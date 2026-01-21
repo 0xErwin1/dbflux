@@ -1,8 +1,6 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
-use std::collections::HashMap;
-
 use dbflux_core::{
     ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, IndexInfo, QueryHandle, QueryRequest, QueryResult, Row,
@@ -116,15 +114,20 @@ impl Connection for PostgresConnection {
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let start = Instant::now();
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-        let rows = client
-            .query(&req.sql, &[])
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        // Execute query with lock, release immediately after
+        let rows = {
+            let mut client = self
+                .client
+                .lock()
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
+            client
+                .query(&req.sql, &[])
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?
+        };
+
+        // Process results without holding lock
         if rows.is_empty() {
             return Ok(QueryResult {
                 columns: Vec::new(),
@@ -317,39 +320,6 @@ fn get_views_for_schema(client: &mut Client, schema: &str) -> Result<Vec<ViewInf
         .collect())
 }
 
-fn get_tables(client: &mut Client) -> Result<Vec<TableInfo>, DbError> {
-    let rows = client
-        .query(
-            r#"
-            SELECT table_schema, table_name
-            FROM information_schema.tables
-            WHERE table_type = 'BASE TABLE'
-              AND table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_schema, table_name
-            "#,
-            &[],
-        )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-    let mut tables = Vec::new();
-    for row in rows {
-        let schema: String = row.get(0);
-        let name: String = row.get(1);
-
-        let columns = get_columns(client, &schema, &name)?;
-        let indexes = get_indexes(client, &schema, &name)?;
-
-        tables.push(TableInfo {
-            name,
-            schema: Some(schema),
-            columns,
-            indexes,
-        });
-    }
-
-    Ok(tables)
-}
-
 fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
     let rows = client
         .query(
@@ -423,28 +393,6 @@ fn get_indexes(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Ind
                 is_unique: row.get(2),
                 is_primary: row.get(3),
             }
-        })
-        .collect())
-}
-
-fn get_views(client: &mut Client) -> Result<Vec<ViewInfo>, DbError> {
-    let rows = client
-        .query(
-            r#"
-            SELECT table_schema, table_name
-            FROM information_schema.views
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_schema, table_name
-            "#,
-            &[],
-        )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-    Ok(rows
-        .iter()
-        .map(|row| ViewInfo {
-            name: row.get(1),
-            schema: Some(row.get(0)),
         })
         .collect())
 }
