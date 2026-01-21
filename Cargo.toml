@@ -1,10 +1,30 @@
 [workspace]
-members = ["crates/dbflux"]
+members = [
+    "crates/dbflux",
+    "crates/dbflux_core",
+    "crates/dbflux_driver_sqlite",
+    "crates/dbflux_driver_postgres",
+]
 default-members = ["crates/dbflux"]
 resolver = "2"
 
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
-gpui = { git = "https://github.com/zed-industries/zed" }
+dbflux_core = { path = "crates/dbflux_core" }
+dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
+dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
+
+gpui = "0.2.2"
 gpui-component = "0.5.0"
 smallvec = "1.13.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+dirs = "5"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio-postgres = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+log = "0.4"
+env_logger = "0.11"

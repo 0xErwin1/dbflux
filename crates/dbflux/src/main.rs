@@ -1,30 +1,33 @@
+mod app;
+mod ui;
+
+use app::AppState;
 use gpui::*;
-
-struct HelloWorld {
-    text: SharedString,
-}
-
-impl Render for HelloWorld {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-        .flex()
-        .bg(rgb(0x2e7d32))
-        .size_full()
-        .justify_center()
-        .items_center()
-        .text_xl()
-        .text_color(rgb(0xffffff))
-        .child(format!("Hello, {}!", &self.text))
-    }
-}
+use gpui_component::Root;
+use ui::workspace::Workspace;
 
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
+
     Application::new().run(|cx: &mut App| {
-        cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|_cx| HelloWorld {
-                text: "World".into(),
-            })
-        })
+        ui::theme::init(cx);
+        let app_state = cx.new(|_cx| AppState::new());
+
+        cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("DBFlux".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(app_state, window, cx));
+                cx.new(|cx| Root::new(workspace, window, cx))
+            },
+        )
         .unwrap();
     });
 }

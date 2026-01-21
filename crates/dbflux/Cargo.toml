@@ -1,7 +1,7 @@
 [package]
 name = "dbflux"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [[bin]]
@@ -11,3 +11,20 @@ path = "src/main.rs"
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
+dbflux_core.workspace = true
+uuid.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[dependencies.dbflux_driver_sqlite]
+workspace = true
+optional = true
+
+[dependencies.dbflux_driver_postgres]
+workspace = true
+optional = true
+
+[features]
+default = ["sqlite", "postgres"]
+sqlite = ["dbflux_driver_sqlite"]
+postgres = ["dbflux_driver_postgres"]

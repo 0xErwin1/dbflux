@@ -1,0 +1,11 @@
+[package]
+name = "dbflux_driver_postgres"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dbflux_core = { path = "../dbflux_core" }
+postgres = "0.19"
+native-tls = "0.2"
+postgres-native-tls = "0.5"
