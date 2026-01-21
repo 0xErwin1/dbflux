@@ -57,11 +57,15 @@ impl TreeNodeKind {
         }
     }
 
-    fn is_clickable(&self) -> bool {
+    fn needs_click_handler(&self) -> bool {
         matches!(
             self,
             Self::Profile | Self::Database | Self::Table | Self::View
         )
+    }
+
+    fn shows_pointer_cursor(&self) -> bool {
+        matches!(self, Self::Profile | Self::Database)
     }
 }
 
@@ -72,6 +76,12 @@ pub struct Sidebar {
     results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
     pending_view_table: Option<String>,
+    pending_toast: Option<PendingToast>,
+}
+
+struct PendingToast {
+    message: String,
+    is_error: bool,
 }
 
 impl Sidebar {
@@ -95,10 +105,31 @@ impl Sidebar {
             results,
             tree_state,
             pending_view_table: None,
+            pending_toast: None,
         }
     }
 
     fn handle_item_click(&mut self, item_id: &str, click_count: usize, cx: &mut Context<Self>) {
+        if click_count == 2 && (item_id.starts_with("table_") || item_id.starts_with("view_")) {
+            let qualified_name = if let Some(rest) = item_id.strip_prefix("table_") {
+                Self::parse_qualified_table_name(rest)
+            } else if let Some(rest) = item_id.strip_prefix("view_") {
+                Self::parse_qualified_table_name(rest)
+            } else {
+                None
+            };
+
+            if let Some(name) = qualified_name {
+                self.pending_view_table = Some(name);
+                cx.notify();
+            }
+            return;
+        }
+
+        if click_count != 1 {
+            return;
+        }
+
         if item_id.starts_with("profile_") {
             if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
                 if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
@@ -119,35 +150,26 @@ impl Sidebar {
             }
         } else if item_id.starts_with("db_") {
             self.handle_database_click(item_id, cx);
-        } else if click_count >= 2
-            && (item_id.starts_with("table_") || item_id.starts_with("view_"))
-        {
-            // Format: table_{uuid}_{schema}_{table} or view_{uuid}_{schema}_{view}
-            // UUID is 36 chars, so after prefix we have: {uuid}_{schema}_{name}
-            let qualified_name = if let Some(rest) = item_id.strip_prefix("table_") {
-                Self::parse_qualified_table_name(rest)
-            } else if let Some(rest) = item_id.strip_prefix("view_") {
-                Self::parse_qualified_table_name(rest)
-            } else {
-                None
-            };
-
-            if let Some(name) = qualified_name {
-                self.pending_view_table = Some(name);
-                cx.notify();
-            }
         }
     }
 
     fn parse_qualified_table_name(rest: &str) -> Option<String> {
-        // rest = "{uuid}_{schema}_{table_name}"
-        // UUID is 36 chars
         if rest.len() < 38 {
             return None;
         }
 
-        let after_uuid = &rest[37..]; // skip uuid and underscore
+        let uuid_part = rest.get(..36)?;
+        if Uuid::parse_str(uuid_part).is_err() {
+            return None;
+        }
+
+        let after_uuid = rest.get(37..)?;
         let (schema, table) = after_uuid.split_once('_')?;
+
+        if schema.is_empty() || table.is_empty() {
+            return None;
+        }
+
         Some(format!("{}.{}", schema, table))
     }
 
@@ -169,20 +191,17 @@ impl Sidebar {
             return;
         };
 
-        if self
-            .app_state
-            .read(cx)
-            .is_operation_pending(profile_id, Some(db_name))
-        {
-            log::info!("Operation already pending for {}", db_name);
-            return;
-        }
-
         let params = match self.app_state.update(cx, |state, cx| {
-            let result = state.prepare_switch_database(profile_id, db_name);
-            if result.is_ok() {
-                state.start_pending_operation(profile_id, Some(db_name));
+            if state.is_operation_pending(profile_id, Some(db_name)) {
+                return Err("Operation already pending".to_string());
             }
+
+            let result = state.prepare_switch_database(profile_id, db_name);
+
+            if result.is_ok() && !state.start_pending_operation(profile_id, Some(db_name)) {
+                return Err("Operation started by another thread".to_string());
+            }
+
             cx.notify();
             result
         }) {
@@ -195,32 +214,41 @@ impl Sidebar {
 
         let app_state = self.app_state.clone();
         let db_name_owned = db_name.to_string();
+        let sidebar = cx.entity().clone();
+        let task = cx.background_executor().spawn(async move { params.execute() });
 
         cx.spawn(async move |_this, cx| {
-            let result = std::thread::spawn(move || params.execute()).join();
+            let result = task.await;
 
             cx.update(|cx| {
+                let toast = match &result {
+                    Ok(res) => Some(PendingToast {
+                        message: format!("Switched to database: {}", res.database),
+                        is_error: false,
+                    }),
+                    Err(e) => Some(PendingToast {
+                        message: format!("Failed to switch database: {}", e),
+                        is_error: true,
+                    }),
+                };
+
                 app_state.update(cx, |state, cx| {
                     state.finish_pending_operation(profile_id, Some(&db_name_owned));
 
-                    match result {
-                        Ok(Ok(res)) => {
-                            state.apply_switch_database(
-                                res.profile_id,
-                                res.original_profile,
-                                res.connection,
-                                res.schema,
-                            );
-                            log::info!("Switched to database: {}", res.database);
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Failed to switch database: {}", e);
-                        }
-                        Err(_) => {
-                            log::error!("Database switch thread panicked");
-                        }
+                    if let Ok(res) = result {
+                        state.apply_switch_database(
+                            res.profile_id,
+                            res.original_profile,
+                            res.connection,
+                            res.schema,
+                        );
                     }
 
+                    cx.notify();
+                });
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_toast = toast;
                     cx.notify();
                 });
             })
@@ -439,20 +467,17 @@ impl Sidebar {
     }
 
     fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        if self
-            .app_state
-            .read(cx)
-            .is_operation_pending(profile_id, None)
-        {
-            log::info!("Connection already pending for profile {}", profile_id);
-            return;
-        }
-
         let params = match self.app_state.update(cx, |state, cx| {
-            let result = state.prepare_connect_profile(profile_id);
-            if result.is_ok() {
-                state.start_pending_operation(profile_id, None);
+            if state.is_operation_pending(profile_id, None) {
+                return Err("Connection already pending".to_string());
             }
+
+            let result = state.prepare_connect_profile(profile_id);
+
+            if result.is_ok() && !state.start_pending_operation(profile_id, None) {
+                return Err("Operation started by another thread".to_string());
+            }
+
             cx.notify();
             result
         }) {
@@ -464,27 +489,36 @@ impl Sidebar {
         };
 
         let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let task = cx.background_executor().spawn(async move { params.execute() });
 
         cx.spawn(async move |_this, cx| {
-            let result = std::thread::spawn(move || params.execute()).join();
+            let result = task.await;
 
             cx.update(|cx| {
+                let toast = match &result {
+                    Ok(res) => Some(PendingToast {
+                        message: format!("Connected to {}", res.profile.name),
+                        is_error: false,
+                    }),
+                    Err(e) => Some(PendingToast {
+                        message: format!("Connection failed: {}", e),
+                        is_error: true,
+                    }),
+                };
+
                 app_state.update(cx, |state, cx| {
                     state.finish_pending_operation(profile_id, None);
 
-                    match result {
-                        Ok(Ok(res)) => {
-                            state.apply_connect_profile(res.profile, res.connection, res.schema);
-                            log::info!("Connected successfully");
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Failed to connect: {}", e);
-                        }
-                        Err(_) => {
-                            log::error!("Connection thread panicked");
-                        }
+                    if let Ok(res) = result {
+                        state.apply_connect_profile(res.profile, res.connection, res.schema);
                     }
 
+                    cx.notify();
+                });
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_toast = toast;
                     cx.notify();
                 });
             })
@@ -558,6 +592,15 @@ impl Render for Sidebar {
             });
         }
 
+        if let Some(toast) = self.pending_toast.take() {
+            use crate::ui::toast::ToastExt;
+            if toast.is_error {
+                cx.toast_error(toast.message, window);
+            } else {
+                cx.toast_success(toast.message, window);
+            }
+        }
+
         let theme = cx.theme();
         let app_state = self.app_state.clone();
         let state = self.app_state.read(cx);
@@ -578,21 +621,29 @@ impl Render for Sidebar {
                     .items_center()
                     .justify_between()
                     .px_2()
-                    .h(px(36.0))
+                    .h(px(28.0))
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
                         div()
-                            .text_sm()
+                            .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child("Connections"),
+                            .text_color(theme.muted_foreground)
+                            .child("CONNECTIONS"),
                     )
                     .child(
-                        Button::new("add-connection")
-                            .ghost()
-                            .compact()
-                            .label("+")
+                        div()
+                            .id("add-connection")
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.0))
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
                             .on_click(move |_, _, cx| {
                                 let app_state = app_state.clone();
                                 cx.open_window(
@@ -615,7 +666,8 @@ impl Render for Sidebar {
                                     },
                                 )
                                 .ok();
-                            }),
+                            })
+                            .child("+"),
                     ),
             )
             .child(div().flex_1().overflow_hidden().child(tree(
@@ -646,11 +698,24 @@ impl Render for Sidebar {
                     };
 
                     let theme = cx.theme();
-                    let indent = px(depth as f32 * 12.0);
+                    let indent = px(depth as f32 * 10.0);
                     let is_folder = entry.is_folder();
                     let is_expanded = entry.is_expanded();
 
-                    let chevron: Option<&str> = if is_folder && node_kind == TreeNodeKind::Table {
+                    let needs_chevron = is_folder
+                        && matches!(
+                            node_kind,
+                            TreeNodeKind::Table
+                                | TreeNodeKind::View
+                                | TreeNodeKind::Schema
+                                | TreeNodeKind::TablesFolder
+                                | TreeNodeKind::ViewsFolder
+                                | TreeNodeKind::ColumnsFolder
+                                | TreeNodeKind::IndexesFolder
+                                | TreeNodeKind::Database
+                                | TreeNodeKind::Profile
+                        );
+                    let chevron: Option<&str> = if needs_chevron {
                         Some(if is_expanded { "▾" } else { "▸" })
                     } else {
                         None
@@ -697,36 +762,35 @@ impl Render for Sidebar {
 
                     let mut list_item = ListItem::new(ix)
                         .selected(selected)
-                        .py(px(2.0))
-                        .text_sm()
+                        .py(px(1.0))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap(px(2.0))
                                 .pl(indent)
-                                .when_some(chevron, |el, ch| {
-                                    el.child(
-                                        div()
-                                            .w(px(10.0))
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(ch),
-                                    )
-                                })
-                                .when(
-                                    chevron.is_none() && node_kind == TreeNodeKind::Table,
-                                    |el| el.child(div().w(px(10.0))),
+                                .child(
+                                    div()
+                                        .w(px(12.0))
+                                        .flex()
+                                        .justify_center()
+                                        .text_color(theme.muted_foreground)
+                                        .when_some(chevron, |el, ch| {
+                                            el.text_xs().child(ch)
+                                        }),
                                 )
                                 .child(
                                     div()
                                         .w(px(14.0))
+                                        .flex()
+                                        .justify_center()
                                         .text_xs()
                                         .text_color(icon_color)
                                         .child(icon),
                                 )
                                 .child(
                                     div()
+                                        .text_xs()
                                         .text_color(label_color)
                                         .when(
                                             node_kind == TreeNodeKind::Profile && is_active,
@@ -737,15 +801,20 @@ impl Render for Sidebar {
                                                 node_kind,
                                                 TreeNodeKind::TablesFolder
                                                     | TreeNodeKind::ViewsFolder
+                                                    | TreeNodeKind::ColumnsFolder
+                                                    | TreeNodeKind::IndexesFolder
                                             ),
-                                            |d| d.text_xs().font_weight(FontWeight::MEDIUM),
+                                            |d| d.font_weight(FontWeight::MEDIUM),
                                         )
                                         .child(item.label.clone()),
                                 ),
                         );
 
-                    if node_kind.is_clickable() {
+                    if node_kind.shows_pointer_cursor() {
                         list_item = list_item.cursor(CursorStyle::PointingHand);
+                    }
+
+                    if node_kind.needs_click_handler() {
                         let item_id_for_click = item_id.clone();
                         let sidebar = sidebar_entity.clone();
                         list_item = list_item.on_click(move |event, _window, cx| {

@@ -7,7 +7,7 @@ use gpui_component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::PopupMenuItem;
 use gpui_component::{ActiveTheme, InteractiveElementExt, Sizable};
-use log::{error, info};
+use log::info;
 use uuid::Uuid;
 
 pub struct EditorPane {
@@ -168,7 +168,15 @@ impl EditorPane {
     }
 
     fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::toast::ToastExt;
+
         let sql = self.tabs[self.active_tab].input_state.read(cx).value();
+
+        if sql.trim().is_empty() {
+            cx.toast_warning("Enter a query to run", window);
+            return;
+        }
+
         info!("Running query: {}", sql);
 
         let conn = {
@@ -177,7 +185,7 @@ impl EditorPane {
         };
 
         let Some(conn) = conn else {
-            error!("No active connection");
+            cx.toast_error("No active connection", window);
             return;
         };
 
@@ -194,7 +202,7 @@ impl EditorPane {
                 });
             }
             Err(e) => {
-                error!("Query failed: {:?}", e);
+                cx.toast_error(format!("Query failed: {}", e), window);
             }
         }
     }
@@ -248,11 +256,11 @@ impl Render for EditorPane {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(32.0))
+                    .h(px(36.0))
                     .px_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .bg(theme.secondary)
+                    .bg(theme.tab_bar)
                     .child(
                         div()
                             .flex()
@@ -260,8 +268,8 @@ impl Render for EditorPane {
                             .gap_2()
                             .child(
                                 div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
+                                    .w(px(6.0))
+                                    .h(px(6.0))
                                     .rounded_full()
                                     .when(is_connected, |d| d.bg(gpui::green()))
                                     .when(!is_connected, |d| d.bg(theme.muted_foreground)),
@@ -273,6 +281,7 @@ impl Render for EditorPane {
                                         .button(
                                             Button::new("conn-btn")
                                                 .ghost()
+                                                .compact()
                                                 .label(connection_name.clone()),
                                         )
                                         .dropdown_menu(move |menu, _window, _cx| {
@@ -298,7 +307,7 @@ impl Render for EditorPane {
                             .when(!has_multiple_connections, |d| {
                                 d.child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .when(is_connected, |d| d.text_color(theme.foreground))
                                         .when(!is_connected, |d| {
                                             d.text_color(theme.muted_foreground)
@@ -308,22 +317,36 @@ impl Render for EditorPane {
                             }),
                     )
                     .child(
-                        Button::new("run-query")
-                            .primary()
-                            .compact()
-                            .label("▶ Run")
+                        div()
+                            .id("run-query")
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .ml_2()
+                            .px_3()
+                            .py(px(4.0))
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.background)
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary).border_color(theme.primary))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.run_query(window, cx);
-                            })),
+                            }))
+                            .child("▶")
+                            .child("Run"),
                     ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(36.0))
-                    .px_2()
-                    .gap_1()
+                    .h(px(28.0))
+                    .px_1()
+                    .gap(px(2.0))
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
@@ -341,12 +364,11 @@ impl Render for EditorPane {
                             .id(("tab", idx))
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .pl_3()
-                            .pr_1()
-                            .py_1()
-                            .text_sm()
-                            .rounded_t(px(4.0))
+                            .gap(px(2.0))
+                            .px_2()
+                            .py(px(2.0))
+                            .text_xs()
+                            .rounded_t(px(3.0))
                             .cursor_pointer()
                             .when(is_active, |d| {
                                 d.bg(theme.background).text_color(theme.foreground)
@@ -362,15 +384,15 @@ impl Render for EditorPane {
                                 this.start_rename(idx, window, cx);
                             }))
                             .when(is_renaming, |d| {
-                                d.child(div().w(px(100.0)).child(Input::new(&rename_input).small()))
+                                d.child(div().w(px(80.0)).child(Input::new(&rename_input).small()))
                             })
                             .when(!is_renaming, |d| d.child(tab_title))
                             .when(tab_count > 1 && !is_renaming, |d| {
                                 d.child(
                                     div()
                                         .id(("close-tab", idx))
-                                        .ml_1()
-                                        .px_1()
+                                        .ml(px(2.0))
+                                        .px(px(2.0))
                                         .rounded(px(2.0))
                                         .text_xs()
                                         .text_color(theme.muted_foreground)
@@ -385,13 +407,22 @@ impl Render for EditorPane {
                             })
                     }))
                     .child(
-                        Button::new("new-tab")
-                            .ghost()
-                            .compact()
-                            .label("+")
+                        div()
+                            .id("new-tab")
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.0))
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.add_new_tab(window, cx);
-                            })),
+                            }))
+                            .child("+"),
                     ),
             )
             .child(

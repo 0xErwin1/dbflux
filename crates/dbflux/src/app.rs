@@ -32,7 +32,7 @@ pub struct AppState {
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
-    profile_store: ProfileStore,
+    profile_store: Option<ProfileStore>,
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
 }
 
@@ -50,15 +50,19 @@ impl AppState {
             drivers.insert(DbKind::Postgres, Arc::new(PostgresDriver::new()));
         }
 
-        let profile_store = ProfileStore::new().expect("Failed to create profile store");
-        let profiles = match profile_store.load() {
-            Ok(p) => {
-                info!("Loaded {} profiles from disk", p.len());
-                p
+        let (profile_store, profiles) = match ProfileStore::new() {
+            Ok(store) => {
+                let profiles = store.load().unwrap_or_else(|e| {
+                    error!("Failed to load profiles: {:?}", e);
+                    Vec::new()
+                });
+                info!("Loaded {} profiles from disk", profiles.len());
+                (Some(store), profiles)
             }
             Err(e) => {
-                error!("Failed to load profiles: {:?}", e);
-                Vec::new()
+                error!("Failed to create profile store: {:?}", e);
+                error!("Application will run without persistent profile storage");
+                (None, Vec::new())
             }
         };
 
@@ -81,14 +85,17 @@ impl AppState {
             .and_then(|id| self.connections.get(&id))
     }
 
+    #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         self.active_connection_id.is_some()
     }
 
+    #[allow(dead_code)]
     pub fn connection_display_name(&self) -> Option<&str> {
         self.active_connection().map(|c| c.profile.name.as_str())
     }
 
+    #[allow(dead_code)]
     pub fn active_schema(&self) -> Option<&SchemaSnapshot> {
         self.active_connection().and_then(|c| c.schema.as_ref())
     }
@@ -118,15 +125,29 @@ impl AppState {
     }
 
     pub fn disconnect(&mut self, profile_id: Uuid) {
-        self.connections.remove(&profile_id);
+        if let Some(mut connected) = self.connections.remove(&profile_id) {
+            if let Some(conn) = Arc::get_mut(&mut connected.connection) {
+                if let Err(e) = conn.close() {
+                    log::warn!(
+                        "Failed to close connection for {}: {:?}",
+                        connected.profile.name,
+                        e
+                    );
+                }
+            }
+        }
+
         if self.active_connection_id == Some(profile_id) {
             self.active_connection_id = self.connections.keys().next().copied();
         }
     }
 
+    #[allow(dead_code)]
     pub fn disconnect_all(&mut self) {
-        self.connections.clear();
-        self.active_connection_id = None;
+        let ids: Vec<Uuid> = self.connections.keys().copied().collect();
+        for id in ids {
+            self.disconnect(id);
+        }
     }
 
     pub fn add_profile(&mut self, profile: ConnectionProfile) {
@@ -154,7 +175,12 @@ impl AppState {
     }
 
     pub fn save_profiles(&self) {
-        if let Err(e) = self.profile_store.save(&self.profiles) {
+        let Some(ref profile_store) = self.profile_store else {
+            log::warn!("Cannot save profiles: profile store not available");
+            return;
+        };
+
+        if let Err(e) = profile_store.save(&self.profiles) {
             error!("Failed to save profiles: {:?}", e);
         } else {
             info!("Saved {} profiles to disk", self.profiles.len());
@@ -162,23 +188,34 @@ impl AppState {
     }
 
     pub fn secret_store_available(&self) -> bool {
-        self.secret_store
-            .read()
-            .map(|s| s.is_available())
-            .unwrap_or(false)
+        match self.secret_store.read() {
+            Ok(s) => s.is_available(),
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner().is_available()
+            }
+        }
     }
 
+    #[allow(dead_code)]
     pub fn secret_store(&self) -> Arc<RwLock<Box<dyn SecretStore>>> {
         self.secret_store.clone()
     }
 
     pub fn save_password(&self, profile: &ConnectionProfile, password: &str) {
-        let Ok(store) = self.secret_store.read() else {
-            error!("Failed to acquire secret store lock");
+        if !profile.save_password {
             return;
+        }
+
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
         };
 
-        if !profile.save_password || !store.is_available() {
+        if !store.is_available() {
             return;
         }
 
@@ -188,9 +225,12 @@ impl AppState {
     }
 
     pub fn delete_password(&self, profile: &ConnectionProfile) {
-        let Ok(store) = self.secret_store.read() else {
-            error!("Failed to acquire secret store lock");
-            return;
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
         };
 
         if let Err(e) = store.delete(&profile.secret_ref()) {
@@ -374,7 +414,14 @@ impl ConnectProfileParams {
             return None;
         }
 
-        let store = self.secret_store.as_ref()?.read().ok()?;
+        let store_arc = self.secret_store.as_ref()?;
+        let store = match store_arc.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
+                poison_err.into_inner()
+            }
+        };
 
         match store.get(&self.profile.secret_ref()) {
             Ok(pwd) => pwd,
@@ -442,7 +489,13 @@ impl SwitchDatabaseParams {
             return None;
         }
 
-        let store = self.secret_store.read().ok()?;
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
+                poison_err.into_inner()
+            }
+        };
 
         match store.get(&self.original_profile.secret_ref()) {
             Ok(pwd) => pwd,

@@ -2,11 +2,11 @@ use crate::app::AppState;
 use dbflux_core::{QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
+
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::table::{Column, Table, TableDelegate, TableState};
 use gpui_component::{ActiveTheme, Sizable};
-use log::{error, info};
+use log::info;
 
 enum ResultSource {
     Query,
@@ -132,16 +132,27 @@ impl ResultsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use crate::ui::toast::ToastExt;
+
         let filter = self.filter_input.read(cx).value();
         let limit_str = self.limit_input.read(cx).value();
-        let limit: u32 = limit_str.parse().unwrap_or(100);
+        let limit: u32 = limit_str
+            .parse()
+            .ok()
+            .filter(|&n| n > 0 && n <= 10000)
+            .unwrap_or(100);
+
+        let Some(quoted_table) = Self::quote_table_identifier(table_name) else {
+            cx.toast_error(format!("Invalid table identifier: {}", table_name), window);
+            return;
+        };
 
         let sql = if filter.trim().is_empty() {
-            format!("SELECT * FROM {} LIMIT {}", table_name, limit)
+            format!("SELECT * FROM {} LIMIT {}", quoted_table, limit)
         } else {
             format!(
                 "SELECT * FROM {} WHERE {} LIMIT {}",
-                table_name, filter, limit
+                quoted_table, filter, limit
             )
         };
 
@@ -153,7 +164,7 @@ impl ResultsPane {
         };
 
         let Some(conn) = conn else {
-            error!("No active connection");
+            cx.toast_error("No active connection", window);
             return;
         };
 
@@ -193,7 +204,7 @@ impl ResultsPane {
                 cx.notify();
             }
             Err(e) => {
-                error!("Query failed: {:?}", e);
+                cx.toast_error(format!("Query failed: {}", e), window);
             }
         }
     }
@@ -246,6 +257,31 @@ impl ResultsPane {
         self.active_tab = 0;
         cx.notify();
     }
+
+    fn is_valid_identifier(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            && !s.chars().next().unwrap().is_ascii_digit()
+    }
+
+    fn quote_table_identifier(table_name: &str) -> Option<String> {
+        if table_name.contains('.') {
+            let parts: Vec<&str> = table_name.splitn(2, '.').collect();
+            if parts.len() == 2
+                && Self::is_valid_identifier(parts[0])
+                && Self::is_valid_identifier(parts[1])
+            {
+                Some(format!("\"{}\".\"{}\"", parts[0], parts[1]))
+            } else {
+                None
+            }
+        } else if Self::is_valid_identifier(table_name) {
+            Some(format!("\"{}\"", table_name))
+        } else {
+            None
+        }
+    }
 }
 
 impl Render for ResultsPane {
@@ -276,17 +312,17 @@ impl Render for ResultsPane {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(32.0))
-                    .px_2()
-                    .gap_1()
+                    .h(px(26.0))
+                    .px_1()
+                    .gap(px(2.0))
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
                     .when(self.tabs.is_empty(), |d| {
                         d.child(
                             div()
-                                .text_sm()
-                                .text_color(theme.foreground)
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
                                 .child("Results"),
                         )
                     })
@@ -299,12 +335,11 @@ impl Render for ResultsPane {
                             .id(("result-tab", idx))
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .pl_2()
-                            .pr_1()
-                            .py_1()
-                            .text_sm()
-                            .rounded_t(px(4.0))
+                            .gap(px(2.0))
+                            .px_2()
+                            .py(px(2.0))
+                            .text_xs()
+                            .rounded_t(px(3.0))
                             .cursor_pointer()
                             .when(is_active, |d| {
                                 d.bg(theme.background).text_color(theme.foreground)
@@ -323,8 +358,8 @@ impl Render for ResultsPane {
                             .child(
                                 div()
                                     .id(("close-result-tab", idx))
-                                    .ml_1()
-                                    .px_1()
+                                    .ml(px(2.0))
+                                    .px(px(2.0))
                                     .rounded(px(2.0))
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
@@ -342,9 +377,9 @@ impl Render for ResultsPane {
                     div()
                         .flex()
                         .items_center()
-                        .gap_3()
-                        .h(px(36.0))
-                        .px_3()
+                        .gap_2()
+                        .h(px(28.0))
+                        .px_2()
                         .border_b_1()
                         .border_color(theme.border)
                         .bg(theme.secondary)
@@ -355,13 +390,13 @@ impl Render for ResultsPane {
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .text_color(theme.muted_foreground)
                                         .child("SELECT * FROM"),
                                 )
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.foreground)
                                         .child(table_name),
@@ -371,16 +406,16 @@ impl Render for ResultsPane {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .gap_1()
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .text_color(theme.muted_foreground)
                                         .child("WHERE"),
                                 )
                                 .child(
                                     div()
-                                        .w(px(280.0))
+                                        .w(px(220.0))
                                         .child(Input::new(&filter_input).small().cleanable(true)),
                                 ),
                         )
@@ -388,23 +423,32 @@ impl Render for ResultsPane {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .gap_1()
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_xs()
                                         .text_color(theme.muted_foreground)
                                         .child("LIMIT"),
                                 )
-                                .child(div().w(px(70.0)).child(Input::new(&limit_input).small())),
+                                .child(div().w(px(50.0)).child(Input::new(&limit_input).small())),
                         )
                         .child(
-                            Button::new("refresh-table")
-                                .ghost()
-                                .compact()
-                                .label("↻")
+                            div()
+                                .id("refresh-table")
+                                .w(px(22.0))
+                                .h(px(22.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.0))
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.run_table_query(window, cx);
-                                })),
+                                }))
+                                .child("↻"),
                         ),
                 )
             })
@@ -432,7 +476,7 @@ impl Render for ResultsPane {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(24.0))
+                    .h(px(20.0))
                     .px_2()
                     .border_t_1()
                     .border_color(theme.border)
@@ -441,13 +485,13 @@ impl Render for ResultsPane {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(format!("Rows: {}", row_count)),
+                            .child(format!("{} rows", row_count)),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(format!("Time: {}", exec_time)),
+                            .child(exec_time),
                     ),
             )
     }
@@ -503,6 +547,6 @@ impl TableDelegate for ResultsTableDelegate {
             .map(|v| v.as_display_string())
             .unwrap_or_default();
 
-        div().text_sm().child(value)
+        div().text_xs().child(value)
     }
 }

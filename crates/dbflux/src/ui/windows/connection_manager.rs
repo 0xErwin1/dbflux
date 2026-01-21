@@ -31,7 +31,6 @@ struct DriverInfo {
     kind: DbKind,
     name: String,
     description: String,
-    requires_password: bool,
 }
 
 pub struct ConnectionManagerWindow {
@@ -65,7 +64,6 @@ impl ConnectionManagerWindow {
                 kind: driver.kind(),
                 name: driver.display_name().to_string(),
                 description: driver.description().to_string(),
-                requires_password: driver.requires_password(),
             })
             .collect();
 
