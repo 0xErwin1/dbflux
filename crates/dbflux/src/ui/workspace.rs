@@ -4,9 +4,9 @@ use crate::ui::results::ResultsPane;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::toast::ToastManager;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use gpui_component::notification::NotificationList;
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_component::ActiveTheme;
 
 pub struct Workspace {
     #[allow(dead_code)]

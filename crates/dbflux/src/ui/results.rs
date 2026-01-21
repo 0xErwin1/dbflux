@@ -52,7 +52,7 @@ impl ResultsPane {
             state
         });
 
-        let _ = cx.subscribe_in(
+        cx.subscribe_in(
             &filter_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
@@ -60,9 +60,10 @@ impl ResultsPane {
                     this.run_table_query(window, cx);
                 }
             },
-        );
+        )
+        .detach();
 
-        let _ = cx.subscribe_in(
+        cx.subscribe_in(
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
@@ -70,7 +71,8 @@ impl ResultsPane {
                     this.run_table_query(window, cx);
                 }
             },
-        );
+        )
+        .detach();
 
         Self {
             app_state,
@@ -123,9 +125,9 @@ impl ResultsPane {
         let delegate = ResultsTableDelegate::new(result.clone());
         let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
 
-        if let Some(idx) = self.tabs.iter().position(|t| {
-            matches!(&t.source, ResultSource::TableView { table_name: n } if *n == table_name)
-        }) {
+        if let Some(idx) = self.tabs.iter().position(
+            |t| matches!(&t.source, ResultSource::TableView { table_name: n } if *n == table_name),
+        ) {
             self.tabs[idx].result = result;
             self.tabs[idx].table_state = table_state;
             self.active_tab = idx;
@@ -220,37 +222,35 @@ impl ResultsPane {
         let table_name_owned = table_name.to_string();
         let results_entity = cx.entity().clone();
 
-        let task = cx.background_executor().spawn(async move {
-            conn.execute(&request)
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| {
-                match result {
-                    Ok(result) => {
-                        info!(
-                            "Query returned {} rows in {:?}",
-                            result.row_count(),
-                            result.execution_time
-                        );
+            cx.update(|cx| match result {
+                Ok(result) => {
+                    info!(
+                        "Query returned {} rows in {:?}",
+                        result.row_count(),
+                        result.execution_time
+                    );
 
-                        results_entity.update(cx, |pane, cx| {
-                            pane.pending_table_result = Some(PendingTableResult {
-                                table_name: table_name_owned,
-                                result,
-                            });
-                            cx.notify();
+                    results_entity.update(cx, |pane, cx| {
+                        pane.pending_table_result = Some(PendingTableResult {
+                            table_name: table_name_owned,
+                            result,
                         });
-                    }
-                    Err(e) => {
-                        log::error!("Table query failed: {}", e);
-                        results_entity.update(cx, |pane, cx| {
-                            pane.pending_error = Some(format!("Query failed: {}", e));
-                            cx.notify();
-                        });
-                    }
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    log::error!("Table query failed: {}", e);
+                    results_entity.update(cx, |pane, cx| {
+                        pane.pending_error = Some(format!("Query failed: {}", e));
+                        cx.notify();
+                    });
                 }
             })
             .ok();
@@ -311,7 +311,7 @@ impl ResultsPane {
         !s.is_empty()
             && s.chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-            && !s.chars().next().unwrap().is_ascii_digit()
+            && !s.chars().next().is_some_and(|c| c.is_ascii_digit())
     }
 
     fn quote_table_identifier(table_name: &str) -> Option<String> {

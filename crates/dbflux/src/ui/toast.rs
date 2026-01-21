@@ -1,4 +1,4 @@
-use gpui::{px, App, AppContext as _, Context, Entity, Global, Styled, Window};
+use gpui::{App, AppContext as _, Context, Entity, Global, Styled, Window, px};
 use gpui_component::notification::{Notification, NotificationList, NotificationType};
 
 pub struct ToastManager {

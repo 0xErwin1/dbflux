@@ -28,6 +28,6 @@ fn main() {
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         )
-        .unwrap();
+        .expect("Failed to open main window");
     });
 }

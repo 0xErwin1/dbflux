@@ -16,7 +16,7 @@ pub use schema::{
     ColumnInfo, DatabaseInfo, DbSchemaInfo, IndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
 };
 pub use secrets::{
-    connection_secret_ref, create_secret_store, KeyringSecretStore, NoopSecretStore, SecretStore,
+    KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
 };
 pub use store::ProfileStore;
 pub use traits::{Connection, DbDriver};

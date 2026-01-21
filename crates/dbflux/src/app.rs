@@ -1,6 +1,6 @@
 use dbflux_core::{
-    create_secret_store, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry,
-    HistoryStore, ProfileStore, SchemaSnapshot, SecretStore,
+    Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry, HistoryStore,
+    ProfileStore, SchemaSnapshot, SecretStore, create_secret_store,
 };
 use log::{error, info};
 use std::collections::{HashMap, HashSet};

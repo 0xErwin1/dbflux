@@ -46,7 +46,7 @@ impl EditorPane {
 
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
-        let _ = cx.subscribe_in(
+        cx.subscribe_in(
             &rename_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
@@ -58,7 +58,8 @@ impl EditorPane {
                 }
                 _ => {}
             },
-        );
+        )
+        .detach();
 
         Self {
             app_state,
@@ -202,44 +203,42 @@ impl EditorPane {
         let results_pane = self.results_pane.clone();
         let editor_entity = cx.entity().clone();
 
-        let task = cx.background_executor().spawn(async move {
-            conn.execute(&request)
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| {
-                match result {
-                    Ok(result) => {
-                        info!(
-                            "Query returned {} rows in {:?}",
-                            result.row_count(),
-                            result.execution_time
-                        );
+            cx.update(|cx| match result {
+                Ok(result) => {
+                    info!(
+                        "Query returned {} rows in {:?}",
+                        result.row_count(),
+                        result.execution_time
+                    );
 
-                        let entry = HistoryEntry::new(
-                            sql_owned,
-                            database,
-                            connection_name,
-                            result.execution_time,
-                            Some(result.row_count()),
-                        );
-                        app_state.update(cx, |state, _cx| {
-                            state.add_history_entry(entry);
-                        });
+                    let entry = HistoryEntry::new(
+                        sql_owned,
+                        database,
+                        connection_name,
+                        result.execution_time,
+                        Some(result.row_count()),
+                    );
+                    app_state.update(cx, |state, _cx| {
+                        state.add_history_entry(entry);
+                    });
 
-                        results_pane.update(cx, |pane, cx| {
-                            pane.set_query_result_async(result, cx);
-                        });
-                    }
-                    Err(e) => {
-                        log::error!("Query failed: {}", e);
-                        editor_entity.update(cx, |editor, cx| {
-                            editor.pending_error = Some(format!("Query failed: {}", e));
-                            cx.notify();
-                        });
-                    }
+                    results_pane.update(cx, |pane, cx| {
+                        pane.set_query_result_async(result, cx);
+                    });
+                }
+                Err(e) => {
+                    log::error!("Query failed: {}", e);
+                    editor_entity.update(cx, |editor, cx| {
+                        editor.pending_error = Some(format!("Query failed: {}", e));
+                        cx.notify();
+                    });
                 }
             })
             .ok();

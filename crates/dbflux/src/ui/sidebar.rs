@@ -5,12 +5,12 @@ use crate::ui::results::ResultsPane;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Root;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::tree::{tree, TreeItem, TreeState};
-use gpui_component::ActiveTheme;
-use gpui_component::Root;
+use gpui_component::tree::{TreeItem, TreeState, tree};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +216,9 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let db_name_owned = db_name.to_string();
         let sidebar = cx.entity().clone();
-        let task = cx.background_executor().spawn(async move { params.execute() });
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -492,7 +494,9 @@ impl Sidebar {
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
-        let task = cx.background_executor().spawn(async move { params.execute() });
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -764,55 +768,49 @@ impl Render for Sidebar {
                         TreeNodeKind::Unknown => theme.muted_foreground,
                     };
 
-                    let mut list_item = ListItem::new(ix)
-                        .selected(selected)
-                        .py(px(1.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(2.0))
-                                .pl(indent)
-                                .child(
-                                    div()
-                                        .w(px(12.0))
-                                        .flex()
-                                        .justify_center()
-                                        .text_color(theme.muted_foreground)
-                                        .when_some(chevron, |el, ch| {
-                                            el.text_xs().child(ch)
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(14.0))
-                                        .flex()
-                                        .justify_center()
-                                        .text_xs()
-                                        .text_color(icon_color)
-                                        .child(icon),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(label_color)
-                                        .when(
-                                            node_kind == TreeNodeKind::Profile && is_active,
-                                            |d| d.font_weight(FontWeight::SEMIBOLD),
-                                        )
-                                        .when(
-                                            matches!(
-                                                node_kind,
-                                                TreeNodeKind::TablesFolder
-                                                    | TreeNodeKind::ViewsFolder
-                                                    | TreeNodeKind::ColumnsFolder
-                                                    | TreeNodeKind::IndexesFolder
-                                            ),
-                                            |d| d.font_weight(FontWeight::MEDIUM),
-                                        )
-                                        .child(item.label.clone()),
-                                ),
-                        );
+                    let mut list_item = ListItem::new(ix).selected(selected).py(px(1.0)).child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .pl(indent)
+                            .child(
+                                div()
+                                    .w(px(12.0))
+                                    .flex()
+                                    .justify_center()
+                                    .text_color(theme.muted_foreground)
+                                    .when_some(chevron, |el, ch| el.text_xs().child(ch)),
+                            )
+                            .child(
+                                div()
+                                    .w(px(14.0))
+                                    .flex()
+                                    .justify_center()
+                                    .text_xs()
+                                    .text_color(icon_color)
+                                    .child(icon),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(label_color)
+                                    .when(node_kind == TreeNodeKind::Profile && is_active, |d| {
+                                        d.font_weight(FontWeight::SEMIBOLD)
+                                    })
+                                    .when(
+                                        matches!(
+                                            node_kind,
+                                            TreeNodeKind::TablesFolder
+                                                | TreeNodeKind::ViewsFolder
+                                                | TreeNodeKind::ColumnsFolder
+                                                | TreeNodeKind::IndexesFolder
+                                        ),
+                                        |d| d.font_weight(FontWeight::MEDIUM),
+                                    )
+                                    .child(item.label.clone()),
+                            ),
+                    );
 
                     if node_kind.shows_pointer_cursor() {
                         list_item = list_item.cursor(CursorStyle::PointingHand);
