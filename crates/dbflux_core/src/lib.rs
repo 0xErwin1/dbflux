@@ -1,4 +1,5 @@
 mod error;
+mod history;
 mod profile;
 mod query;
 mod schema;
@@ -8,6 +9,7 @@ mod traits;
 mod value;
 
 pub use error::DbError;
+pub use history::{HistoryEntry, HistoryStore};
 pub use profile::{ConnectionProfile, DbConfig, DbKind, SshTunnelConfig, SslMode};
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use schema::{

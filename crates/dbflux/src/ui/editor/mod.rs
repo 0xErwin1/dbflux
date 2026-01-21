@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::ui::results::ResultsPane;
-use dbflux_core::QueryRequest;
+use dbflux_core::{HistoryEntry, QueryRequest};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants, DropdownButton};
@@ -18,6 +18,7 @@ pub struct EditorPane {
     next_tab_number: usize,
     renaming_tab: Option<usize>,
     rename_input: Entity<InputState>,
+    pending_error: Option<String>,
 }
 
 struct QueryTab {
@@ -72,6 +73,7 @@ impl EditorPane {
             next_tab_number: 2,
             renaming_tab: None,
             rename_input,
+            pending_error: None,
         }
     }
 
@@ -179,9 +181,14 @@ impl EditorPane {
 
         info!("Running query: {}", sql);
 
-        let conn = {
+        let (conn, database, connection_name) = {
             let state = self.app_state.read(cx);
-            state.active_connection().map(|c| c.connection.clone())
+            let active = state.active_connection();
+            (
+                active.map(|c| c.connection.clone()),
+                active.and_then(|c| c.schema.as_ref().and_then(|s| s.current_database.clone())),
+                active.map(|c| c.profile.name.clone()),
+            )
         };
 
         let Some(conn) = conn else {
@@ -189,22 +196,55 @@ impl EditorPane {
             return;
         };
 
-        let request = QueryRequest::new(sql);
-        match conn.execute(&request) {
-            Ok(result) => {
-                info!(
-                    "Query returned {} rows in {:?}",
-                    result.row_count(),
-                    result.execution_time
-                );
-                self.results_pane.update(cx, |pane, cx| {
-                    pane.set_query_result(result, window, cx);
-                });
-            }
-            Err(e) => {
-                cx.toast_error(format!("Query failed: {}", e), window);
-            }
-        }
+        let sql_owned = sql.to_string();
+        let request = QueryRequest::new(sql_owned.clone());
+        let app_state = self.app_state.clone();
+        let results_pane = self.results_pane.clone();
+        let editor_entity = cx.entity().clone();
+
+        let task = cx.background_executor().spawn(async move {
+            conn.execute(&request)
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                match result {
+                    Ok(result) => {
+                        info!(
+                            "Query returned {} rows in {:?}",
+                            result.row_count(),
+                            result.execution_time
+                        );
+
+                        let entry = HistoryEntry::new(
+                            sql_owned,
+                            database,
+                            connection_name,
+                            result.execution_time,
+                            Some(result.row_count()),
+                        );
+                        app_state.update(cx, |state, _cx| {
+                            state.add_history_entry(entry);
+                        });
+
+                        results_pane.update(cx, |pane, cx| {
+                            pane.set_query_result_async(result, cx);
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Query failed: {}", e);
+                        editor_entity.update(cx, |editor, cx| {
+                            editor.pending_error = Some(format!("Query failed: {}", e));
+                            cx.notify();
+                        });
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn build_connection_menu_items(&self, cx: &Context<Self>) -> Vec<(Uuid, String, bool)> {
@@ -221,7 +261,12 @@ impl EditorPane {
 }
 
 impl Render for EditorPane {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(error) = self.pending_error.take() {
+            use crate::ui::toast::ToastExt;
+            cx.toast_error(error, window);
+        }
+
         let theme = cx.theme();
         let active_input = self.tabs[self.active_tab].input_state.clone();
         let active_tab_idx = self.active_tab;

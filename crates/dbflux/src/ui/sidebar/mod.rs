@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::ui::editor::EditorPane;
+use crate::ui::history::HistoryPanel;
 use crate::ui::results::ResultsPane;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use gpui::prelude::FluentBuilder;
@@ -75,6 +76,7 @@ pub struct Sidebar {
     editor: Entity<EditorPane>,
     results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
+    history_panel: Entity<HistoryPanel>,
     pending_view_table: Option<String>,
     pending_toast: Option<PendingToast>,
 }
@@ -89,21 +91,20 @@ impl Sidebar {
         app_state: Entity<AppState>,
         editor: Entity<EditorPane>,
         results: Entity<ResultsPane>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let items = Self::build_tree_items(&app_state.read(cx));
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
-
-        cx.observe(&app_state, |this, _, cx| {
-            this.refresh_tree(cx);
-        })
-        .detach();
+        let history_panel =
+            cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
 
         Self {
             app_state,
             editor,
             results,
             tree_state,
+            history_panel,
             pending_view_table: None,
             pending_toast: None,
         }
@@ -249,7 +250,7 @@ impl Sidebar {
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = toast;
-                    cx.notify();
+                    sidebar.refresh_tree(cx);
                 });
             })
             .ok();
@@ -467,7 +468,7 @@ impl Sidebar {
     }
 
     fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        let params = match self.app_state.update(cx, |state, cx| {
+        let params = match self.app_state.update(cx, |state, _cx| {
             if state.is_operation_pending(profile_id, None) {
                 return Err("Connection already pending".to_string());
             }
@@ -478,7 +479,6 @@ impl Sidebar {
                 return Err("Operation started by another thread".to_string());
             }
 
-            cx.notify();
             result
         }) {
             Ok(p) => p,
@@ -487,6 +487,8 @@ impl Sidebar {
                 return;
             }
         };
+
+        self.refresh_tree(cx);
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
@@ -519,7 +521,7 @@ impl Sidebar {
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = toast;
-                    cx.notify();
+                    sidebar.refresh_tree(cx);
                 });
             })
             .ok();
@@ -533,6 +535,7 @@ impl Sidebar {
             log::info!("Disconnected profile {}", profile_id);
             cx.notify();
         });
+        self.refresh_tree(cx);
     }
 
     fn delete_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
@@ -607,6 +610,15 @@ impl Render for Sidebar {
         let active_id = state.active_connection_id;
         let connections = state.connections.keys().copied().collect::<Vec<_>>();
         let sidebar_entity = cx.entity().clone();
+
+        let color_teal: Hsla = gpui::rgb(0x4EC9B0).into();
+        let color_yellow: Hsla = gpui::rgb(0xDCDCAA).into();
+        let color_blue: Hsla = gpui::rgb(0x9CDCFE).into();
+        let color_purple: Hsla = gpui::rgb(0xC586C0).into();
+        let color_gray: Hsla = gpui::rgb(0x808080).into();
+        let color_orange: Hsla = gpui::rgb(0xCE9178).into();
+        let color_schema: Hsla = gpui::rgb(0x569CD6).into();
+        let color_green: Hsla = gpui::green().into();
 
         div()
             .flex()
@@ -721,16 +733,8 @@ impl Render for Sidebar {
                         None
                     };
 
-                    let color_teal: Hsla = gpui::rgb(0x4EC9B0).into();
-                    let color_yellow: Hsla = gpui::rgb(0xDCDCAA).into();
-                    let color_blue: Hsla = gpui::rgb(0x9CDCFE).into();
-                    let color_purple: Hsla = gpui::rgb(0xC586C0).into();
-                    let color_gray: Hsla = gpui::rgb(0x808080).into();
-                    let color_orange: Hsla = gpui::rgb(0xCE9178).into();
-                    let color_schema: Hsla = gpui::rgb(0x569CD6).into();
-
                     let (icon, icon_color): (&str, Hsla) = match node_kind {
-                        TreeNodeKind::Profile if is_connected => ("●", gpui::green().into()),
+                        TreeNodeKind::Profile if is_connected => ("●", color_green),
                         TreeNodeKind::Profile => ("○", theme.muted_foreground),
                         TreeNodeKind::Database => ("⬡", color_orange),
                         TreeNodeKind::Schema => ("▣", color_schema),
@@ -902,5 +906,6 @@ impl Render for Sidebar {
                     list_item
                 },
             )))
+            .child(self.history_panel.clone())
     }
 }

@@ -20,12 +20,23 @@ impl Value {
     }
 
     pub fn as_display_string(&self) -> String {
+        self.as_display_string_truncated(1000)
+    }
+
+    pub fn as_display_string_truncated(&self, max_len: usize) -> String {
         match self {
             Value::Null => "NULL".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
-            Value::Text(s) => s.clone(),
+            Value::Text(s) => {
+                if s.len() <= max_len {
+                    s.clone()
+                } else {
+                    let truncated: String = s.chars().take(max_len).collect();
+                    format!("{}...", truncated)
+                }
+            }
             Value::Bytes(b) => format!("<{} bytes>", b.len()),
         }
     }

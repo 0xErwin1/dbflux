@@ -1,6 +1,6 @@
 use dbflux_core::{
-    create_secret_store, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, ProfileStore,
-    SchemaSnapshot, SecretStore,
+    create_secret_store, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry,
+    HistoryStore, ProfileStore, SchemaSnapshot, SecretStore,
 };
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
@@ -34,6 +34,7 @@ pub struct AppState {
     pub pending_operations: HashSet<PendingOperation>,
     profile_store: Option<ProfileStore>,
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
+    history_store: Option<HistoryStore>,
 }
 
 impl AppState {
@@ -69,6 +70,17 @@ impl AppState {
         let secret_store = create_secret_store();
         info!("Secret store available: {}", secret_store.is_available());
 
+        let history_store = match HistoryStore::new() {
+            Ok(store) => {
+                info!("Loaded {} history entries", store.entries().len());
+                Some(store)
+            }
+            Err(e) => {
+                error!("Failed to create history store: {:?}", e);
+                None
+            }
+        };
+
         Self {
             drivers,
             profiles,
@@ -77,6 +89,7 @@ impl AppState {
             pending_operations: HashSet::new(),
             profile_store,
             secret_store: Arc::new(RwLock::new(secret_store)),
+            history_store,
         }
     }
 
@@ -303,6 +316,42 @@ impl AppState {
             database: database.map(|s| s.to_string()),
         };
         self.pending_operations.remove(&op);
+    }
+
+    pub fn add_history_entry(&mut self, entry: HistoryEntry) {
+        if let Some(ref mut store) = self.history_store {
+            store.add(entry);
+            if let Err(e) = store.save() {
+                error!("Failed to save history: {:?}", e);
+            }
+        }
+    }
+
+    pub fn history_entries(&self) -> &[HistoryEntry] {
+        self.history_store
+            .as_ref()
+            .map(|s| s.entries())
+            .unwrap_or(&[])
+    }
+
+    pub fn toggle_history_favorite(&mut self, id: Uuid) -> bool {
+        if let Some(ref mut store) = self.history_store {
+            let result = store.toggle_favorite(id);
+            if let Err(e) = store.save() {
+                error!("Failed to save history: {:?}", e);
+            }
+            return result;
+        }
+        false
+    }
+
+    pub fn remove_history_entry(&mut self, id: Uuid) {
+        if let Some(ref mut store) = self.history_store {
+            store.remove(id);
+            if let Err(e) = store.save() {
+                error!("Failed to save history: {:?}", e);
+            }
+        }
     }
 
     pub fn prepare_switch_database(

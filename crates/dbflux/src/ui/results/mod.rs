@@ -22,6 +22,11 @@ struct ResultTab {
     table_state: Entity<TableState<ResultsTableDelegate>>,
 }
 
+struct PendingTableResult {
+    table_name: String,
+    result: QueryResult,
+}
+
 pub struct ResultsPane {
     app_state: Entity<AppState>,
     tabs: Vec<ResultTab>,
@@ -30,6 +35,9 @@ pub struct ResultsPane {
 
     filter_input: Entity<InputState>,
     limit_input: Entity<InputState>,
+    pending_result: Option<QueryResult>,
+    pending_table_result: Option<PendingTableResult>,
+    pending_error: Option<String>,
 }
 
 impl ResultsPane {
@@ -71,6 +79,9 @@ impl ResultsPane {
             next_tab_id: 1,
             filter_input,
             limit_input,
+            pending_result: None,
+            pending_table_result: None,
+            pending_error: None,
         }
     }
 
@@ -94,6 +105,43 @@ impl ResultsPane {
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
         self.next_tab_id += 1;
+        cx.notify();
+    }
+
+    pub fn set_query_result_async(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        self.pending_result = Some(result);
+        cx.notify();
+    }
+
+    fn apply_table_result(
+        &mut self,
+        table_name: String,
+        result: QueryResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delegate = ResultsTableDelegate::new(result.clone());
+        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+
+        if let Some(idx) = self.tabs.iter().position(|t| {
+            matches!(&t.source, ResultSource::TableView { table_name: n } if *n == table_name)
+        }) {
+            self.tabs[idx].result = result;
+            self.tabs[idx].table_state = table_state;
+            self.active_tab = idx;
+        } else {
+            let tab = ResultTab {
+                id: self.next_tab_id,
+                title: table_name.clone(),
+                source: ResultSource::TableView { table_name },
+                result,
+                table_state,
+            };
+            self.tabs.push(tab);
+            self.active_tab = self.tabs.len() - 1;
+            self.next_tab_id += 1;
+        }
+
         cx.notify();
     }
 
@@ -169,44 +217,45 @@ impl ResultsPane {
         };
 
         let request = QueryRequest::new(sql);
-        match conn.execute(&request) {
-            Ok(result) => {
-                info!(
-                    "Query returned {} rows in {:?}",
-                    result.row_count(),
-                    result.execution_time
-                );
+        let table_name_owned = table_name.to_string();
+        let results_entity = cx.entity().clone();
 
-                let delegate = ResultsTableDelegate::new(result.clone());
-                let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let task = cx.background_executor().spawn(async move {
+            conn.execute(&request)
+        });
 
-                if let Some(idx) = self.tabs.iter().position(|t| {
-                    matches!(&t.source, ResultSource::TableView { table_name: n } if n == table_name)
-                }) {
-                    self.tabs[idx].result = result;
-                    self.tabs[idx].table_state = table_state;
-                    self.active_tab = idx;
-                } else {
-                    let tab = ResultTab {
-                        id: self.next_tab_id,
-                        title: table_name.to_string(),
-                        source: ResultSource::TableView {
-                            table_name: table_name.to_string(),
-                        },
-                        result,
-                        table_state,
-                    };
-                    self.tabs.push(tab);
-                    self.active_tab = self.tabs.len() - 1;
-                    self.next_tab_id += 1;
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                match result {
+                    Ok(result) => {
+                        info!(
+                            "Query returned {} rows in {:?}",
+                            result.row_count(),
+                            result.execution_time
+                        );
+
+                        results_entity.update(cx, |pane, cx| {
+                            pane.pending_table_result = Some(PendingTableResult {
+                                table_name: table_name_owned,
+                                result,
+                            });
+                            cx.notify();
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Table query failed: {}", e);
+                        results_entity.update(cx, |pane, cx| {
+                            pane.pending_error = Some(format!("Query failed: {}", e));
+                            cx.notify();
+                        });
+                    }
                 }
-
-                cx.notify();
-            }
-            Err(e) => {
-                cx.toast_error(format!("Query failed: {}", e), window);
-            }
-        }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -285,7 +334,20 @@ impl ResultsPane {
 }
 
 impl Render for ResultsPane {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(result) = self.pending_result.take() {
+            self.set_query_result(result, window, cx);
+        }
+
+        if let Some(pending) = self.pending_table_result.take() {
+            self.apply_table_result(pending.table_name, pending.result, window, cx);
+        }
+
+        if let Some(error) = self.pending_error.take() {
+            use crate::ui::toast::ToastExt;
+            cx.toast_error(error, window);
+        }
+
         let theme = cx.theme();
 
         let (row_count, exec_time) = self
@@ -544,9 +606,14 @@ impl TableDelegate for ResultsTableDelegate {
             .rows
             .get(row_ix)
             .and_then(|row| row.get(col_ix))
-            .map(|v| v.as_display_string())
+            .map(|v| v.as_display_string_truncated(200))
             .unwrap_or_default();
 
-        div().text_xs().child(value)
+        div()
+            .text_xs()
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
+            .child(value)
     }
 }

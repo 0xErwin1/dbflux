@@ -1,4 +1,5 @@
 pub mod editor;
+pub mod history;
 pub mod results;
 pub mod sidebar;
 pub mod theme;

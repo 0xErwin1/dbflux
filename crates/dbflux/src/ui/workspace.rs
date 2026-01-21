@@ -23,8 +23,15 @@ impl Workspace {
 
         let results = cx.new(|cx| ResultsPane::new(app_state.clone(), window, cx));
         let editor = cx.new(|cx| EditorPane::new(app_state.clone(), results.clone(), window, cx));
-        let sidebar =
-            cx.new(|cx| Sidebar::new(app_state.clone(), editor.clone(), results.clone(), cx));
+        let sidebar = cx.new(|cx| {
+            Sidebar::new(
+                app_state.clone(),
+                editor.clone(),
+                results.clone(),
+                window,
+                cx,
+            )
+        });
         let notification_list = ToastManager::notification_list(cx);
 
         Self {
