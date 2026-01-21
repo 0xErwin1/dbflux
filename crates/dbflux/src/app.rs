@@ -138,16 +138,15 @@ impl AppState {
     }
 
     pub fn disconnect(&mut self, profile_id: Uuid) {
-        if let Some(mut connected) = self.connections.remove(&profile_id) {
-            if let Some(conn) = Arc::get_mut(&mut connected.connection) {
-                if let Err(e) = conn.close() {
-                    log::warn!(
-                        "Failed to close connection for {}: {:?}",
-                        connected.profile.name,
-                        e
-                    );
-                }
-            }
+        if let Some(mut connected) = self.connections.remove(&profile_id)
+            && let Some(conn) = Arc::get_mut(&mut connected.connection)
+            && let Err(e) = conn.close()
+        {
+            log::warn!(
+                "Failed to close connection for {}: {:?}",
+                connected.profile.name,
+                e
+            );
         }
 
         if self.active_connection_id == Some(profile_id) {
@@ -248,6 +247,60 @@ impl AppState {
 
         if let Err(e) = store.delete(&profile.secret_ref()) {
             error!("Failed to delete password: {:?}", e);
+        }
+    }
+
+    pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<String> {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        if !store.is_available() {
+            return None;
+        }
+
+        match store.get(&profile.ssh_secret_ref()) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("Failed to get SSH secret: {:?}", e);
+                None
+            }
+        }
+    }
+
+    pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &str) {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.set(&profile.ssh_secret_ref(), secret) {
+            error!("Failed to save SSH secret: {:?}", e);
+        }
+    }
+
+    pub fn delete_ssh_password(&self, profile: &ConnectionProfile) {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        if let Err(e) = store.delete(&profile.ssh_secret_ref()) {
+            error!("Failed to delete SSH secret: {:?}", e);
         }
     }
 
@@ -368,10 +421,10 @@ impl AppState {
             return Err("Database switching only supported for PostgreSQL".to_string());
         }
 
-        if let Some(ref schema) = connected.schema {
-            if schema.current_database.as_deref() == Some(database) {
-                return Err("Already connected to this database".to_string());
-            }
+        if let Some(ref schema) = connected.schema
+            && schema.current_database.as_deref() == Some(database)
+        {
+            return Err("Already connected to this database".to_string());
         }
 
         let mut new_profile = connected.profile.clone();

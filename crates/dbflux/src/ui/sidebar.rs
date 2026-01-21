@@ -94,7 +94,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let items = Self::build_tree_items(&app_state.read(cx));
+        let items = Self::build_tree_items(app_state.read(cx));
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
         let history_panel =
             cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
@@ -131,23 +131,21 @@ impl Sidebar {
             return;
         }
 
-        if item_id.starts_with("profile_") {
-            if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
-                if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
-                    let is_connected = self
-                        .app_state
-                        .read(cx)
-                        .connections
-                        .contains_key(&profile_id);
-                    if is_connected {
-                        self.app_state.update(cx, |state, cx| {
-                            state.set_active_connection(profile_id);
-                            cx.notify();
-                        });
-                    } else {
-                        self.connect_to_profile(profile_id, cx);
-                    }
-                }
+        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+        {
+            let is_connected = self
+                .app_state
+                .read(cx)
+                .connections
+                .contains_key(&profile_id);
+            if is_connected {
+                self.app_state.update(cx, |state, cx| {
+                    state.set_active_connection(profile_id);
+                    cx.notify();
+                });
+            } else {
+                self.connect_to_profile(profile_id, cx);
             }
         } else if item_id.starts_with("db_") {
             self.handle_database_click(item_id, cx);
@@ -261,7 +259,7 @@ impl Sidebar {
     }
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        let items = Self::build_tree_items(&self.app_state.read(cx));
+        let items = Self::build_tree_items(self.app_state.read(cx));
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
         });
@@ -285,46 +283,41 @@ impl Sidebar {
 
             let mut profile_item = TreeItem::new(format!("profile_{}", profile_id), profile_label);
 
-            if is_connected {
-                if let Some(connected) = state.connections.get(&profile_id) {
-                    if let Some(ref schema) = connected.schema {
-                        let mut profile_children = Vec::new();
+            if is_connected
+                && let Some(connected) = state.connections.get(&profile_id)
+                && let Some(ref schema) = connected.schema
+            {
+                let mut profile_children = Vec::new();
 
-                        if !schema.databases.is_empty() {
-                            for db in &schema.databases {
-                                let is_pending =
-                                    state.is_operation_pending(profile_id, Some(&db.name));
+                if !schema.databases.is_empty() {
+                    for db in &schema.databases {
+                        let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
 
-                                let db_children = if db.is_current {
-                                    Self::build_schema_children(profile_id, schema)
-                                } else {
-                                    Vec::new()
-                                };
-
-                                let db_label = if is_pending {
-                                    format!("{} (loading...)", db.name)
-                                } else if db.is_current {
-                                    format!("{} (current)", db.name)
-                                } else {
-                                    db.name.clone()
-                                };
-
-                                profile_children.push(
-                                    TreeItem::new(
-                                        format!("db_{}_{}", profile_id, db.name),
-                                        db_label,
-                                    )
-                                    .expanded(db.is_current)
-                                    .children(db_children),
-                                );
-                            }
+                        let db_children = if db.is_current {
+                            Self::build_schema_children(profile_id, schema)
                         } else {
-                            profile_children = Self::build_schema_children(profile_id, schema);
-                        }
+                            Vec::new()
+                        };
 
-                        profile_item = profile_item.expanded(is_active).children(profile_children);
+                        let db_label = if is_pending {
+                            format!("{} (loading...)", db.name)
+                        } else if db.is_current {
+                            format!("{} (current)", db.name)
+                        } else {
+                            db.name.clone()
+                        };
+
+                        profile_children.push(
+                            TreeItem::new(format!("db_{}_{}", profile_id, db.name), db_label)
+                                .expanded(db.is_current)
+                                .children(db_children),
+                        );
                     }
+                } else {
+                    profile_children = Self::build_schema_children(profile_id, schema);
                 }
+
+                profile_item = profile_item.expanded(is_active).children(profile_children);
             }
 
             items.push(profile_item);
@@ -544,10 +537,10 @@ impl Sidebar {
 
     fn delete_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
-            if let Some(idx) = state.profiles.iter().position(|p| p.id == profile_id) {
-                if let Some(removed) = state.remove_profile(idx) {
-                    log::info!("Deleted profile: {}", removed.name);
-                }
+            if let Some(idx) = state.profiles.iter().position(|p| p.id == profile_id)
+                && let Some(removed) = state.remove_profile(idx)
+            {
+                log::info!("Deleted profile: {}", removed.name);
             }
             cx.notify();
         });
@@ -568,7 +561,7 @@ impl Sidebar {
         };
 
         let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(500.0), px(450.0)), cx);
+        let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
 
         cx.open_window(
             WindowOptions {
@@ -622,7 +615,7 @@ impl Render for Sidebar {
         let color_gray: Hsla = gpui::rgb(0x808080).into();
         let color_orange: Hsla = gpui::rgb(0xCE9178).into();
         let color_schema: Hsla = gpui::rgb(0x569CD6).into();
-        let color_green: Hsla = gpui::green().into();
+        let color_green: Hsla = gpui::green();
 
         div()
             .flex()
@@ -669,7 +662,7 @@ impl Render for Sidebar {
                                             ..Default::default()
                                         }),
                                         window_bounds: Some(WindowBounds::Windowed(
-                                            Bounds::centered(None, size(px(500.0), px(450.0)), cx),
+                                            Bounds::centered(None, size(px(600.0), px(550.0)), cx),
                                         )),
                                         kind: WindowKind::Floating,
                                         ..Default::default()
@@ -827,78 +820,72 @@ impl Render for Sidebar {
                         });
                     }
 
-                    if node_kind == TreeNodeKind::Profile {
-                        if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
-                            if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
-                                let sidebar_for_menu = sidebar_entity.clone();
-                                let profile_connected = is_connected;
+                    if node_kind == TreeNodeKind::Profile
+                        && let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                        && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                    {
+                        let sidebar_for_menu = sidebar_entity.clone();
+                        let profile_connected = is_connected;
 
-                                let btn_id: SharedString = format!("menu-{}", profile_id).into();
+                        let btn_id: SharedString = format!("menu-{}", profile_id).into();
 
-                                list_item = list_item.suffix(move |_window, _cx| {
-                                    let sidebar = sidebar_for_menu.clone();
-                                    let sidebar_action = sidebar.clone();
-                                    let sidebar_edit = sidebar.clone();
-                                    let sidebar_delete = sidebar.clone();
+                        list_item = list_item.suffix(move |_window, _cx| {
+                            let sidebar = sidebar_for_menu.clone();
+                            let sidebar_action = sidebar.clone();
+                            let sidebar_edit = sidebar.clone();
+                            let sidebar_delete = sidebar.clone();
 
-                                    Button::new(btn_id.clone())
-                                        .ghost()
-                                        .compact()
-                                        .label("⋯")
-                                        .on_click(|_ev, _window, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .dropdown_menu(move |menu, _window, _cx| {
-                                            let menu = if profile_connected {
-                                                let sidebar_disconnect = sidebar_action.clone();
-                                                menu.item(
-                                                    PopupMenuItem::new("Disconnect").on_click(
-                                                        move |_ev, _window, cx| {
-                                                            sidebar_disconnect.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    this.disconnect_profile(
-                                                                        profile_id, cx,
-                                                                    );
-                                                                },
-                                                            );
-                                                        },
-                                                    ),
-                                                )
-                                            } else {
-                                                let sidebar_connect = sidebar_action.clone();
-                                                menu.item(PopupMenuItem::new("Connect").on_click(
-                                                    move |_ev, _window, cx| {
-                                                        sidebar_connect.update(cx, |this, cx| {
-                                                            this.connect_to_profile(profile_id, cx);
-                                                        });
-                                                    },
-                                                ))
-                                            };
-
-                                            let sidebar_ed = sidebar_edit.clone();
-                                            let sidebar_del = sidebar_delete.clone();
-                                            menu.item(PopupMenuItem::new("Edit").on_click(
+                            Button::new(btn_id.clone())
+                                .ghost()
+                                .compact()
+                                .label("⋯")
+                                .on_click(|_ev, _window, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .dropdown_menu(move |menu, _window, _cx| {
+                                    let menu = if profile_connected {
+                                        let sidebar_disconnect = sidebar_action.clone();
+                                        menu.item(
+                                            PopupMenuItem::new("Disconnect").on_click(
                                                 move |_ev, _window, cx| {
-                                                    sidebar_ed.update(cx, |this, cx| {
-                                                        this.edit_profile(profile_id, cx);
+                                                    sidebar_disconnect.update(cx, |this, cx| {
+                                                        this.disconnect_profile(profile_id, cx);
                                                     });
                                                 },
-                                            ))
-                                            .separator()
-                                            .item(
-                                                PopupMenuItem::new("Delete").on_click(
-                                                    move |_ev, _window, cx| {
-                                                        sidebar_del.update(cx, |this, cx| {
-                                                            this.delete_profile(profile_id, cx);
-                                                        });
-                                                    },
-                                                ),
-                                            )
-                                        })
-                                });
-                            }
-                        }
+                                            ),
+                                        )
+                                    } else {
+                                        let sidebar_connect = sidebar_action.clone();
+                                        menu.item(PopupMenuItem::new("Connect").on_click(
+                                            move |_ev, _window, cx| {
+                                                sidebar_connect.update(cx, |this, cx| {
+                                                    this.connect_to_profile(profile_id, cx);
+                                                });
+                                            },
+                                        ))
+                                    };
+
+                                    let sidebar_ed = sidebar_edit.clone();
+                                    let sidebar_del = sidebar_delete.clone();
+                                    menu.item(PopupMenuItem::new("Edit").on_click(
+                                        move |_ev, _window, cx| {
+                                            sidebar_ed.update(cx, |this, cx| {
+                                                this.edit_profile(profile_id, cx);
+                                            });
+                                        },
+                                    ))
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("Delete").on_click(
+                                            move |_ev, _window, cx| {
+                                                sidebar_del.update(cx, |this, cx| {
+                                                    this.delete_profile(profile_id, cx);
+                                                });
+                                            },
+                                        ),
+                                    )
+                                })
+                        });
                     }
 
                     list_item

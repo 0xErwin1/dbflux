@@ -137,10 +137,10 @@ impl Connection for SqliteConnection {
             }
             rows.push(values);
 
-            if let Some(limit) = req.limit {
-                if rows.len() >= limit as usize {
-                    break;
-                }
+            if let Some(limit) = req.limit
+                && rows.len() >= limit as usize
+            {
+                break;
             }
         }
 

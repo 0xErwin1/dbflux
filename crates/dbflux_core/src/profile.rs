@@ -32,6 +32,27 @@ pub enum SslMode {
     Require,
 }
 
+/// SSH authentication method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SshAuthMethod {
+    /// Authenticate using a private key file.
+    /// The passphrase (if any) is stored in the keyring.
+    PrivateKey {
+        /// Path to the private key file. If `None`, uses SSH agent or default keys (~/.ssh/id_rsa).
+        key_path: Option<PathBuf>,
+    },
+
+    /// Authenticate using a password.
+    /// The password is stored in the keyring.
+    Password,
+}
+
+impl Default for SshAuthMethod {
+    fn default() -> Self {
+        SshAuthMethod::PrivateKey { key_path: None }
+    }
+}
+
 /// SSH tunnel configuration for connecting through a bastion host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshTunnelConfig {
@@ -44,8 +65,9 @@ pub struct SshTunnelConfig {
     /// SSH username.
     pub user: String,
 
-    /// Path to private key file. If `None`, uses SSH agent or default keys.
-    pub private_key_path: Option<PathBuf>,
+    /// Authentication method (private key or password).
+    #[serde(default)]
+    pub auth_method: SshAuthMethod,
 }
 
 /// Database-specific connection parameters.
@@ -125,8 +147,11 @@ impl ConnectionProfile {
         self.config.kind()
     }
 
-    /// Returns the keyring key for this profile's password.
     pub fn secret_ref(&self) -> String {
         crate::secrets::connection_secret_ref(&self.id)
+    }
+
+    pub fn ssh_secret_ref(&self) -> String {
+        crate::secrets::ssh_secret_ref(&self.id)
     }
 }

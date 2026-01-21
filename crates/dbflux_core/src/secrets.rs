@@ -110,6 +110,10 @@ pub fn connection_secret_ref(profile_id: &uuid::Uuid) -> String {
     format!("dbflux:conn:{}", profile_id)
 }
 
+pub fn ssh_secret_ref(profile_id: &uuid::Uuid) -> String {
+    format!("dbflux:ssh:{}", profile_id)
+}
+
 pub fn create_secret_store() -> Box<dyn SecretStore> {
     let keyring_store = KeyringSecretStore::new();
     if keyring_store.is_available() {
