@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Database value type.
 ///
-/// Custom enum to avoid serde_json::Value overhead and enable proper
-/// type-aware sorting, rendering, and CSV export.
+/// Custom enum instead of `serde_json::Value` to enable proper type-aware
+/// sorting, efficient rendering, and clean CSV export without JSON overhead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Null,

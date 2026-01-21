@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Supported database types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DbKind {
     Postgres,
@@ -17,22 +18,37 @@ impl DbKind {
     }
 }
 
+/// SSL/TLS mode for PostgreSQL connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SslMode {
+    /// No SSL (unencrypted connection).
     #[default]
     Disable,
+
+    /// Try SSL, fall back to unencrypted if unavailable.
     Prefer,
+
+    /// Require SSL (fail if server doesn't support it).
     Require,
 }
 
+/// SSH tunnel configuration for connecting through a bastion host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshTunnelConfig {
+    /// SSH server hostname.
     pub host: String,
+
+    /// SSH server port (typically 22).
     pub port: u16,
+
+    /// SSH username.
     pub user: String,
+
+    /// Path to private key file. If `None`, uses SSH agent or default keys.
     pub private_key_path: Option<PathBuf>,
 }
 
+/// Database-specific connection parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DbConfig {
     Postgres {
@@ -44,6 +60,7 @@ pub enum DbConfig {
         ssh_tunnel: Option<SshTunnelConfig>,
     },
     SQLite {
+        /// Path to the SQLite database file.
         path: PathBuf,
     },
 }
@@ -74,11 +91,22 @@ impl DbConfig {
     }
 }
 
+/// Saved connection profile.
+///
+/// Persisted to disk as JSON. Passwords are stored separately in the
+/// system keyring (if available) and referenced via `secret_ref()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionProfile {
+    /// Unique identifier for this profile.
     pub id: Uuid,
+
+    /// User-defined name shown in the UI.
     pub name: String,
+
+    /// Database-specific connection parameters.
     pub config: DbConfig,
+
+    /// Whether to persist the password in the system keyring.
     #[serde(default)]
     pub save_password: bool,
 }
@@ -97,6 +125,7 @@ impl ConnectionProfile {
         self.config.kind()
     }
 
+    /// Returns the keyring key for this profile's password.
     pub fn secret_ref(&self) -> String {
         crate::secrets::connection_secret_ref(&self.id)
     }
