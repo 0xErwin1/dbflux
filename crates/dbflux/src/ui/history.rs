@@ -1,11 +1,12 @@
 use crate::app::AppState;
 use crate::ui::editor::EditorPane;
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::HistoryEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 pub struct HistoryPanel {
@@ -121,8 +122,8 @@ impl Render for HistoryPanel {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_2()
-                    .h(px(28.0))
+                    .px(Spacing::SM)
+                    .h(Heights::ROW)
                     .cursor_pointer()
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -132,16 +133,16 @@ impl Render for HistoryPanel {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
+                            .gap(Spacing::XS)
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(FontSizes::SM)
                                     .text_color(theme.muted_foreground)
                                     .child(if is_collapsed { "▸" } else { "▾" }),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(FontSizes::SM)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.muted_foreground)
                                     .child(format!("HISTORY ({})", entry_count)),
@@ -151,8 +152,8 @@ impl Render for HistoryPanel {
             .when(!is_collapsed, |d| {
                 d.child(
                     div()
-                        .px_2()
-                        .py_1()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
                         .child(Input::new(&search_input).small().w_full()),
                 )
                 .child(div().flex_1().overflow_hidden().max_h(px(300.0)).children(
@@ -165,8 +166,8 @@ impl Render for HistoryPanel {
                             .id(ElementId::Name(format!("history-{}", entry_id).into()))
                             .flex()
                             .flex_col()
-                            .px_2()
-                            .py(px(4.0))
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
                             .border_b_1()
                             .border_color(theme.border)
                             .cursor_pointer()
@@ -182,7 +183,7 @@ impl Render for HistoryPanel {
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_xs()
+                                            .text_size(FontSizes::SM)
                                             .text_color(theme.foreground)
                                             .overflow_hidden()
                                             .text_ellipsis()
@@ -192,19 +193,19 @@ impl Render for HistoryPanel {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap(px(2.0))
+                                            .gap(Spacing::XS)
                                             .child(
                                                 div()
                                                     .id(ElementId::Name(
                                                         format!("fav-{}", entry_id).into(),
                                                     ))
-                                                    .w(px(16.0))
-                                                    .h(px(16.0))
+                                                    .w(Heights::ICON_SM)
+                                                    .h(Heights::ICON_SM)
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .rounded(px(2.0))
-                                                    .text_xs()
+                                                    .rounded(Radii::SM)
+                                                    .text_size(FontSizes::SM)
                                                     .when(is_favorite, |d| {
                                                         d.text_color(gpui::rgb(0xF59E0B))
                                                     })
@@ -222,13 +223,13 @@ impl Render for HistoryPanel {
                                                     .id(ElementId::Name(
                                                         format!("del-{}", entry_id).into(),
                                                     ))
-                                                    .w(px(16.0))
-                                                    .h(px(16.0))
+                                                    .w(Heights::ICON_SM)
+                                                    .h(Heights::ICON_SM)
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .rounded(px(2.0))
-                                                    .text_xs()
+                                                    .rounded(Radii::SM)
+                                                    .text_size(FontSizes::SM)
                                                     .text_color(theme.muted_foreground)
                                                     .hover(|d: StyleRefinement| {
                                                         d.bg(theme.secondary)
@@ -245,26 +246,26 @@ impl Render for HistoryPanel {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.0))
-                                    .mt(px(2.0))
+                                    .gap(Spacing::SM)
+                                    .mt(Spacing::XS)
                                     .child(
                                         div()
                                             .text_color(theme.muted_foreground)
-                                            .text_size(px(10.0))
+                                            .text_size(FontSizes::XS)
                                             .child(entry.formatted_timestamp()),
                                     )
                                     .when_some(entry.row_count, |d, count| {
                                         d.child(
                                             div()
                                                 .text_color(theme.muted_foreground)
-                                                .text_size(px(10.0))
+                                                .text_size(FontSizes::XS)
                                                 .child(format!("{} rows", count)),
                                         )
                                     })
                                     .child(
                                         div()
                                             .text_color(theme.muted_foreground)
-                                            .text_size(px(10.0))
+                                            .text_size(FontSizes::XS)
                                             .child(format!("{}ms", entry.execution_time_ms)),
                                     ),
                             )
@@ -273,9 +274,9 @@ impl Render for HistoryPanel {
                 .when(entry_count == 0, |d| {
                     d.child(
                         div()
-                            .px_2()
-                            .py_4()
-                            .text_xs()
+                            .px(Spacing::SM)
+                            .py(Spacing::LG)
+                            .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
                             .text_center()
                             .child("No history yet"),

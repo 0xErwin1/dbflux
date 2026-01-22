@@ -8,6 +8,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::ActiveTheme;
 use gpui_component::Disableable;
+use gpui_component::Sizable;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -527,7 +528,7 @@ impl ConnectionManagerWindow {
             self.ssh_auth_method
         );
 
-        self.app_state.update(cx, |state, _| {
+        self.app_state.update(cx, |state, cx| {
             if profile.save_password && !password.is_empty() {
                 info!("Saving password to keyring for profile {}", profile.id);
                 state.save_password(&profile, &password);
@@ -549,6 +550,8 @@ impl ConnectionManagerWindow {
             } else {
                 state.add_profile(profile);
             }
+
+            cx.emit(crate::app::AppStateChanged);
         });
 
         cx.emit(DismissEvent);
@@ -1167,7 +1170,7 @@ impl ConnectionManagerWindow {
                     .border_b_1()
                     .border_color(border_color)
                     .when(!is_editing, |d| {
-                        d.child(Button::new("back").ghost().label("<").compact().on_click(
+                        d.child(Button::new("back").ghost().label("<").small().on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.back_to_driver_select(window, cx);
                             }),
@@ -1249,7 +1252,7 @@ impl ConnectionManagerWindow {
                                 Button::new("test-connection")
                                     .ghost()
                                     .label("Test Connection")
-                                    .compact()
+                                    .small()
                                     .disabled(test_status == TestStatus::Testing)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.test_connection(window, cx);
@@ -1259,7 +1262,7 @@ impl ConnectionManagerWindow {
                                 Button::new("save-connection")
                                     .primary()
                                     .label("Save")
-                                    .compact()
+                                    .small()
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.save_profile(window, cx);
                                     })),

@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -374,16 +375,16 @@ impl Render for ResultsPane {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(26.0))
-                    .px_1()
-                    .gap(px(2.0))
+                    .h(Heights::TAB)
+                    .px(Spacing::XS)
+                    .gap(Spacing::XS)
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
                     .when(self.tabs.is_empty(), |d| {
                         d.child(
                             div()
-                                .text_xs()
+                                .text_size(FontSizes::SM)
                                 .text_color(theme.muted_foreground)
                                 .child("Results"),
                         )
@@ -397,11 +398,11 @@ impl Render for ResultsPane {
                             .id(("result-tab", idx))
                             .flex()
                             .items_center()
-                            .gap(px(2.0))
-                            .px_2()
-                            .py(px(2.0))
-                            .text_xs()
-                            .rounded_t(px(3.0))
+                            .gap(Spacing::XS)
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
+                            .text_size(FontSizes::SM)
+                            .rounded_t(Radii::SM)
                             .cursor_pointer()
                             .when(is_active, |d| {
                                 d.bg(theme.background).text_color(theme.foreground)
@@ -414,16 +415,21 @@ impl Render for ResultsPane {
                                 this.switch_tab(idx, cx);
                             }))
                             .when(is_table, |d| {
-                                d.child(div().text_xs().text_color(gpui::rgb(0x4EC9B0)).child("▦ "))
+                                d.child(
+                                    div()
+                                        .text_size(FontSizes::SM)
+                                        .text_color(gpui::rgb(0x4EC9B0))
+                                        .child("▦ "),
+                                )
                             })
                             .child(tab_title)
                             .child(
                                 div()
                                     .id(("close-result-tab", idx))
-                                    .ml(px(2.0))
-                                    .px(px(2.0))
-                                    .rounded(px(2.0))
-                                    .text_xs()
+                                    .ml(Spacing::XS)
+                                    .px(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::SM)
                                     .text_color(theme.muted_foreground)
                                     .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -439,9 +445,9 @@ impl Render for ResultsPane {
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .h(px(28.0))
-                        .px_2()
+                        .gap(Spacing::SM)
+                        .h(Heights::TOOLBAR)
+                        .px(Spacing::SM)
                         .border_b_1()
                         .border_color(theme.border)
                         .bg(theme.secondary)
@@ -449,16 +455,16 @@ impl Render for ResultsPane {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap(Spacing::XS)
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(FontSizes::SM)
                                         .text_color(theme.muted_foreground)
                                         .child("SELECT * FROM"),
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(FontSizes::SM)
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.foreground)
                                         .child(table_name),
@@ -468,10 +474,10 @@ impl Render for ResultsPane {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap(Spacing::XS)
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(FontSizes::SM)
                                         .text_color(theme.muted_foreground)
                                         .child("WHERE"),
                                 )
@@ -485,25 +491,25 @@ impl Render for ResultsPane {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap(Spacing::XS)
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(FontSizes::SM)
                                         .text_color(theme.muted_foreground)
                                         .child("LIMIT"),
                                 )
-                                .child(div().w(px(50.0)).child(Input::new(&limit_input).small())),
+                                .child(div().w(px(60.0)).child(Input::new(&limit_input).small())),
                         )
                         .child(
                             div()
                                 .id("refresh-table")
-                                .w(px(22.0))
-                                .h(px(22.0))
+                                .w(Heights::ICON_MD)
+                                .h(Heights::ICON_MD)
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(3.0))
-                                .text_sm()
+                                .rounded(Radii::SM)
+                                .text_size(FontSizes::BASE)
                                 .text_color(theme.muted_foreground)
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
@@ -521,7 +527,7 @@ impl Render for ResultsPane {
                     .when(tab_count == 0, |d| {
                         d.flex().items_center().justify_center().child(
                             div()
-                                .text_sm()
+                                .text_size(FontSizes::BASE)
                                 .text_color(theme.muted_foreground)
                                 .child("Run a query to see results"),
                         )
@@ -538,23 +544,25 @@ impl Render for ResultsPane {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(20.0))
-                    .px_2()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
                     .border_t_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(FontSizes::XS)
                             .text_color(theme.muted_foreground)
                             .child(format!("{} rows", row_count)),
                     )
-                    .child(
+                    .child({
+                        let mut muted = theme.muted_foreground;
+                        muted.a = 0.5;
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(exec_time),
-                    ),
+                            .text_size(FontSizes::XS)
+                            .text_color(muted)
+                            .child(exec_time)
+                    }),
             )
     }
 }

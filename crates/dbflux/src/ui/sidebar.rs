@@ -2,11 +2,13 @@ use crate::app::AppState;
 use crate::ui::editor::EditorPane;
 use crate::ui::history::HistoryPanel;
 use crate::ui::results::ResultsPane;
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
@@ -79,6 +81,7 @@ pub struct Sidebar {
     history_panel: Entity<HistoryPanel>,
     pending_view_table: Option<String>,
     pending_toast: Option<PendingToast>,
+    _subscriptions: Vec<Subscription>,
 }
 
 struct PendingToast {
@@ -99,6 +102,11 @@ impl Sidebar {
         let history_panel =
             cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
 
+        let app_state_subscription =
+            cx.subscribe(&app_state, |this, _app_state, _event, cx| {
+                this.refresh_tree(cx);
+            });
+
         Self {
             app_state,
             editor,
@@ -107,6 +115,7 @@ impl Sidebar {
             history_panel,
             pending_view_table: None,
             pending_toast: None,
+            _subscriptions: vec![app_state_subscription],
         }
     }
 
@@ -211,6 +220,8 @@ impl Sidebar {
             }
         };
 
+        self.refresh_tree(cx);
+
         let app_state = self.app_state.clone();
         let db_name_owned = db_name.to_string();
         let sidebar = cx.entity().clone();
@@ -223,10 +234,7 @@ impl Sidebar {
 
             cx.update(|cx| {
                 let toast = match &result {
-                    Ok(res) => Some(PendingToast {
-                        message: format!("Switched to database: {}", res.database),
-                        is_error: false,
-                    }),
+                    Ok(_) => None,
                     Err(e) => Some(PendingToast {
                         message: format!("Failed to switch database: {}", e),
                         is_error: true,
@@ -542,7 +550,7 @@ impl Sidebar {
             {
                 log::info!("Deleted profile: {}", removed.name);
             }
-            cx.notify();
+            cx.emit(crate::app::AppStateChanged);
         });
     }
 
@@ -629,27 +637,27 @@ impl Render for Sidebar {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_2()
-                    .h(px(28.0))
+                    .px(Spacing::SM)
+                    .h(Heights::TOOLBAR)
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::XS)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.muted_foreground)
                             .child("CONNECTIONS"),
                     )
                     .child(
                         div()
                             .id("add-connection")
-                            .w(px(20.0))
-                            .h(px(20.0))
+                            .w(Heights::ICON_LG)
+                            .h(Heights::ICON_LG)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(3.0))
-                            .text_sm()
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::LG)
                             .text_color(theme.muted_foreground)
                             .cursor_pointer()
                             .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
@@ -707,7 +715,7 @@ impl Render for Sidebar {
                     };
 
                     let theme = cx.theme();
-                    let indent = px(depth as f32 * 10.0);
+                    let indent = px(depth as f32 * 16.0);
                     let is_folder = entry.is_folder();
                     let is_expanded = entry.is_expanded();
 
@@ -761,11 +769,11 @@ impl Render for Sidebar {
                         TreeNodeKind::Unknown => theme.muted_foreground,
                     };
 
-                    let mut list_item = ListItem::new(ix).selected(selected).py(px(1.0)).child(
+                    let mut list_item = ListItem::new(ix).selected(selected).py(Spacing::XS).child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(2.0))
+                            .gap(Spacing::SM)
                             .pl(indent)
                             .child(
                                 div()
@@ -773,20 +781,22 @@ impl Render for Sidebar {
                                     .flex()
                                     .justify_center()
                                     .text_color(theme.muted_foreground)
-                                    .when_some(chevron, |el, ch| el.text_xs().child(ch)),
+                                    .when_some(chevron, |el, ch| {
+                                        el.text_size(FontSizes::XS).child(ch)
+                                    }),
                             )
                             .child(
                                 div()
-                                    .w(px(14.0))
+                                    .w(Heights::ICON_SM)
                                     .flex()
                                     .justify_center()
-                                    .text_xs()
+                                    .text_size(FontSizes::SM)
                                     .text_color(icon_color)
                                     .child(icon),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(FontSizes::SM)
                                     .text_color(label_color)
                                     .when(node_kind == TreeNodeKind::Profile && is_active, |d| {
                                         d.font_weight(FontWeight::SEMIBOLD)
@@ -837,7 +847,7 @@ impl Render for Sidebar {
 
                             Button::new(btn_id.clone())
                                 .ghost()
-                                .compact()
+                                .small()
                                 .label("⋯")
                                 .on_click(|_ev, _window, cx| {
                                     cx.stop_propagation();

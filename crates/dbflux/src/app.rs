@@ -2,11 +2,14 @@ use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry, HistoryStore,
     ProfileStore, SchemaSnapshot, SecretStore, create_secret_store,
 };
+use gpui::EventEmitter;
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
+
+pub struct AppStateChanged;
 
 #[cfg(feature = "sqlite")]
 use dbflux_driver_sqlite::SqliteDriver;
@@ -579,7 +582,6 @@ impl SwitchDatabaseParams {
 
         Ok(SwitchDatabaseResult {
             profile_id: self.profile_id,
-            database: self.database,
             original_profile: self.original_profile,
             connection: connection.into(),
             schema,
@@ -611,7 +613,6 @@ impl SwitchDatabaseParams {
 
 pub struct SwitchDatabaseResult {
     pub profile_id: Uuid,
-    pub database: String,
     pub original_profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
@@ -622,3 +623,5 @@ impl Default for AppState {
         Self::new()
     }
 }
+
+impl EventEmitter<AppStateChanged> for AppState {}

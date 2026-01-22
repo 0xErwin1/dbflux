@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::ui::results::ResultsPane;
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, QueryRequest};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -274,11 +275,15 @@ impl Render for EditorPane {
         let rename_input = self.rename_input.clone();
 
         let state = self.app_state.read(cx);
-        let connection_name = state
-            .active_connection()
+        let active_conn = state.active_connection();
+        let is_connected = active_conn.is_some();
+
+        let connection_name = active_conn
             .map(|c| c.profile.name.clone())
-            .unwrap_or_else(|| "No connection".to_string());
-        let is_connected = state.active_connection().is_some();
+            .unwrap_or_default();
+        let current_db = active_conn
+            .and_then(|c| c.schema.as_ref())
+            .and_then(|s| s.current_database.clone());
         let has_multiple_connections = state.connections.len() > 1;
 
         let connection_items = self.build_connection_menu_items(cx);
@@ -293,6 +298,7 @@ impl Render for EditorPane {
             .flex_col()
             .flex_1()
             .min_h(px(200.0))
+            .bg(theme.sidebar)
             .border_b_1()
             .border_color(theme.border)
             .child(
@@ -300,86 +306,149 @@ impl Render for EditorPane {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(36.0))
-                    .px_3()
+                    .h(Heights::HEADER)
+                    .px(Spacing::MD)
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(6.0))
-                                    .h(px(6.0))
-                                    .rounded_full()
-                                    .when(is_connected, |d| d.bg(gpui::green()))
-                                    .when(!is_connected, |d| d.bg(theme.muted_foreground)),
-                            )
-                            .when(has_multiple_connections, |d| {
-                                d.child(
-                                    DropdownButton::new("connection-selector")
-                                        .compact()
-                                        .button(
-                                            Button::new("conn-btn")
-                                                .ghost()
-                                                .compact()
-                                                .label(connection_name.clone()),
-                                        )
-                                        .dropdown_menu(move |menu, _window, _cx| {
-                                            let mut menu = menu;
-                                            for (profile_id, name, is_active) in &connection_items {
-                                                let pid = *profile_id;
-                                                let app_state = app_state.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(name.clone())
-                                                        .checked(*is_active)
-                                                        .on_click(move |_, _, cx| {
-                                                            app_state.update(cx, |state, cx| {
-                                                                state.set_active_connection(pid);
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                );
-                                            }
-                                            menu
-                                        }),
-                                )
-                            })
-                            .when(!has_multiple_connections, |d| {
-                                d.child(
+                    .when(!is_connected, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .child(
                                     div()
-                                        .text_xs()
-                                        .when(is_connected, |d| d.text_color(theme.foreground))
-                                        .when(!is_connected, |d| {
-                                            d.text_color(theme.muted_foreground)
-                                        })
-                                        .child(connection_name.clone()),
+                                        .w(Spacing::SM)
+                                        .h(Spacing::SM)
+                                        .rounded_full()
+                                        .bg(theme.muted_foreground),
                                 )
-                            }),
-                    )
+                                .child(
+                                    div()
+                                        .text_size(FontSizes::SM)
+                                        .text_color(theme.muted_foreground)
+                                        .child("No connection"),
+                                ),
+                        )
+                    })
+                    .when(is_connected, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .px(Spacing::SM)
+                                .py(Spacing::XS)
+                                .rounded(Radii::MD)
+                                .bg(theme.secondary)
+                                .child(
+                                    div()
+                                        .w(Spacing::SM)
+                                        .h(Spacing::SM)
+                                        .rounded_full()
+                                        .bg(gpui::rgb(0x22C55E)),
+                                )
+                                .when(!has_multiple_connections, |d| {
+                                    d.child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::XS)
+                                            .child(
+                                                div()
+                                                    .text_size(FontSizes::SM)
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.foreground)
+                                                    .child(connection_name.clone()),
+                                            )
+                                            .when_some(current_db.clone(), |d, db| {
+                                                d.child(
+                                                    div()
+                                                        .text_size(FontSizes::SM)
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("/"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(FontSizes::SM)
+                                                        .text_color(theme.foreground)
+                                                        .child(db),
+                                                )
+                                            }),
+                                    )
+                                })
+                                .when(has_multiple_connections, |d| {
+                                    d.child(
+                                        DropdownButton::new("connection-selector")
+                                            .small()
+                                            .button(
+                                                Button::new("conn-btn")
+                                                    .ghost()
+                                                    .small()
+                                                    .label(if let Some(ref db) = current_db {
+                                                        format!("{} / {}", connection_name, db)
+                                                    } else {
+                                                        connection_name.clone()
+                                                    }),
+                                            )
+                                            .dropdown_menu(move |menu, _window, _cx| {
+                                                let mut menu = menu;
+                                                for (profile_id, name, is_active) in
+                                                    &connection_items
+                                                {
+                                                    let pid = *profile_id;
+                                                    let app_state = app_state.clone();
+                                                    menu = menu.item(
+                                                        PopupMenuItem::new(name.clone())
+                                                            .checked(*is_active)
+                                                            .on_click(move |_, _, cx| {
+                                                                app_state.update(
+                                                                    cx,
+                                                                    |state, cx| {
+                                                                        state
+                                                                            .set_active_connection(
+                                                                                pid,
+                                                                            );
+                                                                        cx.notify();
+                                                                    },
+                                                                );
+                                                            }),
+                                                    );
+                                                }
+                                                menu
+                                            }),
+                                    )
+                                }),
+                        )
+                    })
                     .child(
                         div()
                             .id("run-query")
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .ml_2()
-                            .px_3()
-                            .py(px(4.0))
-                            .rounded(px(4.0))
+                            .gap(Spacing::SM)
+                            .px(Spacing::MD)
+                            .h(Heights::BUTTON)
+                            .rounded(Radii::MD)
                             .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.background)
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary).border_color(theme.primary))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.run_query(window, cx);
-                            }))
+                            .when(is_connected, |d| {
+                                d.border_color(theme.border)
+                                    .bg(theme.background)
+                                    .text_color(theme.foreground)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.secondary).border_color(theme.primary))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.run_query(window, cx);
+                                    }))
+                            })
+                            .when(!is_connected, |d| {
+                                d.border_color(theme.border)
+                                    .bg(theme.secondary)
+                                    .text_color(theme.muted_foreground)
+                                    .cursor_not_allowed()
+                            })
+                            .text_size(FontSizes::SM)
                             .child("▶")
                             .child("Run"),
                     ),
@@ -388,9 +457,9 @@ impl Render for EditorPane {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(28.0))
-                    .px_1()
-                    .gap(px(2.0))
+                    .h(Heights::TAB)
+                    .px(Spacing::XS)
+                    .gap(Spacing::XS)
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
@@ -408,11 +477,11 @@ impl Render for EditorPane {
                             .id(("tab", idx))
                             .flex()
                             .items_center()
-                            .gap(px(2.0))
-                            .px_2()
-                            .py(px(2.0))
-                            .text_xs()
-                            .rounded_t(px(3.0))
+                            .gap(Spacing::XS)
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
+                            .text_size(FontSizes::SM)
+                            .rounded_t(Radii::SM)
                             .cursor_pointer()
                             .when(is_active, |d| {
                                 d.bg(theme.background).text_color(theme.foreground)
@@ -428,17 +497,17 @@ impl Render for EditorPane {
                                 this.start_rename(idx, window, cx);
                             }))
                             .when(is_renaming, |d| {
-                                d.child(div().w(px(80.0)).child(Input::new(&rename_input).small()))
+                                d.child(div().w(px(100.0)).child(Input::new(&rename_input).small()))
                             })
                             .when(!is_renaming, |d| d.child(tab_title))
                             .when(tab_count > 1 && !is_renaming, |d| {
                                 d.child(
                                     div()
                                         .id(("close-tab", idx))
-                                        .ml(px(2.0))
-                                        .px(px(2.0))
-                                        .rounded(px(2.0))
-                                        .text_xs()
+                                        .ml(Spacing::XS)
+                                        .px(Spacing::XS)
+                                        .rounded(Radii::SM)
+                                        .text_size(FontSizes::SM)
                                         .text_color(theme.muted_foreground)
                                         .hover(|d| {
                                             d.bg(theme.secondary).text_color(theme.foreground)
@@ -453,13 +522,13 @@ impl Render for EditorPane {
                     .child(
                         div()
                             .id("new-tab")
-                            .w(px(20.0))
-                            .h(px(20.0))
+                            .w(Heights::ICON_MD)
+                            .h(Heights::ICON_MD)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(3.0))
-                            .text_xs()
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
                             .cursor_pointer()
                             .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))

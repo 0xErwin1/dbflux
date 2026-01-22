@@ -4,5 +4,6 @@ pub mod results;
 pub mod sidebar;
 pub mod theme;
 pub mod toast;
+pub mod tokens;
 pub mod windows;
 pub mod workspace;
