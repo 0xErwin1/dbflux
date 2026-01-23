@@ -4,6 +4,7 @@ use dbflux_core::{
     CancelToken, Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef, TaskId,
     TaskKind,
 };
+use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -11,6 +12,8 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::table::{Column, Table, TableDelegate, TableState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
+use std::fs::File;
+use std::io::BufWriter;
 
 pub struct ResultsReceived;
 
@@ -54,6 +57,11 @@ struct RunningTableQuery {
     cancel_token: CancelToken,
 }
 
+struct PendingToast {
+    message: String,
+    is_error: bool,
+}
+
 pub struct ResultsPane {
     app_state: Entity<AppState>,
     tabs: Vec<ResultTab>,
@@ -67,6 +75,7 @@ pub struct ResultsPane {
     pending_total_count: Option<PendingTotalCount>,
     pending_error: Option<String>,
     running_table_query: Option<RunningTableQuery>,
+    pending_toast: Option<PendingToast>,
 }
 
 impl ResultsPane {
@@ -115,6 +124,7 @@ impl ResultsPane {
             pending_total_count: None,
             pending_error: None,
             running_table_query: None,
+            pending_toast: None,
         }
     }
 
@@ -650,6 +660,66 @@ impl ResultsPane {
     fn is_table_query_running(&self) -> bool {
         self.running_table_query.is_some()
     }
+
+    fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::toast::ToastExt;
+
+        let Some(tab) = self.active_tab() else {
+            cx.toast_error("No results to export", window);
+            return;
+        };
+
+        let result = tab.result.clone();
+        let suggested_name = match &tab.source {
+            ResultSource::TableView { table, .. } => format!("{}.csv", table.name),
+            ResultSource::Query => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("result_{}.csv", timestamp)
+            }
+        };
+
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let file_handle = rfd::AsyncFileDialog::new()
+                .set_title("Export as CSV")
+                .set_file_name(&suggested_name)
+                .add_filter("CSV", &["csv"])
+                .save_file()
+                .await;
+
+            let Some(handle) = file_handle else {
+                return;
+            };
+
+            let path = handle.path().to_path_buf();
+
+            let export_result = (|| {
+                let file = File::create(&path)?;
+                let mut writer = BufWriter::new(file);
+                CsvExporter.export(&result, &mut writer)?;
+                Ok::<_, dbflux_export::ExportError>(())
+            })();
+
+            let message = match &export_result {
+                Ok(()) => format!("Exported to {}", path.display()),
+                Err(e) => format!("Export failed: {}", e),
+            };
+            let is_error = export_result.is_err();
+
+            cx.update(|cx| {
+                entity.update(cx, |pane, cx| {
+                    pane.pending_toast = Some(PendingToast { message, is_error });
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl Render for ResultsPane {
@@ -677,6 +747,15 @@ impl Render for ResultsPane {
         if let Some(error) = self.pending_error.take() {
             use crate::ui::toast::ToastExt;
             cx.toast_error(error, window);
+        }
+
+        if let Some(toast) = self.pending_toast.take() {
+            use crate::ui::toast::ToastExt;
+            if toast.is_error {
+                cx.toast_error(toast.message, window);
+            } else {
+                cx.toast_success(toast.message, window);
+            }
         }
 
         let theme = cx.theme();
@@ -952,14 +1031,38 @@ impl Render for ResultsPane {
                             )
                         },
                     ))
-                    .child({
-                        let mut muted = theme.muted_foreground;
-                        muted.a = 0.5;
+                    .child(
                         div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .child(exec_time)
-                    }),
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .when(tab_count > 0, |d| {
+                                d.child(
+                                    div()
+                                        .id("export-csv")
+                                        .px(Spacing::XS)
+                                        .rounded(Radii::SM)
+                                        .text_size(FontSizes::XS)
+                                        .cursor_pointer()
+                                        .text_color(theme.muted_foreground)
+                                        .hover(|d| {
+                                            d.bg(theme.secondary).text_color(theme.foreground)
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.export_results(window, cx);
+                                        }))
+                                        .child("Export CSV"),
+                                )
+                            })
+                            .child({
+                                let mut muted = theme.muted_foreground;
+                                muted.a = 0.5;
+                                div()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(muted)
+                                    .child(exec_time)
+                            }),
+                    ),
             )
     }
 }

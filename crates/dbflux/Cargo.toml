@@ -12,6 +12,7 @@ path = "src/main.rs"
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_core.workspace = true
+dbflux_export.workspace = true
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
