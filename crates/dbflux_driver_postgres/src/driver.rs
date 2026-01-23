@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -195,8 +196,10 @@ impl PostgresDriver {
         db_password: Option<&str>,
         ssl_mode: SslMode,
     ) -> Result<Box<dyn Connection>, DbError> {
+        let total_start = Instant::now();
+
         log::info!(
-            "Connecting via SSH tunnel: {}@{}:{} -> {}:{}",
+            "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
             tunnel_config.user,
             tunnel_config.host,
             tunnel_config.port,
@@ -204,21 +207,31 @@ impl PostgresDriver {
             db_port
         );
 
+        let phase_start = Instant::now();
         let ssh_session = establish_ssh_session(tunnel_config, ssh_secret)?;
+        log::info!(
+            "[CONNECT] SSH session phase completed in {:.2}ms",
+            phase_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         log::info!(
-            "SSH session established, setting up local port forwarding to {}:{}",
+            "[SSH] Phase 4/4: Setting up tunnel to {}:{}",
             db_host,
             db_port
         );
+        let phase_start = Instant::now();
 
         let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
         let local_port = tunnel.local_port();
 
         log::info!(
-            "SSH tunnel listening on 127.0.0.1:{}, connecting to PostgreSQL",
-            local_port
+            "[SSH] Phase 4/4: Tunnel ready on 127.0.0.1:{} in {:.2}ms",
+            local_port,
+            phase_start.elapsed().as_secs_f64() * 1000.0
         );
+
+        log::info!("[DB] Connecting to PostgreSQL via tunnel");
+        let phase_start = Instant::now();
 
         let client = connect_postgres(&PostgresConnectParams {
             host: "127.0.0.1",
@@ -230,7 +243,13 @@ impl PostgresDriver {
         })?;
 
         log::info!(
-            "Successfully connected to {}:{} via SSH tunnel through {}",
+            "[DB] PostgreSQL connection established in {:.2}ms",
+            phase_start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        log::info!(
+            "[CONNECT] Total connection time: {:.2}ms ({}:{} via SSH {})",
+            total_start.elapsed().as_secs_f64() * 1000.0,
             db_host,
             db_port,
             tunnel_config.host
@@ -247,6 +266,15 @@ fn establish_ssh_session(
     config: &SshTunnelConfig,
     secret: Option<&str>,
 ) -> Result<Session, DbError> {
+    let total_start = Instant::now();
+
+    log::info!(
+        "[SSH] Phase 1/4: TCP connect to {}:{}",
+        config.host,
+        config.port
+    );
+    let phase_start = Instant::now();
+
     let tcp = TcpStream::connect((&*config.host, config.port)).map_err(|e| {
         DbError::ConnectionFailed(format!(
             "Failed to connect to SSH server {}:{}: {}",
@@ -254,10 +282,19 @@ fn establish_ssh_session(
         ))
     })?;
 
+    tcp.set_nodelay(true).ok();
     tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .ok();
     tcp.set_write_timeout(Some(std::time::Duration::from_secs(30)))
         .ok();
+
+    log::info!(
+        "[SSH] Phase 1/4: TCP connect completed in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!("[SSH] Phase 2/4: Creating SSH session and handshake");
+    let phase_start = Instant::now();
 
     let mut session = Session::new()
         .map_err(|e| DbError::ConnectionFailed(format!("Failed to create SSH session: {}", e)))?;
@@ -268,6 +305,14 @@ fn establish_ssh_session(
     session
         .handshake()
         .map_err(|e| DbError::ConnectionFailed(format!("SSH handshake failed: {}", e)))?;
+
+    log::info!(
+        "[SSH] Phase 2/4: Handshake completed in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!("[SSH] Phase 3/4: Authenticating as {}", config.user);
+    let phase_start = Instant::now();
 
     match &config.auth_method {
         SshAuthMethod::PrivateKey { key_path } => {
@@ -291,7 +336,16 @@ fn establish_ssh_session(
         ));
     }
 
-    log::info!("SSH authenticated as {}", config.user);
+    log::info!(
+        "[SSH] Phase 3/4: Authentication completed in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!(
+        "[SSH] Session established, total time: {:.2}ms",
+        total_start.elapsed().as_secs_f64() * 1000.0
+    );
+
     Ok(session)
 }
 
@@ -422,7 +476,7 @@ fn run_tunnel_loop(
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(std::time::Duration::from_millis(10));
+                thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => {
                 log::error!("SSH tunnel listener error: {}", e);
@@ -458,6 +512,7 @@ fn handle_tunnel_connection(
         channel
     };
 
+    client_stream.set_nodelay(true)?;
     client_stream.set_nonblocking(true)?;
 
     let mut client_buf = [0u8; 8192];
@@ -487,7 +542,7 @@ fn handle_tunnel_connection(
         }
 
         if !activity {
-            thread::sleep(std::time::Duration::from_millis(1));
+            thread::sleep(std::time::Duration::from_micros(100));
         }
     }
 
@@ -519,6 +574,13 @@ impl Connection for PostgresConnection {
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let start = Instant::now();
 
+        let sql_preview = if req.sql.len() > 80 {
+            format!("{}...", &req.sql[..80])
+        } else {
+            req.sql.clone()
+        };
+        log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
+
         let rows = {
             let mut client = self
                 .client
@@ -530,12 +592,18 @@ impl Connection for PostgresConnection {
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?
         };
 
+        let query_time = start.elapsed();
+
         if rows.is_empty() {
+            log::debug!(
+                "[QUERY] Completed in {:.2}ms, 0 rows",
+                query_time.as_secs_f64() * 1000.0
+            );
             return Ok(QueryResult {
                 columns: Vec::new(),
                 rows: Vec::new(),
                 affected_rows: None,
-                execution_time: start.elapsed(),
+                execution_time: query_time,
             });
         }
 
@@ -559,11 +627,21 @@ impl Connection for PostgresConnection {
             })
             .collect();
 
+        let total_time = start.elapsed();
+        log::debug!(
+            "[QUERY] Completed in {:.2}ms (query: {:.2}ms, parse: {:.2}ms), {} rows, {} cols",
+            total_time.as_secs_f64() * 1000.0,
+            query_time.as_secs_f64() * 1000.0,
+            (total_time - query_time).as_secs_f64() * 1000.0,
+            result_rows.len(),
+            columns.len()
+        );
+
         Ok(QueryResult {
             columns,
             rows: result_rows,
             affected_rows: None,
-            execution_time: start.elapsed(),
+            execution_time: total_time,
         })
     }
 
@@ -574,14 +652,45 @@ impl Connection for PostgresConnection {
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+        let total_start = Instant::now();
+        log::info!("[SCHEMA] Starting schema fetch");
+
         let mut client = self
             .client
             .lock()
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
+        let phase_start = Instant::now();
         let databases = get_databases(&mut client)?;
+        log::info!(
+            "[SCHEMA] Fetched {} databases in {:.2}ms",
+            databases.len(),
+            phase_start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        let phase_start = Instant::now();
         let current_database = get_current_database(&mut client)?;
+        log::info!(
+            "[SCHEMA] Fetched current database in {:.2}ms",
+            phase_start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        let phase_start = Instant::now();
         let schemas = get_schemas(&mut client)?;
+        let table_count: usize = schemas.iter().map(|s| s.tables.len()).sum();
+        let view_count: usize = schemas.iter().map(|s| s.views.len()).sum();
+        log::info!(
+            "[SCHEMA] Fetched {} schemas ({} tables, {} views) in {:.2}ms",
+            schemas.len(),
+            table_count,
+            view_count,
+            phase_start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        log::info!(
+            "[SCHEMA] Total schema fetch time: {:.2}ms",
+            total_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         Ok(SchemaSnapshot {
             databases,
@@ -640,6 +749,7 @@ fn get_current_database(client: &mut Client) -> Result<Option<String>, DbError> 
 }
 
 fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
+    let phase_start = Instant::now();
     let schema_rows = client
         .query(
             r#"
@@ -652,12 +762,28 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
         )
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
+    log::info!(
+        "[SCHEMA] Found {} schemas in {:.2}ms",
+        schema_rows.len(),
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
     let mut schemas = Vec::new();
 
     for row in schema_rows {
         let schema_name: String = row.get(0);
+        let schema_start = Instant::now();
+
         let tables = get_tables_for_schema(client, &schema_name)?;
         let views = get_views_for_schema(client, &schema_name)?;
+
+        log::info!(
+            "[SCHEMA] Schema '{}': {} tables, {} views in {:.2}ms",
+            schema_name,
+            tables.len(),
+            views.len(),
+            schema_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         schemas.push(DbSchemaInfo {
             name: schema_name,
@@ -683,19 +809,28 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
         )
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-    let mut tables = Vec::new();
-    for row in rows {
-        let name: String = row.get(0);
-        let columns = get_columns(client, schema, &name)?;
-        let indexes = get_indexes(client, schema, &name)?;
+    let table_names: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
 
-        tables.push(TableInfo {
-            name,
-            schema: Some(schema.to_string()),
-            columns,
-            indexes,
-        });
+    if table_names.is_empty() {
+        return Ok(Vec::new());
     }
+
+    let columns_map = get_all_columns_for_schema(client, schema)?;
+    let indexes_map = get_all_indexes_for_schema(client, schema)?;
+
+    let tables = table_names
+        .into_iter()
+        .map(|name| {
+            let columns = columns_map.get(&name).cloned().unwrap_or_default();
+            let indexes = indexes_map.get(&name).cloned().unwrap_or_default();
+            TableInfo {
+                name,
+                schema: Some(schema.to_string()),
+                columns,
+                indexes,
+            }
+        })
+        .collect();
 
     Ok(tables)
 }
@@ -722,6 +857,7 @@ fn get_views_for_schema(client: &mut Client, schema: &str) -> Result<Vec<ViewInf
         .collect())
 }
 
+#[allow(dead_code)]
 fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
     let rows = client
         .query(
@@ -762,6 +898,102 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
         .collect())
 }
 
+fn get_all_columns_for_schema(
+    client: &mut Client,
+    schema: &str,
+) -> Result<HashMap<String, Vec<ColumnInfo>>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                c.table_name,
+                c.column_name,
+                c.data_type,
+                c.is_nullable = 'YES' as nullable,
+                c.column_default,
+                COALESCE(
+                    (SELECT true FROM information_schema.table_constraints tc
+                     JOIN information_schema.key_column_usage kcu
+                       ON tc.constraint_name = kcu.constraint_name
+                      AND tc.table_schema = kcu.table_schema
+                     WHERE tc.constraint_type = 'PRIMARY KEY'
+                       AND tc.table_schema = c.table_schema
+                       AND tc.table_name = c.table_name
+                       AND kcu.column_name = c.column_name),
+                    false
+                ) as is_pk
+            FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+            WHERE c.table_schema = $1 AND t.table_type = 'BASE TABLE'
+            ORDER BY c.table_name, c.ordinal_position
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+    let mut result: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
+
+    for row in rows {
+        let table_name: String = row.get(0);
+        let column = ColumnInfo {
+            name: row.get(1),
+            type_name: row.get(2),
+            nullable: row.get(3),
+            default_value: row.get(4),
+            is_primary_key: row.get(5),
+        };
+        result.entry(table_name).or_default().push(column);
+    }
+
+    Ok(result)
+}
+
+fn get_all_indexes_for_schema(
+    client: &mut Client,
+    schema: &str,
+) -> Result<HashMap<String, Vec<IndexInfo>>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                t.relname as table_name,
+                i.relname as index_name,
+                array_agg(a.attname ORDER BY k.n) as columns,
+                ix.indisunique as is_unique,
+                ix.indisprimary as is_primary
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, n) ON true
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+            WHERE n.nspname = $1
+            GROUP BY t.relname, i.relname, ix.indisunique, ix.indisprimary
+            ORDER BY t.relname, i.relname
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+    let mut result: HashMap<String, Vec<IndexInfo>> = HashMap::new();
+
+    for row in rows {
+        let table_name: String = row.get(0);
+        let columns: Vec<String> = row.get(2);
+        let index = IndexInfo {
+            name: row.get(1),
+            columns,
+            is_unique: row.get(3),
+            is_primary: row.get(4),
+        };
+        result.entry(table_name).or_default().push(index);
+    }
+
+    Ok(result)
+}
+
+#[allow(dead_code)]
 fn get_indexes(client: &mut Client, schema: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
     let rows = client
         .query(

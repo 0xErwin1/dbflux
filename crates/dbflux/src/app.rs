@@ -1,6 +1,7 @@
 use dbflux_core::{
-    Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry, HistoryStore,
-    ProfileStore, SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore, create_secret_store,
+    CancelToken, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry,
+    HistoryStore, ProfileStore, SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore,
+    TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
 };
 use gpui::EventEmitter;
 use log::{error, info};
@@ -36,6 +37,7 @@ pub struct AppState {
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
+    pub tasks: TaskManager,
     profile_store: Option<ProfileStore>,
     ssh_tunnel_store: Option<SshTunnelStore>,
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
@@ -108,6 +110,7 @@ impl AppState {
             connections: HashMap::new(),
             active_connection_id: None,
             pending_operations: HashSet::new(),
+            tasks: TaskManager::new(),
             profile_store,
             ssh_tunnel_store,
             secret_store: Arc::new(RwLock::new(secret_store)),
@@ -531,6 +534,33 @@ impl AppState {
             return result;
         }
         false
+    }
+
+    pub fn start_task(&mut self, kind: TaskKind, description: impl Into<String>) -> (TaskId, CancelToken) {
+        self.tasks.start(kind, description)
+    }
+
+    pub fn complete_task(&mut self, id: TaskId) {
+        self.tasks.complete(id);
+    }
+
+    pub fn fail_task(&mut self, id: TaskId, error: impl Into<String>) {
+        self.tasks.fail(id, error);
+    }
+
+    #[allow(dead_code)]
+    pub fn cancel_task(&mut self, id: TaskId) -> bool {
+        self.tasks.cancel(id)
+    }
+
+    #[allow(dead_code)]
+    pub fn running_tasks(&self) -> Vec<TaskSnapshot> {
+        self.tasks.running_tasks()
+    }
+
+    #[allow(dead_code)]
+    pub fn has_running_tasks(&self) -> bool {
+        self.tasks.has_running_tasks()
     }
 
     pub fn remove_history_entry(&mut self, id: Uuid) {

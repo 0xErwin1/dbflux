@@ -1,10 +1,11 @@
-use crate::app::AppState;
+use crate::app::{AppState, AppStateChanged};
 use crate::ui::editor::EditorPane;
 use crate::ui::history::HistoryPanel;
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
+use dbflux_core::TaskKind;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -473,7 +474,7 @@ impl Sidebar {
     }
 
     fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        let params = match self.app_state.update(cx, |state, _cx| {
+        let (params, profile_name) = match self.app_state.update(cx, |state, _cx| {
             if state.is_operation_pending(profile_id, None) {
                 return Err("Connection already pending".to_string());
             }
@@ -484,7 +485,10 @@ impl Sidebar {
                 return Err("Operation started by another thread".to_string());
             }
 
-            result
+            result.map(|p| {
+                let name = p.profile.name.clone();
+                (p, name)
+            })
         }) {
             Ok(p) => p,
             Err(e) => {
@@ -492,6 +496,12 @@ impl Sidebar {
                 return;
             }
         };
+
+        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+            let result = state.start_task(TaskKind::Connect, format!("Connecting to {}", profile_name));
+            cx.emit(AppStateChanged);
+            result
+        });
 
         self.refresh_tree(cx);
 
@@ -506,14 +516,24 @@ impl Sidebar {
 
             cx.update(|cx| {
                 let toast = match &result {
-                    Ok(res) => Some(PendingToast {
-                        message: format!("Connected to {}", res.profile.name),
-                        is_error: false,
-                    }),
-                    Err(e) => Some(PendingToast {
-                        message: e.clone(),
-                        is_error: true,
-                    }),
+                    Ok(res) => {
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
+                        });
+                        Some(PendingToast {
+                            message: format!("Connected to {}", res.profile.name),
+                            is_error: false,
+                        })
+                    }
+                    Err(e) => {
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.clone());
+                        });
+                        Some(PendingToast {
+                            message: e.clone(),
+                            is_error: true,
+                        })
+                    }
                 };
 
                 app_state.update(cx, |state, cx| {
@@ -523,6 +543,7 @@ impl Sidebar {
                         state.apply_connect_profile(res.profile, res.connection, res.schema);
                     }
 
+                    cx.emit(AppStateChanged);
                     cx.notify();
                 });
 

@@ -1,7 +1,7 @@
-use crate::app::AppState;
+use crate::app::{AppState, AppStateChanged};
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{HistoryEntry, QueryRequest};
+use dbflux_core::{HistoryEntry, QueryRequest, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants, DropdownButton};
@@ -199,6 +199,18 @@ impl EditorPane {
         };
 
         let sql_owned = sql.to_string();
+        let sql_preview = if sql_owned.len() > 50 {
+            format!("{}...", &sql_owned[..50])
+        } else {
+            sql_owned.clone()
+        };
+
+        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+            let result = state.start_task(TaskKind::Query, format!("Query: {}", sql_preview));
+            cx.emit(AppStateChanged);
+            result
+        });
+
         let request = QueryRequest::new(sql_owned.clone());
         let app_state = self.app_state.clone();
         let results_pane = self.results_pane.clone();
@@ -211,36 +223,51 @@ impl EditorPane {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| match result {
-                Ok(result) => {
-                    info!(
-                        "Query returned {} rows in {:?}",
-                        result.row_count(),
-                        result.execution_time
-                    );
+            cx.update(|cx| {
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Query returned {} rows in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
 
-                    let entry = HistoryEntry::new(
-                        sql_owned,
-                        database,
-                        connection_name,
-                        result.execution_time,
-                        Some(result.row_count()),
-                    );
-                    app_state.update(cx, |state, _cx| {
-                        state.add_history_entry(entry);
-                    });
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
+                        });
 
-                    results_pane.update(cx, |pane, cx| {
-                        pane.set_query_result_async(result, cx);
-                    });
+                        let entry = HistoryEntry::new(
+                            sql_owned,
+                            database,
+                            connection_name,
+                            query_result.execution_time,
+                            Some(query_result.row_count()),
+                        );
+                        app_state.update(cx, |state, _cx| {
+                            state.add_history_entry(entry);
+                        });
+
+                        results_pane.update(cx, |pane, cx| {
+                            pane.set_query_result_async(query_result.clone(), cx);
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Query failed: {}", e);
+
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.to_string());
+                        });
+
+                        editor_entity.update(cx, |editor, cx| {
+                            editor.pending_error = Some(format!("Query failed: {}", e));
+                            cx.notify();
+                        });
+                    }
                 }
-                Err(e) => {
-                    log::error!("Query failed: {}", e);
-                    editor_entity.update(cx, |editor, cx| {
-                        editor.pending_error = Some(format!("Query failed: {}", e));
-                        cx.notify();
-                    });
-                }
+
+                app_state.update(cx, |_, cx| {
+                    cx.emit(AppStateChanged);
+                });
             })
             .ok();
         })

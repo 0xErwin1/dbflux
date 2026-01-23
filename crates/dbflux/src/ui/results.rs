@@ -1,6 +1,6 @@
-use crate::app::AppState;
+use crate::app::{AppState, AppStateChanged};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{QueryRequest, QueryResult};
+use dbflux_core::{QueryRequest, QueryResult, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -219,9 +219,16 @@ impl ResultsPane {
             return;
         };
 
+        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+            let result = state.start_task(TaskKind::Query, format!("SELECT * FROM {}", table_name));
+            cx.emit(AppStateChanged);
+            result
+        });
+
         let request = QueryRequest::new(sql);
         let table_name_owned = table_name.to_string();
         let results_entity = cx.entity().clone();
+        let app_state = self.app_state.clone();
 
         let task = cx
             .background_executor()
@@ -230,29 +237,44 @@ impl ResultsPane {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| match result {
-                Ok(result) => {
-                    info!(
-                        "Query returned {} rows in {:?}",
-                        result.row_count(),
-                        result.execution_time
-                    );
+            cx.update(|cx| {
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Query returned {} rows in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
 
-                    results_entity.update(cx, |pane, cx| {
-                        pane.pending_table_result = Some(PendingTableResult {
-                            table_name: table_name_owned,
-                            result,
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
                         });
-                        cx.notify();
-                    });
+
+                        results_entity.update(cx, |pane, cx| {
+                            pane.pending_table_result = Some(PendingTableResult {
+                                table_name: table_name_owned,
+                                result: query_result.clone(),
+                            });
+                            cx.notify();
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Table query failed: {}", e);
+
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.to_string());
+                        });
+
+                        results_entity.update(cx, |pane, cx| {
+                            pane.pending_error = Some(format!("Query failed: {}", e));
+                            cx.notify();
+                        });
+                    }
                 }
-                Err(e) => {
-                    log::error!("Table query failed: {}", e);
-                    results_entity.update(cx, |pane, cx| {
-                        pane.pending_error = Some(format!("Query failed: {}", e));
-                        cx.notify();
-                    });
-                }
+
+                app_state.update(cx, |_, cx| {
+                    cx.emit(AppStateChanged);
+                });
             })
             .ok();
         })

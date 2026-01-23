@@ -5,6 +5,7 @@ mod query;
 mod schema;
 mod secrets;
 mod store;
+mod task;
 mod traits;
 mod value;
 
@@ -22,5 +23,6 @@ pub use secrets::{
     NoopSecretStore, SecretStore,
 };
 pub use store::{ProfileStore, SshTunnelStore};
+pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{Connection, DbDriver};
 pub use value::Value;
