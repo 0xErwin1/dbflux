@@ -19,8 +19,8 @@ pub use schema::{
     ColumnInfo, DatabaseInfo, DbSchemaInfo, IndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
 };
 pub use secrets::{
-    connection_secret_ref, create_secret_store, ssh_tunnel_secret_ref, KeyringSecretStore,
-    NoopSecretStore, SecretStore,
+    KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
+    ssh_tunnel_secret_ref,
 };
 pub use store::{ProfileStore, SshTunnelStore};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};

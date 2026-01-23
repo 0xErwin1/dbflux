@@ -1,4 +1,4 @@
-use gpui::{px, Pixels};
+use gpui::{Pixels, px};
 
 #[allow(dead_code)]
 pub struct Spacing;

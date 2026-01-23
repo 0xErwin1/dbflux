@@ -468,7 +468,10 @@ impl AppState {
             _ => return None,
         };
 
-        let tunnel = self.ssh_tunnels.iter().find(|t| t.id == tunnel_profile_id)?;
+        let tunnel = self
+            .ssh_tunnels
+            .iter()
+            .find(|t| t.id == tunnel_profile_id)?;
 
         if !tunnel.save_secret {
             return None;
@@ -536,7 +539,11 @@ impl AppState {
         false
     }
 
-    pub fn start_task(&mut self, kind: TaskKind, description: impl Into<String>) -> (TaskId, CancelToken) {
+    pub fn start_task(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+    ) -> (TaskId, CancelToken) {
         self.tasks.start(kind, description)
     }
 
@@ -652,7 +659,11 @@ impl ConnectProfileParams {
 
         let connection = self
             .driver
-            .connect_with_secrets(&self.profile, password.as_deref(), self.ssh_secret.as_deref())
+            .connect_with_secrets(
+                &self.profile,
+                password.as_deref(),
+                self.ssh_secret.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
 
         let schema = match connection.schema() {

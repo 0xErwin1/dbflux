@@ -39,9 +39,7 @@ impl StatusBar {
             let should_notify = cx
                 .update(|cx| {
                     this.upgrade()
-                        .map(|entity| {
-                            entity.read(cx).app_state.read(cx).tasks.has_running_tasks()
-                        })
+                        .map(|entity| entity.read(cx).app_state.read(cx).tasks.has_running_tasks())
                         .unwrap_or(false)
                 })
                 .unwrap_or(false);
@@ -138,15 +136,9 @@ impl Render for StatusBar {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("|")
                                 .child(task.description.clone())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().accent)
-                                        .child(format!(
-                                            "({})",
-                                            Self::format_elapsed(task.elapsed_secs)
-                                        )),
-                                ),
+                                .child(div().text_xs().text_color(cx.theme().accent).child(
+                                    format!("({})", Self::format_elapsed(task.elapsed_secs)),
+                                )),
                         )
                     })
                     .when_some(last_completed, |this, task| {

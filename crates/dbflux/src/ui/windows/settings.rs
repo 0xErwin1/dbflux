@@ -2,13 +2,13 @@ use crate::app::{AppState, AppStateChanged};
 use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::{Icon, IconName};
 use gpui_component::input::{Input, InputState};
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
+use gpui_component::{Icon, IconName};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -88,26 +88,41 @@ impl SettingsWindow {
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form_save_secret = false;
 
-        self.input_tunnel_name.update(cx, |s, cx| s.set_value("", window, cx));
-        self.input_ssh_host.update(cx, |s, cx| s.set_value("", window, cx));
-        self.input_ssh_port.update(cx, |s, cx| s.set_value("22", window, cx));
-        self.input_ssh_user.update(cx, |s, cx| s.set_value("", window, cx));
-        self.input_ssh_key_path.update(cx, |s, cx| s.set_value("", window, cx));
-        self.input_ssh_key_passphrase.update(cx, |s, cx| s.set_value("", window, cx));
-        self.input_ssh_password.update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_tunnel_name
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_ssh_host
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_ssh_port
+            .update(cx, |s, cx| s.set_value("22", window, cx));
+        self.input_ssh_user
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_ssh_key_path
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_ssh_key_passphrase
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.input_ssh_password
+            .update(cx, |s, cx| s.set_value("", window, cx));
 
         cx.notify();
     }
 
-    fn edit_tunnel(&mut self, tunnel: &SshTunnelProfile, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit_tunnel(
+        &mut self,
+        tunnel: &SshTunnelProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.editing_tunnel_id = Some(tunnel.id);
 
-        self.input_tunnel_name.update(cx, |s, cx| s.set_value(&tunnel.name, window, cx));
-        self.input_ssh_host.update(cx, |s, cx| s.set_value(&tunnel.config.host, window, cx));
+        self.input_tunnel_name
+            .update(cx, |s, cx| s.set_value(&tunnel.name, window, cx));
+        self.input_ssh_host
+            .update(cx, |s, cx| s.set_value(&tunnel.config.host, window, cx));
         self.input_ssh_port.update(cx, |s, cx| {
             s.set_value(tunnel.config.port.to_string(), window, cx)
         });
-        self.input_ssh_user.update(cx, |s, cx| s.set_value(&tunnel.config.user, window, cx));
+        self.input_ssh_user
+            .update(cx, |s, cx| s.set_value(&tunnel.config.user, window, cx));
 
         match &tunnel.config.auth_method {
             SshAuthMethod::PrivateKey { key_path } => {
@@ -116,16 +131,19 @@ impl SettingsWindow {
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
-                self.input_ssh_key_path.update(cx, |s, cx| s.set_value(&path_str, window, cx));
+                self.input_ssh_key_path
+                    .update(cx, |s, cx| s.set_value(&path_str, window, cx));
 
                 if let Some(secret) = self.app_state.read(cx).get_ssh_tunnel_secret(tunnel) {
-                    self.input_ssh_key_passphrase.update(cx, |s, cx| s.set_value(&secret, window, cx));
+                    self.input_ssh_key_passphrase
+                        .update(cx, |s, cx| s.set_value(&secret, window, cx));
                 }
             }
             SshAuthMethod::Password => {
                 self.ssh_auth_method = SshAuthSelection::Password;
                 if let Some(secret) = self.app_state.read(cx).get_ssh_tunnel_secret(tunnel) {
-                    self.input_ssh_password.update(cx, |s, cx| s.set_value(&secret, window, cx));
+                    self.input_ssh_password
+                        .update(cx, |s, cx| s.set_value(&secret, window, cx));
                 }
             }
         }
@@ -228,9 +246,7 @@ impl SettingsWindow {
     fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.entity().clone();
 
-        let start_dir = dirs::home_dir()
-            .map(|h| h.join(".ssh"))
-            .unwrap_or_default();
+        let start_dir = dirs::home_dir().map(|h| h.join(".ssh")).unwrap_or_default();
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
@@ -354,20 +370,16 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .child(
-                div()
-                    .p_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        Button::new("new-tunnel")
-                            .icon(Icon::new(IconName::Plus))
-                            .label("New Tunnel")
-                            .small()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.clear_form(window, cx);
-                            })),
-                    ),
+                div().p_2().border_b_1().border_color(theme.border).child(
+                    Button::new("new-tunnel")
+                        .icon(Icon::new(IconName::Plus))
+                        .label("New Tunnel")
+                        .small()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.clear_form(window, cx);
+                        })),
+                ),
             )
             .child(
                 div()
@@ -456,7 +468,9 @@ impl SettingsWindow {
             "New Tunnel"
         };
 
-        let auth_selector = self.render_auth_selector(auth_method, cx).into_any_element();
+        let auth_selector = self
+            .render_auth_selector(auth_method, cx)
+            .into_any_element();
         let auth_fields = self
             .render_auth_fields(auth_method, keyring_available, save_secret, cx)
             .into_any_element();
@@ -470,16 +484,12 @@ impl SettingsWindow {
             .flex_col()
             .overflow_hidden()
             .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
-                    ),
+                div().p_4().border_b_1().border_color(theme.border).child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
+                ),
             )
             .child(
                 div()
@@ -494,8 +504,16 @@ impl SettingsWindow {
                         div()
                             .flex()
                             .gap_3()
-                            .child(div().flex_1().child(self.render_form_field("Host", &self.input_ssh_host, true)))
-                            .child(div().w(px(80.0)).child(self.render_form_field("Port", &self.input_ssh_port, false))),
+                            .child(div().flex_1().child(self.render_form_field(
+                                "Host",
+                                &self.input_ssh_host,
+                                true,
+                            )))
+                            .child(div().w(px(80.0)).child(self.render_form_field(
+                                "Port",
+                                &self.input_ssh_port,
+                                false,
+                            ))),
                     )
                     .child(self.render_form_field("Username", &self.input_ssh_user, true))
                     .child(auth_selector)
@@ -524,7 +542,11 @@ impl SettingsWindow {
                     })
                     .child(
                         Button::new("save-tunnel")
-                            .label(if editing_id.is_some() { "Update" } else { "Create" })
+                            .label(if editing_id.is_some() {
+                                "Update"
+                            } else {
+                                "Create"
+                            })
                             .small()
                             .primary()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -587,7 +609,11 @@ impl SettingsWindow {
                                 this.ssh_auth_method = SshAuthSelection::PrivateKey;
                                 cx.notify();
                             }))
-                            .child(self.render_radio(current == SshAuthSelection::PrivateKey, primary, border))
+                            .child(self.render_radio(
+                                current == SshAuthSelection::PrivateKey,
+                                primary,
+                                border,
+                            ))
                             .child(div().text_sm().child("Private Key")),
                     )
                     .child(
@@ -601,7 +627,11 @@ impl SettingsWindow {
                                 this.ssh_auth_method = SshAuthSelection::Password;
                                 cx.notify();
                             }))
-                            .child(self.render_radio(current == SshAuthSelection::Password, primary, border))
+                            .child(self.render_radio(
+                                current == SshAuthSelection::Password,
+                                primary,
+                                border,
+                            ))
                             .child(div().text_sm().child("Password")),
                     ),
             )
@@ -670,7 +700,11 @@ impl SettingsWindow {
                             div()
                                 .flex()
                                 .gap_2()
-                                .child(div().flex_1().child(Input::new(&self.input_ssh_key_path).small()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .child(Input::new(&self.input_ssh_key_path).small()),
+                                )
                                 .child(
                                     Button::new("browse-key")
                                         .label("Browse")
@@ -693,7 +727,11 @@ impl SettingsWindow {
                         .flex()
                         .items_end()
                         .gap_3()
-                        .child(div().flex_1().child(self.render_form_field("Key Passphrase", &self.input_ssh_key_passphrase, false)))
+                        .child(div().flex_1().child(self.render_form_field(
+                            "Key Passphrase",
+                            &self.input_ssh_key_passphrase,
+                            false,
+                        )))
                         .when_some(save_checkbox, |d, checkbox| {
                             d.child(
                                 div()
@@ -717,7 +755,11 @@ impl SettingsWindow {
                         .flex()
                         .items_end()
                         .gap_3()
-                        .child(div().flex_1().child(self.render_form_field("Password", &self.input_ssh_password, false)))
+                        .child(div().flex_1().child(self.render_form_field(
+                            "Password",
+                            &self.input_ssh_password,
+                            false,
+                        )))
                         .when_some(save_checkbox, |d, checkbox| {
                             d.child(
                                 div()
@@ -768,7 +810,9 @@ impl Render for SettingsWindow {
             .flex()
             .child(self.render_sidebar(cx))
             .child(match self.active_section {
-                SettingsSection::SshTunnels => self.render_ssh_tunnels_section(cx).into_any_element(),
+                SettingsSection::SshTunnels => {
+                    self.render_ssh_tunnels_section(cx).into_any_element()
+                }
             })
             .when(show_delete_confirm, |el| {
                 let this = cx.entity().clone();
@@ -790,14 +834,10 @@ impl Render for SettingsWindow {
                             });
                             true
                         })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(format!(
-                                    "Are you sure you want to delete \"{}\"?",
-                                    tunnel_name
-                                )),
-                        ),
+                        .child(div().text_sm().child(format!(
+                            "Are you sure you want to delete \"{}\"?",
+                            tunnel_name
+                        ))),
                 )
             })
     }

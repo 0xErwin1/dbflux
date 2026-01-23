@@ -409,16 +409,13 @@ impl Render for EditorPane {
                                     d.child(
                                         DropdownButton::new("connection-selector")
                                             .small()
-                                            .button(
-                                                Button::new("conn-btn")
-                                                    .ghost()
-                                                    .small()
-                                                    .label(if let Some(ref db) = current_db {
-                                                        format!("{} / {}", connection_name, db)
-                                                    } else {
-                                                        connection_name.clone()
-                                                    }),
-                                            )
+                                            .button(Button::new("conn-btn").ghost().small().label(
+                                                if let Some(ref db) = current_db {
+                                                    format!("{} / {}", connection_name, db)
+                                                } else {
+                                                    connection_name.clone()
+                                                },
+                                            ))
                                             .dropdown_menu(move |menu, _window, _cx| {
                                                 let mut menu = menu;
                                                 for (profile_id, name, is_active) in

@@ -1,4 +1,4 @@
-use gpui::{hsla, App, Hsla};
+use gpui::{App, Hsla, hsla};
 use gpui_component::theme::{Theme, ThemeMode};
 use log::info;
 

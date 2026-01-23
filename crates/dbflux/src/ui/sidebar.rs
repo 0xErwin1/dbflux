@@ -12,10 +12,10 @@ use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Icon, IconName};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::tree::{TreeItem, TreeState, tree};
+use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,10 +105,9 @@ impl Sidebar {
         let history_panel =
             cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
 
-        let app_state_subscription =
-            cx.subscribe(&app_state, |this, _app_state, _event, cx| {
-                this.refresh_tree(cx);
-            });
+        let app_state_subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
+            this.refresh_tree(cx);
+        });
 
         Self {
             app_state,
@@ -498,7 +497,8 @@ impl Sidebar {
         };
 
         let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
-            let result = state.start_task(TaskKind::Connect, format!("Connecting to {}", profile_name));
+            let result =
+                state.start_task(TaskKind::Connect, format!("Connecting to {}", profile_name));
             cx.emit(AppStateChanged);
             result
         });
@@ -646,9 +646,11 @@ impl Sidebar {
                                     title: Some("Settings".into()),
                                     ..Default::default()
                                 }),
-                                window_bounds: Some(WindowBounds::Windowed(
-                                    Bounds::centered(None, size(px(700.0), px(500.0)), cx),
-                                )),
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                                    None,
+                                    size(px(700.0), px(500.0)),
+                                    cx,
+                                ))),
                                 kind: WindowKind::Floating,
                                 ..Default::default()
                             },
@@ -933,15 +935,13 @@ impl Render for Sidebar {
                                 .dropdown_menu(move |menu, _window, _cx| {
                                     let menu = if profile_connected {
                                         let sidebar_disconnect = sidebar_action.clone();
-                                        menu.item(
-                                            PopupMenuItem::new("Disconnect").on_click(
-                                                move |_ev, _window, cx| {
-                                                    sidebar_disconnect.update(cx, |this, cx| {
-                                                        this.disconnect_profile(profile_id, cx);
-                                                    });
-                                                },
-                                            ),
-                                        )
+                                        menu.item(PopupMenuItem::new("Disconnect").on_click(
+                                            move |_ev, _window, cx| {
+                                                sidebar_disconnect.update(cx, |this, cx| {
+                                                    this.disconnect_profile(profile_id, cx);
+                                                });
+                                            },
+                                        ))
                                     } else {
                                         let sidebar_connect = sidebar_action.clone();
                                         menu.item(PopupMenuItem::new("Connect").on_click(

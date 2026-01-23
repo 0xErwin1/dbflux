@@ -121,8 +121,11 @@ impl ConnectionManagerWindow {
                 .placeholder("postgres")
                 .default_value("postgres")
         });
-        let input_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Password").masked(true));
+        let input_password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Password")
+                .masked(true)
+        });
         let input_database = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("postgres")
@@ -568,7 +571,9 @@ impl ConnectionManagerWindow {
         };
 
         self.app_state.update(cx, |state, cx| {
-            if tunnel.save_secret && let Some(ref secret) = secret {
+            if tunnel.save_secret
+                && let Some(ref secret) = secret
+            {
                 state.save_ssh_tunnel_secret(&tunnel, secret);
             }
             state.add_ssh_tunnel(tunnel.clone());
@@ -727,9 +732,9 @@ impl ConnectionManagerWindow {
         let profile_name = profile.name.clone();
         let this = cx.entity().clone();
 
-        let task = cx.background_executor().spawn(async move {
-            driver.connect_with_password(&profile, password_opt.as_deref())
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { driver.connect_with_password(&profile, password_opt.as_deref()) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -855,9 +860,7 @@ impl ConnectionManagerWindow {
     fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.entity().clone();
 
-        let start_dir = dirs::home_dir()
-            .map(|h| h.join(".ssh"))
-            .unwrap_or_default();
+        let start_dir = dirs::home_dir().map(|h| h.join(".ssh")).unwrap_or_default();
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
@@ -1089,7 +1092,9 @@ impl ConnectionManagerWindow {
                                             .items_center()
                                             .gap_2()
                                             .child(
-                                                div().flex_1().child(Input::new(&self.input_password)),
+                                                div()
+                                                    .flex_1()
+                                                    .child(Input::new(&self.input_password)),
                                             )
                                             .child(
                                                 Self::render_password_toggle(
@@ -1259,7 +1264,10 @@ impl ConnectionManagerWindow {
                         div()
                             .text_sm()
                             .text_color(theme.danger)
-                            .child(ssh_test_error.unwrap_or_else(|| "SSH connection failed".to_string()))
+                            .child(
+                                ssh_test_error
+                                    .unwrap_or_else(|| "SSH connection failed".to_string()),
+                            )
                             .into_any_element(),
                     ),
                 };
@@ -1272,23 +1280,20 @@ impl ConnectionManagerWindow {
                         .flex_col()
                         .gap_2()
                         .mt_2()
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(test_button)
-                                .when(show_save_tunnel, |d| {
-                                    d.child(
-                                        Button::new("save-ssh-tunnel")
-                                            .label("Save as tunnel")
-                                            .small()
-                                            .ghost()
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.save_current_ssh_as_tunnel(cx);
-                                            })),
-                                    )
-                                }),
-                        )
+                        .child(div().flex().gap_2().child(test_button).when(
+                            show_save_tunnel,
+                            |d| {
+                                d.child(
+                                    Button::new("save-ssh-tunnel")
+                                        .label("Save as tunnel")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.save_current_ssh_as_tunnel(cx);
+                                        })),
+                                )
+                            },
+                        ))
                         .when_some(status_el, |d, el| d.child(el)),
                 )
             })
@@ -1313,10 +1318,8 @@ impl ConnectionManagerWindow {
         let app_state = self.app_state.clone();
         let this = cx.entity().clone();
 
-        let tunnel_items: Vec<(Uuid, String)> = tunnels
-            .iter()
-            .map(|t| (t.id, t.name.clone()))
-            .collect();
+        let tunnel_items: Vec<(Uuid, String)> =
+            tunnels.iter().map(|t| (t.id, t.name.clone())).collect();
 
         let button_label = selected_name
             .map(|s| s.to_string())
@@ -1341,11 +1344,7 @@ impl ConnectionManagerWindow {
                     .child(
                         DropdownButton::new("ssh-tunnel-selector")
                             .small()
-                            .button(
-                                Button::new("ssh-tunnel-btn")
-                                    .small()
-                                    .label(button_label),
-                            )
+                            .button(Button::new("ssh-tunnel-btn").small().label(button_label))
                             .dropdown_menu(move |menu, _window, _cx| {
                                 let mut menu = menu;
 
@@ -1576,10 +1575,12 @@ impl ConnectionManagerWindow {
                                         "toggle-ssh-passphrase",
                                         theme,
                                     )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.show_ssh_passphrase = !this.show_ssh_passphrase;
-                                        cx.notify();
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.show_ssh_passphrase = !this.show_ssh_passphrase;
+                                            cx.notify();
+                                        },
+                                    )),
                                 )
                                 .when_some(passphrase_checkbox, |d, checkbox| {
                                     d.child(
@@ -1621,31 +1622,26 @@ impl ConnectionManagerWindow {
                                         .font_weight(FontWeight::MEDIUM)
                                         .child("SSH Password"),
                                 )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(gpui::rgb(0xEF4444))
-                                        .child("*"),
-                                ),
+                                .child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*")),
                         )
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(
-                                    div().flex_1().child(Input::new(&self.input_ssh_password)),
-                                )
+                                .child(div().flex_1().child(Input::new(&self.input_ssh_password)))
                                 .child(
                                     Self::render_password_toggle(
                                         self.show_ssh_password,
                                         "toggle-ssh-password",
                                         theme,
                                     )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.show_ssh_password = !this.show_ssh_password;
-                                        cx.notify();
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.show_ssh_password = !this.show_ssh_password;
+                                            cx.notify();
+                                        },
+                                    )),
                                 )
                                 .when_some(password_checkbox, |d, checkbox| {
                                     d.child(
@@ -1871,7 +1867,11 @@ impl ConnectionManagerWindow {
             .child(div().w(px(200.0)).child(Input::new(input)))
     }
 
-    fn render_password_toggle(show: bool, toggle_id: &'static str, theme: &gpui_component::theme::Theme) -> Stateful<Div> {
+    fn render_password_toggle(
+        show: bool,
+        toggle_id: &'static str,
+        theme: &gpui_component::theme::Theme,
+    ) -> Stateful<Div> {
         let secondary = theme.secondary;
         let muted_foreground = theme.muted_foreground;
 
