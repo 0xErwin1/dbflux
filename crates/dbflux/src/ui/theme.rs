@@ -1,4 +1,4 @@
-use gpui::{App, Hsla, hsla};
+use gpui::{hsla, App, Hsla};
 use gpui_component::theme::{Theme, ThemeMode};
 use log::info;
 
@@ -162,8 +162,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.table_head_foreground = muted;
     theme.table_even = rgb_to_hsla_alpha(0xB3B1AD, 0.02);
     theme.table_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
-    theme.table_active = selection;
-    theme.table_active_border = accent;
+    theme.table_active = rgb_to_hsla_alpha(0x59C2FF, 0.15);
+    theme.table_active_border = rgb_to_hsla_alpha(0x59C2FF, 0.5);
     theme.table_row_border = border;
 
     // List
