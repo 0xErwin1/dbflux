@@ -4,6 +4,7 @@ members = [
     "crates/dbflux_core",
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
+    "crates/dbflux_ssh",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -13,6 +14,7 @@ dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
+dbflux_ssh = { path = "crates/dbflux_ssh" }
 
 gpui = "0.2.2"
 gpui-component = "0.5.0"

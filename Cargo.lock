@@ -1347,12 +1347,11 @@ name = "dbflux_driver_postgres"
 version = "0.1.0"
 dependencies = [
  "dbflux_core",
- "dirs 6.0.0",
+ "dbflux_ssh",
  "log",
  "native-tls",
  "postgres",
  "postgres-native-tls",
- "ssh2",
  "uuid",
 ]
 
@@ -1363,6 +1362,16 @@ dependencies = [
  "dbflux_core",
  "log",
  "rusqlite",
+]
+
+[[package]]
+name = "dbflux_ssh"
+version = "0.1.0"
+dependencies = [
+ "dbflux_core",
+ "dirs 6.0.0",
+ "log",
+ "ssh2",
 ]
 
 [[package]]

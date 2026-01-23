@@ -6,10 +6,9 @@ publish = false
 
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
-dirs = "6"
+dbflux_ssh = { path = "../dbflux_ssh" }
 log = "0.4"
 postgres = "0.19"
 native-tls = "0.2"
 postgres-native-tls = "0.5"
-ssh2 = "0.9"
 uuid = { version = "1", features = ["v4"] }
