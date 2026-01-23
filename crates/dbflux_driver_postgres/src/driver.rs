@@ -3,19 +3,21 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use dbflux_core::{
     ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, IndexInfo, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaSnapshot, SshAuthMethod, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest,
+    QueryResult, Row, SchemaSnapshot, SshAuthMethod, SshTunnelConfig, SslMode, TableInfo, Value,
+    ViewInfo,
 };
 use native_tls::TlsConnector;
-use postgres::{Client, NoTls};
+use postgres::{CancelToken as PgCancelToken, Client, NoTls};
 use postgres_native_tls::MakeTlsConnector;
 use ssh2::Session;
+use uuid::Uuid;
 
 pub struct PostgresDriver;
 
@@ -176,11 +178,15 @@ impl PostgresDriver {
             ssl_mode,
         })?;
 
+        let cancel_token = client.cancel_token();
         log::info!("Successfully connected to {}:{}", host, port);
 
         Ok(Box::new(PostgresConnection {
             client: Mutex::new(client),
             ssh_tunnel: None,
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 
@@ -242,6 +248,8 @@ impl PostgresDriver {
             ssl_mode,
         })?;
 
+        let cancel_token = client.cancel_token();
+
         log::info!(
             "[DB] PostgreSQL connection established in {:.2}ms",
             phase_start.elapsed().as_secs_f64() * 1000.0
@@ -258,6 +266,9 @@ impl PostgresDriver {
         Ok(Box::new(PostgresConnection {
             client: Mutex::new(client),
             ssh_tunnel: Some(tunnel),
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 }
@@ -553,6 +564,32 @@ pub struct PostgresConnection {
     client: Mutex<Client>,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
+    cancel_token: PgCancelToken,
+    active_query: RwLock<Option<Uuid>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct PostgresCancelHandle {
+    cancel_token: PgCancelToken,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl QueryCancelHandle for PostgresCancelHandle {
+    fn cancel(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+
+        self.cancel_token.cancel_query(NoTls).map_err(|e| {
+            log::error!("[CANCEL] Failed to cancel query: {}", e);
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+        })?;
+
+        log::info!("[CANCEL] PostgreSQL cancel request sent");
+        Ok(())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
 
 impl Connection for PostgresConnection {
@@ -572,25 +609,55 @@ impl Connection for PostgresConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        self.cancelled.store(false, Ordering::SeqCst);
+
         let start = Instant::now();
+        let query_id = Uuid::new_v4();
+
+        {
+            let mut active = self
+                .active_query
+                .write()
+                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            *active = Some(query_id);
+        }
 
         let sql_preview = if req.sql.len() > 80 {
             format!("{}...", &req.sql[..80])
         } else {
             req.sql.clone()
         };
-        log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
+        log::debug!(
+            "[QUERY] Executing (id={}): {}",
+            query_id,
+            sql_preview.replace('\n', " ")
+        );
 
-        let rows = {
+        let query_result = {
             let mut client = self
                 .client
                 .lock()
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-            client
-                .query(&req.sql, &[])
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?
+            client.query(&req.sql, &[])
         };
+
+        {
+            let mut active = self
+                .active_query
+                .write()
+                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            *active = None;
+        }
+
+        let rows = query_result.map_err(|e| {
+            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+                log::info!("[QUERY] Query {} was cancelled", query_id);
+                DbError::Cancelled
+            } else {
+                DbError::QueryFailed(e.to_string())
+            }
+        })?;
 
         let query_time = start.elapsed();
 
@@ -645,10 +712,93 @@ impl Connection for PostgresConnection {
         })
     }
 
-    fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
-        Err(DbError::NotSupported(
-            "Query cancellation not yet implemented".to_string(),
-        ))
+    fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
+        let active = self
+            .active_query
+            .read()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        if *active != Some(handle.id) {
+            return Err(DbError::QueryFailed(
+                "No matching active query to cancel".to_string(),
+            ));
+        }
+
+        drop(active);
+
+        log::info!("[CANCEL] Sending cancel request for query {}", handle.id);
+
+        self.cancel_token.cancel_query(NoTls).map_err(|e| {
+            log::error!("[CANCEL] Failed to cancel query: {}", e);
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+        })?;
+
+        log::info!("[CANCEL] Cancel request sent successfully");
+        Ok(())
+    }
+
+    fn cancel_active(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+
+        let active = self
+            .active_query
+            .read()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let query_id = match *active {
+            Some(id) => id,
+            None => {
+                log::debug!("[CANCEL] No active query to cancel");
+                return Ok(());
+            }
+        };
+
+        drop(active);
+
+        log::info!(
+            "[CANCEL] Sending cancel request for active query {}",
+            query_id
+        );
+
+        self.cancel_token.cancel_query(NoTls).map_err(|e| {
+            log::error!("[CANCEL] Failed to cancel query: {}", e);
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+        })?;
+
+        log::info!("[CANCEL] Cancel request sent successfully");
+        Ok(())
+    }
+
+    fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
+        Arc::new(PostgresCancelHandle {
+            cancel_token: self.cancel_token.clone(),
+            cancelled: self.cancelled.clone(),
+        })
+    }
+
+    fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        if !self.cancelled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        log::info!("[CLEANUP] Running ROLLBACK after cancelled query");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        if let Err(e) = client.simple_query("ROLLBACK") {
+            log::warn!(
+                "[CLEANUP] ROLLBACK failed (may not have been in transaction): {}",
+                e
+            );
+        }
+
+        self.cancelled.store(false, Ordering::SeqCst);
+
+        log::info!("[CLEANUP] Connection cleanup complete");
+        Ok(())
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {

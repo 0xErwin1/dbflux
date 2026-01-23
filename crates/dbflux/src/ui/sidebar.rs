@@ -496,7 +496,7 @@ impl Sidebar {
             }
         };
 
-        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result =
                 state.start_task(TaskKind::Connect, format!("Connecting to {}", profile_name));
             cx.emit(AppStateChanged);
@@ -515,6 +515,18 @@ impl Sidebar {
             let result = task.await;
 
             cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Connection task was cancelled, discarding result");
+                    app_state.update(cx, |state, cx| {
+                        state.finish_pending_operation(profile_id, None);
+                        cx.emit(AppStateChanged);
+                    });
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.refresh_tree(cx);
+                    });
+                    return;
+                }
+
                 let toast = match &result {
                     Ok(res) => {
                         app_state.update(cx, |state, _| {

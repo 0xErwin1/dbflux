@@ -1,7 +1,7 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{HistoryEntry, QueryRequest, TaskKind};
+use dbflux_core::{CancelToken, HistoryEntry, QueryRequest, TaskId, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants, DropdownButton};
@@ -20,6 +20,12 @@ pub struct EditorPane {
     renaming_tab: Option<usize>,
     rename_input: Entity<InputState>,
     pending_error: Option<String>,
+    running_query: Option<RunningQuery>,
+}
+
+struct RunningQuery {
+    task_id: TaskId,
+    cancel_token: CancelToken,
 }
 
 struct QueryTab {
@@ -76,6 +82,7 @@ impl EditorPane {
             renaming_tab: None,
             rename_input,
             pending_error: None,
+            running_query: None,
         }
     }
 
@@ -174,6 +181,11 @@ impl EditorPane {
     fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::toast::ToastExt;
 
+        if self.running_query.is_some() {
+            cx.toast_warning("A query is already running", window);
+            return;
+        }
+
         let sql = self.tabs[self.active_tab].input_state.read(cx).value();
 
         if sql.trim().is_empty() {
@@ -205,16 +217,23 @@ impl EditorPane {
             sql_owned.clone()
         };
 
-        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(TaskKind::Query, format!("Query: {}", sql_preview));
             cx.emit(AppStateChanged);
             result
         });
 
+        self.running_query = Some(RunningQuery {
+            task_id,
+            cancel_token: cancel_token.clone(),
+        });
+        cx.notify();
+
         let request = QueryRequest::new(sql_owned.clone());
         let app_state = self.app_state.clone();
         let results_pane = self.results_pane.clone();
         let editor_entity = cx.entity().clone();
+        let conn_for_cleanup = conn.clone();
 
         let task = cx
             .background_executor()
@@ -224,6 +243,23 @@ impl EditorPane {
             let result = task.await;
 
             cx.update(|cx| {
+                let was_cancelled = cancel_token.is_cancelled();
+
+                editor_entity.update(cx, |editor, cx| {
+                    editor.running_query = None;
+                    cx.notify();
+                });
+
+                if was_cancelled {
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    app_state.update(cx, |_, cx| {
+                        cx.emit(AppStateChanged);
+                    });
+                    return;
+                }
+
                 match &result {
                     Ok(query_result) => {
                         info!(
@@ -274,6 +310,36 @@ impl EditorPane {
         .detach();
     }
 
+    fn cancel_query(&mut self, cx: &mut Context<Self>) {
+        if let Some(running) = self.running_query.take() {
+            running.cancel_token.cancel();
+
+            let conn = self
+                .app_state
+                .read(cx)
+                .active_connection()
+                .map(|c| c.connection.clone());
+
+            if let Some(conn) = conn
+                && let Err(e) = conn.cancel_active()
+            {
+                log::warn!("Failed to send cancel to database: {}", e);
+            }
+
+            self.app_state.update(cx, |state, cx| {
+                state.cancel_task(running.task_id);
+                cx.emit(AppStateChanged);
+            });
+
+            cx.notify();
+            info!("Query cancelled");
+        }
+    }
+
+    fn is_query_running(&self) -> bool {
+        self.running_query.is_some()
+    }
+
     fn build_connection_menu_items(&self, cx: &Context<Self>) -> Vec<(Uuid, String, bool)> {
         let state = self.app_state.read(cx);
         let active_id = state.active_connection_id;
@@ -315,6 +381,7 @@ impl Render for EditorPane {
 
         let connection_items = self.build_connection_menu_items(cx);
         let app_state = self.app_state.clone();
+        let is_query_running = self.is_query_running();
 
         let tab_dirty_states: Vec<bool> = (0..self.tabs.len())
             .map(|i| self.is_tab_dirty(i, cx))
@@ -323,11 +390,8 @@ impl Render for EditorPane {
         div()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_h(px(200.0))
+            .size_full()
             .bg(theme.sidebar)
-            .border_b_1()
-            .border_color(theme.border)
             .child(
                 div()
                     .flex()
@@ -448,33 +512,67 @@ impl Render for EditorPane {
                     })
                     .child(
                         div()
-                            .id("run-query")
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .px(Spacing::MD)
-                            .h(Heights::BUTTON)
-                            .rounded(Radii::MD)
-                            .border_1()
-                            .when(is_connected, |d| {
-                                d.border_color(theme.border)
-                                    .bg(theme.background)
-                                    .text_color(theme.foreground)
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.secondary).border_color(theme.primary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.run_query(window, cx);
-                                    }))
-                            })
-                            .when(!is_connected, |d| {
-                                d.border_color(theme.border)
-                                    .bg(theme.secondary)
-                                    .text_color(theme.muted_foreground)
-                                    .cursor_not_allowed()
-                            })
-                            .text_size(FontSizes::SM)
-                            .child("▶")
-                            .child("Run"),
+                            .child(
+                                div()
+                                    .id("run-query")
+                                    .flex()
+                                    .items_center()
+                                    .gap(Spacing::SM)
+                                    .px(Spacing::MD)
+                                    .h(Heights::BUTTON)
+                                    .rounded(Radii::MD)
+                                    .border_1()
+                                    .when(is_connected && !is_query_running, |d| {
+                                        d.border_color(theme.border)
+                                            .bg(theme.background)
+                                            .text_color(theme.foreground)
+                                            .cursor_pointer()
+                                            .hover(|s| {
+                                                s.bg(theme.secondary).border_color(theme.primary)
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.run_query(window, cx);
+                                            }))
+                                    })
+                                    .when(!is_connected || is_query_running, |d| {
+                                        d.border_color(theme.border)
+                                            .bg(theme.secondary)
+                                            .text_color(theme.muted_foreground)
+                                            .cursor_not_allowed()
+                                    })
+                                    .text_size(FontSizes::SM)
+                                    .child("▶")
+                                    .child("Run"),
+                            )
+                            .when(is_query_running, |d| {
+                                d.child(
+                                    div()
+                                        .id("cancel-query")
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .px(Spacing::MD)
+                                        .h(Heights::BUTTON)
+                                        .rounded(Radii::MD)
+                                        .border_1()
+                                        .border_color(gpui::rgb(0xDC2626))
+                                        .bg(theme.background)
+                                        .text_color(gpui::rgb(0xDC2626))
+                                        .cursor_pointer()
+                                        .hover(|s| {
+                                            s.bg(gpui::rgb(0xDC2626)).text_color(gpui::white())
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_query(cx);
+                                        }))
+                                        .text_size(FontSizes::SM)
+                                        .child("■")
+                                        .child("Cancel"),
+                                )
+                            }),
                     ),
             )
             .child(

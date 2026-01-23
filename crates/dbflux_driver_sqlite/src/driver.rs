@@ -1,11 +1,12 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dbflux_core::{
     ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, IndexInfo, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot,
-    TableInfo, Value, ViewInfo,
+    DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
 use rusqlite::Connection as RusqliteConnection;
 
@@ -56,6 +57,7 @@ impl DbDriver for SqliteDriver {
 
         Ok(Box::new(SqliteConnection {
             conn: Mutex::new(conn),
+            cancelled: Arc::new(AtomicBool::new(false)),
             path,
         }))
     }
@@ -82,8 +84,24 @@ impl DbDriver for SqliteDriver {
 
 pub struct SqliteConnection {
     conn: Mutex<RusqliteConnection>,
+    cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]
     path: PathBuf,
+}
+
+struct SqliteCancelHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl QueryCancelHandle for SqliteCancelHandle {
+    fn cancel(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
 
 impl Connection for SqliteConnection {
@@ -101,15 +119,26 @@ impl Connection for SqliteConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        self.cancelled.store(false, Ordering::SeqCst);
+
         let start = Instant::now();
         let conn = self
             .conn
             .lock()
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-        let mut stmt = conn
-            .prepare(&req.sql)
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let stmt_result = conn.prepare(&req.sql);
+
+        let mut stmt = match stmt_result {
+            Ok(s) => s,
+            Err(e) => {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    log::info!("[QUERY] SQLite query was interrupted");
+                    return Err(DbError::Cancelled);
+                }
+                return Err(DbError::QueryFailed(e.to_string()));
+            }
+        };
 
         let column_count = stmt.column_count();
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
@@ -123,25 +152,45 @@ impl Connection for SqliteConnection {
             .collect();
 
         let mut rows: Vec<Row> = Vec::new();
-        let mut result_rows = stmt
-            .query([])
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let query_result = stmt.query([]);
 
-        while let Some(row) = result_rows
-            .next()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?
-        {
-            let mut values: Vec<Value> = Vec::with_capacity(column_count);
-            for i in 0..column_count {
-                let value = sqlite_value_to_value(row, i);
-                values.push(value);
+        let mut result_rows = match query_result {
+            Ok(r) => r,
+            Err(e) => {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    log::info!("[QUERY] SQLite query was interrupted");
+                    return Err(DbError::Cancelled);
+                }
+                return Err(DbError::QueryFailed(e.to_string()));
             }
-            rows.push(values);
+        };
 
-            if let Some(limit) = req.limit
-                && rows.len() >= limit as usize
-            {
-                break;
+        loop {
+            let next_result = result_rows.next();
+
+            match next_result {
+                Ok(Some(row)) => {
+                    let mut values: Vec<Value> = Vec::with_capacity(column_count);
+                    for i in 0..column_count {
+                        let value = sqlite_value_to_value(row, i);
+                        values.push(value);
+                    }
+                    rows.push(values);
+
+                    if let Some(limit) = req.limit
+                        && rows.len() >= limit as usize
+                    {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if self.cancelled.load(Ordering::SeqCst) {
+                        log::info!("[QUERY] SQLite query was interrupted during iteration");
+                        return Err(DbError::Cancelled);
+                    }
+                    return Err(DbError::QueryFailed(e.to_string()));
+                }
             }
         }
 
@@ -154,9 +203,24 @@ impl Connection for SqliteConnection {
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
-        Err(DbError::NotSupported(
-            "SQLite does not support query cancellation".to_string(),
-        ))
+        self.cancel_active()
+    }
+
+    fn cancel_active(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+
+        if let Ok(conn) = self.conn.lock() {
+            conn.get_interrupt_handle().interrupt();
+            log::info!("[CANCEL] SQLite interrupt signal sent");
+        }
+
+        Ok(())
+    }
+
+    fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
+        Arc::new(SqliteCancelHandle {
+            cancelled: self.cancelled.clone(),
+        })
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {

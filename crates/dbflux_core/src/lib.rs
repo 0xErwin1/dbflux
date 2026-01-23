@@ -26,5 +26,5 @@ pub use secrets::{
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{Pagination, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
-pub use traits::{Connection, DbDriver};
+pub use traits::{Connection, DbDriver, NoopCancelHandle, QueryCancelHandle};
 pub use value::Value;

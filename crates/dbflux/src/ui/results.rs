@@ -9,6 +9,10 @@ use gpui_component::table::{Column, Table, TableDelegate, TableState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
 
+pub struct ResultsReceived;
+
+impl EventEmitter<ResultsReceived> for ResultsPane {}
+
 enum ResultSource {
     Query,
     TableView {
@@ -128,6 +132,7 @@ impl ResultsPane {
 
     pub fn set_query_result_async(&mut self, result: QueryResult, cx: &mut Context<Self>) {
         self.pending_result = Some(result);
+        cx.emit(ResultsReceived);
         cx.notify();
     }
 
@@ -381,7 +386,7 @@ impl ResultsPane {
             return;
         };
 
-        let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::Query,
                 format!("SELECT * FROM {}", table.qualified_name()),
@@ -394,6 +399,8 @@ impl ResultsPane {
         let results_entity = cx.entity().clone();
         let app_state = self.app_state.clone();
 
+        let conn_for_cleanup = conn.clone();
+
         let task = cx
             .background_executor()
             .spawn(async move { conn.execute(&query_request) });
@@ -402,6 +409,17 @@ impl ResultsPane {
             let result = task.await;
 
             cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Table query was cancelled, discarding result");
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    app_state.update(cx, |_, cx| {
+                        cx.emit(AppStateChanged);
+                    });
+                    return;
+                }
+
                 match &result {
                     Ok(query_result) => {
                         info!(

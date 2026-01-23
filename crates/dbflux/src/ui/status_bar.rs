@@ -4,10 +4,14 @@ use gpui::*;
 use gpui_component::{ActiveTheme, IconName, IconNamed};
 use std::time::Duration;
 
+pub struct ToggleTasksPanel;
+
 pub struct StatusBar {
     app_state: Entity<AppState>,
     _timer: Option<Task<()>>,
 }
+
+impl EventEmitter<ToggleTasksPanel> for StatusBar {}
 
 impl StatusBar {
     pub fn new(app_state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -156,27 +160,37 @@ impl Render for StatusBar {
             )
             .child(
                 div()
+                    .id("tasks-toggle")
                     .flex()
                     .items_center()
                     .gap_1()
+                    .px_2()
+                    .cursor_pointer()
+                    .rounded(px(4.0))
+                    .hover(|s| s.bg(cx.theme().secondary))
+                    .on_click(cx.listener(|_this, _, _, cx| {
+                        cx.emit(ToggleTasksPanel);
+                    }))
                     .when(running_count > 0, |this| {
                         this.child(
+                            svg()
+                                .path(IconName::Loader.path())
+                                .size_3()
+                                .text_color(cx.theme().accent),
+                        )
+                        .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    svg()
-                                        .path(IconName::Loader.path())
-                                        .size_3()
-                                        .text_color(cx.theme().accent),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("{} task(s)", running_count)),
-                                ),
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("{} task(s)", running_count)),
+                        )
+                    })
+                    .when(running_count == 0, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Tasks"),
                         )
                     }),
             )

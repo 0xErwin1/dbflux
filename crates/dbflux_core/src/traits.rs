@@ -2,6 +2,40 @@ use crate::{
     ConnectionProfile, DatabaseInfo, DbError, DbKind, QueryHandle, QueryRequest, QueryResult,
     SchemaSnapshot,
 };
+use std::sync::Arc;
+
+/// Handle for cancelling a running query.
+///
+/// Each database driver implements this trait to provide database-specific
+/// cancellation logic. The handle is returned when starting a query and can
+/// be used to cancel it from another thread.
+pub trait QueryCancelHandle: Send + Sync {
+    /// Attempt to cancel the query.
+    ///
+    /// This is a best-effort operation. The query may have already completed
+    /// or the database may not support cancellation.
+    ///
+    /// Returns `Ok(())` if the cancel request was sent successfully.
+    /// The actual query may still complete before the cancel takes effect.
+    fn cancel(&self) -> Result<(), DbError>;
+
+    /// Check if cancellation has been requested.
+    fn is_cancelled(&self) -> bool;
+}
+
+/// A no-op cancel handle for databases that don't support cancellation.
+#[derive(Clone)]
+pub struct NoopCancelHandle;
+
+impl QueryCancelHandle for NoopCancelHandle {
+    fn cancel(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
 
 /// Factory for creating database connections.
 ///
@@ -101,6 +135,36 @@ pub trait Connection: Send + Sync {
     /// - PostgreSQL: Sends `pg_cancel_backend()` to terminate the query
     /// - SQLite: Returns `DbError::NotSupported` (queries are typically fast)
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError>;
+
+    /// Cancel the currently active query on this connection.
+    ///
+    /// This is a convenience method that cancels whatever query is running
+    /// without needing a handle. Returns `Ok(())` if no query is active.
+    ///
+    /// Behavior varies by database:
+    /// - PostgreSQL: Sends cancel signal to the backend
+    /// - SQLite: Calls sqlite3_interrupt()
+    fn cancel_active(&self) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "Query cancellation not supported".to_string(),
+        ))
+    }
+
+    /// Get a cancel handle for this connection.
+    ///
+    /// The handle can be used from another thread to cancel an active query.
+    /// Call this before starting a long-running query.
+    fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
+        Arc::new(NoopCancelHandle)
+    }
+
+    /// Clean up connection state after a cancelled query.
+    ///
+    /// This should be called after a query is cancelled to ensure
+    /// the connection is in a clean state (e.g., rollback any open transaction).
+    fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        Ok(())
+    }
 
     /// Retrieve the database schema (tables, views, columns, indexes).
     ///

@@ -12,3 +12,4 @@ postgres = "0.19"
 native-tls = "0.2"
 postgres-native-tls = "0.5"
 ssh2 = "0.9"
+uuid = { version = "1", features = ["v4"] }
