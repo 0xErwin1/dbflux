@@ -1,6 +1,6 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{QueryRequest, QueryResult, TaskKind};
+use dbflux_core::{Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -11,7 +11,12 @@ use log::info;
 
 enum ResultSource {
     Query,
-    TableView { table_name: String },
+    TableView {
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<String>,
+        total_rows: Option<u64>,
+    },
 }
 
 struct ResultTab {
@@ -24,8 +29,16 @@ struct ResultTab {
 }
 
 struct PendingTableResult {
-    table_name: String,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<String>,
+    total_rows: Option<u64>,
     result: QueryResult,
+}
+
+struct PendingTotalCount {
+    table_qualified: String,
+    total: u64,
 }
 
 pub struct ResultsPane {
@@ -38,6 +51,7 @@ pub struct ResultsPane {
     limit_input: Entity<InputState>,
     pending_result: Option<QueryResult>,
     pending_table_result: Option<PendingTableResult>,
+    pending_total_count: Option<PendingTotalCount>,
     pending_error: Option<String>,
 }
 
@@ -84,6 +98,7 @@ impl ResultsPane {
             limit_input,
             pending_result: None,
             pending_table_result: None,
+            pending_total_count: None,
             pending_error: None,
         }
     }
@@ -116,27 +131,48 @@ impl ResultsPane {
         cx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_table_result(
         &mut self,
-        table_name: String,
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<String>,
+        total_rows: Option<u64>,
         result: QueryResult,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let delegate = ResultsTableDelegate::new(result.clone());
         let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let qualified = table.qualified_name();
 
         if let Some(idx) = self.tabs.iter().position(
-            |t| matches!(&t.source, ResultSource::TableView { table_name: n } if *n == table_name),
+            |t| matches!(&t.source, ResultSource::TableView { table: tbl, .. } if tbl.qualified_name() == qualified),
         ) {
+            let existing_total = match &self.tabs[idx].source {
+                ResultSource::TableView { total_rows, .. } => *total_rows,
+                _ => None,
+            };
+
             self.tabs[idx].result = result;
             self.tabs[idx].table_state = table_state;
+            self.tabs[idx].source = ResultSource::TableView {
+                table,
+                pagination,
+                order_by,
+                total_rows: total_rows.or(existing_total),
+            };
             self.active_tab = idx;
         } else {
             let tab = ResultTab {
                 id: self.next_tab_id,
-                title: table_name.clone(),
-                source: ResultSource::TableView { table_name },
+                title: table.name.clone(),
+                source: ResultSource::TableView {
+                    table,
+                    pagination,
+                    order_by,
+                    total_rows,
+                },
                 result,
                 table_state,
             };
@@ -148,9 +184,26 @@ impl ResultsPane {
         cx.notify();
     }
 
+    fn apply_total_count(&mut self, table_qualified: String, total: u64, cx: &mut Context<Self>) {
+        for tab in &mut self.tabs {
+            if let ResultSource::TableView {
+                table, total_rows, ..
+            } = &mut tab.source
+                && table.qualified_name() == table_qualified
+            {
+                *total_rows = Some(total);
+                cx.notify();
+                return;
+            }
+        }
+    }
+
     pub fn view_table(&mut self, table_name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let table = TableRef::from_qualified(table_name);
+        let qualified = table.qualified_name();
+
         if let Some(idx) = self.tabs.iter().position(
-            |t| matches!(&t.source, ResultSource::TableView { table_name: n } if n == table_name),
+            |t| matches!(&t.source, ResultSource::TableView { table: tbl, .. } if tbl.qualified_name() == qualified),
         ) {
             self.active_tab = idx;
             cx.notify();
@@ -161,7 +214,68 @@ impl ResultsPane {
             state.set_value("", window, cx);
         });
 
-        self.run_table_query_for(table_name, window, cx);
+        let order_by = self.get_primary_key_columns(&table, cx);
+        let pagination = Pagination::default();
+
+        self.run_table_query_internal(table.clone(), pagination, order_by, None, None, window, cx);
+        self.fetch_total_count(table, None, cx);
+    }
+
+    fn fetch_total_count(
+        &mut self,
+        table: TableRef,
+        filter: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let conn = {
+            let state = self.app_state.read(cx);
+            state.active_connection().map(|c| c.connection.clone())
+        };
+
+        let Some(conn) = conn else {
+            return;
+        };
+
+        let sql = if let Some(ref f) = filter {
+            let trimmed = f.trim();
+            if trimmed.is_empty() {
+                format!("SELECT COUNT(*) FROM {}", table.quoted())
+            } else {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", table.quoted(), trimmed)
+            }
+        } else {
+            format!("SELECT COUNT(*) FROM {}", table.quoted())
+        };
+
+        let request = QueryRequest::new(sql);
+        let results_entity = cx.entity().clone();
+        let qualified = table.qualified_name();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                if let Ok(query_result) = result
+                    && let Some(row) = query_result.rows.first()
+                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                {
+                    let total = *count as u64;
+                    results_entity.update(cx, |pane, cx| {
+                        pane.pending_total_count = Some(PendingTotalCount {
+                            table_qualified: qualified,
+                            total,
+                        });
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn run_table_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -169,44 +283,92 @@ impl ResultsPane {
             return;
         };
 
-        let table_name = match &tab.source {
-            ResultSource::TableView { table_name } => table_name.clone(),
+        let (table, pagination, order_by, total_rows) = match &tab.source {
+            ResultSource::TableView {
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => (
+                table.clone(),
+                pagination.clone(),
+                order_by.clone(),
+                *total_rows,
+            ),
             _ => return,
         };
 
-        self.run_table_query_for(&table_name, window, cx);
+        let filter_value = self.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        self.run_table_query_internal(
+            table.clone(),
+            pagination,
+            order_by,
+            filter.clone(),
+            total_rows,
+            window,
+            cx,
+        );
+
+        if total_rows.is_none() {
+            self.fetch_total_count(table, filter, cx);
+        }
     }
 
-    fn run_table_query_for(
+    fn get_primary_key_columns(&self, table: &TableRef, cx: &Context<Self>) -> Vec<String> {
+        let state = self.app_state.read(cx);
+        let Some(connected) = state.active_connection() else {
+            return Vec::new();
+        };
+        let Some(schema) = &connected.schema else {
+            return Vec::new();
+        };
+
+        for db_schema in &schema.schemas {
+            if table.schema.as_deref() == Some(&db_schema.name) || table.schema.is_none() {
+                for t in &db_schema.tables {
+                    if t.name == table.name {
+                        return t
+                            .columns
+                            .iter()
+                            .filter(|c| c.is_primary_key)
+                            .map(|c| c.name.clone())
+                            .collect();
+                    }
+                }
+            }
+        }
+
+        Vec::new()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_table_query_internal(
         &mut self,
-        table_name: &str,
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<String>,
+        filter: Option<String>,
+        total_rows: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use crate::ui::toast::ToastExt;
 
-        let filter = self.filter_input.read(cx).value();
-        let limit_str = self.limit_input.read(cx).value();
-        let limit: u32 = limit_str
-            .parse()
-            .ok()
-            .filter(|&n| n > 0 && n <= 10000)
-            .unwrap_or(100);
+        let mut request = TableBrowseRequest::new(table.clone())
+            .with_pagination(pagination.clone())
+            .with_order_by(order_by.clone());
 
-        let Some(quoted_table) = Self::quote_table_identifier(table_name) else {
-            cx.toast_error(format!("Invalid table identifier: {}", table_name), window);
-            return;
-        };
+        if let Some(ref f) = filter {
+            request = request.with_filter(f.clone());
+        }
 
-        let sql = if filter.trim().is_empty() {
-            format!("SELECT * FROM {} LIMIT {}", quoted_table, limit)
-        } else {
-            format!(
-                "SELECT * FROM {} WHERE {} LIMIT {}",
-                quoted_table, filter, limit
-            )
-        };
-
+        let sql = request.build_sql();
         info!("Running table query: {}", sql);
 
         let conn = {
@@ -220,19 +382,21 @@ impl ResultsPane {
         };
 
         let (task_id, _cancel_token) = self.app_state.update(cx, |state, cx| {
-            let result = state.start_task(TaskKind::Query, format!("SELECT * FROM {}", table_name));
+            let result = state.start_task(
+                TaskKind::Query,
+                format!("SELECT * FROM {}", table.qualified_name()),
+            );
             cx.emit(AppStateChanged);
             result
         });
 
-        let request = QueryRequest::new(sql);
-        let table_name_owned = table_name.to_string();
+        let query_request = QueryRequest::new(sql);
         let results_entity = cx.entity().clone();
         let app_state = self.app_state.clone();
 
         let task = cx
             .background_executor()
-            .spawn(async move { conn.execute(&request) });
+            .spawn(async move { conn.execute(&query_request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -252,7 +416,10 @@ impl ResultsPane {
 
                         results_entity.update(cx, |pane, cx| {
                             pane.pending_table_result = Some(PendingTableResult {
-                                table_name: table_name_owned,
+                                table,
+                                pagination,
+                                order_by,
+                                total_rows,
                                 result: query_result.clone(),
                             });
                             cx.notify();
@@ -279,6 +446,66 @@ impl ResultsPane {
             .ok();
         })
         .detach();
+    }
+
+    fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+
+        let (table, pagination, order_by, total_rows) = match &tab.source {
+            ResultSource::TableView {
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => (
+                table.clone(),
+                pagination.next_page(),
+                order_by.clone(),
+                *total_rows,
+            ),
+            _ => return,
+        };
+
+        let filter_value = self.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        self.run_table_query_internal(table, pagination, order_by, filter, total_rows, window, cx);
+    }
+
+    fn go_to_prev_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+
+        let (table, pagination, order_by, total_rows) = match &tab.source {
+            ResultSource::TableView {
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => {
+                let Some(prev) = pagination.prev_page() else {
+                    return;
+                };
+                (table.clone(), prev, order_by.clone(), *total_rows)
+            }
+            _ => return,
+        };
+
+        let filter_value = self.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        self.run_table_query_internal(table, pagination, order_by, filter, total_rows, window, cx);
     }
 
     fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -316,11 +543,57 @@ impl ResultsPane {
             .unwrap_or(false)
     }
 
-    fn current_table_name(&self) -> Option<&str> {
+    fn current_table_ref(&self) -> Option<&TableRef> {
         self.active_tab().and_then(|t| match &t.source {
-            ResultSource::TableView { table_name } => Some(table_name.as_str()),
+            ResultSource::TableView { table, .. } => Some(table),
             _ => None,
         })
+    }
+
+    fn current_pagination(&self) -> Option<&Pagination> {
+        self.active_tab().and_then(|t| match &t.source {
+            ResultSource::TableView { pagination, .. } => Some(pagination),
+            _ => None,
+        })
+    }
+
+    fn can_go_prev(&self) -> bool {
+        self.current_pagination()
+            .map(|p| !p.is_first_page())
+            .unwrap_or(false)
+    }
+
+    fn can_go_next(&self) -> bool {
+        let Some(tab) = self.active_tab() else {
+            return false;
+        };
+        let Some(pagination) = self.current_pagination() else {
+            return false;
+        };
+
+        if let Some(total) = self.current_total_rows() {
+            let next_offset = pagination.offset() + pagination.limit() as u64;
+            return next_offset < total;
+        }
+
+        tab.result.row_count() >= pagination.limit() as usize
+    }
+
+    fn current_total_rows(&self) -> Option<u64> {
+        self.active_tab().and_then(|t| match &t.source {
+            ResultSource::TableView { total_rows, .. } => *total_rows,
+            _ => None,
+        })
+    }
+
+    fn total_pages(&self) -> Option<u64> {
+        let pagination = self.current_pagination()?;
+        let total = self.current_total_rows()?;
+        let limit = pagination.limit() as u64;
+        if limit == 0 {
+            return Some(1);
+        }
+        Some(total.div_ceil(limit))
     }
 
     #[allow(dead_code)]
@@ -328,31 +601,6 @@ impl ResultsPane {
         self.tabs.clear();
         self.active_tab = 0;
         cx.notify();
-    }
-
-    fn is_valid_identifier(s: &str) -> bool {
-        !s.is_empty()
-            && s.chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-            && !s.chars().next().is_some_and(|c| c.is_ascii_digit())
-    }
-
-    fn quote_table_identifier(table_name: &str) -> Option<String> {
-        if table_name.contains('.') {
-            let parts: Vec<&str> = table_name.splitn(2, '.').collect();
-            if parts.len() == 2
-                && Self::is_valid_identifier(parts[0])
-                && Self::is_valid_identifier(parts[1])
-            {
-                Some(format!("\"{}\".\"{}\"", parts[0], parts[1]))
-            } else {
-                None
-            }
-        } else if Self::is_valid_identifier(table_name) {
-            Some(format!("\"{}\"", table_name))
-        } else {
-            None
-        }
     }
 }
 
@@ -363,7 +611,19 @@ impl Render for ResultsPane {
         }
 
         if let Some(pending) = self.pending_table_result.take() {
-            self.apply_table_result(pending.table_name, pending.result, window, cx);
+            self.apply_table_result(
+                pending.table,
+                pending.pagination,
+                pending.order_by,
+                pending.total_rows,
+                pending.result,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(pending) = self.pending_total_count.take() {
+            self.apply_total_count(pending.table_qualified, pending.total, cx);
         }
 
         if let Some(error) = self.pending_error.take() {
@@ -382,11 +642,16 @@ impl Render for ResultsPane {
             .unwrap_or((0, "-".to_string()));
 
         let is_table_view = self.is_table_view_mode();
-        let table_name = self.current_table_name().map(|s| s.to_string());
+        let table_name = self.current_table_ref().map(|t| t.qualified_name());
         let filter_input = self.filter_input.clone();
         let limit_input = self.limit_input.clone();
         let active_tab_idx = self.active_tab;
         let tab_count = self.tabs.len();
+
+        let pagination_info = self.current_pagination().cloned();
+        let total_pages = self.total_pages();
+        let can_prev = self.can_go_prev();
+        let can_next = self.can_go_next();
 
         div()
             .flex()
@@ -413,7 +678,10 @@ impl Render for ResultsPane {
                     })
                     .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
                         let is_active = idx == active_tab_idx;
-                        let tab_title = tab.title.clone();
+                        let tab_title = match &tab.source {
+                            ResultSource::TableView { table, .. } => table.qualified_name(),
+                            _ => tab.title.clone(),
+                        };
                         let is_table = matches!(tab.source, ResultSource::TableView { .. });
 
                         div()
@@ -577,6 +845,65 @@ impl Render for ResultsPane {
                             .text_color(theme.muted_foreground)
                             .child(format!("{} rows", row_count)),
                     )
+                    .child(div().flex().items_center().gap(Spacing::SM).when(
+                        is_table_view && pagination_info.is_some(),
+                        |d| {
+                            let pagination = pagination_info.clone().unwrap();
+                            let page = pagination.current_page();
+                            let offset = pagination.offset();
+                            let start = offset + 1;
+                            let end = offset + row_count as u64;
+
+                            d.child(
+                                div()
+                                    .id("prev-page")
+                                    .px(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::XS)
+                                    .when(can_prev, |d| {
+                                        d.cursor_pointer()
+                                            .text_color(theme.foreground)
+                                            .hover(|d| d.bg(theme.secondary))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.go_to_prev_page(window, cx);
+                                            }))
+                                    })
+                                    .when(!can_prev, |d| {
+                                        d.text_color(theme.muted_foreground).opacity(0.5)
+                                    })
+                                    .child("← Prev"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(theme.muted_foreground)
+                                    .child(if let Some(total) = total_pages {
+                                        format!("Page {}/{} ({}-{})", page, total, start, end)
+                                    } else {
+                                        format!("Page {} ({}-{})", page, start, end)
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id("next-page")
+                                    .px(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::XS)
+                                    .when(can_next, |d| {
+                                        d.cursor_pointer()
+                                            .text_color(theme.foreground)
+                                            .hover(|d| d.bg(theme.secondary))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.go_to_next_page(window, cx);
+                                            }))
+                                    })
+                                    .when(!can_next, |d| {
+                                        d.text_color(theme.muted_foreground).opacity(0.5)
+                                    })
+                                    .child("Next →"),
+                            )
+                        },
+                    ))
                     .child({
                         let mut muted = theme.muted_foreground;
                         muted.a = 0.5;

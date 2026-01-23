@@ -5,6 +5,7 @@ mod query;
 mod schema;
 mod secrets;
 mod store;
+mod table_browser;
 mod task;
 mod traits;
 mod value;
@@ -23,6 +24,7 @@ pub use secrets::{
     ssh_tunnel_secret_ref,
 };
 pub use store::{ProfileStore, SshTunnelStore};
+pub use table_browser::{Pagination, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{Connection, DbDriver};
 pub use value::Value;
