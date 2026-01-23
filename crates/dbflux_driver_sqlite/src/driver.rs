@@ -36,10 +36,11 @@ impl DbDriver for SqliteDriver {
         false
     }
 
-    fn connect_with_password(
+    fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
         _password: Option<&str>,
+        _ssh_secret: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let path = match &profile.config {
             DbConfig::SQLite { path } => path.clone(),

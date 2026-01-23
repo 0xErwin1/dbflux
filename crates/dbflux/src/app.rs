@@ -1,6 +1,6 @@
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry, HistoryStore,
-    ProfileStore, SchemaSnapshot, SecretStore, create_secret_store,
+    ProfileStore, SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore, create_secret_store,
 };
 use gpui::EventEmitter;
 use log::{error, info};
@@ -32,10 +32,12 @@ pub struct ConnectedProfile {
 pub struct AppState {
     pub drivers: HashMap<DbKind, Arc<dyn DbDriver>>,
     pub profiles: Vec<ConnectionProfile>,
+    pub ssh_tunnels: Vec<SshTunnelProfile>,
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
     profile_store: Option<ProfileStore>,
+    ssh_tunnel_store: Option<SshTunnelStore>,
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
     history_store: Option<HistoryStore>,
 }
@@ -70,6 +72,21 @@ impl AppState {
             }
         };
 
+        let (ssh_tunnel_store, ssh_tunnels) = match SshTunnelStore::new() {
+            Ok(store) => {
+                let tunnels = store.load().unwrap_or_else(|e| {
+                    error!("Failed to load SSH tunnels: {:?}", e);
+                    Vec::new()
+                });
+                info!("Loaded {} SSH tunnel profiles from disk", tunnels.len());
+                (Some(store), tunnels)
+            }
+            Err(e) => {
+                error!("Failed to create SSH tunnel store: {:?}", e);
+                (None, Vec::new())
+            }
+        };
+
         let secret_store = create_secret_store();
         info!("Secret store available: {}", secret_store.is_available());
 
@@ -87,10 +104,12 @@ impl AppState {
         Self {
             drivers,
             profiles,
+            ssh_tunnels,
             connections: HashMap::new(),
             active_connection_id: None,
             pending_operations: HashSet::new(),
             profile_store,
+            ssh_tunnel_store,
             secret_store: Arc::new(RwLock::new(secret_store)),
             history_store,
         }
@@ -199,6 +218,98 @@ impl AppState {
             error!("Failed to save profiles: {:?}", e);
         } else {
             info!("Saved {} profiles to disk", self.profiles.len());
+        }
+    }
+
+    pub fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
+        self.ssh_tunnels.push(tunnel);
+        self.save_ssh_tunnels();
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<SshTunnelProfile> {
+        if idx < self.ssh_tunnels.len() {
+            let removed = self.ssh_tunnels.remove(idx);
+            self.delete_ssh_tunnel_secret(&removed);
+            self.save_ssh_tunnels();
+            Some(removed)
+        } else {
+            None
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn update_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
+        if let Some(existing) = self.ssh_tunnels.iter_mut().find(|t| t.id == tunnel.id) {
+            *existing = tunnel;
+            self.save_ssh_tunnels();
+        }
+    }
+
+    pub fn save_ssh_tunnels(&self) {
+        let Some(ref store) = self.ssh_tunnel_store else {
+            log::warn!("Cannot save SSH tunnels: store not available");
+            return;
+        };
+
+        if let Err(e) = store.save(&self.ssh_tunnels) {
+            error!("Failed to save SSH tunnels: {:?}", e);
+        } else {
+            info!("Saved {} SSH tunnels to disk", self.ssh_tunnels.len());
+        }
+    }
+
+    pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<String> {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        match store.get(&tunnel.secret_ref()) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("Failed to get SSH tunnel secret: {:?}", e);
+                None
+            }
+        }
+    }
+
+    pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &str) {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.set(&tunnel.secret_ref(), secret) {
+            error!("Failed to save SSH tunnel secret: {:?}", e);
+        }
+    }
+
+    pub fn delete_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) {
+        let store = match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        };
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.delete(&tunnel.secret_ref()) {
+            log::warn!("Failed to delete SSH tunnel secret: {:?}", e);
         }
     }
 
@@ -335,11 +446,32 @@ impl AppState {
             Some(self.secret_store.clone())
         };
 
+        let ssh_secret = self.get_ssh_secret_for_profile(&profile);
+
         Ok(ConnectProfileParams {
             profile,
             driver,
             secret_store,
+            ssh_secret,
         })
+    }
+
+    fn get_ssh_secret_for_profile(&self, profile: &ConnectionProfile) -> Option<String> {
+        let tunnel_profile_id = match &profile.config {
+            DbConfig::Postgres {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            } => *id,
+            _ => return None,
+        };
+
+        let tunnel = self.ssh_tunnels.iter().find(|t| t.id == tunnel_profile_id)?;
+
+        if !tunnel.save_secret {
+            return None;
+        }
+
+        self.get_ssh_tunnel_secret(tunnel)
     }
 
     pub fn apply_connect_profile(
@@ -479,6 +611,7 @@ pub struct ConnectProfileParams {
     pub profile: ConnectionProfile,
     pub driver: Arc<dyn DbDriver>,
     pub secret_store: Option<Arc<RwLock<Box<dyn SecretStore>>>>,
+    pub ssh_secret: Option<String>,
 }
 
 impl ConnectProfileParams {
@@ -489,8 +622,8 @@ impl ConnectProfileParams {
 
         let connection = self
             .driver
-            .connect_with_password(&self.profile, password.as_deref())
-            .map_err(|e| format!("Connection failed: {:?}", e))?;
+            .connect_with_secrets(&self.profile, password.as_deref(), self.ssh_secret.as_deref())
+            .map_err(|e| e.to_string())?;
 
         let schema = match connection.schema() {
             Ok(s) => {

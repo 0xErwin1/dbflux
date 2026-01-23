@@ -4,12 +4,14 @@ use crate::ui::history::HistoryPanel;
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
+use crate::ui::windows::settings::SettingsWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::{Icon, IconName};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::tree::{TreeItem, TreeState, tree};
@@ -509,7 +511,7 @@ impl Sidebar {
                         is_error: false,
                     }),
                     Err(e) => Some(PendingToast {
-                        message: format!("Connection failed: {}", e),
+                        message: e.clone(),
                         is_error: true,
                     }),
                 };
@@ -589,6 +591,61 @@ impl Sidebar {
             },
         )
         .ok();
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let app_state = self.app_state.clone();
+
+        div()
+            .w_full()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .id("settings-btn")
+                    .w_full()
+                    .h(Heights::ROW)
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.muted_foreground)
+                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                    .on_click(move |_, _, cx| {
+                        let app_state = app_state.clone();
+                        cx.open_window(
+                            WindowOptions {
+                                titlebar: Some(TitlebarOptions {
+                                    title: Some("Settings".into()),
+                                    ..Default::default()
+                                }),
+                                window_bounds: Some(WindowBounds::Windowed(
+                                    Bounds::centered(None, size(px(700.0), px(500.0)), cx),
+                                )),
+                                kind: WindowKind::Floating,
+                                ..Default::default()
+                            },
+                            |window, cx| {
+                                let settings =
+                                    cx.new(|cx| SettingsWindow::new(app_state, window, cx));
+                                cx.new(|cx| Root::new(settings, window, cx))
+                            },
+                        )
+                        .ok();
+                    })
+                    .child(
+                        Icon::new(IconName::Settings)
+                            .size(px(14.0))
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child("Settings"),
+            )
     }
 }
 
@@ -902,5 +959,6 @@ impl Render for Sidebar {
                 },
             )))
             .child(self.history_panel.clone())
+            .child(self.render_footer(cx))
     }
 }

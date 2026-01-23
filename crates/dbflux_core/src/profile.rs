@@ -70,6 +70,31 @@ pub struct SshTunnelConfig {
     pub auth_method: SshAuthMethod,
 }
 
+/// Saved SSH tunnel profile for reuse across connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTunnelProfile {
+    pub id: Uuid,
+    pub name: String,
+    pub config: SshTunnelConfig,
+    #[serde(default)]
+    pub save_secret: bool,
+}
+
+impl SshTunnelProfile {
+    pub fn new(name: impl Into<String>, config: SshTunnelConfig) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            config,
+            save_secret: false,
+        }
+    }
+
+    pub fn secret_ref(&self) -> String {
+        crate::secrets::ssh_tunnel_secret_ref(&self.id)
+    }
+}
+
 /// Database-specific connection parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DbConfig {
@@ -80,9 +105,10 @@ pub enum DbConfig {
         database: String,
         ssl_mode: SslMode,
         ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
     },
     SQLite {
-        /// Path to the SQLite database file.
         path: PathBuf,
     },
 }
@@ -103,6 +129,7 @@ impl DbConfig {
             database: "postgres".to_string(),
             ssl_mode: SslMode::default(),
             ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
         }
     }
 

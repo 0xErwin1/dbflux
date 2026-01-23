@@ -43,6 +43,19 @@ pub trait DbDriver: Send + Sync {
         &self,
         profile: &ConnectionProfile,
         password: Option<&str>,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        self.connect_with_secrets(profile, password, None)
+    }
+
+    /// Create a connection with optional password and SSH secret.
+    ///
+    /// The SSH secret is the passphrase for the private key or the SSH password,
+    /// depending on the authentication method configured in the profile.
+    fn connect_with_secrets(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&str>,
+        ssh_secret: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError>;
 
     /// Test if a connection can be established without keeping it open.

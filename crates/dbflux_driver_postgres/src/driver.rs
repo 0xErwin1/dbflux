@@ -1,14 +1,20 @@
-use std::sync::Mutex;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use dbflux_core::{
     ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, IndexInfo, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaSnapshot, SslMode, TableInfo, Value, ViewInfo,
+    SchemaSnapshot, SshAuthMethod, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use native_tls::TlsConnector;
 use postgres::{Client, NoTls};
 use postgres_native_tls::MakeTlsConnector;
+use ssh2::Session;
 
 pub struct PostgresDriver;
 
@@ -33,67 +39,465 @@ impl DbDriver for PostgresDriver {
         "Advanced open source relational database"
     }
 
-    fn connect_with_password(
+    fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,
         password: Option<&str>,
+        ssh_secret: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let (host, port, user, database, ssl_mode) = match &profile.config {
-            DbConfig::Postgres {
-                host,
-                port,
-                user,
-                database,
-                ssl_mode,
-                ..
-            } => (host, *port, user, database, *ssl_mode),
-            _ => {
-                return Err(DbError::InvalidProfile(
-                    "Expected PostgreSQL configuration".to_string(),
-                ));
-            }
-        };
+        let config = extract_postgres_config(&profile.config)?;
 
-        let password = password.unwrap_or("");
-        let conn_string = format!(
-            "host={} port={} user={} password={} dbname={}",
-            host, port, user, password, database
-        );
-
-        let client = match ssl_mode {
-            SslMode::Disable => Client::connect(&conn_string, NoTls)
-                .map_err(|e| DbError::ConnectionFailed(format!("{:?}", e)))?,
-            SslMode::Prefer | SslMode::Require => {
-                let connector = TlsConnector::builder()
-                    .danger_accept_invalid_certs(ssl_mode == SslMode::Prefer)
-                    .build()
-                    .map_err(|e| DbError::ConnectionFailed(format!("TLS error: {:?}", e)))?;
-                let tls = MakeTlsConnector::new(connector);
-
-                match Client::connect(&conn_string, tls) {
-                    Ok(c) => c,
-                    Err(e) if ssl_mode == SslMode::Prefer => {
-                        Client::connect(&conn_string, NoTls)
-                            .map_err(|e| DbError::ConnectionFailed(format!("{:?}", e)))?
-                    }
-                    Err(e) => return Err(DbError::ConnectionFailed(format!("{:?}", e))),
-                }
-            }
-        };
-
-        Ok(Box::new(PostgresConnection {
-            client: Mutex::new(client),
-        }))
+        if let Some(tunnel_config) = &config.ssh_tunnel {
+            self.connect_via_ssh_tunnel(
+                tunnel_config,
+                ssh_secret,
+                &config.host,
+                config.port,
+                &config.user,
+                &config.database,
+                password,
+                config.ssl_mode,
+            )
+        } else {
+            self.connect_direct(
+                &config.host,
+                config.port,
+                &config.user,
+                &config.database,
+                password,
+                config.ssl_mode,
+            )
+        }
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
-        let conn = self.connect_with_password(profile, None)?;
+        let conn = self.connect_with_secrets(profile, None, None)?;
         conn.ping()
     }
 }
 
+struct ExtractedPostgresConfig {
+    host: String,
+    port: u16,
+    user: String,
+    database: String,
+    ssl_mode: SslMode,
+    ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig, DbError> {
+    match config {
+        DbConfig::Postgres {
+            host,
+            port,
+            user,
+            database,
+            ssl_mode,
+            ssh_tunnel,
+            ..
+        } => Ok(ExtractedPostgresConfig {
+            host: host.clone(),
+            port: *port,
+            user: user.clone(),
+            database: database.clone(),
+            ssl_mode: *ssl_mode,
+            ssh_tunnel: ssh_tunnel.clone(),
+        }),
+        _ => Err(DbError::InvalidProfile(
+            "Expected PostgreSQL configuration".to_string(),
+        )),
+    }
+}
+
+struct PostgresConnectParams<'a> {
+    host: &'a str,
+    port: u16,
+    user: &'a str,
+    password: &'a str,
+    database: &'a str,
+    ssl_mode: SslMode,
+}
+
+fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
+    let conn_string = format!(
+        "host={} port={} user={} password={} dbname={} connect_timeout=30",
+        params.host, params.port, params.user, params.password, params.database
+    );
+
+    match params.ssl_mode {
+        SslMode::Disable => Client::connect(&conn_string, NoTls)
+            .map_err(|e| format_pg_error(&e, params.host, params.port)),
+
+        SslMode::Prefer | SslMode::Require => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(params.ssl_mode == SslMode::Prefer)
+                .build()
+                .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            match Client::connect(&conn_string, tls) {
+                Ok(client) => Ok(client),
+                Err(_) if params.ssl_mode == SslMode::Prefer => {
+                    Client::connect(&conn_string, NoTls)
+                        .map_err(|e| format_pg_error(&e, params.host, params.port))
+                }
+                Err(e) => Err(format_pg_error(&e, params.host, params.port)),
+            }
+        }
+    }
+}
+
+impl PostgresDriver {
+    fn connect_direct(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        database: &str,
+        password: Option<&str>,
+        ssl_mode: SslMode,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        log::info!(
+            "Connecting directly to PostgreSQL at {}:{} as {} (database: {})",
+            host,
+            port,
+            user,
+            database
+        );
+
+        let client = connect_postgres(&PostgresConnectParams {
+            host,
+            port,
+            user,
+            password: password.unwrap_or(""),
+            database,
+            ssl_mode,
+        })?;
+
+        log::info!("Successfully connected to {}:{}", host, port);
+
+        Ok(Box::new(PostgresConnection {
+            client: Mutex::new(client),
+            ssh_tunnel: None,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn connect_via_ssh_tunnel(
+        &self,
+        tunnel_config: &SshTunnelConfig,
+        ssh_secret: Option<&str>,
+        db_host: &str,
+        db_port: u16,
+        db_user: &str,
+        database: &str,
+        db_password: Option<&str>,
+        ssl_mode: SslMode,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        log::info!(
+            "Connecting via SSH tunnel: {}@{}:{} -> {}:{}",
+            tunnel_config.user,
+            tunnel_config.host,
+            tunnel_config.port,
+            db_host,
+            db_port
+        );
+
+        let ssh_session = establish_ssh_session(tunnel_config, ssh_secret)?;
+
+        log::info!(
+            "SSH session established, setting up local port forwarding to {}:{}",
+            db_host,
+            db_port
+        );
+
+        let tunnel = SshTunnel::start(ssh_session, db_host.to_string(), db_port)?;
+        let local_port = tunnel.local_port();
+
+        log::info!(
+            "SSH tunnel listening on 127.0.0.1:{}, connecting to PostgreSQL",
+            local_port
+        );
+
+        let client = connect_postgres(&PostgresConnectParams {
+            host: "127.0.0.1",
+            port: local_port,
+            user: db_user,
+            password: db_password.unwrap_or(""),
+            database,
+            ssl_mode,
+        })?;
+
+        log::info!(
+            "Successfully connected to {}:{} via SSH tunnel through {}",
+            db_host,
+            db_port,
+            tunnel_config.host
+        );
+
+        Ok(Box::new(PostgresConnection {
+            client: Mutex::new(client),
+            ssh_tunnel: Some(tunnel),
+        }))
+    }
+}
+
+fn establish_ssh_session(
+    config: &SshTunnelConfig,
+    secret: Option<&str>,
+) -> Result<Session, DbError> {
+    let tcp = TcpStream::connect((&*config.host, config.port)).map_err(|e| {
+        DbError::ConnectionFailed(format!(
+            "Failed to connect to SSH server {}:{}: {}",
+            config.host, config.port, e
+        ))
+    })?;
+
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
+    tcp.set_write_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
+
+    let mut session = Session::new()
+        .map_err(|e| DbError::ConnectionFailed(format!("Failed to create SSH session: {}", e)))?;
+
+    session.set_tcp_stream(tcp);
+    session.set_timeout(30000);
+
+    session
+        .handshake()
+        .map_err(|e| DbError::ConnectionFailed(format!("SSH handshake failed: {}", e)))?;
+
+    match &config.auth_method {
+        SshAuthMethod::PrivateKey { key_path } => {
+            authenticate_with_key(&session, &config.user, key_path.as_deref(), secret)?;
+        }
+        SshAuthMethod::Password => {
+            let password = secret.ok_or_else(|| {
+                DbError::ConnectionFailed("SSH password required but not provided".to_string())
+            })?;
+            session
+                .userauth_password(&config.user, password)
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("SSH password authentication failed: {}", e))
+                })?;
+        }
+    }
+
+    if !session.authenticated() {
+        return Err(DbError::ConnectionFailed(
+            "SSH authentication failed".to_string(),
+        ));
+    }
+
+    log::info!("SSH authenticated as {}", config.user);
+    Ok(session)
+}
+
+fn authenticate_with_key(
+    session: &Session,
+    user: &str,
+    key_path: Option<&Path>,
+    passphrase: Option<&str>,
+) -> Result<(), DbError> {
+    if session.userauth_agent(user).is_ok() && session.authenticated() {
+        log::info!("Authenticated via SSH agent");
+        return Ok(());
+    }
+
+    let key_paths: Vec<std::path::PathBuf> = if let Some(path) = key_path {
+        vec![path.to_path_buf()]
+    } else {
+        let home = dirs::home_dir().unwrap_or_default();
+        vec![
+            home.join(".ssh/id_rsa"),
+            home.join(".ssh/id_ed25519"),
+            home.join(".ssh/id_ecdsa"),
+        ]
+    };
+
+    for path in &key_paths {
+        if !path.exists() {
+            continue;
+        }
+
+        log::debug!("Trying key: {}", path.display());
+
+        let result = session.userauth_pubkey_file(user, None, path, passphrase);
+
+        match result {
+            Ok(()) if session.authenticated() => {
+                log::info!("Authenticated with key: {}", path.display());
+                return Ok(());
+            }
+            Ok(()) => continue,
+            Err(e) => {
+                log::debug!("Key {} failed: {}", path.display(), e);
+                continue;
+            }
+        }
+    }
+
+    Err(DbError::ConnectionFailed(
+        "SSH key authentication failed. Check your key path and passphrase.".to_string(),
+    ))
+}
+
+struct SshTunnel {
+    local_port: u16,
+    shutdown: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    forwarder_thread: JoinHandle<()>,
+}
+
+impl SshTunnel {
+    fn start(session: Session, remote_host: String, remote_port: u16) -> Result<Self, DbError> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+            DbError::ConnectionFailed(format!("Failed to bind local tunnel port: {}", e))
+        })?;
+
+        let local_port = listener
+            .local_addr()
+            .map_err(|e| {
+                DbError::ConnectionFailed(format!("Failed to get local tunnel address: {}", e))
+            })?
+            .port();
+
+        listener.set_nonblocking(true).map_err(|e| {
+            DbError::ConnectionFailed(format!("Failed to set listener non-blocking: {}", e))
+        })?;
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        let session = Arc::new(Mutex::new(session));
+
+        let thread = thread::spawn(move || {
+            run_tunnel_loop(listener, session, remote_host, remote_port, shutdown_clone);
+        });
+
+        Ok(Self {
+            local_port,
+            shutdown,
+            forwarder_thread: thread,
+        })
+    }
+
+    fn local_port(&self) -> u16 {
+        self.local_port
+    }
+}
+
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+}
+
+fn run_tunnel_loop(
+    listener: TcpListener,
+    session: Arc<Mutex<Session>>,
+    remote_host: String,
+    remote_port: u16,
+    shutdown: Arc<AtomicBool>,
+) {
+    while !shutdown.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((client_stream, _)) => {
+                let session = session.clone();
+                let remote_host = remote_host.clone();
+                let shutdown = shutdown.clone();
+
+                thread::spawn(move || {
+                    if let Err(e) = handle_tunnel_connection(
+                        client_stream,
+                        session,
+                        &remote_host,
+                        remote_port,
+                        shutdown,
+                    ) {
+                        log::error!("SSH tunnel connection error: {}", e);
+                    }
+                });
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => {
+                log::error!("SSH tunnel listener error: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+fn open_ssh_channel_blocking(
+    session: &Session,
+    remote_host: &str,
+    remote_port: u16,
+) -> Result<ssh2::Channel, ssh2::Error> {
+    session.set_blocking(true);
+    session.channel_direct_tcpip(remote_host, remote_port, None)
+}
+
+fn handle_tunnel_connection(
+    mut client_stream: TcpStream,
+    session: Arc<Mutex<Session>>,
+    remote_host: &str,
+    remote_port: u16,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut channel = {
+        let session = session
+            .lock()
+            .map_err(|e| format!("Session lock failed: {}", e))?;
+
+        let channel = open_ssh_channel_blocking(&session, remote_host, remote_port)?;
+        session.set_blocking(false);
+        channel
+    };
+
+    client_stream.set_nonblocking(true)?;
+
+    let mut client_buf = [0u8; 8192];
+    let mut channel_buf = [0u8; 8192];
+
+    while !shutdown.load(Ordering::SeqCst) {
+        let mut activity = false;
+
+        match client_stream.read(&mut client_buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                channel.write_all(&client_buf[..n])?;
+                activity = true;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => return Err(Box::new(e)),
+        }
+
+        match channel.read(&mut channel_buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                client_stream.write_all(&channel_buf[..n])?;
+                activity = true;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => return Err(Box::new(e)),
+        }
+
+        if !activity {
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    Ok(())
+}
+
 pub struct PostgresConnection {
     client: Mutex<Client>,
+    #[allow(dead_code)]
+    ssh_tunnel: Option<SshTunnel>,
 }
 
 impl Connection for PostgresConnection {
@@ -115,7 +519,6 @@ impl Connection for PostgresConnection {
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let start = Instant::now();
 
-        // Execute query with lock, release immediately after
         let rows = {
             let mut client = self
                 .client
@@ -127,7 +530,6 @@ impl Connection for PostgresConnection {
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?
         };
 
-        // Process results without holding lock
         if rows.is_empty() {
             return Ok(QueryResult {
                 columns: Vec::new(),
@@ -434,4 +836,44 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .map(Value::Text)
             .unwrap_or(Value::Null),
     }
+}
+
+fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
+    let source = e.to_string();
+
+    let message = if source.contains("timed out") {
+        format!(
+            "Connection to {}:{} timed out. Check that the host is reachable and the port is open.",
+            host, port
+        )
+    } else if source.contains("Connection refused") {
+        format!(
+            "Connection refused at {}:{}. Verify PostgreSQL is running and accepting connections.",
+            host, port
+        )
+    } else if source.contains("password authentication failed") {
+        "Authentication failed. Check your username and password.".to_string()
+    } else if source.contains("does not exist") {
+        format!("Database or user does not exist: {}", source)
+    } else if source.contains("no pg_hba.conf entry") {
+        format!(
+            "Server rejected connection from this host. Check pg_hba.conf on {}.",
+            host
+        )
+    } else if source.contains("error connecting to server") || source.contains("could not connect")
+    {
+        format!(
+            "Could not connect to {}:{}. The server may be unreachable, behind a firewall, or requires SSH tunnel.",
+            host, port
+        )
+    } else if source.contains("Name or service not known")
+        || source.contains("nodename nor servname")
+    {
+        format!("Could not resolve hostname: {}", host)
+    } else {
+        format!("Connection error: {}", source)
+    };
+
+    log::error!("PostgreSQL connection failed: {}", message);
+    DbError::ConnectionFailed(message)
 }
