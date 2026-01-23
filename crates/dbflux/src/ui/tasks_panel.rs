@@ -29,10 +29,14 @@ impl TasksPanel {
     }
 
     async fn timer_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
+        let mut tick_count: u32 = 0;
+
         loop {
             cx.background_executor()
                 .timer(Duration::from_millis(100))
                 .await;
+
+            tick_count = tick_count.wrapping_add(1);
 
             let should_notify = cx
                 .update(|cx| {
@@ -46,6 +50,19 @@ impl TasksPanel {
                 cx.update(|cx| {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |_, cx| cx.notify());
+                    }
+                })
+                .ok();
+            }
+
+            if tick_count.is_multiple_of(300) {
+                cx.update(|cx| {
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |panel, cx| {
+                            panel.app_state.update(cx, |state, _| {
+                                state.tasks.cleanup_completed(60);
+                            });
+                        });
                     }
                 })
                 .ok();

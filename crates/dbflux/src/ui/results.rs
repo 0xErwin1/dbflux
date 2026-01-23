@@ -1,6 +1,9 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef, TaskKind};
+use dbflux_core::{
+    CancelToken, Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef, TaskId,
+    TaskKind,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -45,6 +48,12 @@ struct PendingTotalCount {
     total: u64,
 }
 
+#[allow(dead_code)]
+struct RunningTableQuery {
+    task_id: TaskId,
+    cancel_token: CancelToken,
+}
+
 pub struct ResultsPane {
     app_state: Entity<AppState>,
     tabs: Vec<ResultTab>,
@@ -57,6 +66,7 @@ pub struct ResultsPane {
     pending_table_result: Option<PendingTableResult>,
     pending_total_count: Option<PendingTotalCount>,
     pending_error: Option<String>,
+    running_table_query: Option<RunningTableQuery>,
 }
 
 impl ResultsPane {
@@ -104,6 +114,7 @@ impl ResultsPane {
             pending_table_result: None,
             pending_total_count: None,
             pending_error: None,
+            running_table_query: None,
         }
     }
 
@@ -365,6 +376,11 @@ impl ResultsPane {
     ) {
         use crate::ui::toast::ToastExt;
 
+        if self.running_table_query.is_some() {
+            cx.toast_error("A table query is already running", window);
+            return;
+        }
+
         let mut request = TableBrowseRequest::new(table.clone())
             .with_pagination(pagination.clone())
             .with_order_by(order_by.clone());
@@ -395,6 +411,11 @@ impl ResultsPane {
             result
         });
 
+        self.running_table_query = Some(RunningTableQuery {
+            task_id,
+            cancel_token: cancel_token.clone(),
+        });
+
         let query_request = QueryRequest::new(sql);
         let results_entity = cx.entity().clone();
         let app_state = self.app_state.clone();
@@ -409,6 +430,10 @@ impl ResultsPane {
             let result = task.await;
 
             cx.update(|cx| {
+                results_entity.update(cx, |pane, _cx| {
+                    pane.running_table_query = None;
+                });
+
                 if cancel_token.is_cancelled() {
                     log::info!("Table query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -619,6 +644,11 @@ impl ResultsPane {
         self.tabs.clear();
         self.active_tab = 0;
         cx.notify();
+    }
+
+    #[allow(dead_code)]
+    fn is_table_query_running(&self) -> bool {
+        self.running_table_query.is_some()
     }
 }
 

@@ -8,7 +8,7 @@ use dbflux_core::{
     DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
     SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
-use rusqlite::Connection as RusqliteConnection;
+use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
 pub struct SqliteDriver;
 
@@ -55,8 +55,11 @@ impl DbDriver for SqliteDriver {
         let conn = RusqliteConnection::open(&path)
             .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
 
+        let interrupt_handle = conn.get_interrupt_handle();
+
         Ok(Box::new(SqliteConnection {
             conn: Mutex::new(conn),
+            interrupt_handle,
             cancelled: Arc::new(AtomicBool::new(false)),
             path,
         }))
@@ -84,6 +87,7 @@ impl DbDriver for SqliteDriver {
 
 pub struct SqliteConnection {
     conn: Mutex<RusqliteConnection>,
+    interrupt_handle: InterruptHandle,
     cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]
     path: PathBuf,
@@ -91,11 +95,14 @@ pub struct SqliteConnection {
 
 struct SqliteCancelHandle {
     cancelled: Arc<AtomicBool>,
+    interrupt_handle: InterruptHandle,
 }
 
 impl QueryCancelHandle for SqliteCancelHandle {
     fn cancel(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.interrupt_handle.interrupt();
+        log::info!("[CANCEL] SQLite interrupt signal sent via handle");
         Ok(())
     }
 
@@ -208,18 +215,18 @@ impl Connection for SqliteConnection {
 
     fn cancel_active(&self) -> Result<(), DbError> {
         self.cancelled.store(true, Ordering::SeqCst);
-
-        if let Ok(conn) = self.conn.lock() {
-            conn.get_interrupt_handle().interrupt();
-            log::info!("[CANCEL] SQLite interrupt signal sent");
-        }
-
+        self.interrupt_handle.interrupt();
+        log::info!("[CANCEL] SQLite interrupt signal sent");
         Ok(())
     }
 
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
+            interrupt_handle: self.conn
+                .lock()
+                .map(|c| c.get_interrupt_handle())
+                .expect("Failed to get interrupt handle"),
         })
     }
 

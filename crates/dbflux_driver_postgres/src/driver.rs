@@ -634,10 +634,13 @@ impl Connection for PostgresConnection {
         );
 
         let query_result = {
-            let mut client = self
-                .client
-                .lock()
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut client = match self.client.lock() {
+                Ok(guard) => guard,
+                Err(poison_err) => {
+                    log::warn!("[CLEANUP] Recovering from poisoned mutex during cleanup");
+                    poison_err.into_inner()
+                }
+            };
 
             client.query(&req.sql, &[])
         };
