@@ -20,12 +20,14 @@ crates/
     src/main.rs             # Application entry point
     src/app.rs              # Global state, drivers, profiles, history
     src/ui/                 # UI panels, windows, theme
+    src/ui/history_modal.rs # Recent/saved queries modal
     src/keymap/             # Keyboard commands and keymap
   dbflux_core/              # Traits, core types, storage, errors
     src/traits.rs           # DbDriver + Connection traits
     src/profile.rs          # Connection/SSH profiles
     src/store.rs            # Profile and tunnel stores (JSON)
     src/history.rs          # History persistence
+    src/saved_query.rs      # Saved queries persistence
     src/task.rs             # Background task tracking
   dbflux_driver_postgres/   # PostgreSQL driver implementation
   dbflux_driver_sqlite/     # SQLite driver implementation
@@ -39,7 +41,8 @@ crates/
 - Workspace UI shell: `crates/dbflux/src/ui/workspace.rs` wires panes (sidebar/editor/results/tasks), command palette, and focus routing.
 - Core domain API: `crates/dbflux_core/src/traits.rs` defines `DbDriver`, `Connection`, and cancellation contracts.
 - Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH profiles and keyring integration.
-- Storage: `crates/dbflux_core/src/store.rs` and `crates/dbflux_core/src/history.rs` persist JSON data in the config dir.
+- Storage: `crates/dbflux_core/src/store.rs`, `crates/dbflux_core/src/history.rs`, and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
+- History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 - Drivers: `crates/dbflux_driver_postgres/src/driver.rs` and `crates/dbflux_driver_sqlite/src/driver.rs` implement query execution + schema discovery.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` establishes SSH sessions and runs a local port forwarder.
 - Export: `crates/dbflux_export/src/lib.rs` exposes the CSV exporter interface.
@@ -49,7 +52,8 @@ crates/
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs).
 - Query flow: Editor pane submits SQL to a `Connection` implementation; results are rendered in `ResultsPane` (crates/dbflux/src/ui/editor/mod.rs, crates/dbflux/src/ui/results/mod.rs).
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/workspace.rs).
-- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and exposed in the sidebar (crates/dbflux_core/src/history.rs).
+- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/history.rs).
+- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (crates/dbflux_core/src/saved_query.rs).
 
 ## External Integrations
 - PostgreSQL: `tokio-postgres` client with optional TLS and cancellation support (crates/dbflux_driver_postgres/src/driver.rs).
@@ -63,7 +67,8 @@ crates/
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite` and `postgres` drivers.
 - Runtime data (config dir via `dirs::config_dir`):
   - `profiles.json` and `ssh_tunnels.json` (crates/dbflux_core/src/store.rs).
-  - Query history JSON (crates/dbflux_core/src/history.rs).
+  - `history.json` for query history (crates/dbflux_core/src/history.rs).
+  - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/saved_query.rs).
 - Secrets: passwords stored in OS keyring; references derived from profile IDs (crates/dbflux_core/src/secrets.rs).
 
 ## Build & Deploy
