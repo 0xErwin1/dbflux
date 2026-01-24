@@ -175,14 +175,14 @@ fn history_modal_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
-    layer.bind(KeyChord::new("d", Modifiers::none()), Command::Delete);
+    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::Delete);
     layer.bind(
-        KeyChord::new("f", Modifiers::none()),
+        KeyChord::new("f", Modifiers::ctrl()),
         Command::ToggleFavorite,
     );
-    layer.bind(KeyChord::new("r", Modifiers::none()), Command::Rename);
+    layer.bind(KeyChord::new("r", Modifiers::ctrl()), Command::Rename);
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
-    layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
+    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
 
     layer
 }

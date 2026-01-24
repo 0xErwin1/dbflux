@@ -5,9 +5,9 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -239,14 +239,16 @@ impl HistoryModal {
         };
 
         if let Some(entry) = entries.get(idx) {
+            let entry_id = entry.id;
             self.app_state.update(cx, |state, _| {
-                state.remove_saved_query(entry.id);
+                state.remove_saved_query(entry_id);
             });
-            let new_len = entries.len().saturating_sub(1);
-            self.selected_index = if new_len == 0 {
+
+            let new_count = self.filtered_saved_queries(cx).len();
+            self.selected_index = if new_count == 0 {
                 None
             } else {
-                Some(idx.min(new_len.saturating_sub(1)))
+                Some(idx.min(new_count.saturating_sub(1)))
             };
             cx.notify();
         }
@@ -734,9 +736,9 @@ impl HistoryModal {
         let count = self.current_list_count(cx);
 
         let shortcuts = match self.active_tab {
-            HistoryTab::Recent => "C-j/k Navigate  Enter Load  s Save  Esc Close",
+            HistoryTab::Recent => "C-j/k Navigate  Enter Load  C-s Save  Esc Close",
             HistoryTab::Saved => {
-                "C-j/k Navigate  Enter Load  d Delete  f Favorite  r Rename  Esc Close"
+                "C-j/k Navigate  Enter Load  C-d Delete  C-f Favorite  C-r Rename  Esc Close"
             }
         };
 
