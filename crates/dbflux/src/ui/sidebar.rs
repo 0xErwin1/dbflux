@@ -16,6 +16,7 @@ use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{Icon, IconName};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,9 +82,14 @@ pub struct Sidebar {
     editor: Entity<EditorPane>,
     results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
-    history_panel: Entity<HistoryPanel>,
+    pub history_panel: Entity<HistoryPanel>,
     pending_view_table: Option<String>,
     pending_toast: Option<PendingToast>,
+    connections_focused: bool,
+    history_focused: bool,
+    visible_entry_count: usize,
+    /// User overrides for expansion state (item_id -> is_expanded)
+    expansion_overrides: HashMap<String, bool>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -101,6 +107,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
+        let visible_entry_count = Self::count_visible_entries(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
         let history_panel =
             cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
@@ -117,7 +124,155 @@ impl Sidebar {
             history_panel,
             pending_view_table: None,
             pending_toast: None,
+            connections_focused: false,
+            history_focused: false,
+            visible_entry_count,
+            expansion_overrides: HashMap::new(),
             _subscriptions: vec![app_state_subscription],
+        }
+    }
+
+    pub fn set_connections_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.connections_focused != focused {
+            self.connections_focused = focused;
+            cx.notify();
+        }
+    }
+
+    pub fn set_history_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.history_focused != focused {
+            self.history_focused = focused;
+            self.history_panel.update(cx, |panel, cx| {
+                panel.set_focused(focused, cx);
+            });
+        }
+    }
+
+    pub fn select_next(&mut self, cx: &mut Context<Self>) {
+        if self.visible_entry_count == 0 {
+            return;
+        }
+
+        self.tree_state.update(cx, |state, cx| {
+            let next = match state.selected_index() {
+                Some(current) => (current + 1).min(self.visible_entry_count.saturating_sub(1)),
+                None => 0,
+            };
+            state.set_selected_index(Some(next), cx);
+            state.scroll_to_item(next, gpui::ScrollStrategy::Center);
+        });
+        cx.notify();
+    }
+
+    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
+        if self.visible_entry_count == 0 {
+            return;
+        }
+
+        self.tree_state.update(cx, |state, cx| {
+            let prev = match state.selected_index() {
+                Some(current) => current.saturating_sub(1),
+                None => self.visible_entry_count.saturating_sub(1),
+            };
+            state.set_selected_index(Some(prev), cx);
+            state.scroll_to_item(prev, gpui::ScrollStrategy::Center);
+        });
+        cx.notify();
+    }
+
+    pub fn select_first(&mut self, cx: &mut Context<Self>) {
+        if self.visible_entry_count == 0 {
+            return;
+        }
+
+        self.tree_state.update(cx, |state, cx| {
+            state.set_selected_index(Some(0), cx);
+            state.scroll_to_item(0, gpui::ScrollStrategy::Center);
+        });
+        cx.notify();
+    }
+
+    pub fn select_last(&mut self, cx: &mut Context<Self>) {
+        if self.visible_entry_count == 0 {
+            return;
+        }
+
+        let last = self.visible_entry_count.saturating_sub(1);
+        self.tree_state.update(cx, |state, cx| {
+            state.set_selected_index(Some(last), cx);
+            state.scroll_to_item(last, gpui::ScrollStrategy::Center);
+        });
+        cx.notify();
+    }
+
+    pub fn expand_collapse(&mut self, cx: &mut Context<Self>) {
+        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        if let Some(entry) = entry
+            && entry.is_folder()
+        {
+            let item_id = entry.item().id.to_string();
+            let currently_expanded = entry.is_expanded();
+            self.set_expanded(&item_id, !currently_expanded, cx);
+        }
+    }
+
+    pub fn collapse(&mut self, cx: &mut Context<Self>) {
+        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        if let Some(entry) = entry
+            && entry.is_folder()
+            && entry.is_expanded()
+        {
+            let item_id = entry.item().id.to_string();
+            self.set_expanded(&item_id, false, cx);
+        }
+    }
+
+    pub fn expand(&mut self, cx: &mut Context<Self>) {
+        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        if let Some(entry) = entry
+            && entry.is_folder()
+            && !entry.is_expanded()
+        {
+            let item_id = entry.item().id.to_string();
+            self.set_expanded(&item_id, true, cx);
+        }
+    }
+
+    fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        self.expansion_overrides
+            .insert(item_id.to_string(), expanded);
+        self.rebuild_tree_with_overrides(cx);
+    }
+
+    fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
+        let selected_index = self.tree_state.read(cx).selected_index();
+        let items = self.build_tree_items_with_overrides(cx);
+        self.visible_entry_count = Self::count_visible_entries(&items);
+
+        self.tree_state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            if let Some(idx) = selected_index {
+                let new_idx = idx.min(self.visible_entry_count.saturating_sub(1));
+                state.set_selected_index(Some(new_idx), cx);
+            }
+        });
+        cx.notify();
+    }
+
+    pub fn execute(&mut self, cx: &mut Context<Self>) {
+        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        if let Some(entry) = entry {
+            let item_id = entry.item().id.to_string();
+            let node_kind = TreeNodeKind::from_id(&item_id);
+
+            // For tables and views, simulate double-click to view data
+            // For other nodes, simulate single-click
+            let click_count = match node_kind {
+                TreeNodeKind::Table | TreeNodeKind::View => 2,
+                _ => 1,
+            };
+
+            self.handle_item_click(&item_id, click_count, cx);
         }
     }
 
@@ -269,11 +424,56 @@ impl Sidebar {
     }
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        let items = Self::build_tree_items(self.app_state.read(cx));
+        // Preserve selection across refresh
+        let selected_index = self.tree_state.read(cx).selected_index();
+
+        let items = self.build_tree_items_with_overrides(cx);
+        self.visible_entry_count = Self::count_visible_entries(&items);
+
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
+
+            // Restore selection, clamping to valid range
+            if let Some(idx) = selected_index {
+                let new_idx = idx.min(self.visible_entry_count.saturating_sub(1));
+                state.set_selected_index(Some(new_idx), cx);
+            }
         });
         cx.notify();
+    }
+
+    fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
+        let items = Self::build_tree_items(self.app_state.read(cx));
+        self.apply_expansion_overrides(items)
+    }
+
+    fn apply_expansion_overrides(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
+        items
+            .into_iter()
+            .map(|item| self.apply_override_recursive(item))
+            .collect()
+    }
+
+    fn apply_override_recursive(&self, item: TreeItem) -> TreeItem {
+        let item_id = item.id.to_string();
+        let default_expanded = item.is_expanded();
+
+        let children: Vec<TreeItem> = item
+            .children
+            .into_iter()
+            .map(|c| self.apply_override_recursive(c))
+            .collect();
+
+        // Apply override if exists, otherwise keep default
+        let expanded = self
+            .expansion_overrides
+            .get(&item_id)
+            .copied()
+            .unwrap_or(default_expanded);
+
+        TreeItem::new(item_id, item.label.clone())
+            .children(children)
+            .expanded(expanded)
     }
 
     fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
@@ -334,6 +534,20 @@ impl Sidebar {
         }
 
         items
+    }
+
+    fn count_visible_entries(items: &[TreeItem]) -> usize {
+        fn count_recursive(item: &TreeItem) -> usize {
+            let mut count = 1;
+            if item.is_expanded() && item.is_folder() {
+                for child in &item.children {
+                    count += count_recursive(child);
+                }
+            }
+            count
+        }
+
+        items.iter().map(count_recursive).sum()
     }
 
     fn build_schema_children(
@@ -736,8 +950,16 @@ impl Render for Sidebar {
                     .child(
                         div()
                             .text_size(FontSizes::XS)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.muted_foreground)
+                            .font_weight(if self.connections_focused {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::SEMIBOLD
+                            })
+                            .text_color(if self.connections_focused {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
                             .child("CONNECTIONS"),
                     )
                     .child(

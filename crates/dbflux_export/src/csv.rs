@@ -21,13 +21,9 @@ impl Exporter for CsvExporter {
         csv_writer.write_record(&headers)?;
 
         for row in &result.rows {
-            for (i, value) in row.iter().enumerate() {
+            for value in row.iter() {
                 let field = value_to_csv_field(value);
-                if i == 0 {
-                    csv_writer.write_field(&field)?;
-                } else {
-                    csv_writer.write_field(&field)?;
-                }
+                csv_writer.write_field(&field)?;
             }
             csv_writer.write_record(None::<&[u8]>)?;
         }

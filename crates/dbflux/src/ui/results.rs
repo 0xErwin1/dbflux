@@ -661,7 +661,117 @@ impl ResultsPane {
         self.running_table_query.is_some()
     }
 
-    fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_next(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let row_count = tab.result.rows.len();
+        if row_count == 0 {
+            return;
+        }
+
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            let next = match state.selected_row() {
+                Some(current) => (current + 1).min(row_count.saturating_sub(1)),
+                None => 0,
+            };
+            state.set_selected_row(next, cx);
+            state.scroll_to_row(next, cx);
+        });
+    }
+
+    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let row_count = tab.result.rows.len();
+        if row_count == 0 {
+            return;
+        }
+
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            let prev = match state.selected_row() {
+                Some(current) => current.saturating_sub(1),
+                None => row_count.saturating_sub(1),
+            };
+            state.set_selected_row(prev, cx);
+            state.scroll_to_row(prev, cx);
+        });
+    }
+
+    pub fn select_first(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        if tab.result.rows.is_empty() {
+            return;
+        }
+
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            state.set_selected_row(0, cx);
+            state.scroll_to_row(0, cx);
+        });
+    }
+
+    pub fn select_last(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let row_count = tab.result.rows.len();
+        if row_count == 0 {
+            return;
+        }
+
+        let last = row_count.saturating_sub(1);
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            state.set_selected_row(last, cx);
+            state.scroll_to_row(last, cx);
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn column_left(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let col_count = tab.result.columns.len();
+        if col_count == 0 {
+            return;
+        }
+
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            let current = state.selected_col().unwrap_or(0);
+            let prev = current.saturating_sub(1);
+            state.set_selected_col(prev, cx);
+            state.scroll_to_col(prev, cx);
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn column_right(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let col_count = tab.result.columns.len();
+        if col_count == 0 {
+            return;
+        }
+
+        let table_state = tab.table_state.clone();
+        table_state.update(cx, |state, cx| {
+            let current = state.selected_col().unwrap_or(0);
+            let next = (current + 1).min(col_count.saturating_sub(1));
+            state.set_selected_col(next, cx);
+            state.scroll_to_col(next, cx);
+        });
+    }
+
+    pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::toast::ToastExt;
 
         let Some(tab) = self.active_tab() else {

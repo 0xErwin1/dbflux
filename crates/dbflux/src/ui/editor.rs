@@ -86,7 +86,7 @@ impl EditorPane {
         }
     }
 
-    fn add_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn add_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("sql")
@@ -127,6 +127,36 @@ impl EditorPane {
         }
 
         cx.notify();
+    }
+
+    pub fn next_tab(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let next = (self.active_tab + 1) % self.tabs.len();
+        self.switch_tab(next, cx);
+    }
+
+    pub fn prev_tab(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let prev = if self.active_tab == 0 {
+            self.tabs.len() - 1
+        } else {
+            self.active_tab - 1
+        };
+        self.switch_tab(prev, cx);
+    }
+
+    pub fn switch_to_tab(&mut self, n: usize, cx: &mut Context<Self>) {
+        if n >= 1 && n <= self.tabs.len() {
+            self.switch_tab(n - 1, cx);
+        }
+    }
+
+    pub fn close_current_tab(&mut self, cx: &mut Context<Self>) {
+        self.close_tab(self.active_tab, cx);
     }
 
     fn start_rename(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -178,7 +208,15 @@ impl EditorPane {
         cx.notify();
     }
 
-    fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs[self.active_tab]
+            .input_state
+            .update(cx, |state, cx| {
+                state.focus(window, cx);
+            });
+    }
+
+    pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::toast::ToastExt;
 
         if self.running_query.is_some() {

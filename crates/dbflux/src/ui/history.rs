@@ -15,6 +15,8 @@ pub struct HistoryPanel {
     search_input: Entity<InputState>,
     search_query: String,
     is_collapsed: bool,
+    is_focused: bool,
+    selected_index: Option<usize>,
     pending_load_sql: Option<String>,
 }
 
@@ -46,8 +48,114 @@ impl HistoryPanel {
             search_input,
             search_query: String::new(),
             is_collapsed: true,
+            is_focused: false,
+            selected_index: None,
             pending_load_sql: None,
         }
+    }
+
+    pub fn set_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.is_focused != focused {
+            self.is_focused = focused;
+            cx.notify();
+        }
+    }
+
+    pub fn select_next(&mut self, cx: &mut Context<Self>) {
+        let count = self.entry_count(cx);
+        if count == 0 {
+            return;
+        }
+
+        self.selected_index = Some(match self.selected_index {
+            Some(idx) => (idx + 1).min(count.saturating_sub(1)),
+            None => 0,
+        });
+        cx.notify();
+    }
+
+    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
+        let count = self.entry_count(cx);
+        if count == 0 {
+            return;
+        }
+
+        self.selected_index = Some(match self.selected_index {
+            Some(idx) => idx.saturating_sub(1),
+            None => count.saturating_sub(1),
+        });
+        cx.notify();
+    }
+
+    pub fn select_first(&mut self, cx: &mut Context<Self>) {
+        if self.entry_count(cx) == 0 {
+            return;
+        }
+        self.selected_index = Some(0);
+        cx.notify();
+    }
+
+    pub fn select_last(&mut self, cx: &mut Context<Self>) {
+        let count = self.entry_count(cx);
+        if count == 0 {
+            return;
+        }
+        self.selected_index = Some(count.saturating_sub(1));
+        cx.notify();
+    }
+
+    pub fn execute(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+
+        let entries = self.app_state.read(cx).history_entries();
+        let filtered = self.filtered_entries(entries);
+
+        if let Some(entry) = filtered.get(idx) {
+            self.load_query(entry.sql.clone(), cx);
+        }
+    }
+
+    pub fn toggle_favorite_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+
+        let entries = self.app_state.read(cx).history_entries();
+        let filtered = self.filtered_entries(entries);
+
+        if let Some(entry) = filtered.get(idx) {
+            let id = entry.id;
+            self.toggle_favorite(id, cx);
+        }
+    }
+
+    pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+
+        let entries = self.app_state.read(cx).history_entries();
+        let filtered = self.filtered_entries(entries);
+
+        if let Some(entry) = filtered.get(idx) {
+            let id = entry.id;
+            self.remove_entry(id, cx);
+
+            // Adjust selection after deletion
+            let new_count = self.entry_count(cx);
+            if new_count == 0 {
+                self.selected_index = None;
+            } else if idx >= new_count {
+                self.selected_index = Some(new_count.saturating_sub(1));
+            }
+        }
+    }
+
+    fn entry_count(&self, cx: &Context<Self>) -> usize {
+        let entries = self.app_state.read(cx).history_entries();
+        self.filtered_entries(entries).len()
     }
 
     fn toggle_collapsed(&mut self, cx: &mut Context<Self>) {
@@ -143,8 +251,16 @@ impl Render for HistoryPanel {
                             .child(
                                 div()
                                     .text_size(FontSizes::SM)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.muted_foreground)
+                                    .font_weight(if self.is_focused {
+                                        FontWeight::BOLD
+                                    } else {
+                                        FontWeight::MEDIUM
+                                    })
+                                    .text_color(if self.is_focused {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground
+                                    })
                                     .child(format!("HISTORY ({})", entry_count)),
                             ),
                     ),

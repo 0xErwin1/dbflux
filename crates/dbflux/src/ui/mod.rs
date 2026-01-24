@@ -1,3 +1,5 @@
+pub mod command_palette;
+pub mod dropdown;
 pub mod editor;
 pub mod history;
 pub mod results;

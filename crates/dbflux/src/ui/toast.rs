@@ -20,6 +20,7 @@ impl ToastManager {
 
 pub trait ToastExt {
     fn toast_success(&mut self, message: impl Into<String>, window: &mut Window);
+    fn toast_info(&mut self, message: impl Into<String>, window: &mut Window);
     fn toast_warning(&mut self, message: impl Into<String>, window: &mut Window);
     fn toast_error(&mut self, message: impl Into<String>, window: &mut Window);
 }
@@ -33,6 +34,20 @@ impl<T> ToastExt for Context<'_, T> {
                 .message(message.into())
                 .with_type(NotificationType::Success)
                 .border_color(gpui::rgb(0x22C55E))
+                .shadow_lg()
+                .rounded(px(8.0));
+            list.push(notification, window, cx);
+        });
+    }
+
+    fn toast_info(&mut self, message: impl Into<String>, window: &mut Window) {
+        let list = ToastManager::notification_list(self);
+        list.update(self, |list, cx| {
+            let notification = Notification::new()
+                .title("Info")
+                .message(message.into())
+                .with_type(NotificationType::Info)
+                .border_color(gpui::rgb(0x3B82F6))
                 .shadow_lg()
                 .rounded(px(8.0));
             list.push(notification, window, cx);

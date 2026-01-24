@@ -223,7 +223,8 @@ impl Connection for SqliteConnection {
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
-            interrupt_handle: self.conn
+            interrupt_handle: self
+                .conn
                 .lock()
                 .map(|c| c.get_interrupt_handle())
                 .expect("Failed to get interrupt handle"),
