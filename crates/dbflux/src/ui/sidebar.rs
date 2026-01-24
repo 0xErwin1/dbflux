@@ -1,6 +1,5 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::editor::EditorPane;
-use crate::ui::history::HistoryPanel;
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
@@ -37,30 +36,19 @@ enum TreeNodeKind {
 
 impl TreeNodeKind {
     fn from_id(id: &str) -> Self {
-        if id.starts_with("profile_") {
-            Self::Profile
-        } else if id.starts_with("db_") {
-            Self::Database
-        } else if id.starts_with("schema_") {
-            Self::Schema
-        } else if id.starts_with("tables_") {
-            Self::TablesFolder
-        } else if id.starts_with("views_") {
-            Self::ViewsFolder
-        } else if id.starts_with("table_") {
-            Self::Table
-        } else if id.starts_with("view_") {
-            Self::View
-        } else if id.starts_with("columns_") {
-            Self::ColumnsFolder
-        } else if id.starts_with("indexes_") {
-            Self::IndexesFolder
-        } else if id.starts_with("col_") {
-            Self::Column
-        } else if id.starts_with("idx_") {
-            Self::Index
-        } else {
-            Self::Unknown
+        match id {
+            _ if id.starts_with("profile_") => Self::Profile,
+            _ if id.starts_with("db_") => Self::Database,
+            _ if id.starts_with("schema_") => Self::Schema,
+            _ if id.starts_with("tables_") => Self::TablesFolder,
+            _ if id.starts_with("views_") => Self::ViewsFolder,
+            _ if id.starts_with("table_") => Self::Table,
+            _ if id.starts_with("view_") => Self::View,
+            _ if id.starts_with("columns_") => Self::ColumnsFolder,
+            _ if id.starts_with("indexes_") => Self::IndexesFolder,
+            _ if id.starts_with("col_") => Self::Column,
+            _ if id.starts_with("idx_") => Self::Index,
+            _ => Self::Unknown,
         }
     }
 
@@ -82,11 +70,9 @@ pub struct Sidebar {
     editor: Entity<EditorPane>,
     results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
-    pub history_panel: Entity<HistoryPanel>,
     pending_view_table: Option<String>,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
-    history_focused: bool,
     visible_entry_count: usize,
     /// User overrides for expansion state (item_id -> is_expanded)
     expansion_overrides: HashMap<String, bool>,
@@ -103,14 +89,12 @@ impl Sidebar {
         app_state: Entity<AppState>,
         editor: Entity<EditorPane>,
         results: Entity<ResultsPane>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
         let visible_entry_count = Self::count_visible_entries(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
-        let history_panel =
-            cx.new(|cx| HistoryPanel::new(app_state.clone(), editor.clone(), window, cx));
 
         let app_state_subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
             this.refresh_tree(cx);
@@ -121,11 +105,9 @@ impl Sidebar {
             editor,
             results,
             tree_state,
-            history_panel,
             pending_view_table: None,
             pending_toast: None,
             connections_focused: false,
-            history_focused: false,
             visible_entry_count,
             expansion_overrides: HashMap::new(),
             _subscriptions: vec![app_state_subscription],
@@ -136,15 +118,6 @@ impl Sidebar {
         if self.connections_focused != focused {
             self.connections_focused = focused;
             cx.notify();
-        }
-    }
-
-    pub fn set_history_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
-        if self.history_focused != focused {
-            self.history_focused = focused;
-            self.history_panel.update(cx, |panel, cx| {
-                panel.set_focused(focused, cx);
-            });
         }
     }
 
@@ -1213,7 +1186,6 @@ impl Render for Sidebar {
                     list_item
                 },
             )))
-            .child(self.history_panel.clone())
             .child(self.render_footer(cx))
     }
 }

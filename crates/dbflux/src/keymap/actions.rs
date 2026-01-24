@@ -20,7 +20,6 @@ actions!(
         FocusSidebar,
         FocusEditor,
         FocusResults,
-        FocusHistory,
         FocusBackgroundTasks,
         CycleFocusForward,
         CycleFocusBackward,
@@ -48,5 +47,21 @@ actions!(
         FocusRight,
         FocusUp,
         FocusDown,
+        // Saved queries / history actions
+        Delete,
+        ToggleFavorite,
+        Rename,
+        FocusSearch,
+        SaveQuery,
     ]
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_module_compiles() {
+        let _ = ToggleCommandPalette;
+    }
+}

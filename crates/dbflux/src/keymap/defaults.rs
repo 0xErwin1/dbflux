@@ -6,8 +6,8 @@ pub fn default_keymap() -> KeymapStack {
 
     stack.add_layer(global_layer());
     stack.add_layer(sidebar_layer());
-    stack.add_layer(history_layer());
     stack.add_layer(editor_layer());
+    stack.add_layer(history_modal_layer());
     stack.add_layer(results_layer());
     stack.add_layer(background_tasks_layer());
     stack.add_layer(command_palette_layer());
@@ -76,7 +76,7 @@ fn global_layer() -> KeymapLayer {
     );
     layer.bind(
         KeyChord::new("4", Modifiers::ctrl_shift()),
-        Command::FocusHistory,
+        Command::FocusBackgroundTasks,
     );
 
     layer
@@ -136,58 +136,6 @@ fn sidebar_layer() -> KeymapLayer {
     layer
 }
 
-fn history_layer() -> KeymapLayer {
-    let mut layer = KeymapLayer::new(ContextId::History);
-
-    // Panel navigation (Ctrl+hjkl)
-    layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
-
-    // List navigation
-    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
-    layer.bind(
-        KeyChord::new("down", Modifiers::none()),
-        Command::SelectNext,
-    );
-    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
-    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
-
-    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
-    layer.bind(
-        KeyChord::new("home", Modifiers::none()),
-        Command::SelectFirst,
-    );
-    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
-    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
-
-    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
-    layer.bind(
-        KeyChord::new("pagedown", Modifiers::none()),
-        Command::PageDown,
-    );
-    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
-    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
-
-    // Actions
-    layer.bind(
-        KeyChord::new("enter", Modifiers::none()),
-        Command::LoadQuery,
-    );
-    layer.bind(
-        KeyChord::new("f", Modifiers::none()),
-        Command::ToggleFavorite,
-    );
-    layer.bind(
-        KeyChord::new("delete", Modifiers::none()),
-        Command::DeleteHistoryEntry,
-    );
-    layer.bind(
-        KeyChord::new("x", Modifiers::none()),
-        Command::DeleteHistoryEntry,
-    );
-
-    layer
-}
-
 fn editor_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Editor);
 
@@ -198,6 +146,43 @@ fn editor_layer() -> KeymapLayer {
 
     // Enter focuses the SQL input
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+
+    // Query history / saved queries
+    layer.bind(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::ToggleHistoryDropdown,
+    );
+    layer.bind(
+        KeyChord::new("p", Modifiers::ctrl()),
+        Command::OpenSavedQueries,
+    );
+    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+
+    layer
+}
+
+fn history_modal_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::HistoryModal);
+
+    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+    layer.bind(KeyChord::new("d", Modifiers::none()), Command::Delete);
+    layer.bind(
+        KeyChord::new("f", Modifiers::none()),
+        Command::ToggleFavorite,
+    );
+    layer.bind(KeyChord::new("r", Modifiers::none()), Command::Rename);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+    layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 
     layer
 }
@@ -307,6 +292,7 @@ fn command_palette_layer() -> KeymapLayer {
 
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 
     layer
 }
@@ -363,6 +349,7 @@ fn dropdown_layer() -> KeymapLayer {
 
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 
     layer
 }
@@ -396,6 +383,28 @@ mod tests {
         assert_eq!(
             keymap.resolve(ContextId::Sidebar, &k),
             Some(Command::SelectPrev)
+        );
+    }
+
+    #[test]
+    fn test_editor_history_bindings() {
+        let keymap = default_keymap();
+
+        let alt_h = KeyChord::new("h", Modifiers::alt());
+        let ctrl_p = KeyChord::new("p", Modifiers::ctrl());
+        let ctrl_shift_s = KeyChord::new("s", Modifiers::ctrl_shift());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &alt_h),
+            Some(Command::ToggleHistoryDropdown)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &ctrl_p),
+            Some(Command::OpenSavedQueries)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &ctrl_shift_s),
+            Some(Command::SaveQuery)
         );
     }
 

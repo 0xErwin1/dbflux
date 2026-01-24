@@ -29,6 +29,13 @@ impl Modifiers {
         }
     }
 
+    pub fn alt() -> Self {
+        Self {
+            alt: true,
+            ..Default::default()
+        }
+    }
+
     pub fn ctrl_shift() -> Self {
         Self {
             ctrl: true,

@@ -179,7 +179,11 @@ impl FormFocus {
                 }
                 // PrivateKey mode: KeyPath row -> Passphrase row -> TestSsh row
                 SshKeyPath | SshKeyBrowse => SshPassphrase,
-                SshPassphrase | SshSaveSecret if state.auth_method == SshAuthSelection::PrivateKey => TestSsh,
+                SshPassphrase | SshSaveSecret
+                    if state.auth_method == SshAuthSelection::PrivateKey =>
+                {
+                    TestSsh
+                }
                 // Password mode: Password row -> TestSsh row
                 SshPassword | SshSaveSecret => TestSsh,
                 TestSsh => {
@@ -225,7 +229,11 @@ impl FormFocus {
                 SshAuthPrivateKey | SshAuthPassword => SshUser,
                 // PrivateKey mode
                 SshKeyPath | SshKeyBrowse => SshAuthPrivateKey,
-                SshPassphrase | SshSaveSecret if state.auth_method == SshAuthSelection::PrivateKey => SshKeyPath,
+                SshPassphrase | SshSaveSecret
+                    if state.auth_method == SshAuthSelection::PrivateKey =>
+                {
+                    SshKeyPath
+                }
                 // Password mode
                 SshPassword | SshSaveSecret => SshAuthPassword,
                 TestSsh | SaveAsTunnel => {
@@ -508,9 +516,8 @@ impl ConnectionManagerWindow {
                 .masked(true)
         });
 
-        let ssh_tunnel_dropdown = cx.new(|_cx| {
-            Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel")
-        });
+        let ssh_tunnel_dropdown =
+            cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
 
         let dropdown_subscription = cx.subscribe(
             &ssh_tunnel_dropdown,
@@ -1763,57 +1770,54 @@ impl ConnectionManagerWindow {
                     ),
             )
             .child(
-                div()
-                    .flex_1()
-                    .p_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .mb_2()
-                                    .child("Select database type (j/k to navigate, Enter to select)"),
-                            )
-                            .children(drivers.into_iter().enumerate().map(|(idx, driver_info)| {
-                                let kind = driver_info.kind;
-                                let is_focused = idx == focused_idx;
+                div().flex_1().p_3().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .mb_2()
+                                .child("Select database type (j/k to navigate, Enter to select)"),
+                        )
+                        .children(drivers.into_iter().enumerate().map(|(idx, driver_info)| {
+                            let kind = driver_info.kind;
+                            let is_focused = idx == focused_idx;
 
-                                div()
-                                    .rounded(px(6.0))
-                                    .border_2()
-                                    .when(is_focused, |d| d.border_color(ring_color))
-                                    .when(!is_focused, |d| d.border_color(gpui::transparent_black()))
-                                    .child(
-                                        ListItem::new(("driver", idx))
-                                            .py(px(8.0))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.select_driver(kind, window, cx);
-                                            }))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .child(driver_info.name),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.muted_foreground)
-                                                            .child(driver_info.description),
-                                                    ),
-                                            ),
-                                    )
-                            })),
-                    ),
+                            div()
+                                .rounded(px(6.0))
+                                .border_2()
+                                .when(is_focused, |d| d.border_color(ring_color))
+                                .when(!is_focused, |d| d.border_color(gpui::transparent_black()))
+                                .child(
+                                    ListItem::new(("driver", idx))
+                                        .py(px(8.0))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.select_driver(kind, window, cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(driver_info.name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(driver_info.description),
+                                                ),
+                                        ),
+                                )
+                        })),
+                ),
             )
             .child(
                 div()
@@ -1904,7 +1908,8 @@ impl ConnectionManagerWindow {
             .unwrap_or(true);
         let save_password = self.form_save_password;
 
-        let show_focus = self.edit_state == EditState::Navigating && self.active_tab == FormTab::Main;
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == FormTab::Main;
         let focus = self.form_focus;
 
         let theme = cx.theme().clone();
@@ -2042,15 +2047,11 @@ impl ConnectionManagerWindow {
                             .child(Input::new(&self.input_password)),
                     )
                     .child(
-                        Self::render_password_toggle(
-                            self.show_password,
-                            "toggle-password",
-                            theme,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_password = !this.show_password;
-                            cx.notify();
-                        })),
+                        Self::render_password_toggle(self.show_password, "toggle-password", theme)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_password = !this.show_password;
+                                cx.notify();
+                            })),
                     )
                     // Save checkbox with focus ring
                     .when(show_save_checkbox, |d| {
@@ -2069,12 +2070,10 @@ impl ConnectionManagerWindow {
                                 .child(
                                     Checkbox::new("save-password")
                                         .checked(save_password)
-                                        .on_click(cx.listener(
-                                            |this, checked: &bool, _, cx| {
-                                                this.form_save_password = *checked;
-                                                cx.notify();
-                                            },
-                                        )),
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                            this.form_save_password = *checked;
+                                            cx.notify();
+                                        })),
                                 )
                                 .child(div().text_sm().child("Save")),
                         )
@@ -2090,7 +2089,8 @@ impl ConnectionManagerWindow {
         let ssh_tunnels = self.app_state.read(cx).ssh_tunnels.clone();
         let selected_tunnel_id = self.selected_ssh_tunnel_id;
 
-        let show_focus = self.edit_state == EditState::Navigating && self.active_tab == FormTab::Ssh;
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == FormTab::Ssh;
         let focus = self.form_focus;
 
         // Get ring_color early, before mutable borrows
@@ -2104,7 +2104,9 @@ impl ConnectionManagerWindow {
             .rounded(px(4.0))
             .border_2()
             .when(ssh_enabled_focused, |d| d.border_color(ring_color))
-            .when(!ssh_enabled_focused, |d| d.border_color(gpui::transparent_black()))
+            .when(!ssh_enabled_focused, |d| {
+                d.border_color(gpui::transparent_black())
+            })
             .p(px(2.0))
             .child(
                 Checkbox::new("ssh-enabled")
@@ -2128,9 +2130,8 @@ impl ConnectionManagerWindow {
             .collect();
         self.ssh_tunnel_uuids = ssh_tunnels.iter().map(|t| t.id).collect();
 
-        let selected_tunnel_index = selected_tunnel_id.and_then(|id| {
-            ssh_tunnels.iter().position(|t| t.id == id)
-        });
+        let selected_tunnel_index =
+            selected_tunnel_id.and_then(|id| ssh_tunnels.iter().position(|t| t.id == id));
 
         let tunnel_selector_focused = show_focus && focus == FormFocus::SshTunnelSelector;
         let tunnel_clear_focused = show_focus && focus == FormFocus::SshTunnelClear;
@@ -2173,7 +2174,9 @@ impl ConnectionManagerWindow {
                                     div()
                                         .rounded(px(4.0))
                                         .border_2()
-                                        .when(tunnel_clear_focused, |dd| dd.border_color(ring_color))
+                                        .when(tunnel_clear_focused, |dd| {
+                                            dd.border_color(ring_color)
+                                        })
                                         .when(!tunnel_clear_focused, |dd| {
                                             dd.border_color(gpui::transparent_black())
                                         })
@@ -2254,15 +2257,13 @@ impl ConnectionManagerWindow {
                                     ring_color,
                                 ))),
                         )
-                        .child(
-                            div().id(3usize).child(self.form_field_input(
-                                "Username",
-                                &self.input_ssh_user,
-                                true,
-                                show_focus && focus == FormFocus::SshUser,
-                                ring_color,
-                            )),
-                        ),
+                        .child(div().id(3usize).child(self.form_field_input(
+                            "Username",
+                            &self.input_ssh_user,
+                            true,
+                            show_focus && focus == FormFocus::SshUser,
+                            ring_color,
+                        ))),
                     theme,
                 )
                 .into_any_element(),
@@ -2280,7 +2281,9 @@ impl ConnectionManagerWindow {
                 .rounded(px(4.0))
                 .border_2()
                 .when(test_ssh_focused, |d| d.border_color(ring_color))
-                .when(!test_ssh_focused, |d| d.border_color(gpui::transparent_black()))
+                .when(!test_ssh_focused, |d| {
+                    d.border_color(gpui::transparent_black())
+                })
                 .child(
                     Button::new("test-ssh")
                         .label("Test SSH")
@@ -2327,7 +2330,9 @@ impl ConnectionManagerWindow {
                         .rounded(px(4.0))
                         .border_2()
                         .when(save_tunnel_focused, |d| d.border_color(ring_color))
-                        .when(!save_tunnel_focused, |d| d.border_color(gpui::transparent_black()))
+                        .when(!save_tunnel_focused, |d| {
+                            d.border_color(gpui::transparent_black())
+                        })
                         .child(
                             Button::new("save-ssh-tunnel")
                                 .label("Save as tunnel")
@@ -2471,7 +2476,9 @@ impl ConnectionManagerWindow {
                     .rounded(px(4.0))
                     .border_2()
                     .when(password_focused, |d| d.border_color(ring_color))
-                    .when(!password_focused, |d| d.border_color(gpui::transparent_black()))
+                    .when(!password_focused, |d| {
+                        d.border_color(gpui::transparent_black())
+                    })
                     .p(px(2.0))
                     .on_click(click_pw)
                     .child(self.render_radio_button(
@@ -2656,7 +2663,9 @@ impl ConnectionManagerWindow {
                                         div()
                                             .rounded(px(4.0))
                                             .border_2()
-                                            .when(save_secret_focused, |d| d.border_color(ring_color))
+                                            .when(save_secret_focused, |d| {
+                                                d.border_color(ring_color)
+                                            })
                                             .when(!save_secret_focused, |d| {
                                                 d.border_color(gpui::transparent_black())
                                             })
@@ -2738,7 +2747,9 @@ impl ConnectionManagerWindow {
                                         div()
                                             .rounded(px(4.0))
                                             .border_2()
-                                            .when(save_secret_focused, |d| d.border_color(ring_color))
+                                            .when(save_secret_focused, |d| {
+                                                d.border_color(ring_color)
+                                            })
                                             .when(!save_secret_focused, |d| {
                                                 d.border_color(gpui::transparent_black())
                                             })

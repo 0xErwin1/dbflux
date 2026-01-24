@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
-    anchored, deferred, div, point, px, Corner, ElementId, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Window,
+    Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, anchored,
+    deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
 

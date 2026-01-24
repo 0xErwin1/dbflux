@@ -1,4 +1,8 @@
+pub mod toolbar;
+
 use crate::app::{AppState, AppStateChanged};
+use crate::ui::editor::toolbar::{EditorToolbar, ToolbarEvent};
+use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected, QuerySaved};
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{CancelToken, HistoryEntry, QueryRequest, TaskId, TaskKind};
@@ -21,6 +25,11 @@ pub struct EditorPane {
     rename_input: Entity<InputState>,
     pending_error: Option<String>,
     running_query: Option<RunningQuery>,
+    toolbar: Entity<EditorToolbar>,
+    pub history_modal: Entity<HistoryModal>,
+    pending_set_query: Option<HistoryQuerySelected>,
+    pending_open_history: bool,
+    pending_save_query: bool,
 }
 
 struct RunningQuery {
@@ -34,6 +43,23 @@ struct QueryTab {
     title: String,
     input_state: Entity<InputState>,
     original_content: String,
+    saved_query_id: Option<Uuid>,
+}
+
+impl QueryTab {
+    #[allow(dead_code)]
+    fn is_modified(&self, cx: &App) -> bool {
+        self.input_state.read(cx).value() != self.original_content
+    }
+
+    fn has_custom_title(&self) -> bool {
+        !self.title.starts_with("Query ")
+            || self
+                .title
+                .trim_start_matches("Query ")
+                .parse::<usize>()
+                .is_err()
+    }
 }
 
 impl EditorPane {
@@ -68,6 +94,41 @@ impl EditorPane {
         )
         .detach();
 
+        let toolbar = cx.new(|cx| EditorToolbar::new(window, cx));
+        let history_modal = cx.new(|cx| HistoryModal::new(app_state.clone(), window, cx));
+
+        cx.subscribe(&toolbar, |this, _, event: &ToolbarEvent, cx| match event {
+            ToolbarEvent::OpenHistory => {
+                this.pending_open_history = true;
+                cx.notify();
+            }
+            ToolbarEvent::SaveQuery => {
+                this.pending_save_query = true;
+                cx.notify();
+            }
+        })
+        .detach();
+
+        cx.subscribe(
+            &history_modal,
+            |this, _, event: &HistoryQuerySelected, cx| {
+                this.pending_set_query = Some(event.clone());
+                cx.notify();
+            },
+        )
+        .detach();
+
+        cx.subscribe(&history_modal, |this, _, event: &QuerySaved, cx| {
+            // Update current tab with the saved query info
+            if let Some(tab) = this.tabs.get_mut(this.active_tab) {
+                tab.saved_query_id = Some(event.id);
+                tab.title = event.name.clone();
+                tab.original_content = tab.input_state.read(cx).value().to_string();
+            }
+            cx.notify();
+        })
+        .detach();
+
         Self {
             app_state,
             results_pane,
@@ -76,6 +137,7 @@ impl EditorPane {
                 title: "Query 1".to_string(),
                 input_state,
                 original_content: String::new(),
+                saved_query_id: None,
             }],
             active_tab: 0,
             next_tab_number: 2,
@@ -83,6 +145,11 @@ impl EditorPane {
             rename_input,
             pending_error: None,
             running_query: None,
+            toolbar,
+            history_modal,
+            pending_set_query: None,
+            pending_open_history: false,
+            pending_save_query: false,
         }
     }
 
@@ -100,9 +167,48 @@ impl EditorPane {
             title: format!("Query {}", self.next_tab_number),
             input_state,
             original_content: String::new(),
+            saved_query_id: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.next_tab_number += 1;
+        cx.notify();
+    }
+
+    pub fn add_tab_with_content(
+        &mut self,
+        sql: String,
+        name: Option<String>,
+        saved_query_id: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("sql")
+                .line_number(true)
+                .soft_wrap(false)
+                .placeholder("-- Enter SQL here...")
+        });
+
+        input_state.update(cx, |state, cx| {
+            state.set_value(&sql, window, cx);
+        });
+
+        let title = name.unwrap_or_else(|| {
+            let num = self.next_tab_number;
+            self.next_tab_number += 1;
+            format!("Query {}", num)
+        });
+
+        self.tabs.push(QueryTab {
+            id: Uuid::new_v4(),
+            title,
+            input_state,
+            original_content: sql,
+            saved_query_id,
+        });
+
+        self.active_tab = self.tabs.len() - 1;
         cx.notify();
     }
 
@@ -173,13 +279,27 @@ impl EditorPane {
     }
 
     fn finish_rename(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(idx) = self.renaming_tab {
-            let new_title = self.rename_input.read(cx).value();
-            if !new_title.trim().is_empty() && idx < self.tabs.len() {
-                self.tabs[idx].title = new_title.to_string();
+        let Some(idx) = self.renaming_tab.take() else {
+            return;
+        };
+
+        let new_name = self.rename_input.read(cx).value().to_string();
+        if new_name.trim().is_empty() {
+            cx.notify();
+            return;
+        }
+
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.title = new_name.clone();
+
+            // If linked to saved query, update its name too
+            if let Some(saved_id) = tab.saved_query_id {
+                self.app_state.update(cx, |state, _| {
+                    state.update_saved_query_name(saved_id, &new_name);
+                });
             }
         }
-        self.renaming_tab = None;
+
         cx.notify();
     }
 
@@ -208,12 +328,88 @@ impl EditorPane {
         cx.notify();
     }
 
+    pub fn history_modal_open(&self, cx: &App) -> bool {
+        self.history_modal.read(cx).is_visible()
+    }
+
+    pub fn history_modal_input_mode(&self, cx: &App) -> bool {
+        self.history_modal.read(cx).is_input_mode()
+    }
+
+    pub fn toggle_history_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_open = self.history_modal.read(cx).is_visible();
+        if is_open {
+            self.history_modal.update(cx, |modal, cx| modal.close(cx));
+        } else {
+            self.history_modal
+                .update(cx, |modal, cx| modal.open(window, cx));
+        }
+    }
+
+    pub fn open_saved_queries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history_modal
+            .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
+    }
+
+    pub fn save_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::toast::ToastExt;
+
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+
+        let sql = tab.input_state.read(cx).value().to_string();
+
+        // Case 1: Already linked to a saved query - update directly
+        if let Some(saved_id) = tab.saved_query_id {
+            self.app_state.update(cx, |state, _| {
+                state.update_saved_query_sql(saved_id, &sql);
+            });
+            tab.original_content = sql;
+            cx.notify();
+            cx.toast_success("Query saved", window);
+            return;
+        }
+
+        // Case 2: Has custom title - save as new with that name
+        if tab.has_custom_title() {
+            let name = tab.title.clone();
+            let query = dbflux_core::SavedQuery::new(name.clone(), sql.clone(), None);
+            let saved_id = query.id;
+            self.app_state.update(cx, |state, _| {
+                state.add_saved_query(query);
+            });
+            // Need to re-borrow tab after app_state update
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.saved_query_id = Some(saved_id);
+                tab.original_content = sql;
+            }
+            cx.notify();
+            cx.toast_success("Query saved", window);
+            return;
+        }
+
+        // Case 3: Default title - open modal to ask for name
+        self.history_modal.update(cx, |modal, cx| {
+            modal.open_save(sql, window, cx);
+        });
+    }
+
     pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs[self.active_tab]
             .input_state
             .update(cx, |state, cx| {
                 state.focus(window, cx);
             });
+    }
+
+    #[allow(dead_code)]
+    pub fn focus_active_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            tab.input_state.update(cx, |state, cx| {
+                state.focus(window, cx);
+            });
+        }
     }
 
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -398,6 +594,29 @@ impl Render for EditorPane {
             cx.toast_error(error, window);
         }
 
+        if let Some(warning) = self
+            .app_state
+            .update(cx, |state, _| state.take_saved_query_warning())
+        {
+            use crate::ui::toast::ToastExt;
+            cx.toast_warning(warning, window);
+        }
+
+        if let Some(event) = self.pending_set_query.take() {
+            self.add_tab_with_content(event.sql, event.name, event.saved_query_id, window, cx);
+        }
+
+        if self.pending_open_history {
+            self.pending_open_history = false;
+            self.history_modal
+                .update(cx, |modal, cx| modal.open(window, cx));
+        }
+
+        if self.pending_save_query {
+            self.pending_save_query = false;
+            self.save_current_query(window, cx);
+        }
+
         let theme = cx.theme();
         let active_input = self.tabs[self.active_tab].input_state.clone();
         let active_tab_idx = self.active_tab;
@@ -425,6 +644,8 @@ impl Render for EditorPane {
             .map(|i| self.is_tab_dirty(i, cx))
             .collect();
 
+        let toolbar = self.toolbar.clone();
+
         div()
             .flex()
             .flex_col()
@@ -440,119 +661,120 @@ impl Render for EditorPane {
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
-                    .when(!is_connected, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .child(
-                                    div()
-                                        .w(Spacing::SM)
-                                        .h(Spacing::SM)
-                                        .rounded_full()
-                                        .bg(theme.muted_foreground),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.muted_foreground)
-                                        .child("No connection"),
-                                ),
-                        )
-                    })
-                    .when(is_connected, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .px(Spacing::SM)
-                                .py(Spacing::XS)
-                                .rounded(Radii::MD)
-                                .bg(theme.secondary)
-                                .child(
-                                    div()
-                                        .w(Spacing::SM)
-                                        .h(Spacing::SM)
-                                        .rounded_full()
-                                        .bg(gpui::rgb(0x22C55E)),
-                                )
-                                .when(!has_multiple_connections, |d| {
-                                    d.child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::XS)
-                                            .child(
-                                                div()
-                                                    .text_size(FontSizes::SM)
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.foreground)
-                                                    .child(connection_name.clone()),
-                                            )
-                                            .when_some(current_db.clone(), |d, db| {
-                                                d.child(
-                                                    div()
-                                                        .text_size(FontSizes::SM)
-                                                        .text_color(theme.muted_foreground)
-                                                        .child("/"),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(FontSizes::SM)
-                                                        .text_color(theme.foreground)
-                                                        .child(db),
-                                                )
-                                            }),
-                                    )
-                                })
-                                .when(has_multiple_connections, |d| {
-                                    d.child(
-                                        DropdownButton::new("connection-selector")
-                                            .small()
-                                            .button(Button::new("conn-btn").ghost().small().label(
-                                                if let Some(ref db) = current_db {
-                                                    format!("{} / {}", connection_name, db)
-                                                } else {
-                                                    connection_name.clone()
-                                                },
-                                            ))
-                                            .dropdown_menu(move |menu, _window, _cx| {
-                                                let mut menu = menu;
-                                                for (profile_id, name, is_active) in
-                                                    &connection_items
-                                                {
-                                                    let pid = *profile_id;
-                                                    let app_state = app_state.clone();
-                                                    menu = menu.item(
-                                                        PopupMenuItem::new(name.clone())
-                                                            .checked(*is_active)
-                                                            .on_click(move |_, _, cx| {
-                                                                app_state.update(
-                                                                    cx,
-                                                                    |state, cx| {
-                                                                        state
-                                                                            .set_active_connection(
-                                                                                pid,
-                                                                            );
-                                                                        cx.notify();
-                                                                    },
-                                                                );
-                                                            }),
-                                                    );
-                                                }
-                                                menu
-                                            }),
-                                    )
-                                }),
-                        )
-                    })
+                    .child(toolbar)
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
+                            .when(!is_connected, |d| {
+                                d.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            div()
+                                                .w(Spacing::SM)
+                                                .h(Spacing::SM)
+                                                .rounded_full()
+                                                .bg(theme.muted_foreground),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(FontSizes::SM)
+                                                .text_color(theme.muted_foreground)
+                                                .child("No connection"),
+                                        ),
+                                )
+                            })
+                            .when(is_connected, |d| {
+                                d.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .px(Spacing::SM)
+                                        .py(Spacing::XS)
+                                        .rounded(Radii::MD)
+                                        .bg(theme.secondary)
+                                        .child(
+                                            div()
+                                                .w(Spacing::SM)
+                                                .h(Spacing::SM)
+                                                .rounded_full()
+                                                .bg(gpui::rgb(0x22C55E)),
+                                        )
+                                        .when(!has_multiple_connections, |d| {
+                                            d.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(Spacing::XS)
+                                                    .child(
+                                                        div()
+                                                            .text_size(FontSizes::SM)
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(theme.foreground)
+                                                            .child(connection_name.clone()),
+                                                    )
+                                                    .when_some(current_db.clone(), |d, db| {
+                                                        d.child(
+                                                            div()
+                                                                .text_size(FontSizes::SM)
+                                                                .text_color(theme.muted_foreground)
+                                                                .child("/"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(FontSizes::SM)
+                                                                .text_color(theme.foreground)
+                                                                .child(db),
+                                                        )
+                                                    }),
+                                            )
+                                        })
+                                        .when(has_multiple_connections, |d| {
+                                            d.child(
+                                                DropdownButton::new("connection-selector")
+                                                    .small()
+                                                    .button(Button::new("conn-btn").ghost().small().label(
+                                                        if let Some(ref db) = current_db {
+                                                            format!("{} / {}", connection_name, db)
+                                                        } else {
+                                                            connection_name.clone()
+                                                        },
+                                                    ))
+                                                    .dropdown_menu(move |menu, _window, _cx| {
+                                                        let mut menu = menu;
+                                                        for (profile_id, name, is_active) in
+                                                            &connection_items
+                                                        {
+                                                            let pid = *profile_id;
+                                                            let app_state = app_state.clone();
+                                                            menu = menu.item(
+                                                                PopupMenuItem::new(name.clone())
+                                                                    .checked(*is_active)
+                                                                    .on_click(move |_, _, cx| {
+                                                                        app_state.update(
+                                                                            cx,
+                                                                            |state, cx| {
+                                                                                state
+                                                                                    .set_active_connection(
+                                                                                        pid,
+                                                                                    );
+                                                                                cx.notify();
+                                                                            },
+                                                                        );
+                                                                    }),
+                                                            );
+                                                        }
+                                                        menu
+                                                    }),
+                                            )
+                                        }),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("run-query")
@@ -582,7 +804,6 @@ impl Render for EditorPane {
                                             .cursor_not_allowed()
                                     })
                                     .text_size(FontSizes::SM)
-                                    .child("▶")
                                     .child("Run"),
                             )
                             .when(is_query_running, |d| {
@@ -607,7 +828,6 @@ impl Render for EditorPane {
                                             this.cancel_query(cx);
                                         }))
                                         .text_size(FontSizes::SM)
-                                        .child("■")
                                         .child("Cancel"),
                                 )
                             }),
@@ -628,7 +848,7 @@ impl Render for EditorPane {
                         let is_renaming = renaming_tab == Some(idx);
                         let is_dirty = tab_dirty_states.get(idx).copied().unwrap_or(false);
                         let tab_title = if is_dirty {
-                            format!("{}*", tab.title)
+                            format!("{} •", tab.title)
                         } else {
                             tab.title.clone()
                         };
@@ -704,5 +924,6 @@ impl Render for EditorPane {
                     .p_2()
                     .child(Input::new(&active_input).h_full()),
             )
+            .child(self.history_modal.clone())
     }
 }

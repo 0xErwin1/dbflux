@@ -13,9 +13,6 @@ pub enum ContextId {
     /// Schema tree navigation in the sidebar.
     Sidebar,
 
-    /// Query history panel.
-    History,
-
     /// SQL editor area.
     Editor,
 
@@ -30,6 +27,9 @@ pub enum ContextId {
 
     /// Connection manager modal (captures all input).
     ConnectionManager,
+
+    /// History modal (captures all input).
+    HistoryModal,
 
     /// Any text input is focused and receiving keyboard input.
     TextInput,
@@ -48,10 +48,10 @@ impl ContextId {
             ContextId::Global => None,
             ContextId::CommandPalette => None,
             ContextId::ConnectionManager => None,
+            ContextId::HistoryModal => None,
             ContextId::TextInput => None,
             ContextId::Dropdown => None,
             ContextId::Sidebar => Some(ContextId::Global),
-            ContextId::History => Some(ContextId::Global),
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
             ContextId::BackgroundTasks => Some(ContextId::Global),
@@ -65,6 +65,7 @@ impl ContextId {
             self,
             ContextId::CommandPalette
                 | ContextId::ConnectionManager
+                | ContextId::HistoryModal
                 | ContextId::TextInput
                 | ContextId::Dropdown
         )
@@ -76,12 +77,12 @@ impl ContextId {
         match self {
             ContextId::Global => "Global",
             ContextId::Sidebar => "Sidebar",
-            ContextId::History => "History",
             ContextId::Editor => "Editor",
             ContextId::Results => "Results",
             ContextId::BackgroundTasks => "Background Tasks",
             ContextId::CommandPalette => "Command Palette",
             ContextId::ConnectionManager => "Connection Manager",
+            ContextId::HistoryModal => "History",
             ContextId::TextInput => "Text Input",
             ContextId::Dropdown => "Dropdown",
         }
@@ -92,14 +93,25 @@ impl ContextId {
         match self {
             ContextId::Global => "Global",
             ContextId::Sidebar => "Sidebar",
-            ContextId::History => "History",
             ContextId::Editor => "Editor",
             ContextId::Results => "Results",
             ContextId::BackgroundTasks => "BackgroundTasks",
             ContextId::CommandPalette => "CommandPalette",
             ContextId::ConnectionManager => "ConnectionManager",
+            ContextId::HistoryModal => "HistoryModal",
             ContextId::TextInput => "TextInput",
             ContextId::Dropdown => "Dropdown",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContextId;
+
+    #[test]
+    fn history_modal_is_modal() {
+        assert!(ContextId::HistoryModal.is_modal());
+        assert_eq!(ContextId::HistoryModal.parent(), None);
     }
 }

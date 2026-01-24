@@ -54,12 +54,7 @@ impl HistoryEntry {
     pub fn sql_preview(&self, max_len: usize) -> String {
         let trimmed = self.sql.trim();
         let single_line = trimmed.replace('\n', " ").replace("  ", " ");
-
-        if single_line.len() <= max_len {
-            single_line
-        } else {
-            format!("{}...", &single_line[..max_len.saturating_sub(3)])
-        }
+        crate::truncate_string_safe(&single_line, max_len)
     }
 }
 

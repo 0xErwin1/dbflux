@@ -151,6 +151,13 @@ impl Workspace {
         if self.command_palette.read(cx).is_visible() {
             return ContextId::CommandPalette;
         }
+        if self.editor.read(cx).history_modal_open(cx) {
+            // If the modal is in input mode (save/rename), don't use HistoryModal context
+            // so navigation keys pass through to the input
+            if !self.editor.read(cx).history_modal_input_mode(cx) {
+                return ContextId::HistoryModal;
+            }
+        }
         self.focus_target.to_context()
     }
 
@@ -160,7 +167,6 @@ impl Workspace {
 
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_connections_focused(target == FocusTarget::Sidebar, cx);
-            sidebar.set_history_focused(target == FocusTarget::History, cx);
         });
 
         cx.notify();
@@ -199,8 +205,8 @@ impl Workspace {
                                 ..Default::default()
                             },
                             |window, cx| {
-                                let manager =
-                                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
+                                let manager = cx
+                                    .new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
                                 cx.new(|cx| Root::new(manager, window, cx))
                             },
                         )
@@ -621,9 +627,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &keymap::FocusResults, window, cx| {
                 this.set_focus(FocusTarget::Results, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &keymap::FocusHistory, window, cx| {
-                this.set_focus(FocusTarget::History, window, cx);
-            }))
             .on_action(
                 cx.listener(|this, _: &keymap::FocusBackgroundTasks, window, cx| {
                     this.set_focus(FocusTarget::BackgroundTasks, window, cx);
@@ -838,10 +841,7 @@ impl CommandDispatcher for Workspace {
                 self.set_focus(FocusTarget::Results, window, cx);
                 true
             }
-            Command::FocusHistory => {
-                self.set_focus(FocusTarget::History, window, cx);
-                true
-            }
+
             Command::CycleFocusForward => {
                 let next = self.focus_target.next();
                 self.set_focus(next, window, cx);
@@ -899,6 +899,15 @@ impl CommandDispatcher for Workspace {
             Command::Cancel => {
                 if self.command_palette.read(cx).is_visible() {
                     self.command_palette.update(cx, |p, cx| p.hide(cx));
+                    self.focus_handle.focus(window);
+                    return true;
+                }
+                if self.editor.read(cx).history_modal_open(cx) {
+                    self.editor.update(cx, |editor, cx| {
+                        editor.history_modal.update(cx, |modal, cx| modal.close(cx));
+                        editor.focus_input(window, cx);
+                    });
+                    return true;
                 }
                 // Always focus workspace to blur any input and enable keyboard navigation
                 self.focus_handle.focus(window);
@@ -919,12 +928,6 @@ impl CommandDispatcher for Workspace {
                     self.results.update(cx, |r, cx| r.select_next(cx));
                     true
                 }
-                FocusTarget::History => {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.select_next(cx));
-                    });
-                    true
-                }
                 _ => false,
             },
 
@@ -935,12 +938,6 @@ impl CommandDispatcher for Workspace {
                 }
                 FocusTarget::Results => {
                     self.results.update(cx, |r, cx| r.select_prev(cx));
-                    true
-                }
-                FocusTarget::History => {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.select_prev(cx));
-                    });
                     true
                 }
                 _ => false,
@@ -955,12 +952,6 @@ impl CommandDispatcher for Workspace {
                     self.results.update(cx, |r, cx| r.select_first(cx));
                     true
                 }
-                FocusTarget::History => {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.select_first(cx));
-                    });
-                    true
-                }
                 _ => false,
             },
 
@@ -973,24 +964,12 @@ impl CommandDispatcher for Workspace {
                     self.results.update(cx, |r, cx| r.select_last(cx));
                     true
                 }
-                FocusTarget::History => {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.select_last(cx));
-                    });
-                    true
-                }
                 _ => false,
             },
 
             Command::Execute => match self.focus_target {
                 FocusTarget::Sidebar => {
                     self.sidebar.update(cx, |s, cx| s.execute(cx));
-                    true
-                }
-                FocusTarget::History => {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.execute(cx));
-                    });
                     true
                 }
                 FocusTarget::Editor => {
@@ -1035,7 +1014,6 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                _ => false,
             },
 
             Command::ColumnRight => match self.focus_target {
@@ -1064,31 +1042,9 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                _ => false,
             },
 
-            Command::ToggleFavorite => {
-                if self.focus_target == FocusTarget::History {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel
-                            .update(cx, |h, cx| h.toggle_favorite_selected(cx));
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-
-            Command::DeleteHistoryEntry => {
-                if self.focus_target == FocusTarget::History {
-                    self.sidebar.update(cx, |s, cx| {
-                        s.history_panel.update(cx, |h, cx| h.delete_selected(cx));
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
+            Command::ToggleFavorite => false,
 
             // Directional focus navigation
             // Layout:  Sidebar | Editor
@@ -1106,9 +1062,9 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusRight => {
-                // From Sidebar/History → Editor
+                // From Sidebar → Editor
                 match self.focus_target {
-                    FocusTarget::Sidebar | FocusTarget::History => {
+                    FocusTarget::Sidebar => {
                         self.set_focus(FocusTarget::Editor, window, cx);
                         true
                     }
@@ -1140,12 +1096,42 @@ impl CommandDispatcher for Workspace {
                 true
             }
 
+            Command::ToggleHistoryDropdown => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.toggle_history_modal(window, cx);
+                });
+                true
+            }
+
+            Command::OpenSavedQueries => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.open_saved_queries(window, cx);
+                });
+                true
+            }
+
+            Command::SaveQuery => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.save_current_query(window, cx);
+                });
+                true
+            }
+
+            Command::FocusBackgroundTasks => {
+                self.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                true
+            }
+
+            Command::Rename | Command::FocusSearch => {
+                // These are context-specific (saved queries modal)
+                false
+            }
+
             Command::PageDown
             | Command::PageUp
             | Command::Delete
             | Command::ResultsNextPage
-            | Command::ResultsPrevPage
-            | Command::LoadQuery => {
+            | Command::ResultsPrevPage => {
                 log::debug!("Context-specific command {:?} not yet implemented", cmd);
                 false
             }

@@ -17,7 +17,7 @@ pub enum Command {
     FocusSidebar,
     FocusEditor,
     FocusResults,
-    FocusHistory,
+    FocusBackgroundTasks,
     CycleFocusForward,
     CycleFocusBackward,
     FocusLeft,
@@ -25,7 +25,7 @@ pub enum Command {
     FocusUp,
     FocusDown,
 
-    // === List Navigation (Sidebar, Results, History) ===
+    // === List Navigation ===
     SelectNext,
     SelectPrev,
     SelectFirst,
@@ -42,10 +42,16 @@ pub enum Command {
     Cancel,
     ExpandCollapse,
     Delete,
+    Rename,
+    FocusSearch,
+    ToggleFavorite,
 
     // === Editor ===
     RunQuery,
     CancelQuery,
+    ToggleHistoryDropdown,
+    OpenSavedQueries,
+    SaveQuery,
 
     // === Results ===
     ExportResults,
@@ -56,11 +62,6 @@ pub enum Command {
     RefreshSchema,
     OpenConnectionManager,
     Disconnect,
-
-    // === History ===
-    ToggleFavorite,
-    LoadQuery,
-    DeleteHistoryEntry,
 
     // === View ===
     ToggleEditor,
@@ -83,7 +84,7 @@ impl Command {
             Command::FocusSidebar => "Focus Sidebar",
             Command::FocusEditor => "Focus Editor",
             Command::FocusResults => "Focus Results",
-            Command::FocusHistory => "Focus History",
+            Command::FocusBackgroundTasks => "Focus Background Tasks",
             Command::CycleFocusForward => "Cycle Focus Forward",
             Command::CycleFocusBackward => "Cycle Focus Backward",
             Command::FocusLeft => "Focus Left",
@@ -105,9 +106,15 @@ impl Command {
             Command::Cancel => "Cancel",
             Command::ExpandCollapse => "Expand/Collapse",
             Command::Delete => "Delete",
+            Command::Rename => "Rename",
+            Command::FocusSearch => "Focus Search",
+            Command::ToggleFavorite => "Toggle Favorite",
 
             Command::RunQuery => "Run Query",
             Command::CancelQuery => "Cancel Query",
+            Command::ToggleHistoryDropdown => "Toggle History Dropdown",
+            Command::OpenSavedQueries => "Open Saved Queries",
+            Command::SaveQuery => "Save Query",
 
             Command::ExportResults => "Export Results",
             Command::ResultsNextPage => "Results Next Page",
@@ -116,10 +123,6 @@ impl Command {
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
             Command::Disconnect => "Disconnect",
-
-            Command::ToggleFavorite => "Toggle Favorite",
-            Command::LoadQuery => "Load Query",
-            Command::DeleteHistoryEntry => "Delete History Entry",
 
             Command::ToggleEditor => "Toggle Editor Panel",
             Command::ToggleResults => "Toggle Results Panel",
@@ -141,7 +144,7 @@ impl Command {
             Command::FocusSidebar
             | Command::FocusEditor
             | Command::FocusResults
-            | Command::FocusHistory
+            | Command::FocusBackgroundTasks
             | Command::CycleFocusForward
             | Command::CycleFocusBackward
             | Command::FocusLeft
@@ -158,11 +161,19 @@ impl Command {
 
             Command::ColumnLeft | Command::ColumnRight => "Results",
 
-            Command::Execute | Command::Cancel | Command::ExpandCollapse | Command::Delete => {
-                "Actions"
-            }
+            Command::Execute
+            | Command::Cancel
+            | Command::ExpandCollapse
+            | Command::Delete
+            | Command::Rename
+            | Command::FocusSearch
+            | Command::ToggleFavorite => "Actions",
 
-            Command::RunQuery | Command::CancelQuery => "Editor",
+            Command::RunQuery
+            | Command::CancelQuery
+            | Command::ToggleHistoryDropdown
+            | Command::OpenSavedQueries
+            | Command::SaveQuery => "Editor",
 
             Command::ExportResults | Command::ResultsNextPage | Command::ResultsPrevPage => {
                 "Results"
@@ -171,8 +182,6 @@ impl Command {
             Command::RefreshSchema | Command::OpenConnectionManager | Command::Disconnect => {
                 "Connections"
             }
-
-            Command::ToggleFavorite | Command::LoadQuery | Command::DeleteHistoryEntry => "History",
 
             Command::ToggleEditor | Command::ToggleResults | Command::ToggleTasks => "View",
         }
@@ -194,7 +203,7 @@ impl Command {
                 | Command::FocusSidebar
                 | Command::FocusEditor
                 | Command::FocusResults
-                | Command::FocusHistory
+                | Command::FocusBackgroundTasks
                 | Command::CycleFocusForward
                 | Command::CycleFocusBackward
                 | Command::FocusLeft
@@ -205,5 +214,23 @@ impl Command {
                 | Command::ToggleResults
                 | Command::ToggleTasks
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+
+    #[test]
+    fn command_display_names_are_stable() {
+        assert_eq!(
+            Command::ToggleHistoryDropdown.display_name(),
+            "Toggle History Dropdown"
+        );
+        assert_eq!(
+            Command::OpenSavedQueries.display_name(),
+            "Open Saved Queries"
+        );
+        assert_eq!(Command::SaveQuery.display_name(), "Save Query");
     }
 }

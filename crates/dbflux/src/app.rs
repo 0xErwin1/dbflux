@@ -1,7 +1,8 @@
 use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry,
-    HistoryStore, ProfileStore, SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore,
-    TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
+    HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot, SecretStore,
+    SshTunnelProfile, SshTunnelStore, TaskId, TaskKind, TaskManager, TaskSnapshot,
+    create_secret_store,
 };
 use gpui::EventEmitter;
 use log::{error, info};
@@ -42,6 +43,8 @@ pub struct AppState {
     ssh_tunnel_store: Option<SshTunnelStore>,
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
     history_store: Option<HistoryStore>,
+    saved_query_store: Option<SavedQueryStore>,
+    pending_saved_query_warning: Option<String>,
 }
 
 impl AppState {
@@ -103,6 +106,18 @@ impl AppState {
             }
         };
 
+        let (saved_query_store, pending_saved_query_warning) = match SavedQueryStore::new() {
+            Ok(mut store) => {
+                let warning = store.take_load_warning();
+                info!("Loaded {} saved queries", store.get_all().len());
+                (Some(store), warning)
+            }
+            Err(e) => {
+                error!("Failed to create saved query store: {:?}", e);
+                (None, None)
+            }
+        };
+
         Self {
             drivers,
             profiles,
@@ -115,6 +130,8 @@ impl AppState {
             ssh_tunnel_store,
             secret_store: Arc::new(RwLock::new(secret_store)),
             history_store,
+            saved_query_store,
+            pending_saved_query_warning,
         }
     }
 
@@ -421,6 +438,107 @@ impl AppState {
         }
     }
 
+    pub fn take_saved_query_warning(&mut self) -> Option<String> {
+        self.pending_saved_query_warning.take()
+    }
+
+    pub fn add_saved_query(&mut self, query: SavedQuery) {
+        if let Some(ref mut store) = self.saved_query_store {
+            store.add(query);
+            if let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
+            }
+        }
+    }
+
+    pub fn update_saved_query(&mut self, id: Uuid, name: String, sql: String) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let updated = store.update(id, name, sql);
+            if updated {
+                if let Err(e) = store.save() {
+                    error!("Failed to save saved queries: {:?}", e);
+                }
+            }
+            return updated;
+        }
+        false
+    }
+
+    pub fn remove_saved_query(&mut self, id: Uuid) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let removed = store.remove(id);
+            if removed {
+                if let Err(e) = store.save() {
+                    error!("Failed to save saved queries: {:?}", e);
+                }
+            }
+            return removed;
+        }
+        false
+    }
+
+    pub fn toggle_saved_query_favorite(&mut self, id: Uuid) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let result = store.toggle_favorite(id);
+            if let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
+            }
+            return result;
+        }
+        false
+    }
+
+    pub fn update_saved_query_last_used(&mut self, id: Uuid) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let result = store.update_last_used(id);
+            if result {
+                if let Err(e) = store.save() {
+                    error!("Failed to save saved queries: {:?}", e);
+                }
+            }
+            return result;
+        }
+        false
+    }
+
+    pub fn update_saved_query_sql(&mut self, id: Uuid, sql: &str) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let result = store.update_sql(id, sql);
+            if result {
+                if let Err(e) = store.save() {
+                    error!("Failed to save saved queries: {:?}", e);
+                }
+            }
+            return result;
+        }
+        false
+    }
+
+    pub fn update_saved_query_name(&mut self, id: Uuid, name: &str) -> bool {
+        if let Some(ref mut store) = self.saved_query_store {
+            let result = store.update_name(id, name);
+            if result {
+                if let Err(e) = store.save() {
+                    error!("Failed to save saved queries: {:?}", e);
+                }
+            }
+            return result;
+        }
+        false
+    }
+
+    #[allow(dead_code)]
+    pub fn get_saved_query(&self, id: Uuid) -> Option<&SavedQuery> {
+        self.saved_query_store.as_ref().and_then(|s| s.get(id))
+    }
+
+    pub fn saved_queries(&self) -> &[SavedQuery] {
+        self.saved_query_store
+            .as_ref()
+            .map(|s| s.get_all())
+            .unwrap_or(&[])
+    }
+
     pub fn prepare_connect_profile(
         &self,
         profile_id: Uuid,
@@ -512,6 +630,13 @@ impl AppState {
         self.pending_operations.remove(&op);
     }
 
+    pub fn history_entries(&self) -> &[HistoryEntry] {
+        self.history_store
+            .as_ref()
+            .map(|s| s.entries())
+            .unwrap_or(&[])
+    }
+
     pub fn add_history_entry(&mut self, entry: HistoryEntry) {
         if let Some(ref mut store) = self.history_store {
             store.add(entry);
@@ -521,13 +646,7 @@ impl AppState {
         }
     }
 
-    pub fn history_entries(&self) -> &[HistoryEntry] {
-        self.history_store
-            .as_ref()
-            .map(|s| s.entries())
-            .unwrap_or(&[])
-    }
-
+    #[allow(dead_code)]
     pub fn toggle_history_favorite(&mut self, id: Uuid) -> bool {
         if let Some(ref mut store) = self.history_store {
             let result = store.toggle_favorite(id);
@@ -570,6 +689,7 @@ impl AppState {
         self.tasks.has_running_tasks()
     }
 
+    #[allow(dead_code)]
     pub fn remove_history_entry(&mut self, id: Uuid) {
         if let Some(ref mut store) = self.history_store {
             store.remove(id);
@@ -799,3 +919,14 @@ impl Default for AppState {
 }
 
 impl EventEmitter<AppStateChanged> for AppState {}
+
+#[cfg(test)]
+mod tests {
+    use super::AppState;
+
+    #[test]
+    fn saved_query_store_is_optional() {
+        let state = AppState::new();
+        let _ = state.saved_queries();
+    }
+}

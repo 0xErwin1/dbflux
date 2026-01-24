@@ -18,9 +18,6 @@ pub enum FocusTarget {
 
     /// Results table area.
     Results,
-
-    /// Query history panel (not in Tab cycle, accessible via Alt+4).
-    History,
 }
 
 impl FocusTarget {
@@ -31,33 +28,28 @@ impl FocusTarget {
             FocusTarget::Sidebar => ContextId::Sidebar,
             FocusTarget::BackgroundTasks => ContextId::BackgroundTasks,
             FocusTarget::Results => ContextId::Results,
-            FocusTarget::History => ContextId::History,
         }
     }
 
     /// Returns the next focus target in the Tab cycle order.
-    /// Order: Editor → Sidebar → BackgroundTasks → Results → Editor
-    /// Note: History is not in Tab cycle.
+    /// Order: Editor -> Sidebar -> BackgroundTasks -> Results -> Editor
     pub fn next(&self) -> FocusTarget {
         match self {
             FocusTarget::Editor => FocusTarget::Sidebar,
             FocusTarget::Sidebar => FocusTarget::BackgroundTasks,
             FocusTarget::BackgroundTasks => FocusTarget::Results,
             FocusTarget::Results => FocusTarget::Editor,
-            FocusTarget::History => FocusTarget::Editor, // Exit history to editor
         }
     }
 
     /// Returns the previous focus target in the Tab cycle order.
-    /// Order: Editor → Results → BackgroundTasks → Sidebar → Editor
-    /// Note: History is not in Tab cycle.
+    /// Order: Editor -> Results -> BackgroundTasks -> Sidebar -> Editor
     pub fn prev(&self) -> FocusTarget {
         match self {
             FocusTarget::Editor => FocusTarget::Results,
             FocusTarget::Results => FocusTarget::BackgroundTasks,
             FocusTarget::BackgroundTasks => FocusTarget::Sidebar,
             FocusTarget::Sidebar => FocusTarget::Editor,
-            FocusTarget::History => FocusTarget::Editor, // Exit history to editor
         }
     }
 
@@ -69,7 +61,19 @@ impl FocusTarget {
             FocusTarget::Sidebar => "Sidebar",
             FocusTarget::BackgroundTasks => "Background Tasks",
             FocusTarget::Results => "Results",
-            FocusTarget::History => "History",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FocusTarget;
+
+    #[test]
+    fn focus_cycle_skips_history() {
+        assert_eq!(FocusTarget::Editor.next(), FocusTarget::Sidebar);
+        assert_eq!(FocusTarget::Sidebar.next(), FocusTarget::BackgroundTasks);
+        assert_eq!(FocusTarget::BackgroundTasks.next(), FocusTarget::Results);
+        assert_eq!(FocusTarget::Results.next(), FocusTarget::Editor);
     }
 }
