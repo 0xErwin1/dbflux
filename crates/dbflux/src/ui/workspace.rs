@@ -12,6 +12,7 @@ use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::ToastManager;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
+use crate::ui::windows::settings::SettingsWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -131,9 +132,22 @@ impl Workspace {
 
     fn default_commands() -> Vec<PaletteCommand> {
         vec![
-            PaletteCommand::new("new_query_tab", "New Query Tab", "Editor"),
+            // Editor
+            PaletteCommand::new("new_query_tab", "New Query Tab", "Editor").with_shortcut("Ctrl+N"),
             PaletteCommand::new("run_query", "Run Query", "Editor").with_shortcut("Ctrl+Enter"),
-            PaletteCommand::new("export_results", "Export Results to CSV", "Results"),
+            PaletteCommand::new("save_query", "Save Query", "Editor").with_shortcut("Ctrl+S"),
+            PaletteCommand::new("open_history", "Open Query History", "Editor")
+                .with_shortcut("Ctrl+P"),
+            PaletteCommand::new("cancel_query", "Cancel Running Query", "Editor")
+                .with_shortcut("Esc"),
+            // Tabs
+            PaletteCommand::new("close_tab", "Close Current Tab", "Tabs").with_shortcut("Ctrl+W"),
+            PaletteCommand::new("next_tab", "Next Tab", "Tabs").with_shortcut("Ctrl+Tab"),
+            PaletteCommand::new("prev_tab", "Previous Tab", "Tabs").with_shortcut("Ctrl+Shift+Tab"),
+            // Results
+            PaletteCommand::new("export_results", "Export Results to CSV", "Results")
+                .with_shortcut("Ctrl+E"),
+            // Connections
             PaletteCommand::new(
                 "open_connection_manager",
                 "Open Connection Manager",
@@ -141,9 +155,20 @@ impl Workspace {
             ),
             PaletteCommand::new("disconnect", "Disconnect Current", "Connections"),
             PaletteCommand::new("refresh_schema", "Refresh Schema", "Connections"),
+            // Focus
+            PaletteCommand::new("focus_sidebar", "Focus Sidebar", "Focus")
+                .with_shortcut("Ctrl+Shift+1"),
+            PaletteCommand::new("focus_editor", "Focus Editor", "Focus")
+                .with_shortcut("Ctrl+Shift+2"),
+            PaletteCommand::new("focus_results", "Focus Results", "Focus")
+                .with_shortcut("Ctrl+Shift+3"),
+            PaletteCommand::new("focus_tasks", "Focus Tasks Panel", "Focus")
+                .with_shortcut("Ctrl+Shift+4"),
+            // View
             PaletteCommand::new("toggle_editor", "Toggle Editor Panel", "View"),
             PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
             PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
+            PaletteCommand::new("open_settings", "Open Settings", "View"),
         ]
     }
 
@@ -174,6 +199,7 @@ impl Workspace {
 
     fn handle_command(&mut self, command_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match command_id {
+            // Editor
             "new_query_tab" => {
                 self.editor.update(cx, |editor, cx| {
                     editor.add_new_tab(window, cx);
@@ -184,11 +210,47 @@ impl Workspace {
                     editor.run_query(window, cx);
                 });
             }
+            "save_query" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.save_current_query(window, cx);
+                });
+            }
+            "open_history" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.toggle_history_modal(window, cx);
+                });
+            }
+            "cancel_query" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.cancel_query(cx);
+                });
+            }
+
+            // Tabs
+            "close_tab" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.close_current_tab(cx);
+                });
+            }
+            "next_tab" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.next_tab(cx);
+                });
+            }
+            "prev_tab" => {
+                self.editor.update(cx, |editor, cx| {
+                    editor.prev_tab(cx);
+                });
+            }
+
+            // Results
             "export_results" => {
                 self.results.update(cx, |results, cx| {
                     results.export_results(window, cx);
                 });
             }
+
+            // Connections
             "open_connection_manager" => {
                 let app_state = self.app_state.clone();
                 cx.spawn(async move |_this, cx| {
@@ -222,6 +284,22 @@ impl Workspace {
             "refresh_schema" => {
                 self.refresh_schema(window, cx);
             }
+
+            // Focus
+            "focus_sidebar" => {
+                self.set_focus(FocusTarget::Sidebar, window, cx);
+            }
+            "focus_editor" => {
+                self.set_focus(FocusTarget::Editor, window, cx);
+            }
+            "focus_results" => {
+                self.set_focus(FocusTarget::Results, window, cx);
+            }
+            "focus_tasks" => {
+                self.set_focus(FocusTarget::BackgroundTasks, window, cx);
+            }
+
+            // View
             "toggle_editor" => {
                 self.toggle_editor(cx);
             }
@@ -231,6 +309,10 @@ impl Workspace {
             "toggle_tasks" => {
                 self.toggle_tasks_panel(cx);
             }
+            "open_settings" => {
+                self.open_settings(cx);
+            }
+
             _ => {
                 log::warn!("Unknown command: {}", command_id);
             }
@@ -254,6 +336,28 @@ impl Workspace {
             |window, cx| {
                 let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
                 cx.new(|cx| Root::new(manager, window, cx))
+            },
+        )
+        .ok();
+    }
+
+    fn open_settings(&self, cx: &mut Context<Self>) {
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
+
+        cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Settings".into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                kind: WindowKind::Floating,
+                ..Default::default()
+            },
+            |window, cx| {
+                let settings = cx.new(|cx| SettingsWindow::new(app_state, window, cx));
+                cx.new(|cx| Root::new(settings, window, cx))
             },
         )
         .ok();
@@ -1119,6 +1223,11 @@ impl CommandDispatcher for Workspace {
 
             Command::FocusBackgroundTasks => {
                 self.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                true
+            }
+
+            Command::OpenSettings => {
+                self.open_settings(cx);
                 true
             }
 

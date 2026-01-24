@@ -67,6 +67,7 @@ pub enum Command {
     ToggleEditor,
     ToggleResults,
     ToggleTasks,
+    OpenSettings,
 }
 
 impl Command {
@@ -127,6 +128,7 @@ impl Command {
             Command::ToggleEditor => "Toggle Editor Panel",
             Command::ToggleResults => "Toggle Results Panel",
             Command::ToggleTasks => "Toggle Tasks Panel",
+            Command::OpenSettings => "Open Settings",
         }
     }
 
@@ -183,7 +185,10 @@ impl Command {
                 "Connections"
             }
 
-            Command::ToggleEditor | Command::ToggleResults | Command::ToggleTasks => "View",
+            Command::ToggleEditor
+            | Command::ToggleResults
+            | Command::ToggleTasks
+            | Command::OpenSettings => "View",
         }
     }
 

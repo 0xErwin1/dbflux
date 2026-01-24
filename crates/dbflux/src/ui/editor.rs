@@ -544,7 +544,7 @@ impl EditorPane {
         .detach();
     }
 
-    fn cancel_query(&mut self, cx: &mut Context<Self>) {
+    pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if let Some(running) = self.running_query.take() {
             running.cancel_token.cancel();
 

@@ -53,6 +53,8 @@ actions!(
         Rename,
         FocusSearch,
         SaveQuery,
+        // Settings
+        OpenSettings,
     ]
 );
 

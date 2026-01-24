@@ -454,10 +454,8 @@ impl AppState {
     pub fn update_saved_query(&mut self, id: Uuid, name: String, sql: String) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let updated = store.update(id, name, sql);
-            if updated {
-                if let Err(e) = store.save() {
-                    error!("Failed to save saved queries: {:?}", e);
-                }
+            if updated && let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
             }
             return updated;
         }
@@ -467,10 +465,8 @@ impl AppState {
     pub fn remove_saved_query(&mut self, id: Uuid) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let removed = store.remove(id);
-            if removed {
-                if let Err(e) = store.save() {
-                    error!("Failed to save saved queries: {:?}", e);
-                }
+            if removed && let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
             }
             return removed;
         }
@@ -491,10 +487,8 @@ impl AppState {
     pub fn update_saved_query_last_used(&mut self, id: Uuid) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let result = store.update_last_used(id);
-            if result {
-                if let Err(e) = store.save() {
-                    error!("Failed to save saved queries: {:?}", e);
-                }
+            if result && let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
             }
             return result;
         }
@@ -504,10 +498,8 @@ impl AppState {
     pub fn update_saved_query_sql(&mut self, id: Uuid, sql: &str) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let result = store.update_sql(id, sql);
-            if result {
-                if let Err(e) = store.save() {
-                    error!("Failed to save saved queries: {:?}", e);
-                }
+            if result && let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
             }
             return result;
         }
@@ -517,10 +509,8 @@ impl AppState {
     pub fn update_saved_query_name(&mut self, id: Uuid, name: &str) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let result = store.update_name(id, name);
-            if result {
-                if let Err(e) = store.save() {
-                    error!("Failed to save saved queries: {:?}", e);
-                }
+            if result && let Err(e) = store.save() {
+                error!("Failed to save saved queries: {:?}", e);
             }
             return result;
         }

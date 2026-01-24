@@ -50,11 +50,14 @@ struct FilteredCommand {
     score: i64,
 }
 
+const VISIBLE_ITEMS: usize = 8;
+
 pub struct CommandPalette {
     visible: bool,
     commands: Vec<PaletteCommand>,
     filtered: Vec<FilteredCommand>,
     selected_index: usize,
+    scroll_offset: usize,
     input_state: Entity<InputState>,
     matcher: SkimMatcherV2,
 }
@@ -90,6 +93,7 @@ impl CommandPalette {
             commands: Vec::new(),
             filtered: Vec::new(),
             selected_index: 0,
+            scroll_offset: 0,
             input_state,
             matcher: SkimMatcherV2::default(),
         }
@@ -114,6 +118,7 @@ impl CommandPalette {
                 state.focus(window, cx);
             });
             self.selected_index = 0;
+            self.scroll_offset = 0;
             self.filtered = self
                 .commands
                 .iter()
@@ -162,12 +167,14 @@ impl CommandPalette {
         }
 
         self.selected_index = 0;
+        self.scroll_offset = 0;
         cx.notify();
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
         if !self.filtered.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.filtered.len();
+            self.ensure_selected_visible();
             cx.notify();
         }
     }
@@ -179,6 +186,36 @@ impl CommandPalette {
             } else {
                 self.selected_index - 1
             };
+            self.ensure_selected_visible();
+            cx.notify();
+        }
+    }
+
+    fn ensure_selected_visible(&mut self) {
+        // If selected is above visible window, scroll up
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        }
+        // If selected is below visible window, scroll down
+        if self.selected_index >= self.scroll_offset + VISIBLE_ITEMS {
+            self.scroll_offset = self.selected_index - VISIBLE_ITEMS + 1;
+        }
+    }
+
+    fn scroll_down(&mut self, cx: &mut Context<Self>) {
+        // Move selection down (same as select_next but doesn't wrap)
+        if self.selected_index < self.filtered.len().saturating_sub(1) {
+            self.selected_index += 1;
+            self.ensure_selected_visible();
+            cx.notify();
+        }
+    }
+
+    fn scroll_up(&mut self, cx: &mut Context<Self>) {
+        // Move selection up (same as select_prev but doesn't wrap)
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+            self.ensure_selected_visible();
             cx.notify();
         }
     }
@@ -276,11 +313,12 @@ impl Render for CommandPalette {
             .filtered
             .iter()
             .enumerate()
-            .take(10)
-            .map(|(display_idx, filtered)| {
+            .skip(self.scroll_offset)
+            .take(VISIBLE_ITEMS)
+            .map(|(idx, filtered)| {
                 let cmd = self.commands[filtered.index].clone();
-                let is_selected = display_idx == self.selected_index;
-                (display_idx, cmd, is_selected)
+                let is_selected = idx == self.selected_index;
+                (idx, cmd, is_selected)
             })
             .collect();
 
@@ -336,15 +374,26 @@ impl Render for CommandPalette {
                     )
                     .child(
                         div()
+                            .id("command-palette-list")
                             .flex_1()
                             .overflow_y_hidden()
                             .p(Spacing::XS)
+                            .on_scroll_wheel(cx.listener(
+                                |this, event: &ScrollWheelEvent, _window, cx| {
+                                    let delta = event.delta.pixel_delta(px(1.0));
+                                    if delta.y < px(0.0) {
+                                        this.scroll_down(cx);
+                                    } else if delta.y > px(0.0) {
+                                        this.scroll_up(cx);
+                                    }
+                                },
+                            ))
                             .children(commands_to_render.into_iter().map(
                                 |(idx, cmd, is_selected)| {
                                     Self::render_command_item(idx, cmd, is_selected, theme)
                                 },
                             ))
-                            .when(self.filtered.is_empty(), |d: Div| {
+                            .when(self.filtered.is_empty(), |d| {
                                 d.child(
                                     div()
                                         .w_full()

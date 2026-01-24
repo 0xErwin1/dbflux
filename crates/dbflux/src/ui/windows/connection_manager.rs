@@ -1371,10 +1371,9 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         // If the SSH tunnel dropdown is open, route commands to it first
-        if self.ssh_tunnel_dropdown.read(cx).is_open() {
-            if self.handle_dropdown_command(command, cx) {
-                return true;
-            }
+        if self.ssh_tunnel_dropdown.read(cx).is_open() && self.handle_dropdown_command(command, cx)
+        {
+            return true;
         }
 
         match self.edit_state {

@@ -5,9 +5,9 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 #[derive(Clone)]
