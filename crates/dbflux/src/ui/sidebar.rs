@@ -1307,8 +1307,20 @@ impl Sidebar {
                     .text_color(theme.muted_foreground)
                     .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
                     .on_click(move |_, _, cx| {
-                        let app_state = app_state.clone();
-                        cx.open_window(
+                        if let Some(handle) = app_state.read(cx).settings_window {
+                            if handle
+                                .update(cx, |_root, window, _cx| window.activate_window())
+                                .is_ok()
+                            {
+                                return;
+                            }
+                            app_state.update(cx, |state, _| {
+                                state.settings_window = None;
+                            });
+                        }
+
+                        let app_state_for_window = app_state.clone();
+                        if let Ok(handle) = cx.open_window(
                             WindowOptions {
                                 titlebar: Some(TitlebarOptions {
                                     title: Some("Settings".into()),
@@ -1324,12 +1336,16 @@ impl Sidebar {
                                 ..Default::default()
                             },
                             |window, cx| {
-                                let settings =
-                                    cx.new(|cx| SettingsWindow::new(app_state, window, cx));
+                                let settings = cx.new(|cx| {
+                                    SettingsWindow::new(app_state_for_window, window, cx)
+                                });
                                 cx.new(|cx| Root::new(settings, window, cx))
                             },
-                        )
-                        .ok();
+                        ) {
+                            app_state.update(cx, |state, _| {
+                                state.settings_window = Some(handle);
+                            });
+                        }
                     })
                     .child(
                         Icon::new(IconName::Settings)

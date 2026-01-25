@@ -4,7 +4,8 @@ use dbflux_core::{
     SshTunnelProfile, SshTunnelStore, TaskId, TaskKind, TaskManager, TaskSnapshot,
     create_secret_store,
 };
-use gpui::EventEmitter;
+use gpui::{EventEmitter, WindowHandle};
+use gpui_component::Root;
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -45,6 +46,8 @@ pub struct AppState {
     history_store: Option<HistoryStore>,
     saved_query_store: Option<SavedQueryStore>,
     pending_saved_query_warning: Option<String>,
+
+    pub settings_window: Option<WindowHandle<Root>>,
 }
 
 impl AppState {
@@ -132,6 +135,7 @@ impl AppState {
             history_store,
             saved_query_store,
             pending_saved_query_warning,
+            settings_window: None,
         }
     }
 

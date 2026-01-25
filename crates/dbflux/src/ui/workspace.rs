@@ -359,10 +359,22 @@ impl Workspace {
     }
 
     fn open_settings(&self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.app_state.read(cx).settings_window {
+            if handle
+                .update(cx, |_root, window, _cx| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.app_state.update(cx, |state, _| {
+                state.settings_window = None;
+            });
+        }
+
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
-        cx.open_window(
+        if let Ok(handle) = cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Settings".into()),
@@ -374,11 +386,14 @@ impl Workspace {
                 ..Default::default()
             },
             |window, cx| {
-                let settings = cx.new(|cx| SettingsWindow::new(app_state, window, cx));
+                let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
                 cx.new(|cx| Root::new(settings, window, cx))
             },
-        )
-        .ok();
+        ) {
+            self.app_state.update(cx, |state, _| {
+                state.settings_window = Some(handle);
+            });
+        }
     }
 
     fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {

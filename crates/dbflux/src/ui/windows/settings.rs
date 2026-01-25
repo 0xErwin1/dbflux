@@ -68,6 +68,29 @@ enum SshAuthSelection {
     Password,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum SshFocus {
+    ProfileList,
+    Form,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SshFormField {
+    Name,
+    Host,
+    Port,
+    User,
+    AuthPrivateKey,
+    AuthPassword,
+    KeyPath,
+    KeyBrowse,
+    Passphrase,
+    Password,
+    SaveSecret,
+    SaveButton,
+    DeleteButton,
+}
+
 pub struct SettingsWindow {
     app_state: Entity<AppState>,
     active_section: SettingsSection,
@@ -93,6 +116,12 @@ pub struct SettingsWindow {
     input_ssh_password: Entity<InputState>,
     ssh_auth_method: SshAuthSelection,
     form_save_secret: bool,
+
+    // SSH navigation state
+    ssh_focus: SshFocus,
+    ssh_selected_idx: Option<usize>,
+    ssh_form_field: SshFormField,
+    ssh_editing_field: bool,
 
     pending_ssh_key_path: Option<String>,
     pending_delete_tunnel_id: Option<Uuid>,
@@ -155,6 +184,12 @@ impl SettingsWindow {
             input_ssh_password,
             ssh_auth_method: SshAuthSelection::PrivateKey,
             form_save_secret: false,
+
+            ssh_focus: SshFocus::ProfileList,
+            ssh_selected_idx: None,
+            ssh_form_field: SshFormField::Name,
+            ssh_editing_field: false,
+
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
             _subscriptions: vec![subscription],
@@ -303,16 +338,32 @@ impl SettingsWindow {
             return;
         };
 
-        self.app_state.update(cx, |state, cx| {
-            if let Some(idx) = state.ssh_tunnels.iter().position(|t| t.id == tunnel_id) {
-                state.remove_ssh_tunnel(idx);
+        let deleted_idx = self.app_state.update(cx, |state, cx| {
+            let idx = state.ssh_tunnels.iter().position(|t| t.id == tunnel_id);
+            if let Some(i) = idx {
+                state.remove_ssh_tunnel(i);
             }
             cx.emit(AppStateChanged);
+            idx
         });
 
         if self.editing_tunnel_id == Some(tunnel_id) {
             self.editing_tunnel_id = None;
         }
+
+        if let Some(deleted) = deleted_idx {
+            let new_count = self.ssh_tunnel_count(cx);
+            if new_count == 0 {
+                self.ssh_selected_idx = None;
+            } else if let Some(sel) = self.ssh_selected_idx {
+                if sel >= new_count {
+                    self.ssh_selected_idx = Some(new_count - 1);
+                } else if sel > deleted {
+                    self.ssh_selected_idx = Some(sel - 1);
+                }
+            }
+        }
+
         cx.notify();
     }
 
@@ -886,6 +937,9 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
+        let is_list_focused = self.focus_area == SettingsFocus::Content
+            && self.ssh_focus == SshFocus::ProfileList;
+        let is_new_button_focused = is_list_focused && self.ssh_selected_idx.is_none();
 
         div()
             .w(px(250.0))
@@ -896,14 +950,25 @@ impl SettingsWindow {
             .flex_col()
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
-                    Button::new("new-tunnel")
-                        .icon(Icon::new(IconName::Plus))
-                        .label("New Tunnel")
-                        .small()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.clear_form(window, cx);
-                        })),
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_new_button_focused {
+                            theme.primary
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(
+                            Button::new("new-tunnel")
+                                .icon(Icon::new(IconName::Plus))
+                                .label("New Tunnel")
+                                .small()
+                                .w_full()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.ssh_selected_idx = None;
+                                    this.clear_form(window, cx);
+                                })),
+                        ),
                 ),
             )
             .child(
@@ -923,9 +988,10 @@ impl SettingsWindow {
                                 .child("No saved tunnels"),
                         )
                     })
-                    .children(tunnels.iter().map(|tunnel| {
+                    .children(tunnels.iter().enumerate().map(|(idx, tunnel)| {
                         let tunnel_id = tunnel.id;
                         let is_selected = editing_id == Some(tunnel_id);
+                        let is_focused = is_list_focused && self.ssh_selected_idx == Some(idx);
                         let tunnel_clone = tunnel.clone();
 
                         div()
@@ -934,9 +1000,16 @@ impl SettingsWindow {
                             .py_2()
                             .rounded(px(4.0))
                             .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_focused && !is_selected {
+                                theme.primary
+                            } else {
+                                gpui::transparent_black()
+                            })
                             .when(is_selected, |d| d.bg(theme.secondary))
                             .hover(|d| d.bg(theme.secondary))
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                this.ssh_selected_idx = Some(idx);
                                 this.edit_tunnel(&tunnel_clone, window, cx);
                             }))
                             .child(
@@ -986,6 +1059,13 @@ impl SettingsWindow {
     ) -> impl IntoElement {
         let auth_method = self.ssh_auth_method;
         let save_secret = self.form_save_secret;
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+
+        let is_form_focused =
+            self.focus_area == SettingsFocus::Content && self.ssh_focus == SshFocus::Form;
+        let current_field = self.ssh_form_field;
 
         let title = if editing_id.is_some() {
             "Edit Tunnel"
@@ -994,13 +1074,18 @@ impl SettingsWindow {
         };
 
         let auth_selector = self
-            .render_auth_selector(auth_method, cx)
+            .render_auth_selector_with_focus(auth_method, is_form_focused, current_field, cx)
             .into_any_element();
         let auth_fields = self
-            .render_auth_fields(auth_method, keyring_available, save_secret, cx)
+            .render_auth_fields_with_focus(
+                auth_method,
+                keyring_available,
+                save_secret,
+                is_form_focused,
+                current_field,
+                cx,
+            )
             .into_any_element();
-
-        let theme = cx.theme();
 
         div()
             .flex_1()
@@ -1009,12 +1094,16 @@ impl SettingsWindow {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(theme.border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    ),
             )
             .child(
                 div()
@@ -1024,23 +1113,35 @@ impl SettingsWindow {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(self.render_form_field("Name", &self.input_tunnel_name, true))
+                    .child(self.render_form_field_with_focus(
+                        "Name",
+                        &self.input_tunnel_name,
+                        is_form_focused && current_field == SshFormField::Name,
+                        primary,
+                    ))
                     .child(
                         div()
                             .flex()
                             .gap_3()
-                            .child(div().flex_1().child(self.render_form_field(
+                            .child(div().flex_1().child(self.render_form_field_with_focus(
                                 "Host",
                                 &self.input_ssh_host,
-                                true,
+                                is_form_focused && current_field == SshFormField::Host,
+                                primary,
                             )))
-                            .child(div().w(px(80.0)).child(self.render_form_field(
+                            .child(div().w(px(80.0)).child(self.render_form_field_with_focus(
                                 "Port",
                                 &self.input_ssh_port,
-                                false,
+                                is_form_focused && current_field == SshFormField::Port,
+                                primary,
                             ))),
                     )
-                    .child(self.render_form_field("Username", &self.input_ssh_user, true))
+                    .child(self.render_form_field_with_focus(
+                        "Username",
+                        &self.input_ssh_user,
+                        is_form_focused && current_field == SshFormField::User,
+                        primary,
+                    ))
                     .child(auth_selector)
                     .child(auth_fields),
             )
@@ -1048,44 +1149,69 @@ impl SettingsWindow {
                 div()
                     .p_4()
                     .border_t_1()
-                    .border_color(theme.border)
+                    .border_color(border)
                     .flex()
                     .gap_2()
                     .justify_end()
                     .when(editing_id.is_some(), |d| {
                         let tunnel_id = editing_id.unwrap();
+                        let is_delete_focused =
+                            is_form_focused && current_field == SshFormField::DeleteButton;
                         d.child(
-                            Button::new("delete-tunnel")
-                                .label("Delete")
-                                .small()
-                                .danger()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_delete_tunnel(tunnel_id, cx);
-                                })),
+                            div()
+                                .rounded(px(4.0))
+                                .border_1()
+                                .border_color(if is_delete_focused {
+                                    primary
+                                } else {
+                                    gpui::transparent_black()
+                                })
+                                .child(
+                                    Button::new("delete-tunnel")
+                                        .label("Delete")
+                                        .small()
+                                        .danger()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.request_delete_tunnel(tunnel_id, cx);
+                                        })),
+                                ),
                         )
                         .child(div().flex_1())
                     })
-                    .child(
-                        Button::new("save-tunnel")
-                            .label(if editing_id.is_some() {
-                                "Update"
+                    .child({
+                        let is_save_focused =
+                            is_form_focused && current_field == SshFormField::SaveButton;
+                        div()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if is_save_focused {
+                                primary
                             } else {
-                                "Create"
+                                gpui::transparent_black()
                             })
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_tunnel(window, cx);
-                            })),
-                    ),
+                            .child(
+                                Button::new("save-tunnel")
+                                    .label(if editing_id.is_some() {
+                                        "Update"
+                                    } else {
+                                        "Create"
+                                    })
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_tunnel(window, cx);
+                                    })),
+                            )
+                    }),
             )
     }
 
-    fn render_form_field(
+    fn render_form_field_with_focus(
         &self,
         label: &str,
         input: &Entity<InputState>,
-        _required: bool,
+        is_focused: bool,
+        primary: Hsla,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -1097,68 +1223,16 @@ impl SettingsWindow {
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.to_string()),
             )
-            .child(Input::new(input).small())
-    }
-
-    fn render_auth_selector(
-        &self,
-        current: SshAuthSelection,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let primary = theme.primary;
-        let border = theme.border;
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
             .child(
                 div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Authentication"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        div()
-                            .id("auth-key")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.ssh_auth_method = SshAuthSelection::PrivateKey;
-                                cx.notify();
-                            }))
-                            .child(self.render_radio(
-                                current == SshAuthSelection::PrivateKey,
-                                primary,
-                                border,
-                            ))
-                            .child(div().text_sm().child("Private Key")),
-                    )
-                    .child(
-                        div()
-                            .id("auth-pw")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.ssh_auth_method = SshAuthSelection::Password;
-                                cx.notify();
-                            }))
-                            .child(self.render_radio(
-                                current == SshAuthSelection::Password,
-                                primary,
-                                border,
-                            ))
-                            .child(div().text_sm().child("Password")),
-                    ),
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_focused {
+                        primary
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .child(Input::new(input).small()),
             )
     }
 
@@ -1183,123 +1257,246 @@ impl SettingsWindow {
             })
     }
 
-    fn render_auth_fields(
+    fn render_auth_selector_with_focus(
+        &self,
+        current: SshAuthSelection,
+        is_form_focused: bool,
+        current_field: SshFormField,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+
+        let is_key_focused = is_form_focused && current_field == SshFormField::AuthPrivateKey;
+        let is_pw_focused = is_form_focused && current_field == SshFormField::AuthPassword;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Authentication"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .child(
+                        div()
+                            .id("auth-key")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_key_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.ssh_auth_method = SshAuthSelection::PrivateKey;
+                                this.validate_ssh_form_field();
+                                cx.notify();
+                            }))
+                            .child(self.render_radio(
+                                current == SshAuthSelection::PrivateKey,
+                                primary,
+                                border,
+                            ))
+                            .child(div().text_sm().child("Private Key")),
+                    )
+                    .child(
+                        div()
+                            .id("auth-pw")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_pw_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.ssh_auth_method = SshAuthSelection::Password;
+                                this.validate_ssh_form_field();
+                                cx.notify();
+                            }))
+                            .child(self.render_radio(
+                                current == SshAuthSelection::Password,
+                                primary,
+                                border,
+                            ))
+                            .child(div().text_sm().child("Password")),
+                    ),
+            )
+    }
+
+    fn render_auth_fields_with_focus(
         &self,
         auth_method: SshAuthSelection,
         keyring_available: bool,
         save_secret: bool,
+        is_form_focused: bool,
+        current_field: SshFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
+        let primary = theme.primary;
+
+        let is_save_secret_focused = is_form_focused && current_field == SshFormField::SaveSecret;
 
         let save_checkbox = if keyring_available {
             Some(
-                Checkbox::new("save-secret")
-                    .checked(save_secret)
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.form_save_secret = *checked;
-                        cx.notify();
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pb(px(2.0))
+                    .px_2()
+                    .py_1()
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_save_secret_focused {
+                        primary
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .child(
+                        Checkbox::new("save-secret")
+                            .checked(save_secret)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.form_save_secret = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().text_sm().child("Save")),
             )
         } else {
             None
         };
 
         match auth_method {
-            SshAuthSelection::PrivateKey => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Private Key Path"),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .child(Input::new(&self.input_ssh_key_path).small()),
-                                )
-                                .child(
-                                    Button::new("browse-key")
-                                        .label("Browse")
-                                        .small()
-                                        .ghost()
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.browse_ssh_key(window, cx);
-                                        })),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Leave empty to use SSH agent"),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_end()
-                        .gap_3()
-                        .child(div().flex_1().child(self.render_form_field(
-                            "Key Passphrase",
-                            &self.input_ssh_key_passphrase,
-                            false,
-                        )))
-                        .when_some(save_checkbox, |d, checkbox| {
-                            d.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .pb(px(2.0))
-                                    .child(checkbox)
-                                    .child(div().text_sm().child("Save")),
-                            )
-                        }),
-                )
-                .into_any_element(),
+            SshAuthSelection::PrivateKey => {
+                let is_key_path_focused =
+                    is_form_focused && current_field == SshFormField::KeyPath;
+                let is_browse_focused =
+                    is_form_focused && current_field == SshFormField::KeyBrowse;
+                let is_passphrase_focused =
+                    is_form_focused && current_field == SshFormField::Passphrase;
 
-            SshAuthSelection::Password => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .items_end()
-                        .gap_3()
-                        .child(div().flex_1().child(self.render_form_field(
-                            "Password",
-                            &self.input_ssh_password,
-                            false,
-                        )))
-                        .when_some(save_checkbox, |d, checkbox| {
-                            d.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Private Key Path"),
+                            )
+                            .child(
                                 div()
                                     .flex()
-                                    .items_center()
                                     .gap_2()
-                                    .pb(px(2.0))
-                                    .child(checkbox)
-                                    .child(div().text_sm().child("Save")),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .rounded(px(4.0))
+                                            .border_1()
+                                            .border_color(if is_key_path_focused {
+                                                primary
+                                            } else {
+                                                gpui::transparent_black()
+                                            })
+                                            .child(Input::new(&self.input_ssh_key_path).small()),
+                                    )
+                                    .child(
+                                        div()
+                                            .rounded(px(4.0))
+                                            .border_1()
+                                            .border_color(if is_browse_focused {
+                                                primary
+                                            } else {
+                                                gpui::transparent_black()
+                                            })
+                                            .child(
+                                                Button::new("browse-key")
+                                                    .label("Browse")
+                                                    .small()
+                                                    .ghost()
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.browse_ssh_key(window, cx);
+                                                    })),
+                                            ),
+                                    ),
                             )
-                        }),
-                )
-                .into_any_element(),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Leave empty to use SSH agent"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap_3()
+                            .child(div().flex_1().child(self.render_form_field_with_focus(
+                                "Key Passphrase",
+                                &self.input_ssh_key_passphrase,
+                                is_passphrase_focused,
+                                primary,
+                            )))
+                            .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
+                    )
+                    .into_any_element()
+            }
+
+            SshAuthSelection::Password => {
+                let is_password_focused =
+                    is_form_focused && current_field == SshFormField::Password;
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap_3()
+                            .child(div().flex_1().child(self.render_form_field_with_focus(
+                                "Password",
+                                &self.input_ssh_password,
+                                is_password_focused,
+                                primary,
+                            )))
+                            .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
+                    )
+                    .into_any_element()
+            }
         }
     }
+
 }
 
 pub struct DismissEvent;
@@ -1506,6 +1703,285 @@ impl SettingsWindow {
         flat_idx
     }
 
+    fn ssh_tunnel_count(&self, cx: &Context<Self>) -> usize {
+        self.app_state.read(cx).ssh_tunnels.len()
+    }
+
+    fn ssh_move_next_profile(&mut self, cx: &Context<Self>) {
+        let count = self.ssh_tunnel_count(cx);
+        if count == 0 {
+            self.ssh_selected_idx = None;
+            return;
+        }
+
+        match self.ssh_selected_idx {
+            None => self.ssh_selected_idx = Some(0),
+            Some(idx) if idx + 1 < count => self.ssh_selected_idx = Some(idx + 1),
+            _ => {}
+        }
+    }
+
+    fn ssh_move_prev_profile(&mut self, cx: &Context<Self>) {
+        let count = self.ssh_tunnel_count(cx);
+        if count == 0 {
+            self.ssh_selected_idx = None;
+            return;
+        }
+
+        match self.ssh_selected_idx {
+            Some(idx) if idx > 0 => self.ssh_selected_idx = Some(idx - 1),
+            Some(0) => self.ssh_selected_idx = None,
+            _ => {}
+        }
+    }
+
+    fn ssh_load_selected_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+
+        if let Some(idx) = self.ssh_selected_idx
+            && idx >= tunnels.len()
+        {
+            self.ssh_selected_idx = if tunnels.is_empty() {
+                None
+            } else {
+                Some(tunnels.len() - 1)
+            };
+        }
+
+        if let Some(idx) = self.ssh_selected_idx
+            && let Some(tunnel) = tunnels.get(idx)
+        {
+            self.edit_tunnel(tunnel, window, cx);
+            return;
+        }
+
+        self.clear_form(window, cx);
+    }
+
+    fn ssh_enter_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ssh_focus = SshFocus::Form;
+        self.ssh_form_field = SshFormField::Name;
+        self.ssh_editing_field = false;
+
+        self.ssh_load_selected_profile(window, cx);
+    }
+
+    fn ssh_exit_form(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        self.ssh_focus = SshFocus::ProfileList;
+        self.ssh_editing_field = false;
+        self.focus_handle.focus(window);
+    }
+
+    /// Returns form rows. Each row contains fields navigable with h/l.
+    fn ssh_form_rows(&self) -> Vec<Vec<SshFormField>> {
+        let mut rows = vec![
+            vec![SshFormField::Name],
+            vec![SshFormField::Host, SshFormField::Port],
+            vec![SshFormField::User],
+            vec![SshFormField::AuthPrivateKey, SshFormField::AuthPassword],
+        ];
+
+        match self.ssh_auth_method {
+            SshAuthSelection::PrivateKey => {
+                rows.push(vec![SshFormField::KeyPath, SshFormField::KeyBrowse]);
+                rows.push(vec![SshFormField::Passphrase, SshFormField::SaveSecret]);
+            }
+            SshAuthSelection::Password => {
+                rows.push(vec![SshFormField::Password, SshFormField::SaveSecret]);
+            }
+        }
+
+        if self.editing_tunnel_id.is_some() {
+            rows.push(vec![SshFormField::DeleteButton, SshFormField::SaveButton]);
+        } else {
+            rows.push(vec![SshFormField::SaveButton]);
+        }
+
+        rows
+    }
+
+    /// Find current row and column index for the current field.
+    fn ssh_field_position(&self) -> Option<(usize, usize)> {
+        let rows = self.ssh_form_rows();
+        for (row_idx, row) in rows.iter().enumerate() {
+            if let Some(col_idx) = row.iter().position(|&f| f == self.ssh_form_field) {
+                return Some((row_idx, col_idx));
+            }
+        }
+        None
+    }
+
+    /// Move to next row (j/down), staying in same column if possible.
+    fn ssh_move_down(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position()
+            && row_idx + 1 < rows.len()
+        {
+            let next_row = &rows[row_idx + 1];
+            let new_col = col_idx.min(next_row.len() - 1);
+            self.ssh_form_field = next_row[new_col];
+        }
+    }
+
+    /// Move to previous row (k/up), staying in same column if possible.
+    fn ssh_move_up(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position()
+            && row_idx > 0
+        {
+            let prev_row = &rows[row_idx - 1];
+            let new_col = col_idx.min(prev_row.len() - 1);
+            self.ssh_form_field = prev_row[new_col];
+        }
+    }
+
+    /// Move right within current row (l/right).
+    fn ssh_move_right(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
+            let row = &rows[row_idx];
+            if col_idx + 1 < row.len() {
+                self.ssh_form_field = row[col_idx + 1];
+            }
+        }
+    }
+
+    /// Move left within current row (h/left).
+    fn ssh_move_left(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position()
+            && col_idx > 0
+        {
+            self.ssh_form_field = rows[row_idx][col_idx - 1];
+        }
+    }
+
+    fn ssh_move_first(&mut self) {
+        self.ssh_form_field = SshFormField::Name;
+    }
+
+    fn ssh_move_last(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some(last_row) = rows.last()
+            && let Some(last_field) = last_row.last()
+        {
+            self.ssh_form_field = *last_field;
+        }
+    }
+
+    /// Tab to next field sequentially (right within row, then down to next row).
+    fn ssh_tab_next(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
+            let row = &rows[row_idx];
+            if col_idx + 1 < row.len() {
+                self.ssh_form_field = row[col_idx + 1];
+            } else if row_idx + 1 < rows.len() {
+                self.ssh_form_field = rows[row_idx + 1][0];
+            }
+        }
+    }
+
+    /// Tab to previous field sequentially (left within row, then up to previous row's last).
+    fn ssh_tab_prev(&mut self) {
+        let rows = self.ssh_form_rows();
+        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
+            if col_idx > 0 {
+                self.ssh_form_field = rows[row_idx][col_idx - 1];
+            } else if row_idx > 0 {
+                let prev_row = &rows[row_idx - 1];
+                self.ssh_form_field = prev_row[prev_row.len() - 1];
+            }
+        }
+    }
+
+    fn ssh_focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ssh_editing_field = true;
+
+        match self.ssh_form_field {
+            SshFormField::Name => {
+                self.input_tunnel_name.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Host => {
+                self.input_ssh_host.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Port => {
+                self.input_ssh_port.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::User => {
+                self.input_ssh_user.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::KeyPath => {
+                self.input_ssh_key_path.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Passphrase => {
+                self.input_ssh_key_passphrase.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Password => {
+                self.input_ssh_password.update(cx, |s, cx| s.focus(window, cx));
+            }
+            _ => {
+                self.ssh_editing_field = false;
+            }
+        }
+    }
+
+    fn ssh_activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.ssh_form_field {
+            SshFormField::AuthPrivateKey => {
+                self.ssh_auth_method = SshAuthSelection::PrivateKey;
+                cx.notify();
+            }
+            SshFormField::AuthPassword => {
+                self.ssh_auth_method = SshAuthSelection::Password;
+                cx.notify();
+            }
+            SshFormField::KeyBrowse => {
+                self.browse_ssh_key(window, cx);
+            }
+            SshFormField::SaveSecret => {
+                self.form_save_secret = !self.form_save_secret;
+                cx.notify();
+            }
+            SshFormField::SaveButton => {
+                self.save_tunnel(window, cx);
+            }
+            SshFormField::DeleteButton => {
+                if let Some(id) = self.editing_tunnel_id {
+                    self.request_delete_tunnel(id, cx);
+                }
+            }
+            field if self.is_input_field(field) => {
+                self.ssh_focus_current_field(window, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn is_input_field(&self, field: SshFormField) -> bool {
+        matches!(
+            field,
+            SshFormField::Name
+                | SshFormField::Host
+                | SshFormField::Port
+                | SshFormField::User
+                | SshFormField::KeyPath
+                | SshFormField::Passphrase
+                | SshFormField::Password
+        )
+    }
+
+    fn validate_ssh_form_field(&mut self) {
+        let rows = self.ssh_form_rows();
+        let is_valid = rows.iter().any(|row| row.contains(&self.ssh_form_field));
+        if !is_valid {
+            self.ssh_form_field = match self.ssh_auth_method {
+                SshAuthSelection::PrivateKey => SshFormField::KeyPath,
+                SshAuthSelection::Password => SshFormField::Password,
+            };
+        }
+    }
+
     fn handle_key_event(
         &mut self,
         event: &KeyDownEvent,
@@ -1514,7 +1990,6 @@ impl SettingsWindow {
     ) {
         let chord = KeyChord::from_gpui(&event.keystroke);
 
-        // Handle filter input mode
         if self.keybindings_editing_filter {
             if chord.key == "escape" && chord.modifiers == Modifiers::none() {
                 self.keybindings_editing_filter = false;
@@ -1524,8 +1999,160 @@ impl SettingsWindow {
             return;
         }
 
+        if self.active_section == SettingsSection::SshTunnels
+            && self.ssh_focus == SshFocus::Form
+            && self.ssh_editing_field
+        {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("escape", m) if m == Modifiers::none() => {
+                    self.ssh_editing_field = false;
+                    self.focus_handle.focus(window);
+                    cx.notify();
+                }
+                ("enter", m) if m == Modifiers::none() => {
+                    self.ssh_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.ssh_move_down();
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::none() => {
+                    self.ssh_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.ssh_tab_next();
+                    self.ssh_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::shift() => {
+                    self.ssh_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.ssh_tab_prev();
+                    self.ssh_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.active_section == SettingsSection::SshTunnels
+            && self.focus_area == SettingsFocus::Content
+        {
+            match self.ssh_focus {
+                SshFocus::ProfileList => {
+                    match (chord.key.as_str(), chord.modifiers) {
+                        ("j", m) | ("down", m) if m == Modifiers::none() => {
+                            self.ssh_move_next_profile(cx);
+                            self.ssh_load_selected_profile(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("k", m) | ("up", m) if m == Modifiers::none() => {
+                            self.ssh_move_prev_profile(cx);
+                            self.ssh_load_selected_profile(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("l", m) | ("right", m) | ("enter", m) if m == Modifiers::none() => {
+                            self.ssh_enter_form(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("d", m) if m == Modifiers::none() => {
+                            if let Some(idx) = self.ssh_selected_idx {
+                                let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+                                if let Some(tunnel) = tunnels.get(idx) {
+                                    self.request_delete_tunnel(tunnel.id, cx);
+                                }
+                            }
+                            return;
+                        }
+                        ("g", m) if m == Modifiers::none() => {
+                            self.ssh_selected_idx = None;
+                            self.ssh_load_selected_profile(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("g", m) if m == Modifiers::shift() => {
+                            let count = self.ssh_tunnel_count(cx);
+                            if count > 0 {
+                                self.ssh_selected_idx = Some(count - 1);
+                                self.ssh_load_selected_profile(window, cx);
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        ("h", m) | ("left", m) if m == Modifiers::none() => {
+                            self.focus_area = SettingsFocus::Sidebar;
+                            cx.notify();
+                            return;
+                        }
+                        ("escape", m) if m == Modifiers::none() => {
+                            self.focus_area = SettingsFocus::Sidebar;
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                SshFocus::Form => {
+                    match (chord.key.as_str(), chord.modifiers) {
+                        ("escape", m) if m == Modifiers::none() => {
+                            self.ssh_exit_form(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("j", m) | ("down", m) if m == Modifiers::none() => {
+                            self.ssh_move_down();
+                            cx.notify();
+                            return;
+                        }
+                        ("k", m) | ("up", m) if m == Modifiers::none() => {
+                            self.ssh_move_up();
+                            cx.notify();
+                            return;
+                        }
+                        ("h", m) | ("left", m) if m == Modifiers::none() => {
+                            self.ssh_move_left();
+                            cx.notify();
+                            return;
+                        }
+                        ("l", m) | ("right", m) if m == Modifiers::none() => {
+                            self.ssh_move_right();
+                            cx.notify();
+                            return;
+                        }
+                        ("enter", m) | ("space", m) if m == Modifiers::none() => {
+                            self.ssh_activate_current_field(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        ("tab", m) if m == Modifiers::none() => {
+                            self.ssh_tab_next();
+                            cx.notify();
+                            return;
+                        }
+                        ("tab", m) if m == Modifiers::shift() => {
+                            self.ssh_tab_prev();
+                            cx.notify();
+                            return;
+                        }
+                        ("g", m) if m == Modifiers::none() => {
+                            self.ssh_move_first();
+                            cx.notify();
+                            return;
+                        }
+                        ("g", m) if m == Modifiers::shift() => {
+                            self.ssh_move_last();
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         match (chord.key.as_str(), chord.modifiers) {
-            // Navigation between sidebar and content
             ("h", m) | ("left", m) if m == Modifiers::none() => {
                 self.focus_area = SettingsFocus::Sidebar;
                 cx.notify();
@@ -1534,8 +2161,6 @@ impl SettingsWindow {
                 self.focus_area = SettingsFocus::Content;
                 cx.notify();
             }
-
-            // Vertical navigation
             ("j", m) | ("down", m) if m == Modifiers::none() => {
                 match self.focus_area {
                     SettingsFocus::Sidebar => {
@@ -1574,8 +2199,6 @@ impl SettingsWindow {
                 }
                 cx.notify();
             }
-
-            // Go to first (g) / last (G)
             ("g", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Content
                     && self.active_section == SettingsSection::Keybindings
@@ -1602,8 +2225,6 @@ impl SettingsWindow {
                     cx.notify();
                 }
             }
-
-            // Expand/collapse in keybindings (only when on a context header)
             ("enter", m) | ("space", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Sidebar {
                     self.focus_area = SettingsFocus::Content;
@@ -1619,8 +2240,6 @@ impl SettingsWindow {
                 }
                 cx.notify();
             }
-
-            // Focus filter
             ("/", m) | ("f", m) if m == Modifiers::none() => {
                 if self.active_section == SettingsSection::Keybindings {
                     self.keybindings_editing_filter = true;
@@ -1630,8 +2249,6 @@ impl SettingsWindow {
                     cx.notify();
                 }
             }
-
-            // Escape to go back
             ("escape", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Content {
                     self.focus_area = SettingsFocus::Sidebar;
