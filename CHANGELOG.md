@@ -2,6 +2,14 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.1.2] - 2025-01-25
+
+### Fixed
+
+- Connection Manager: SQLite form navigation now works correctly (`j/k` navigates between Name, File Path, and action buttons instead of jumping to non-existent PostgreSQL fields)
+- Connection Manager: Pressing Enter while editing an input now exits edit mode and moves to the next field
+- Connection Manager: Input blur events now properly restore keyboard navigation focus
+
 ## [0.1.1] - 2025-01-25
 
 ### Added

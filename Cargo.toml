@@ -12,7 +12,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
