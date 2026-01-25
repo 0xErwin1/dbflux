@@ -62,6 +62,46 @@ struct PendingToast {
     is_error: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum FocusMode {
+    #[default]
+    Table,
+    Toolbar,
+}
+
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum ToolbarFocus {
+    #[default]
+    Filter,
+    Limit,
+    Refresh,
+}
+
+impl ToolbarFocus {
+    fn left(self) -> Self {
+        match self {
+            ToolbarFocus::Filter => ToolbarFocus::Filter,
+            ToolbarFocus::Limit => ToolbarFocus::Filter,
+            ToolbarFocus::Refresh => ToolbarFocus::Limit,
+        }
+    }
+
+    fn right(self) -> Self {
+        match self {
+            ToolbarFocus::Filter => ToolbarFocus::Limit,
+            ToolbarFocus::Limit => ToolbarFocus::Refresh,
+            ToolbarFocus::Refresh => ToolbarFocus::Refresh,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum EditState {
+    #[default]
+    Navigating,
+    Editing,
+}
+
 pub struct ResultsPane {
     app_state: Entity<AppState>,
     tabs: Vec<ResultTab>,
@@ -76,6 +116,12 @@ pub struct ResultsPane {
     pending_error: Option<String>,
     running_table_query: Option<RunningTableQuery>,
     pending_toast: Option<PendingToast>,
+
+    focus_mode: FocusMode,
+    toolbar_focus: ToolbarFocus,
+    edit_state: EditState,
+    focus_handle: FocusHandle,
+    switching_input: bool,
 }
 
 impl ResultsPane {
@@ -93,10 +139,15 @@ impl ResultsPane {
         cx.subscribe_in(
             &filter_input,
             window,
-            |this, _, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { secondary: false } = event {
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { secondary: false } => {
                     this.run_table_query(window, cx);
+                    this.focus_table(window, cx);
                 }
+                InputEvent::Blur => {
+                    this.exit_edit_mode(window, cx);
+                }
+                _ => {}
             },
         )
         .detach();
@@ -104,13 +155,20 @@ impl ResultsPane {
         cx.subscribe_in(
             &limit_input,
             window,
-            |this, _, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { secondary: false } = event {
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { secondary: false } => {
                     this.run_table_query(window, cx);
+                    this.focus_table(window, cx);
                 }
+                InputEvent::Blur => {
+                    this.exit_edit_mode(window, cx);
+                }
+                _ => {}
             },
         )
         .detach();
+
+        let focus_handle = cx.focus_handle();
 
         Self {
             app_state,
@@ -125,6 +183,11 @@ impl ResultsPane {
             pending_error: None,
             running_table_query: None,
             pending_toast: None,
+            focus_mode: FocusMode::default(),
+            toolbar_focus: ToolbarFocus::default(),
+            edit_state: EditState::default(),
+            focus_handle,
+            switching_input: false,
         }
     }
 
@@ -170,6 +233,7 @@ impl ResultsPane {
     ) {
         let delegate = ResultsTableDelegate::new(result.clone());
         let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+
         let qualified = table.qualified_name();
 
         if let Some(idx) = self.tabs.iter().position(
@@ -329,6 +393,24 @@ impl ResultsPane {
             None
         } else {
             Some(filter_value.to_string())
+        };
+
+        let limit_value = self.limit_input.read(cx).value();
+        let limit_str = limit_value.trim();
+        let pagination = match limit_str.parse::<u32>() {
+            Ok(0) => {
+                use crate::ui::toast::ToastExt;
+                cx.toast_warning("Limit must be greater than 0", window);
+                pagination
+            }
+            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(_) => pagination,
+            Err(_) if !limit_str.is_empty() => {
+                use crate::ui::toast::ToastExt;
+                cx.toast_warning("Invalid limit value", window);
+                pagination
+            }
+            Err(_) => pagination,
         };
 
         self.run_table_query_internal(
@@ -501,7 +583,7 @@ impl ResultsPane {
         .detach();
     }
 
-    fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
@@ -531,7 +613,7 @@ impl ResultsPane {
         self.run_table_query_internal(table, pagination, order_by, filter, total_rows, window, cx);
     }
 
-    fn go_to_prev_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn go_to_prev_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
@@ -733,7 +815,6 @@ impl ResultsPane {
         });
     }
 
-    #[allow(dead_code)]
     pub fn column_left(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else {
             return;
@@ -752,7 +833,6 @@ impl ResultsPane {
         });
     }
 
-    #[allow(dead_code)]
     pub fn column_right(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else {
             return;
@@ -769,6 +849,89 @@ impl ResultsPane {
             state.set_selected_col(next, cx);
             state.scroll_to_col(next, cx);
         });
+    }
+
+    // === Focus Mode / Toolbar Navigation ===
+
+    pub fn focus_mode(&self) -> FocusMode {
+        self.focus_mode
+    }
+
+    pub fn edit_state(&self) -> EditState {
+        self.edit_state
+    }
+
+    pub fn focus_toolbar(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() || !self.is_table_view_mode() {
+            return;
+        }
+        self.focus_mode = FocusMode::Toolbar;
+        self.toolbar_focus = ToolbarFocus::Filter;
+        self.edit_state = EditState::Navigating;
+        cx.notify();
+    }
+
+    pub fn focus_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_mode = FocusMode::Table;
+        self.edit_state = EditState::Navigating;
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    pub fn toolbar_left(&mut self, cx: &mut Context<Self>) {
+        if self.focus_mode != FocusMode::Toolbar {
+            return;
+        }
+        self.toolbar_focus = self.toolbar_focus.left();
+        cx.notify();
+    }
+
+    pub fn toolbar_right(&mut self, cx: &mut Context<Self>) {
+        if self.focus_mode != FocusMode::Toolbar {
+            return;
+        }
+        self.toolbar_focus = self.toolbar_focus.right();
+        cx.notify();
+    }
+
+    pub fn toolbar_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_mode != FocusMode::Toolbar {
+            return;
+        }
+
+        match self.toolbar_focus {
+            ToolbarFocus::Filter => {
+                self.edit_state = EditState::Editing;
+                self.filter_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+                cx.notify();
+            }
+            ToolbarFocus::Limit => {
+                self.edit_state = EditState::Editing;
+                self.limit_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+                cx.notify();
+            }
+            ToolbarFocus::Refresh => {
+                self.run_table_query(window, cx);
+                self.focus_table(window, cx);
+            }
+        }
+    }
+
+    pub fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.switching_input {
+            self.switching_input = false;
+            return;
+        }
+
+        if self.edit_state == EditState::Editing {
+            self.edit_state = EditState::Navigating;
+            window.focus(&self.focus_handle);
+            cx.notify();
+        }
     }
 
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -881,6 +1044,7 @@ impl Render for ResultsPane {
         let is_table_view = self.is_table_view_mode();
         let table_name = self.current_table_ref().map(|t| t.qualified_name());
         let filter_input = self.filter_input.clone();
+        let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
         let active_tab_idx = self.active_tab;
         let tab_count = self.tabs.len();
@@ -890,7 +1054,15 @@ impl Render for ResultsPane {
         let can_prev = self.can_go_prev();
         let can_next = self.can_go_next();
 
+        let focus_mode = self.focus_mode;
+        let toolbar_focus = self.toolbar_focus;
+        let edit_state = self.edit_state;
+        let show_toolbar_focus =
+            focus_mode == FocusMode::Toolbar && edit_state == EditState::Navigating;
+        let focus_handle = self.focus_handle.clone();
+
         div()
+            .track_focus(&focus_handle)
             .flex()
             .flex_col()
             .flex_1()
@@ -1010,8 +1182,55 @@ impl Render for ResultsPane {
                                 )
                                 .child(
                                     div()
-                                        .w(px(220.0))
-                                        .child(Input::new(&filter_input).small().cleanable(true)),
+                                        .flex()
+                                        .items_center()
+                                        .w(px(280.0))
+                                        .rounded(Radii::SM)
+                                        .when(
+                                            show_toolbar_focus
+                                                && toolbar_focus == ToolbarFocus::Filter,
+                                            |d| d.border_1().border_color(theme.ring),
+                                        )
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.switching_input = true;
+                                                this.focus_mode = FocusMode::Toolbar;
+                                                this.toolbar_focus = ToolbarFocus::Filter;
+                                                this.edit_state = EditState::Editing;
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(
+                                            div().flex_1().child(Input::new(&filter_input).small()),
+                                        )
+                                        .when(filter_has_value, |d| {
+                                            d.child(
+                                                div()
+                                                    .id("clear-filter")
+                                                    .w(px(20.0))
+                                                    .h(px(20.0))
+                                                    .mr(Spacing::XS)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(Radii::SM)
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(theme.muted_foreground)
+                                                    .cursor_pointer()
+                                                    .hover(|d| {
+                                                        d.bg(theme.secondary)
+                                                            .text_color(theme.foreground)
+                                                    })
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.filter_input.update(cx, |input, cx| {
+                                                            input.set_value("", window, cx);
+                                                        });
+                                                        cx.notify();
+                                                    }))
+                                                    .child("×"),
+                                            )
+                                        }),
                                 ),
                         )
                         .child(
@@ -1025,7 +1244,27 @@ impl Render for ResultsPane {
                                         .text_color(theme.muted_foreground)
                                         .child("LIMIT"),
                                 )
-                                .child(div().w(px(60.0)).child(Input::new(&limit_input).small())),
+                                .child(
+                                    div()
+                                        .w(px(60.0))
+                                        .rounded(Radii::SM)
+                                        .when(
+                                            show_toolbar_focus
+                                                && toolbar_focus == ToolbarFocus::Limit,
+                                            |d| d.border_1().border_color(theme.ring),
+                                        )
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.switching_input = true;
+                                                this.focus_mode = FocusMode::Toolbar;
+                                                this.toolbar_focus = ToolbarFocus::Limit;
+                                                this.edit_state = EditState::Editing;
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(Input::new(&limit_input).small()),
+                                ),
                         )
                         .child(
                             div()
@@ -1040,8 +1279,13 @@ impl Render for ResultsPane {
                                 .text_color(theme.muted_foreground)
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                                .when(
+                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh,
+                                    |d| d.border_1().border_color(theme.ring),
+                                )
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.run_table_query(window, cx);
+                                    this.focus_table(window, cx);
                                 }))
                                 .child("↻"),
                         ),
@@ -1051,6 +1295,14 @@ impl Render for ResultsPane {
                 div()
                     .flex_1()
                     .overflow_hidden()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.focus_mode != FocusMode::Table {
+                                this.focus_table(window, cx);
+                            }
+                        }),
+                    )
                     .when(tab_count == 0, |d| {
                         d.flex().items_center().justify_center().child(
                             div()

@@ -57,6 +57,9 @@ actions!(
         OpenSettings,
         // Item menu
         OpenItemMenu,
+        // Results toolbar
+        FocusToolbar,
+        TogglePanel,
     ]
 );
 

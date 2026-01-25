@@ -6,7 +6,7 @@ use crate::ui::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
 use crate::ui::editor::EditorPane;
-use crate::ui::results::{ResultsPane, ResultsReceived};
+use crate::ui::results::{EditState, FocusMode, ResultsPane, ResultsReceived};
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::tokens::Spacing;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
@@ -893,6 +893,16 @@ impl Render for Workspace {
                     cx.propagate();
                 }
             }))
+            .on_action(cx.listener(|this, _: &keymap::FocusToolbar, window, cx| {
+                if !this.dispatch(Command::FocusToolbar, window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &keymap::TogglePanel, window, cx| {
+                if !this.dispatch(Command::TogglePanel, window, cx) {
+                    cx.propagate();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let chord = KeyChord::from_gpui(&event.keystroke);
                 let context = this.active_context(cx);
@@ -1192,6 +1202,25 @@ impl CommandDispatcher for Workspace {
                     });
                     return true;
                 }
+                // Handle Results toolbar/edit mode cancellation
+                if self.focus_target == FocusTarget::Results {
+                    let (focus_mode, edit_state) = {
+                        let results = self.results.read(cx);
+                        (results.focus_mode(), results.edit_state())
+                    };
+
+                    if edit_state == EditState::Editing {
+                        // Exit edit mode, stay in toolbar navigation
+                        self.results
+                            .update(cx, |r, cx| r.exit_edit_mode(window, cx));
+                        return true;
+                    }
+                    if focus_mode == FocusMode::Toolbar {
+                        // Exit toolbar mode, go back to table
+                        self.results.update(cx, |r, cx| r.focus_table(window, cx));
+                        return true;
+                    }
+                }
                 // Always focus workspace to blur any input and enable keyboard navigation
                 self.focus_handle.focus(window);
                 true
@@ -1212,7 +1241,13 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Results => {
-                    self.results.update(cx, |r, cx| r.select_next(cx));
+                    let focus_mode = self.results.read(cx).focus_mode();
+                    if focus_mode == FocusMode::Toolbar {
+                        // j in toolbar mode goes back to table
+                        self.results.update(cx, |r, cx| r.focus_table(window, cx));
+                    } else {
+                        self.results.update(cx, |r, cx| r.select_next(cx));
+                    }
                     true
                 }
                 _ => false,
@@ -1228,7 +1263,13 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Results => {
-                    self.results.update(cx, |r, cx| r.select_prev(cx));
+                    let focus_mode = self.results.read(cx).focus_mode();
+                    if focus_mode == FocusMode::Toolbar {
+                        // k in toolbar mode does nothing (toolbar is above table)
+                        // Could potentially focus something above, but for now just ignore
+                    } else {
+                        self.results.update(cx, |r, cx| r.select_prev(cx));
+                    }
                     true
                 }
                 _ => false,
@@ -1281,6 +1322,16 @@ impl CommandDispatcher for Workspace {
                     self.editor.update(cx, |e, cx| e.focus_input(window, cx));
                     true
                 }
+                FocusTarget::Results => {
+                    let focus_mode = self.results.read(cx).focus_mode();
+                    if focus_mode == FocusMode::Toolbar {
+                        self.results
+                            .update(cx, |r, cx| r.toolbar_execute(window, cx));
+                        true
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             },
 
@@ -1308,26 +1359,18 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Results => {
-                    if self.results_state.is_expanded() {
-                        self.results_state = PanelState::Collapsed;
-                        cx.notify();
+                    let focus_mode = self.results.read(cx).focus_mode();
+                    match focus_mode {
+                        FocusMode::Table => {
+                            self.results.update(cx, |r, cx| r.column_left(cx));
+                        }
+                        FocusMode::Toolbar => {
+                            self.results.update(cx, |r, cx| r.toolbar_left(cx));
+                        }
                     }
                     true
                 }
-                FocusTarget::Editor => {
-                    if self.editor_state.is_expanded() {
-                        self.editor_state = PanelState::Collapsed;
-                        cx.notify();
-                    }
-                    true
-                }
-                FocusTarget::BackgroundTasks => {
-                    if self.tasks_state.is_expanded() {
-                        self.tasks_state = PanelState::Collapsed;
-                        cx.notify();
-                    }
-                    true
-                }
+                _ => false,
             },
 
             Command::ColumnRight => match self.focus_target {
@@ -1341,27 +1384,47 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Results => {
-                    if !self.results_state.is_expanded() {
-                        self.results_state = PanelState::Expanded;
-                        cx.notify();
+                    let focus_mode = self.results.read(cx).focus_mode();
+                    match focus_mode {
+                        FocusMode::Table => {
+                            self.results.update(cx, |r, cx| r.column_right(cx));
+                        }
+                        FocusMode::Toolbar => {
+                            self.results.update(cx, |r, cx| r.toolbar_right(cx));
+                        }
                     }
+                    true
+                }
+                _ => false,
+            },
+
+            Command::TogglePanel => match self.focus_target {
+                FocusTarget::Results => {
+                    self.results_state.toggle();
+                    cx.notify();
                     true
                 }
                 FocusTarget::Editor => {
-                    if !self.editor_state.is_expanded() {
-                        self.editor_state = PanelState::Expanded;
-                        cx.notify();
-                    }
+                    self.editor_state.toggle();
+                    cx.notify();
                     true
                 }
                 FocusTarget::BackgroundTasks => {
-                    if !self.tasks_state.is_expanded() {
-                        self.tasks_state = PanelState::Expanded;
-                        cx.notify();
-                    }
+                    self.tasks_state.toggle();
+                    cx.notify();
                     true
                 }
+                _ => false,
             },
+
+            Command::FocusToolbar => {
+                if self.focus_target == FocusTarget::Results {
+                    self.results.update(cx, |r, cx| r.focus_toolbar(cx));
+                    true
+                } else {
+                    false
+                }
+            }
 
             Command::ToggleFavorite => false,
 
@@ -1462,11 +1525,27 @@ impl CommandDispatcher for Workspace {
                 }
             }
 
-            Command::PageDown
-            | Command::PageUp
-            | Command::Delete
-            | Command::ResultsNextPage
-            | Command::ResultsPrevPage => {
+            Command::ResultsNextPage => {
+                if self.focus_target == FocusTarget::Results {
+                    self.results
+                        .update(cx, |r, cx| r.go_to_next_page(window, cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::ResultsPrevPage => {
+                if self.focus_target == FocusTarget::Results {
+                    self.results
+                        .update(cx, |r, cx| r.go_to_prev_page(window, cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::PageDown | Command::PageUp | Command::Delete => {
                 log::debug!("Context-specific command {:?} not yet implemented", cmd);
                 false
             }

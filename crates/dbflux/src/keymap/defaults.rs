@@ -248,6 +248,15 @@ fn results_layer() -> KeymapLayer {
         Command::ExportResults,
     );
 
+    // Execute (Enter to edit input in toolbar mode)
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+
+    // Toolbar focus
+    layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
+
+    // Toggle panel collapse
+    layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
+
     layer
 }
 

@@ -57,6 +57,8 @@ pub enum Command {
     ExportResults,
     ResultsNextPage,
     ResultsPrevPage,
+    FocusToolbar,
+    TogglePanel,
 
     // === Sidebar ===
     RefreshSchema,
@@ -121,6 +123,8 @@ impl Command {
             Command::ExportResults => "Export Results",
             Command::ResultsNextPage => "Results Next Page",
             Command::ResultsPrevPage => "Results Previous Page",
+            Command::FocusToolbar => "Focus Toolbar",
+            Command::TogglePanel => "Toggle Panel",
 
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
@@ -179,9 +183,11 @@ impl Command {
             | Command::OpenSavedQueries
             | Command::SaveQuery => "Editor",
 
-            Command::ExportResults | Command::ResultsNextPage | Command::ResultsPrevPage => {
-                "Results"
-            }
+            Command::ExportResults
+            | Command::ResultsNextPage
+            | Command::ResultsPrevPage
+            | Command::FocusToolbar
+            | Command::TogglePanel => "Results",
 
             Command::RefreshSchema
             | Command::OpenConnectionManager

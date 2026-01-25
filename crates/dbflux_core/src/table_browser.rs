@@ -70,6 +70,24 @@ impl Pagination {
             Self::Offset { offset, .. } => *offset == 0,
         }
     }
+
+    pub fn with_limit(&self, new_limit: u32) -> Self {
+        match self {
+            Self::Offset { offset, .. } => Self::Offset {
+                limit: new_limit,
+                offset: *offset,
+            },
+        }
+    }
+
+    pub fn reset_offset(&self) -> Self {
+        match self {
+            Self::Offset { limit, .. } => Self::Offset {
+                limit: *limit,
+                offset: 0,
+            },
+        }
+    }
 }
 
 /// Reference to a table (schema + name).
