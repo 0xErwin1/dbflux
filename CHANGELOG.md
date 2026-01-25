@@ -2,7 +2,7 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [0.1.0] - 2025-01-24
+## [0.1.0] - 2025-01-25
 
 Initial release of DBFlux.
 
@@ -23,10 +23,11 @@ Initial release of DBFlux.
 - Multi-tab SQL editor with syntax highlighting
 - Virtualized results table with column resizing
 - Table browser mode with WHERE filters, custom LIMIT, and pagination
-- Command palette with fuzzy search
+- Command palette with fuzzy search and scroll support
 - Toast notifications for user feedback
 - Background tasks panel with progress and cancellation
 - Status bar showing connection and task status
+- Keyboard-navigable context menus with nested submenu support
 
 #### SQL Execution
 - Query execution with result display
@@ -38,6 +39,7 @@ Initial release of DBFlux.
 - Query history with timestamps and execution metadata
 - Saved queries with favorites support
 - Search and filter across history and saved queries
+- Unified history/saved queries modal with keyboard navigation
 - Persistent storage in `~/.config/dbflux/`
 
 #### Connection Management
@@ -48,22 +50,24 @@ Initial release of DBFlux.
 
 #### Keyboard Navigation
 - Vim-style navigation (j/k/h/l) throughout the application
-- Context-aware keybindings (Sidebar, Editor, Results, History)
+- Context-aware keybindings (Sidebar, Editor, Results, History, Settings)
 - Global shortcuts for common actions
 - Tab cycling between panels
 - Full keyboard support in connection manager form
 - Results toolbar navigation: `f` to focus toolbar, `h/l` to navigate elements, `Enter` to edit/execute, `Esc` to exit
-- Panel collapse toggle with `z` key
+- Panel collapse toggle with `z` key (works in Editor, Results, and Background Tasks)
+- Context menu navigation: `j/k` to move, `Enter` to select, `l` to open submenu, `h/Esc` to close
 
 #### Export
 - CSV export for query results
 
 #### Settings
-- SSH tunnel profile management
+- SSH tunnel profile management with full keyboard navigation (row-based: `j/k` between rows, `h/l` within fields)
+- Keybindings reference section with collapsible context groups and search filter
+- Settings window opens as singleton (reuses existing window)
 
 ### Known Limitations
 
-- Settings window only includes SSH Tunnels section
 - Export limited to CSV format (JSON, SQL, Excel planned)
 - No query autocompletion
 - No dark/light theme toggle (uses system default)
