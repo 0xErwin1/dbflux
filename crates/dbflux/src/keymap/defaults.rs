@@ -165,6 +165,9 @@ fn editor_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
 
+    // Toggle panel collapse
+    layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
+
     layer
 }
 
@@ -290,6 +293,9 @@ fn background_tasks_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
     layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    // Toggle panel collapse
+    layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
 
     layer
 }

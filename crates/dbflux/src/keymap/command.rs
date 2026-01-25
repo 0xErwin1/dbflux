@@ -186,8 +186,7 @@ impl Command {
             Command::ExportResults
             | Command::ResultsNextPage
             | Command::ResultsPrevPage
-            | Command::FocusToolbar
-            | Command::TogglePanel => "Results",
+            | Command::FocusToolbar => "Results",
 
             Command::RefreshSchema
             | Command::OpenConnectionManager
@@ -197,6 +196,7 @@ impl Command {
             Command::ToggleEditor
             | Command::ToggleResults
             | Command::ToggleTasks
+            | Command::TogglePanel
             | Command::OpenSettings => "View",
         }
     }
