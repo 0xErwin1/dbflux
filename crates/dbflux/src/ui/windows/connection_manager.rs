@@ -8,7 +8,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 
 use gpui_component::ActiveTheme;
@@ -83,51 +83,99 @@ struct SshNavState {
 impl FormFocus {
     // === Main Tab: Vertical Navigation (j/k) ===
 
-    fn down_main(self) -> Self {
+    fn down_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
-        match self {
-            Name => Host,
-            Host | Port => Database,
-            Database => User,
-            User => Password,
-            Password | PasswordSave => TestConnection,
-            TestConnection | Save => Name,
-            _ => Name,
+
+        if state.is_sqlite {
+            // SQLite: Name -> Database -> TestConnection -> Save -> Name
+            match self {
+                Name => Database,
+                Database => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
+        } else {
+            // PostgreSQL: Name -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
+            match self {
+                Name => Host,
+                Host | Port => Database,
+                Database => User,
+                User => Password,
+                Password | PasswordSave => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
         }
     }
 
-    fn up_main(self) -> Self {
+    fn up_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
-        match self {
-            Name => TestConnection,
-            Host | Port => Name,
-            Database => Host,
-            User => Database,
-            Password | PasswordSave => User,
-            TestConnection | Save => Password,
-            _ => TestConnection,
+
+        if state.is_sqlite {
+            // SQLite: Name <- Database <- TestConnection <- Save <- Name
+            match self {
+                Name => Save,
+                Database => Name,
+                TestConnection => Database,
+                Save => TestConnection,
+                _ => Save,
+            }
+        } else {
+            // PostgreSQL
+            match self {
+                Name => Save,
+                Host | Port => Name,
+                Database => Host,
+                User => Database,
+                Password | PasswordSave => User,
+                TestConnection => Password,
+                Save => TestConnection,
+                _ => Save,
+            }
         }
     }
 
     // === Main Tab: Horizontal Navigation (h/l) ===
 
-    fn left_main(self) -> Self {
+    fn left_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
-        match self {
-            Port => Host,
-            PasswordSave => Password,
-            Save => TestConnection,
-            other => other,
+
+        if state.is_sqlite {
+            // SQLite: only TestConnection <-> Save horizontal pair
+            match self {
+                Save => TestConnection,
+                other => other,
+            }
+        } else {
+            // PostgreSQL
+            match self {
+                Port => Host,
+                PasswordSave => Password,
+                Save => TestConnection,
+                other => other,
+            }
         }
     }
 
-    fn right_main(self) -> Self {
+    fn right_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
-        match self {
-            Host => Port,
-            Password => PasswordSave,
-            TestConnection => Save,
-            other => other,
+
+        if state.is_sqlite {
+            // SQLite: only TestConnection <-> Save horizontal pair
+            match self {
+                TestConnection => Save,
+                other => other,
+            }
+        } else {
+            // PostgreSQL
+            match self {
+                Host => Port,
+                Password => PasswordSave,
+                TestConnection => Save,
+                other => other,
+            }
         }
     }
 
@@ -354,6 +402,12 @@ impl SshNavState {
     }
 }
 
+/// State needed for Main tab navigation (depends on database type)
+#[derive(Clone, Copy)]
+struct MainNavState {
+    is_sqlite: bool,
+}
+
 /// Edit state within the form - determines how keyboard input is handled
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 enum EditState {
@@ -526,6 +580,43 @@ impl ConnectionManagerWindow {
             },
         );
 
+        // Helper to create input subscriptions for handling Enter/Blur
+        fn subscribe_input(
+            cx: &mut Context<ConnectionManagerWindow>,
+            window: &mut Window,
+            input: &Entity<InputState>,
+        ) -> Subscription {
+            cx.subscribe_in(
+                input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { secondary: false } => {
+                        this.exit_edit_mode(window, cx);
+                        this.focus_down(cx);
+                    }
+                    InputEvent::Blur => {
+                        this.exit_edit_mode(window, cx);
+                    }
+                    _ => {}
+                },
+            )
+        }
+
+        let mut subscriptions = vec![dropdown_subscription];
+        subscriptions.push(subscribe_input(cx, window, &input_name));
+        subscriptions.push(subscribe_input(cx, window, &input_host));
+        subscriptions.push(subscribe_input(cx, window, &input_port));
+        subscriptions.push(subscribe_input(cx, window, &input_user));
+        subscriptions.push(subscribe_input(cx, window, &input_password));
+        subscriptions.push(subscribe_input(cx, window, &input_database));
+        subscriptions.push(subscribe_input(cx, window, &input_path));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_host));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_port));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_user));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_key_path));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_key_passphrase));
+        subscriptions.push(subscribe_input(cx, window, &input_ssh_password));
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
 
@@ -572,7 +663,7 @@ impl ConnectionManagerWindow {
             edit_state: EditState::Navigating,
             form_scroll_handle: ScrollHandle::new(),
             ssh_tunnel_uuids: Vec::new(),
-            _subscriptions: vec![dropdown_subscription],
+            _subscriptions: subscriptions,
         }
     }
 
@@ -1475,6 +1566,12 @@ impl ConnectionManagerWindow {
                 self.exit_edit_mode(window, cx);
                 true
             }
+            Command::Execute => {
+                // Enter while editing: exit edit mode and move to next field
+                self.exit_edit_mode(window, cx);
+                self.focus_down(cx);
+                true
+            }
             _ => false,
         }
     }
@@ -1482,6 +1579,18 @@ impl ConnectionManagerWindow {
     fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.edit_state = EditState::Navigating;
         window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    /// Enter edit mode for a specific field (used when clicking on an input).
+    fn enter_edit_mode_for_field(
+        &mut self,
+        field: FormFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form_focus = field;
+        self.activate_focused_field(window, cx);
         cx.notify();
     }
 
@@ -1496,6 +1605,12 @@ impl ConnectionManagerWindow {
             self.ssh_auth_method,
             can_save_tunnel,
         )
+    }
+
+    fn main_nav_state(&self) -> MainNavState {
+        MainNavState {
+            is_sqlite: self.selected_kind() == Some(DbKind::SQLite),
+        }
     }
 
     /// Returns the scroll index for the current form focus.
@@ -1546,7 +1661,7 @@ impl ConnectionManagerWindow {
 
     fn focus_down(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.down_main(),
+            FormTab::Main => self.form_focus.down_main(self.main_nav_state()),
             FormTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
@@ -1555,7 +1670,7 @@ impl ConnectionManagerWindow {
 
     fn focus_up(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.up_main(),
+            FormTab::Main => self.form_focus.up_main(self.main_nav_state()),
             FormTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
@@ -1564,7 +1679,7 @@ impl ConnectionManagerWindow {
 
     fn focus_left(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.left_main(),
+            FormTab::Main => self.form_focus.left_main(self.main_nav_state()),
             FormTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
@@ -1573,7 +1688,7 @@ impl ConnectionManagerWindow {
 
     fn focus_right(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.right_main(),
+            FormTab::Main => self.form_focus.right_main(self.main_nav_state()),
             FormTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
@@ -1623,9 +1738,15 @@ impl ConnectionManagerWindow {
             }
             FormFocus::Database => {
                 self.edit_state = EditState::Editing;
-                self.input_database.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                });
+                if self.selected_kind() == Some(DbKind::SQLite) {
+                    self.input_path.update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
+                } else {
+                    self.input_database.update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
+                }
             }
             FormFocus::User => {
                 self.edit_state = EditState::Editing;
@@ -1914,15 +2035,6 @@ impl ConnectionManagerWindow {
         let theme = cx.theme().clone();
         let ring_color = theme.ring;
 
-        let password_field = self.render_password_field(
-            show_focus && focus == FormFocus::Password,
-            show_focus && focus == FormFocus::PasswordSave,
-            keyring_available && requires_password,
-            save_password,
-            ring_color,
-            cx,
-        );
-
         let mut sections: Vec<AnyElement> = Vec::new();
 
         if is_postgres {
@@ -1944,6 +2056,8 @@ impl ConnectionManagerWindow {
                                     true,
                                     show_focus && focus == FormFocus::Host,
                                     ring_color,
+                                    FormFocus::Host,
+                                    cx,
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
                                     "Port",
@@ -1951,6 +2065,8 @@ impl ConnectionManagerWindow {
                                     true,
                                     show_focus && focus == FormFocus::Port,
                                     ring_color,
+                                    FormFocus::Port,
+                                    cx,
                                 ))),
                         )
                         .child(self.form_field_input(
@@ -1959,6 +2075,8 @@ impl ConnectionManagerWindow {
                             true,
                             show_focus && focus == FormFocus::Database,
                             ring_color,
+                            FormFocus::Database,
+                            cx,
                         )),
                     &theme,
                 )
@@ -1966,6 +2084,15 @@ impl ConnectionManagerWindow {
             );
 
             // Section 1: Authentication
+            let password_field = self.render_password_field(
+                show_focus && focus == FormFocus::Password,
+                show_focus && focus == FormFocus::PasswordSave,
+                keyring_available && requires_password,
+                save_password,
+                ring_color,
+                cx,
+            );
+
             sections.push(
                 self.render_section(
                     "Authentication",
@@ -1979,6 +2106,8 @@ impl ConnectionManagerWindow {
                             true,
                             show_focus && focus == FormFocus::User,
                             ring_color,
+                            FormFocus::User,
+                            cx,
                         ))
                         .child(password_field),
                     &theme,
@@ -1996,6 +2125,8 @@ impl ConnectionManagerWindow {
                         true,
                         show_focus && focus == FormFocus::Database,
                         ring_color,
+                        FormFocus::Database,
+                        cx,
                     ),
                     &theme,
                 )
@@ -2014,8 +2145,8 @@ impl ConnectionManagerWindow {
         save_password: bool,
         ring_color: Hsla,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
 
         div()
             .flex()
@@ -2043,10 +2174,16 @@ impl ConnectionManagerWindow {
                                 d.border_color(gpui::transparent_black())
                             })
                             .p(px(2.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(FormFocus::Password, window, cx);
+                                }),
+                            )
                             .child(Input::new(&self.input_password)),
                     )
                     .child(
-                        Self::render_password_toggle(self.show_password, "toggle-password", theme)
+                        Self::render_password_toggle(self.show_password, "toggle-password", &theme)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_password = !this.show_password;
                                 cx.notify();
@@ -2078,6 +2215,7 @@ impl ConnectionManagerWindow {
                         )
                     }),
             )
+            .into_any_element()
     }
 
     fn render_ssh_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -2225,7 +2363,7 @@ impl ConnectionManagerWindow {
             (None, None)
         };
 
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let muted_fg = theme.muted_foreground;
 
         let ssh_server_section: Option<AnyElement> = if ssh_enabled {
@@ -2247,6 +2385,8 @@ impl ConnectionManagerWindow {
                                     true,
                                     show_focus && focus == FormFocus::SshHost,
                                     ring_color,
+                                    FormFocus::SshHost,
+                                    cx,
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
                                     "Port",
@@ -2254,6 +2394,8 @@ impl ConnectionManagerWindow {
                                     false,
                                     show_focus && focus == FormFocus::SshPort,
                                     ring_color,
+                                    FormFocus::SshPort,
+                                    cx,
                                 ))),
                         )
                         .child(div().id(3usize).child(self.form_field_input(
@@ -2262,8 +2404,10 @@ impl ConnectionManagerWindow {
                             true,
                             show_focus && focus == FormFocus::SshUser,
                             ring_color,
+                            FormFocus::SshUser,
+                            cx,
                         ))),
-                    theme,
+                    &theme,
                 )
                 .into_any_element(),
             )
@@ -2385,7 +2529,7 @@ impl ConnectionManagerWindow {
         // Section 4: Auth selector
         if let Some(selector) = auth_selector {
             sections.push(
-                self.render_section("Authentication", selector, theme)
+                self.render_section("Authentication", selector, &theme)
                     .into_any_element(),
             );
         }
@@ -2587,6 +2731,16 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .p(px(2.0))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.enter_edit_mode_for_field(
+                                                    FormFocus::SshKeyPath,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                        )
                                         .child(Input::new(&self.input_ssh_key_path).small()),
                                 )
                                 .child(
@@ -2642,6 +2796,16 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .p(px(2.0))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.enter_edit_mode_for_field(
+                                                    FormFocus::SshPassphrase,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                        )
                                         .child(Input::new(&self.input_ssh_key_passphrase)),
                                 )
                                 .child(
@@ -2726,6 +2890,16 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .p(px(2.0))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.enter_edit_mode_for_field(
+                                                    FormFocus::SshPassword,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                        )
                                         .child(Input::new(&self.input_ssh_password)),
                                 )
                                 .child(
@@ -2859,6 +3033,8 @@ impl ConnectionManagerWindow {
                         &self.input_name,
                         show_focus && focus == FormFocus::Name,
                         ring_color,
+                        FormFocus::Name,
+                        cx,
                     )),
             )
             .when_some(tab_bar, |d, tab_bar| d.child(tab_bar))
@@ -2973,6 +3149,7 @@ impl ConnectionManagerWindow {
             .into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn form_field_input(
         &self,
         label: &str,
@@ -2980,6 +3157,8 @@ impl ConnectionManagerWindow {
         required: bool,
         focused: bool,
         ring_color: Hsla,
+        field: FormFocus,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .rounded(px(4.0))
@@ -2987,6 +3166,12 @@ impl ConnectionManagerWindow {
             .when(focused, |d| d.border_color(ring_color))
             .when(!focused, |d| d.border_color(gpui::transparent_black()))
             .p(px(2.0))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.enter_edit_mode_for_field(field, window, cx);
+                }),
+            )
             .child(
                 div()
                     .flex()
@@ -3012,6 +3197,8 @@ impl ConnectionManagerWindow {
         input: &Entity<InputState>,
         focused: bool,
         ring_color: Hsla,
+        field: FormFocus,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -3031,6 +3218,12 @@ impl ConnectionManagerWindow {
                     .when(focused, |d| d.border_color(ring_color))
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
                     .p(px(2.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.enter_edit_mode_for_field(field, window, cx);
+                        }),
+                    )
                     .child(Input::new(input)),
             )
     }
