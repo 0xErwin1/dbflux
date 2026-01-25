@@ -88,6 +88,22 @@ impl ContextId {
         }
     }
 
+    /// Returns all context variants in display order.
+    pub fn all_variants() -> &'static [ContextId] {
+        &[
+            ContextId::Global,
+            ContextId::Sidebar,
+            ContextId::Editor,
+            ContextId::Results,
+            ContextId::BackgroundTasks,
+            ContextId::CommandPalette,
+            ContextId::ConnectionManager,
+            ContextId::HistoryModal,
+            ContextId::TextInput,
+            ContextId::Dropdown,
+        ]
+    }
+
     /// Returns the GPUI key_context string for this context.
     pub fn as_gpui_context(&self) -> &'static str {
         match self {

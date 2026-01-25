@@ -1223,9 +1223,12 @@ impl Render for ResultsPane {
                                                             .text_color(theme.foreground)
                                                     })
                                                     .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.filter_input.update(cx, |input, cx| {
-                                                            input.set_value("", window, cx);
-                                                        });
+                                                        this.filter_input.update(
+                                                            cx,
+                                                            |input, cx| {
+                                                                input.set_value("", window, cx);
+                                                            },
+                                                        );
                                                         cx.notify();
                                                     }))
                                                     .child("×"),

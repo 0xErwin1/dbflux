@@ -1,7 +1,8 @@
+use std::sync::LazyLock;
+
 use super::{Command, ContextId, KeyChord, KeymapLayer, KeymapStack, Modifiers};
 
-/// Creates a KeymapStack with all default keybindings.
-pub fn default_keymap() -> KeymapStack {
+static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     let mut stack = KeymapStack::new();
 
     stack.add_layer(global_layer());
@@ -16,6 +17,11 @@ pub fn default_keymap() -> KeymapStack {
     stack.add_layer(dropdown_layer());
 
     stack
+});
+
+/// Returns a reference to the default KeymapStack with all default keybindings.
+pub fn default_keymap() -> &'static KeymapStack {
+    &DEFAULT_KEYMAP
 }
 
 fn global_layer() -> KeymapLayer {

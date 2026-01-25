@@ -1,6 +1,7 @@
 use crate::app::{AppState, AppStateChanged};
+use crate::keymap::{ContextId, KeyChord, Modifiers, default_keymap};
 use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -9,12 +10,56 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName};
+
+use std::collections::HashSet;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
+    Keybindings,
     SshTunnels,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsFocus {
+    Sidebar,
+    Content,
+}
+
+/// Represents the currently selected item in the keybindings list
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum KeybindingsSelection {
+    /// A context header row (e.g., "Global", "Sidebar")
+    Context(usize),
+    /// A binding row within an expanded context (context_idx, binding_idx)
+    Binding(usize, usize),
+}
+
+impl KeybindingsSelection {
+    fn context_idx(&self) -> usize {
+        match self {
+            Self::Context(idx) | Self::Binding(idx, _) => *idx,
+        }
+    }
+}
+
+enum KeybindingsListItem {
+    ContextHeader {
+        context: ContextId,
+        ctx_idx: usize,
+        is_expanded: bool,
+        is_selected: bool,
+        binding_count: usize,
+    },
+    Binding {
+        chord: KeyChord,
+        cmd_name: String,
+        is_inherited: bool,
+        is_selected: bool,
+        ctx_idx: usize,
+        binding_idx: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -26,8 +71,19 @@ enum SshAuthSelection {
 pub struct SettingsWindow {
     app_state: Entity<AppState>,
     active_section: SettingsSection,
-    editing_tunnel_id: Option<Uuid>,
+    focus_area: SettingsFocus,
+    focus_handle: FocusHandle,
 
+    // Keybindings section state
+    keybindings_filter: Entity<InputState>,
+    keybindings_expanded: HashSet<ContextId>,
+    keybindings_selection: KeybindingsSelection,
+    keybindings_editing_filter: bool,
+    keybindings_scroll_handle: ScrollHandle,
+    keybindings_pending_scroll: Option<usize>,
+
+    // SSH Tunnels section state
+    editing_tunnel_id: Option<Uuid>,
     input_tunnel_name: Entity<InputState>,
     input_ssh_host: Entity<InputState>,
     input_ssh_port: Entity<InputState>,
@@ -45,6 +101,11 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+
+        let keybindings_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter keybindings..."));
+
         let input_tunnel_name = cx.new(|cx| InputState::new(window, cx).placeholder("Tunnel name"));
         let input_ssh_host = cx.new(|cx| InputState::new(window, cx).placeholder("hostname"));
         let input_ssh_port = cx.new(|cx| {
@@ -64,9 +125,26 @@ impl SettingsWindow {
             cx.notify();
         });
 
+        // Start with Global context expanded
+        let mut keybindings_expanded = HashSet::new();
+        keybindings_expanded.insert(ContextId::Global);
+
+        // Focus the window on creation
+        focus_handle.focus(window);
+
         Self {
             app_state,
-            active_section: SettingsSection::SshTunnels,
+            active_section: SettingsSection::Keybindings,
+            focus_area: SettingsFocus::Sidebar,
+            focus_handle,
+
+            keybindings_filter,
+            keybindings_expanded,
+            keybindings_selection: KeybindingsSelection::Context(0),
+            keybindings_editing_filter: false,
+            keybindings_scroll_handle: ScrollHandle::new(),
+            keybindings_pending_scroll: None,
+
             editing_tunnel_id: None,
             input_tunnel_name,
             input_ssh_host,
@@ -284,6 +362,7 @@ impl SettingsWindow {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active = self.active_section;
+        let focused = self.focus_area == SettingsFocus::Sidebar;
 
         div()
             .w(px(180.0))
@@ -295,24 +374,470 @@ impl SettingsWindow {
             .flex_col()
             .p_2()
             .gap_1()
+            .child(self.render_sidebar_item(
+                "section-keybindings",
+                "Keybindings",
+                SettingsSection::Keybindings,
+                active,
+                focused && self.sidebar_index_for_section(active) == 0,
+                cx,
+            ))
+            .child(self.render_sidebar_item(
+                "section-ssh-tunnels",
+                "SSH Tunnels",
+                SettingsSection::SshTunnels,
+                active,
+                focused && self.sidebar_index_for_section(active) == 1,
+                cx,
+            ))
+    }
+
+    fn render_sidebar_item(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        section: SettingsSection,
+        active: SettingsSection,
+        is_focused: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let is_active = active == section;
+
+        div()
+            .id(id)
+            .px_3()
+            .py_2()
+            .rounded(px(4.0))
+            .text_sm()
+            .cursor_pointer()
+            .border_1()
+            .border_color(if is_focused && !is_active {
+                theme.primary
+            } else {
+                gpui::transparent_black()
+            })
+            .when(is_active, |d| {
+                d.bg(theme.secondary).font_weight(FontWeight::MEDIUM)
+            })
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.active_section = section;
+                this.focus_area = SettingsFocus::Content;
+                cx.notify();
+            }))
+            .child(label)
+    }
+
+    fn sidebar_index_for_section(&self, section: SettingsSection) -> usize {
+        match section {
+            SettingsSection::Keybindings => 0,
+            SettingsSection::SshTunnels => 1,
+        }
+    }
+
+    fn section_for_sidebar_index(&self, idx: usize) -> SettingsSection {
+        match idx {
+            0 => SettingsSection::Keybindings,
+            1 => SettingsSection::SshTunnels,
+            _ => SettingsSection::Keybindings,
+        }
+    }
+
+    fn sidebar_section_count(&self) -> usize {
+        2
+    }
+
+    fn render_keybindings_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let keymap = default_keymap();
+        let filter_text = self.keybindings_filter.read(cx).value().to_lowercase();
+        let has_filter = !filter_text.is_empty();
+
+        // Validate selection when filter is active
+        if has_filter {
+            self.validate_selection_for_filter(cx);
+        }
+
+        // Extract theme colors before closures to avoid borrow issues
+        let border = theme.border;
+        let muted_foreground = theme.muted_foreground;
+        let secondary = theme.secondary;
+
+        let current_selection = self.keybindings_selection;
+        let is_content_focused =
+            self.focus_area == SettingsFocus::Content && !self.keybindings_editing_filter;
+
+        // Flat list required for scroll_to_item to work correctly
+        let mut flat_items: Vec<KeybindingsListItem> = Vec::new();
+
+        for (idx, context) in ContextId::all_variants().iter().enumerate() {
+            let is_expanded = has_filter || self.keybindings_expanded.contains(context);
+            let bindings = keymap.bindings_for_context(*context);
+
+            let filtered_bindings: Vec<_> = if has_filter {
+                bindings
+                    .iter()
+                    .filter(|(chord, cmd, _)| {
+                        let chord_str = chord.to_string().to_lowercase();
+                        let cmd_name = cmd.display_name().to_lowercase();
+                        chord_str.contains(&filter_text) || cmd_name.contains(&filter_text)
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                bindings
+            };
+
+            // Skip contexts with no matching bindings when filtering
+            if has_filter && filtered_bindings.is_empty() {
+                continue;
+            }
+
+            let is_context_selected = is_content_focused
+                && matches!(current_selection, KeybindingsSelection::Context(i) if i == idx);
+
+            // Add context header
+            flat_items.push(KeybindingsListItem::ContextHeader {
+                context: *context,
+                ctx_idx: idx,
+                is_expanded,
+                is_selected: is_context_selected,
+                binding_count: filtered_bindings.len(),
+            });
+
+            // Add bindings if expanded
+            if is_expanded {
+                for (binding_idx, (chord, cmd, source_ctx)) in filtered_bindings.iter().enumerate()
+                {
+                    let is_inherited = *source_ctx != *context;
+                    let is_binding_selected = is_content_focused
+                        && matches!(
+                            current_selection,
+                            KeybindingsSelection::Binding(ci, bi) if ci == idx && bi == binding_idx
+                        );
+
+                    flat_items.push(KeybindingsListItem::Binding {
+                        chord: chord.clone(),
+                        cmd_name: cmd.display_name().to_string(),
+                        is_inherited,
+                        is_selected: is_binding_selected,
+                        ctx_idx: idx,
+                        binding_idx,
+                    });
+                }
+            }
+        }
+
+        if let Some(scroll_idx) = self.keybindings_pending_scroll.take() {
+            self.keybindings_scroll_handle.scroll_to_item(scroll_idx);
+        }
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
             .child(
                 div()
-                    .id("section-ssh-tunnels")
-                    .px_3()
-                    .py_2()
-                    .rounded(px(4.0))
-                    .text_sm()
-                    .cursor_pointer()
-                    .when(active == SettingsSection::SshTunnels, |d| {
-                        d.bg(theme.secondary).font_weight(FontWeight::MEDIUM)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_section = SettingsSection::SshTunnels;
-                        cx.notify();
-                    }))
-                    .child("SSH Tunnels"),
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Keyboard Shortcuts"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted_foreground)
+                            .child("View all keyboard shortcuts by context"),
+                    ),
             )
+            .child(
+                div().p_4().border_b_1().border_color(border).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Icon::new(IconName::Search)
+                                .size(px(16.0))
+                                .text_color(muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(Input::new(&self.keybindings_filter).small()),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .id("keybindings-scroll-container")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .track_scroll(&self.keybindings_scroll_handle)
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_0()
+                    .children(flat_items.into_iter().map(|item| match item {
+                        KeybindingsListItem::ContextHeader {
+                            context,
+                            ctx_idx,
+                            is_expanded,
+                            is_selected,
+                            binding_count,
+                        } => {
+                            let has_parent = context.parent().is_some();
+                            let parent_name = context
+                                .parent()
+                                .map(|p| p.display_name())
+                                .unwrap_or("");
+
+                            div()
+                                .id(SharedString::from(format!(
+                                    "context-{}",
+                                    context.as_gpui_context()
+                                )))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .mt_1()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .bg(if is_selected {
+                                    secondary
+                                } else {
+                                    gpui::transparent_black()
+                                })
+                                .hover(|d| d.bg(secondary))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.keybindings_selection =
+                                        KeybindingsSelection::Context(ctx_idx);
+                                    this.focus_area = SettingsFocus::Content;
+
+                                    if this.keybindings_expanded.contains(&context) {
+                                        this.keybindings_expanded.remove(&context);
+                                    } else {
+                                        this.keybindings_expanded.insert(context);
+                                    }
+                                    cx.notify();
+                                }))
+                                // Chevron icon
+                                .child(
+                                    div()
+                                        .w(px(16.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(if is_expanded {
+                                                IconName::ChevronDown
+                                            } else {
+                                                IconName::ChevronRight
+                                            })
+                                            .size(px(16.0))
+                                            .text_color(muted_foreground),
+                                        ),
+                                )
+                                // Context name and bindings count
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(context.display_name()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted_foreground)
+                                                .child(format!("({} bindings)", binding_count)),
+                                        ),
+                                )
+                                // Inherits info
+                                .when(has_parent, |d| {
+                                    d.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted_foreground)
+                                            .child(format!("inherits from {}", parent_name)),
+                                    )
+                                })
+                        }
+
+                        KeybindingsListItem::Binding {
+                            chord,
+                            cmd_name,
+                            is_inherited,
+                            is_selected,
+                            ctx_idx,
+                            binding_idx,
+                        } => self.render_binding_row(
+                            &chord,
+                            &cmd_name,
+                            is_inherited,
+                            is_selected,
+                            ctx_idx,
+                            binding_idx,
+                            muted_foreground,
+                            secondary,
+                            border,
+                            cx,
+                        ),
+                    })),
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_binding_row(
+        &self,
+        chord: &KeyChord,
+        cmd_name: &str,
+        is_inherited: bool,
+        is_selected: bool,
+        ctx_idx: usize,
+        binding_idx: usize,
+        muted_foreground: Hsla,
+        secondary: Hsla,
+        border: Hsla,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(SharedString::from(format!(
+                "binding-{}-{}",
+                ctx_idx, binding_idx
+            )))
+            .ml(px(28.0))
+            .pl_4()
+            .border_l_2()
+            .border_color(border)
+            .flex()
+            .items_center()
+            .py_1()
+            .px_2()
+            .rounded_r(px(4.0))
+            .gap_4()
+            .cursor_pointer()
+            .bg(if is_selected {
+                secondary
+            } else {
+                gpui::transparent_black()
+            })
+            .hover(|d| d.bg(secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, binding_idx);
+                this.focus_area = SettingsFocus::Content;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .w(px(140.0))
+                    .child(self.render_key_badge(chord, muted_foreground, secondary)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .when(is_inherited, |d| d.text_color(muted_foreground))
+                    .child(cmd_name.to_string()),
+            )
+            .when(is_inherited, |d| {
+                d.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .px_2()
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .bg(secondary)
+                        .child("inherited"),
+                )
+            })
+    }
+
+    fn render_key_badge(
+        &self,
+        chord: &KeyChord,
+        muted_foreground: Hsla,
+        secondary: Hsla,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .children(self.chord_to_badges(chord, muted_foreground, secondary))
+    }
+
+    fn chord_to_badges(
+        &self,
+        chord: &KeyChord,
+        muted_foreground: Hsla,
+        secondary: Hsla,
+    ) -> Vec<Div> {
+        let mut badges = Vec::new();
+
+        if chord.modifiers.ctrl {
+            badges.push(self.render_single_key_badge("Ctrl", muted_foreground, secondary));
+        }
+        if chord.modifiers.alt {
+            badges.push(self.render_single_key_badge("Alt", muted_foreground, secondary));
+        }
+        if chord.modifiers.shift {
+            badges.push(self.render_single_key_badge("Shift", muted_foreground, secondary));
+        }
+        if chord.modifiers.platform {
+            badges.push(self.render_single_key_badge("Cmd", muted_foreground, secondary));
+        }
+
+        let key_display = self.format_key(&chord.key);
+        badges.push(self.render_single_key_badge(&key_display, muted_foreground, secondary));
+
+        badges
+    }
+
+    fn render_single_key_badge(&self, key: &str, muted_foreground: Hsla, secondary: Hsla) -> Div {
+        div()
+            .px_2()
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .bg(secondary)
+            .border_1()
+            .border_color(muted_foreground.opacity(0.3))
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .child(key.to_string())
+    }
+
+    fn format_key(&self, key: &str) -> String {
+        match key {
+            "down" => "↓".to_string(),
+            "up" => "↑".to_string(),
+            "left" => "←".to_string(),
+            "right" => "→".to_string(),
+            "enter" => "Enter".to_string(),
+            "escape" => "Esc".to_string(),
+            "backspace" => "⌫".to_string(),
+            "delete" => "Del".to_string(),
+            "tab" => "Tab".to_string(),
+            "space" => "Space".to_string(),
+            "home" => "Home".to_string(),
+            "end" => "End".to_string(),
+            "pageup" => "PgUp".to_string(),
+            "pagedown" => "PgDn".to_string(),
+            _ => key.to_uppercase(),
+        }
     }
 
     fn render_ssh_tunnels_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -781,6 +1306,344 @@ pub struct DismissEvent;
 
 impl EventEmitter<DismissEvent> for SettingsWindow {}
 
+impl SettingsWindow {
+    /// Returns the current filter text, lowercased.
+    fn get_filter_text(&self, cx: &Context<Self>) -> String {
+        self.keybindings_filter.read(cx).value().to_lowercase()
+    }
+
+    /// Check if a binding matches the current filter.
+    fn binding_matches_filter(chord: &KeyChord, cmd_name: &str, filter: &str) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        let chord_str = chord.to_string().to_lowercase();
+        let cmd_lower = cmd_name.to_lowercase();
+        chord_str.contains(filter) || cmd_lower.contains(filter)
+    }
+
+    /// Get filtered bindings for a context.
+    fn get_filtered_bindings(
+        &self,
+        context: ContextId,
+        filter: &str,
+    ) -> Vec<(KeyChord, crate::keymap::Command, ContextId)> {
+        let keymap = default_keymap();
+        let bindings = keymap.bindings_for_context(context);
+
+        if filter.is_empty() {
+            bindings
+        } else {
+            bindings
+                .into_iter()
+                .filter(|(chord, cmd, _)| {
+                    Self::binding_matches_filter(chord, cmd.display_name(), filter)
+                })
+                .collect()
+        }
+    }
+
+    /// Check if a context is visible (has matching bindings when filtering).
+    fn is_context_visible(&self, ctx_idx: usize, filter: &str) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        if let Some(context) = ContextId::all_variants().get(ctx_idx) {
+            !self.get_filtered_bindings(*context, filter).is_empty()
+        } else {
+            false
+        }
+    }
+
+    /// Check if a context is expanded (always true when filtering).
+    fn is_context_expanded(&self, context: &ContextId, has_filter: bool) -> bool {
+        has_filter || self.keybindings_expanded.contains(context)
+    }
+
+    /// Get the number of visible bindings for a context.
+    fn get_visible_binding_count(&self, ctx_idx: usize, cx: &Context<Self>) -> usize {
+        let filter = self.get_filter_text(cx);
+        let has_filter = !filter.is_empty();
+
+        if let Some(context) = ContextId::all_variants().get(ctx_idx) {
+            if !self.is_context_expanded(context, has_filter) {
+                return 0;
+            }
+            self.get_filtered_bindings(*context, &filter).len()
+        } else {
+            0
+        }
+    }
+
+    fn first_visible_context(&self, cx: &Context<Self>) -> usize {
+        let filter = self.get_filter_text(cx);
+        (0..ContextId::all_variants().len())
+            .find(|&idx| self.is_context_visible(idx, &filter))
+            .unwrap_or(0)
+    }
+
+    fn last_visible_context(&self, cx: &Context<Self>) -> usize {
+        let filter = self.get_filter_text(cx);
+        (0..ContextId::all_variants().len())
+            .rev()
+            .find(|&idx| self.is_context_visible(idx, &filter))
+            .unwrap_or(0)
+    }
+
+    fn next_visible_context(&self, after_idx: usize, cx: &Context<Self>) -> Option<usize> {
+        let filter = self.get_filter_text(cx);
+        ((after_idx + 1)..ContextId::all_variants().len())
+            .find(|&idx| self.is_context_visible(idx, &filter))
+    }
+
+    fn prev_visible_context(&self, before_idx: usize, cx: &Context<Self>) -> Option<usize> {
+        let filter = self.get_filter_text(cx);
+        (0..before_idx)
+            .rev()
+            .find(|&idx| self.is_context_visible(idx, &filter))
+    }
+
+    /// Validate and reset selection if it points to a filtered-out item.
+    fn validate_selection_for_filter(&mut self, cx: &Context<Self>) {
+        let filter = self.get_filter_text(cx);
+        if filter.is_empty() {
+            return;
+        }
+
+        let ctx_idx = self.keybindings_selection.context_idx();
+
+        if !self.is_context_visible(ctx_idx, &filter) {
+            self.keybindings_selection =
+                KeybindingsSelection::Context(self.first_visible_context(cx));
+            return;
+        }
+
+        if let KeybindingsSelection::Binding(_, binding_idx) = self.keybindings_selection {
+            let visible_count = self.get_visible_binding_count(ctx_idx, cx);
+            if binding_idx >= visible_count {
+                if visible_count > 0 {
+                    self.keybindings_selection =
+                        KeybindingsSelection::Binding(ctx_idx, visible_count - 1);
+                } else {
+                    self.keybindings_selection = KeybindingsSelection::Context(ctx_idx);
+                }
+            }
+        }
+    }
+
+    fn keybindings_move_next(&mut self, cx: &Context<Self>) {
+        let binding_count = self.get_visible_binding_count(
+            self.keybindings_selection.context_idx(),
+            cx,
+        );
+
+        match self.keybindings_selection {
+            KeybindingsSelection::Context(ctx_idx) => {
+                if binding_count > 0 {
+                    self.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, 0);
+                } else if let Some(next) = self.next_visible_context(ctx_idx, cx) {
+                    self.keybindings_selection = KeybindingsSelection::Context(next);
+                }
+            }
+            KeybindingsSelection::Binding(ctx_idx, binding_idx) => {
+                if binding_idx + 1 < binding_count {
+                    self.keybindings_selection =
+                        KeybindingsSelection::Binding(ctx_idx, binding_idx + 1);
+                } else if let Some(next) = self.next_visible_context(ctx_idx, cx) {
+                    self.keybindings_selection = KeybindingsSelection::Context(next);
+                }
+            }
+        }
+    }
+
+    fn keybindings_move_prev(&mut self, cx: &Context<Self>) {
+        match self.keybindings_selection {
+            KeybindingsSelection::Context(ctx_idx) => {
+                if let Some(prev) = self.prev_visible_context(ctx_idx, cx) {
+                    let prev_count = self.get_visible_binding_count(prev, cx);
+                    if prev_count > 0 {
+                        self.keybindings_selection =
+                            KeybindingsSelection::Binding(prev, prev_count - 1);
+                    } else {
+                        self.keybindings_selection = KeybindingsSelection::Context(prev);
+                    }
+                }
+            }
+            KeybindingsSelection::Binding(ctx_idx, binding_idx) => {
+                if binding_idx > 0 {
+                    self.keybindings_selection =
+                        KeybindingsSelection::Binding(ctx_idx, binding_idx - 1);
+                } else {
+                    self.keybindings_selection = KeybindingsSelection::Context(ctx_idx);
+                }
+            }
+        }
+    }
+
+    fn keybindings_flat_index(&self, cx: &Context<Self>) -> usize {
+        let filter = self.get_filter_text(cx);
+        let has_filter = !filter.is_empty();
+        let mut flat_idx = 0;
+
+        for (ctx_idx, context) in ContextId::all_variants().iter().enumerate() {
+            if !self.is_context_visible(ctx_idx, &filter) {
+                continue;
+            }
+
+            match self.keybindings_selection {
+                KeybindingsSelection::Context(sel) if sel == ctx_idx => return flat_idx,
+                KeybindingsSelection::Binding(sel, bi) if sel == ctx_idx => {
+                    return flat_idx + 1 + bi;
+                }
+                _ => {}
+            }
+
+            flat_idx += 1;
+            if self.is_context_expanded(context, has_filter) {
+                flat_idx += self.get_filtered_bindings(*context, &filter).len();
+            }
+        }
+        flat_idx
+    }
+
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let chord = KeyChord::from_gpui(&event.keystroke);
+
+        // Handle filter input mode
+        if self.keybindings_editing_filter {
+            if chord.key == "escape" && chord.modifiers == Modifiers::none() {
+                self.keybindings_editing_filter = false;
+                self.focus_handle.focus(window);
+                cx.notify();
+            }
+            return;
+        }
+
+        match (chord.key.as_str(), chord.modifiers) {
+            // Navigation between sidebar and content
+            ("h", m) | ("left", m) if m == Modifiers::none() => {
+                self.focus_area = SettingsFocus::Sidebar;
+                cx.notify();
+            }
+            ("l", m) | ("right", m) if m == Modifiers::none() => {
+                self.focus_area = SettingsFocus::Content;
+                cx.notify();
+            }
+
+            // Vertical navigation
+            ("j", m) | ("down", m) if m == Modifiers::none() => {
+                match self.focus_area {
+                    SettingsFocus::Sidebar => {
+                        let current_idx = self.sidebar_index_for_section(self.active_section);
+                        let next_idx = (current_idx + 1) % self.sidebar_section_count();
+                        self.active_section = self.section_for_sidebar_index(next_idx);
+                    }
+                    SettingsFocus::Content => {
+                        if self.active_section == SettingsSection::Keybindings {
+                            self.keybindings_move_next(cx);
+                            self.keybindings_pending_scroll =
+                                Some(self.keybindings_flat_index(cx));
+                        }
+                    }
+                }
+                cx.notify();
+            }
+            ("k", m) | ("up", m) if m == Modifiers::none() => {
+                match self.focus_area {
+                    SettingsFocus::Sidebar => {
+                        let current_idx = self.sidebar_index_for_section(self.active_section);
+                        let prev_idx = if current_idx == 0 {
+                            self.sidebar_section_count() - 1
+                        } else {
+                            current_idx - 1
+                        };
+                        self.active_section = self.section_for_sidebar_index(prev_idx);
+                    }
+                    SettingsFocus::Content => {
+                        if self.active_section == SettingsSection::Keybindings {
+                            self.keybindings_move_prev(cx);
+                            self.keybindings_pending_scroll =
+                                Some(self.keybindings_flat_index(cx));
+                        }
+                    }
+                }
+                cx.notify();
+            }
+
+            // Go to first (g) / last (G)
+            ("g", m) if m == Modifiers::none() => {
+                if self.focus_area == SettingsFocus::Content
+                    && self.active_section == SettingsSection::Keybindings
+                {
+                    let first = self.first_visible_context(cx);
+                    self.keybindings_selection = KeybindingsSelection::Context(first);
+                    self.keybindings_pending_scroll = Some(0);
+                    cx.notify();
+                }
+            }
+            ("g", m) if m == Modifiers::shift() => {
+                if self.focus_area == SettingsFocus::Content
+                    && self.active_section == SettingsSection::Keybindings
+                {
+                    let last = self.last_visible_context(cx);
+                    let binding_count = self.get_visible_binding_count(last, cx);
+                    if binding_count > 0 {
+                        self.keybindings_selection =
+                            KeybindingsSelection::Binding(last, binding_count - 1);
+                    } else {
+                        self.keybindings_selection = KeybindingsSelection::Context(last);
+                    }
+                    self.keybindings_pending_scroll = Some(self.keybindings_flat_index(cx));
+                    cx.notify();
+                }
+            }
+
+            // Expand/collapse in keybindings (only when on a context header)
+            ("enter", m) | ("space", m) if m == Modifiers::none() => {
+                if self.focus_area == SettingsFocus::Sidebar {
+                    self.focus_area = SettingsFocus::Content;
+                } else if self.active_section == SettingsSection::Keybindings
+                    && let KeybindingsSelection::Context(ctx_idx) = self.keybindings_selection
+                    && let Some(context) = ContextId::all_variants().get(ctx_idx)
+                {
+                    if self.keybindings_expanded.contains(context) {
+                        self.keybindings_expanded.remove(context);
+                    } else {
+                        self.keybindings_expanded.insert(*context);
+                    }
+                }
+                cx.notify();
+            }
+
+            // Focus filter
+            ("/", m) | ("f", m) if m == Modifiers::none() => {
+                if self.active_section == SettingsSection::Keybindings {
+                    self.keybindings_editing_filter = true;
+                    self.keybindings_filter.update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
+                    cx.notify();
+                }
+            }
+
+            // Escape to go back
+            ("escape", m) if m == Modifiers::none() => {
+                if self.focus_area == SettingsFocus::Content {
+                    self.focus_area = SettingsFocus::Sidebar;
+                    cx.notify();
+                }
+            }
+
+            _ => {}
+        }
+    }
+}
+
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = self.pending_ssh_key_path.take() {
@@ -808,8 +1671,15 @@ impl Render for SettingsWindow {
             .size_full()
             .bg(theme.background)
             .flex()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_event(event, window, cx);
+            }))
             .child(self.render_sidebar(cx))
             .child(match self.active_section {
+                SettingsSection::Keybindings => {
+                    self.render_keybindings_section(cx).into_any_element()
+                }
                 SettingsSection::SshTunnels => {
                     self.render_ssh_tunnels_section(cx).into_any_element()
                 }

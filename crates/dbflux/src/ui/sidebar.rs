@@ -421,7 +421,10 @@ impl Sidebar {
             TreeNodeKind::Profile => {
                 let is_connected = if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
                     if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
-                        self.app_state.read(cx).connections.contains_key(&profile_id)
+                        self.app_state
+                            .read(cx)
+                            .connections
+                            .contains_key(&profile_id)
                     } else {
                         false
                     }
@@ -1265,7 +1268,8 @@ impl Sidebar {
                     .when_some(sidebar_for_click, |d, sidebar| {
                         d.on_click(move |_, _, cx| {
                             if is_parent_menu {
-                                sidebar.update(cx, |s, cx| s.context_menu_parent_execute_at(idx, cx));
+                                sidebar
+                                    .update(cx, |s, cx| s.context_menu_parent_execute_at(idx, cx));
                             } else {
                                 sidebar.update(cx, |s, cx| s.context_menu_execute_at(idx, cx));
                             }
@@ -1312,10 +1316,11 @@ impl Sidebar {
                                 }),
                                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                                     None,
-                                    size(px(700.0), px(500.0)),
+                                    size(px(950.0), px(700.0)),
                                     cx,
                                 ))),
                                 kind: WindowKind::Floating,
+                                focus: true,
                                 ..Default::default()
                             },
                             |window, cx| {
@@ -1554,13 +1559,15 @@ impl Render for Sidebar {
                                         cx.notify();
                                     });
                                 })
-                                .on_click(move |event, _window, cx| {
-                                    if event.click_count() == 2 {
-                                        sidebar_cl.update(cx, |this, cx| {
-                                            this.browse_table(&id_cl, cx);
-                                        });
-                                    }
-                                })
+                                .on_click(
+                                    move |event, _window, cx| {
+                                        if event.click_count() == 2 {
+                                            sidebar_cl.update(cx, |this, cx| {
+                                                this.browse_table(&id_cl, cx);
+                                            });
+                                        }
+                                    },
+                                )
                             })
                             .child(
                                 div()

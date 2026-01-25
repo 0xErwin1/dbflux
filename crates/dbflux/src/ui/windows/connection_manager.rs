@@ -440,7 +440,7 @@ pub struct ConnectionManagerWindow {
 
     // Keyboard navigation state
     focus_handle: FocusHandle,
-    keymap: KeymapStack,
+    keymap: &'static KeymapStack,
     driver_focus: DriverFocus,
     form_focus: FormFocus,
     edit_state: EditState,

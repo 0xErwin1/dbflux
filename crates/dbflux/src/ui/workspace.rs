@@ -8,10 +8,10 @@ use crate::ui::command_palette::{
 use crate::ui::editor::EditorPane;
 use crate::ui::results::{EditState, FocusMode, ResultsPane, ResultsReceived};
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
-use crate::ui::tokens::Spacing;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::ToastManager;
+use crate::ui::tokens::Spacing;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use gpui::prelude::FluentBuilder;
@@ -59,7 +59,7 @@ pub struct Workspace {
     needs_focus_restore: bool,
 
     focus_target: FocusTarget,
-    keymap: KeymapStack,
+    keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
 }
 
@@ -360,7 +360,7 @@ impl Workspace {
 
     fn open_settings(&self, cx: &mut Context<Self>) {
         let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
+        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
         cx.open_window(
             WindowOptions {
@@ -370,6 +370,7 @@ impl Workspace {
                 }),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 kind: WindowKind::Floating,
+                focus: true,
                 ..Default::default()
             },
             |window, cx| {
@@ -961,90 +962,86 @@ impl Render for Workspace {
             .child(command_palette)
             .child(notification_list)
             // Context menu rendered at workspace level for proper positioning
-            .when_some(
-                self.sidebar.read(cx).context_menu_state(),
-                |this, menu| {
-                    let theme = cx.theme();
-                    let sidebar_entity = self.sidebar.clone();
+            .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
+                let theme = cx.theme();
+                let sidebar_entity = self.sidebar.clone();
 
-                    let menu_x = menu.position.x;
-                    let menu_y = menu.position.y;
-                    let menu_width = px(160.0);
-                    let menu_gap = Spacing::XS;
-                    let menu_item_height = px(32.0);
-                    let menu_container_padding = px(4.0);
+                let menu_x = menu.position.x;
+                let menu_y = menu.position.y;
+                let menu_width = px(160.0);
+                let menu_gap = Spacing::XS;
+                let menu_item_height = px(32.0);
+                let menu_container_padding = px(4.0);
 
-                    let in_submenu = !menu.parent_stack.is_empty();
+                let in_submenu = !menu.parent_stack.is_empty();
 
-                    let submenu_y_offset = if in_submenu {
-                        let (_, parent_selected) = menu.parent_stack.last().unwrap();
-                        menu_container_padding + (menu_item_height * (*parent_selected as f32))
-                    } else {
-                        px(0.0)
-                    };
+                let submenu_y_offset = if in_submenu {
+                    let (_, parent_selected) = menu.parent_stack.last().unwrap();
+                    menu_container_padding + (menu_item_height * (*parent_selected as f32))
+                } else {
+                    px(0.0)
+                };
 
-                    this
-                        // Full-screen overlay to capture clicks outside
-                        .child(
-                            div()
-                                .id("context-menu-overlay")
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full()
-                                .on_mouse_down(MouseButton::Left, {
-                                    let sidebar = sidebar_entity.clone();
-                                    move |_, _, cx| {
-                                        sidebar.update(cx, |s, cx| s.close_context_menu(cx));
-                                    }
-                                }),
-                        )
-                        // Parent menu (shown when in submenu, at original position)
-                        .when(in_submenu, |d| {
-                            let (parent_items, parent_selected) =
-                                menu.parent_stack.last().unwrap();
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .top(menu_y)
-                                    .left(menu_x)
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .child(Sidebar::render_menu_panel(
-                                        theme,
-                                        parent_items,
-                                        Some(*parent_selected),
-                                        Some(sidebar_entity.clone()),
-                                        "parent-menu",
-                                        true, // is_parent_menu
-                                    )),
-                            )
-                        })
-                        // Current menu (submenu to the right of parent, or main menu at click position)
-                        .child(
+                this
+                    // Full-screen overlay to capture clicks outside
+                    .child(
+                        div()
+                            .id("context-menu-overlay")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .on_mouse_down(MouseButton::Left, {
+                                let sidebar = sidebar_entity.clone();
+                                move |_, _, cx| {
+                                    sidebar.update(cx, |s, cx| s.close_context_menu(cx));
+                                }
+                            }),
+                    )
+                    // Parent menu (shown when in submenu, at original position)
+                    .when(in_submenu, |d| {
+                        let (parent_items, parent_selected) = menu.parent_stack.last().unwrap();
+                        d.child(
                             div()
                                 .absolute()
-                                .top(menu_y + submenu_y_offset)
-                                .left(if in_submenu {
-                                    menu_x + menu_width + menu_gap
-                                } else {
-                                    menu_x
-                                })
+                                .top(menu_y)
+                                .left(menu_x)
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
                                 .child(Sidebar::render_menu_panel(
                                     theme,
-                                    &menu.items,
-                                    Some(menu.selected_index),
+                                    parent_items,
+                                    Some(*parent_selected),
                                     Some(sidebar_entity.clone()),
-                                    "context-menu",
-                                    false, // is_parent_menu
+                                    "parent-menu",
+                                    true, // is_parent_menu
                                 )),
                         )
-                },
-            )
+                    })
+                    // Current menu (submenu to the right of parent, or main menu at click position)
+                    .child(
+                        div()
+                            .absolute()
+                            .top(menu_y + submenu_y_offset)
+                            .left(if in_submenu {
+                                menu_x + menu_width + menu_gap
+                            } else {
+                                menu_x
+                            })
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(Sidebar::render_menu_panel(
+                                theme,
+                                &menu.items,
+                                Some(menu.selected_index),
+                                Some(sidebar_entity.clone()),
+                                "context-menu",
+                                false, // is_parent_menu
+                            )),
+                    )
+            })
     }
 }
 
@@ -1234,7 +1231,8 @@ impl CommandDispatcher for Workspace {
             Command::SelectNext => match self.focus_target {
                 FocusTarget::Sidebar => {
                     if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar.update(cx, |s, cx| s.context_menu_select_next(cx));
+                        self.sidebar
+                            .update(cx, |s, cx| s.context_menu_select_next(cx));
                     } else {
                         self.sidebar.update(cx, |s, cx| s.select_next(cx));
                     }
@@ -1256,7 +1254,8 @@ impl CommandDispatcher for Workspace {
             Command::SelectPrev => match self.focus_target {
                 FocusTarget::Sidebar => {
                     if self.sidebar.read(cx).has_context_menu_open() {
-                        self.sidebar.update(cx, |s, cx| s.context_menu_select_prev(cx));
+                        self.sidebar
+                            .update(cx, |s, cx| s.context_menu_select_prev(cx));
                     } else {
                         self.sidebar.update(cx, |s, cx| s.select_prev(cx));
                     }
@@ -1348,8 +1347,7 @@ impl CommandDispatcher for Workspace {
                 FocusTarget::Sidebar => {
                     if self.sidebar.read(cx).has_context_menu_open() {
                         // If in submenu, go back to parent; otherwise close menu
-                        let went_back =
-                            self.sidebar.update(cx, |s, cx| s.context_menu_go_back(cx));
+                        let went_back = self.sidebar.update(cx, |s, cx| s.context_menu_go_back(cx));
                         if !went_back {
                             self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
                         }
