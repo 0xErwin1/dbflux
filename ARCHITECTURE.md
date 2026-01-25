@@ -20,8 +20,13 @@ crates/
     src/main.rs             # Application entry point
     src/app.rs              # Global state, drivers, profiles, history
     src/ui/                 # UI panels, windows, theme
+    src/ui/workspace.rs     # Main layout, command dispatch, focus routing
+    src/ui/results.rs       # Results table with toolbar focus management
     src/ui/history_modal.rs # Recent/saved queries modal
-    src/keymap/             # Keyboard commands and keymap
+    src/keymap/             # Keyboard system
+    src/keymap/command.rs   # Command enum with all app actions
+    src/keymap/defaults.rs  # Context-aware key bindings
+    src/keymap/focus.rs     # FocusTarget enum for panel routing
   dbflux_core/              # Traits, core types, storage, errors
     src/traits.rs           # DbDriver + Connection traits
     src/profile.rs          # Connection/SSH profiles
@@ -50,10 +55,17 @@ crates/
 ## Data Flow
 - Startup: `main` creates `AppState` and `Workspace`, then opens the main window (crates/dbflux/src/main.rs).
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs).
-- Query flow: Editor pane submits SQL to a `Connection` implementation; results are rendered in `ResultsPane` (crates/dbflux/src/ui/editor/mod.rs, crates/dbflux/src/ui/results/mod.rs).
+- Query flow: Editor pane submits SQL to a `Connection` implementation; results are rendered in `ResultsPane` (crates/dbflux/src/ui/editor.rs, crates/dbflux/src/ui/results.rs).
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/workspace.rs).
 - History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/history.rs).
 - Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (crates/dbflux_core/src/saved_query.rs).
+
+## Keyboard & Focus Architecture
+- Keymap system: `crates/dbflux/src/keymap/` defines `Command` enum, `KeyChord` parsing, context-aware `KeymapLayer` bindings, and `FocusTarget` for panel routing.
+- Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` routes commands based on `focus_target` (Sidebar, Editor, Results, BackgroundTasks).
+- Focus layers: Each context (sidebar, editor, results) has its own keymap layer with vim-style bindings (j/k/h/l navigation).
+- Panel focus modes: Complex panels like Results have internal focus state machines (`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`) to handle nested keyboard navigation.
+- Mouse/keyboard sync: Mouse handlers update focus state to keep keyboard and mouse navigation consistent; a `switching_input` flag prevents race conditions during input blur events.
 
 ## External Integrations
 - PostgreSQL: `tokio-postgres` client with optional TLS and cancellation support (crates/dbflux_driver_postgres/src/driver.rs).

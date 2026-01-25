@@ -146,6 +146,43 @@ Event handlers: `.on_click(cx.listener(|this, event, window, cx| ...))`
 
 Actions defined with `actions!(namespace, [SomeAction])` macro or `#[derive(Action)]`.
 
+### Keyboard & Mouse Patterns
+
+**Focus tracking**: Use `.track_focus(&focus_handle)` on container elements to receive key events:
+```rust
+div()
+    .track_focus(&self.focus_handle)
+    .on_key_down(cx.listener(|this, event, window, cx| { ... }))
+    .child(content)
+```
+
+**Mouse/keyboard sync**: When a component supports both mouse and keyboard navigation, sync state on mouse events:
+```rust
+.on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+    this.focus_mode = FocusMode::SomeMode;
+    this.edit_state = EditState::Editing;
+    cx.notify();
+}))
+```
+
+**Input blur race condition**: When switching between inputs via click, the old input's `Blur` event fires after the new input's `mousedown`. Use a flag to prevent focus theft:
+```rust
+// In mousedown handler
+this.switching_input = true;
+
+// In blur handler / exit_edit_mode
+if self.switching_input {
+    self.switching_input = false;
+    return;
+}
+```
+
+**Focus state machines**: For complex focus scenarios (e.g., toolbar with editable inputs), use explicit state enums:
+```rust
+enum FocusMode { Table, Toolbar }
+enum EditState { Navigating, Editing }
+```
+
 ### Subscriptions
 
 ```rust
@@ -187,8 +224,10 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 | File | Purpose |
 |------|---------|
 | `crates/dbflux/src/app.rs` | AppState, driver registry |
-| `crates/dbflux/src/ui/workspace.rs` | Main 3-pane layout |
-| `crates/dbflux/src/ui/sidebar/mod.rs` | Schema tree |
-| `crates/dbflux/src/ui/editor/mod.rs` | SQL editor |
-| `crates/dbflux/src/ui/results/mod.rs` | Results table |
+| `crates/dbflux/src/ui/workspace.rs` | Main 3-pane layout, command dispatch |
+| `crates/dbflux/src/ui/sidebar.rs` | Schema tree |
+| `crates/dbflux/src/ui/editor.rs` | SQL editor |
+| `crates/dbflux/src/ui/results.rs` | Results table, toolbar navigation |
+| `crates/dbflux/src/keymap/defaults.rs` | Key bindings per context |
+| `crates/dbflux/src/keymap/command.rs` | Command enum and dispatch |
 | `crates/dbflux_core/src/traits.rs` | `DbDriver`, `Connection` traits |

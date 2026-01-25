@@ -22,7 +22,7 @@ Initial release of DBFlux.
 - Visual indicators for column properties (primary key, nullable, type)
 - Multi-tab SQL editor with syntax highlighting
 - Virtualized results table with column resizing
-- Table browser mode with WHERE filters and pagination
+- Table browser mode with WHERE filters, custom LIMIT, and pagination
 - Command palette with fuzzy search
 - Toast notifications for user feedback
 - Background tasks panel with progress and cancellation
@@ -52,6 +52,8 @@ Initial release of DBFlux.
 - Global shortcuts for common actions
 - Tab cycling between panels
 - Full keyboard support in connection manager form
+- Results toolbar navigation: `f` to focus toolbar, `h/l` to navigate elements, `Enter` to edit/execute, `Esc` to exit
+- Panel collapse toggle with `z` key
 
 #### Export
 - CSV export for query results
