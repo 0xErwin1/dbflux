@@ -12,6 +12,7 @@ pub enum TaskKind {
     Query,
     Connect,
     Disconnect,
+    SwitchDatabase,
     SchemaRefresh,
     Export,
 }
@@ -22,6 +23,7 @@ impl TaskKind {
             TaskKind::Query => "Query",
             TaskKind::Connect => "Connect",
             TaskKind::Disconnect => "Disconnect",
+            TaskKind::SwitchDatabase => "Switch Database",
             TaskKind::SchemaRefresh => "Schema Refresh",
             TaskKind::Export => "Export",
         }

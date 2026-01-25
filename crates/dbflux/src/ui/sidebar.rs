@@ -731,6 +731,15 @@ impl Sidebar {
             }
         };
 
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            let result = state.start_task(
+                TaskKind::SwitchDatabase,
+                format!("Switching to database: {}", db_name),
+            );
+            cx.emit(AppStateChanged);
+            result
+        });
+
         self.refresh_tree(cx);
 
         let app_state = self.app_state.clone();
@@ -744,12 +753,34 @@ impl Sidebar {
             let result = task.await;
 
             cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Switch database task was cancelled, discarding result");
+                    app_state.update(cx, |state, cx| {
+                        state.finish_pending_operation(profile_id, Some(&db_name_owned));
+                        cx.emit(AppStateChanged);
+                    });
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.refresh_tree(cx);
+                    });
+                    return;
+                }
+
                 let toast = match &result {
-                    Ok(_) => None,
-                    Err(e) => Some(PendingToast {
-                        message: format!("Failed to switch database: {}", e),
-                        is_error: true,
-                    }),
+                    Ok(_) => {
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
+                        });
+                        None
+                    }
+                    Err(e) => {
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.clone());
+                        });
+                        Some(PendingToast {
+                            message: format!("Failed to switch database: {}", e),
+                            is_error: true,
+                        })
+                    }
                 };
 
                 app_state.update(cx, |state, cx| {
@@ -764,6 +795,7 @@ impl Sidebar {
                         );
                     }
 
+                    cx.emit(AppStateChanged);
                     cx.notify();
                 });
 
