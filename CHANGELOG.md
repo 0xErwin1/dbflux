@@ -2,6 +2,22 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.1.1] - 2025-01-25
+
+### Added
+
+- About section in Settings with version info, GitHub links, and license (Apache 2.0 / MIT)
+- SSH tunnel form keyboard navigation (row-based: `j/k` between rows, `h/l` within fields, `Tab` sequential, `g/G` first/last)
+- Database switch now appears as cancellable background task
+
+### Fixed
+
+- Settings window now opens as singleton (reuses existing window instead of opening duplicates)
+- Stale settings window handle is now cleared when the window is closed
+- SSH form field selection resets to valid field when switching auth method (PrivateKey ↔ Password)
+- SSH selected index adjusts correctly when tunnels are deleted
+- `z` keybinding for panel collapse now works in Editor and Background Tasks (previously only Results)
+
 ## [0.1.0] - 2025-01-25
 
 Initial release of DBFlux.
@@ -55,16 +71,15 @@ Initial release of DBFlux.
 - Tab cycling between panels
 - Full keyboard support in connection manager form
 - Results toolbar navigation: `f` to focus toolbar, `h/l` to navigate elements, `Enter` to edit/execute, `Esc` to exit
-- Panel collapse toggle with `z` key (works in Editor, Results, and Background Tasks)
+- Panel collapse toggle with `z` key
 - Context menu navigation: `j/k` to move, `Enter` to select, `l` to open submenu, `h/Esc` to close
 
 #### Export
 - CSV export for query results
 
 #### Settings
-- SSH tunnel profile management with full keyboard navigation (row-based: `j/k` between rows, `h/l` within fields)
+- SSH tunnel profile management
 - Keybindings reference section with collapsible context groups and search filter
-- Settings window opens as singleton (reuses existing window)
 
 ### Known Limitations
 

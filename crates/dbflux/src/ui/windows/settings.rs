@@ -19,6 +19,7 @@ use uuid::Uuid;
 enum SettingsSection {
     Keybindings,
     SshTunnels,
+    About,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -441,6 +442,14 @@ impl SettingsWindow {
                 focused && self.sidebar_index_for_section(active) == 1,
                 cx,
             ))
+            .child(self.render_sidebar_item(
+                "section-about",
+                "About",
+                SettingsSection::About,
+                active,
+                focused && self.sidebar_index_for_section(active) == 2,
+                cx,
+            ))
     }
 
     fn render_sidebar_item(
@@ -484,6 +493,7 @@ impl SettingsWindow {
         match section {
             SettingsSection::Keybindings => 0,
             SettingsSection::SshTunnels => 1,
+            SettingsSection::About => 2,
         }
     }
 
@@ -491,12 +501,13 @@ impl SettingsWindow {
         match idx {
             0 => SettingsSection::Keybindings,
             1 => SettingsSection::SshTunnels,
+            2 => SettingsSection::About,
             _ => SettingsSection::Keybindings,
         }
     }
 
     fn sidebar_section_count(&self) -> usize {
-        2
+        3
     }
 
     fn render_keybindings_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -645,10 +656,8 @@ impl SettingsWindow {
                             binding_count,
                         } => {
                             let has_parent = context.parent().is_some();
-                            let parent_name = context
-                                .parent()
-                                .map(|p| p.display_name())
-                                .unwrap_or("");
+                            let parent_name =
+                                context.parent().map(|p| p.display_name()).unwrap_or("");
 
                             div()
                                 .id(SharedString::from(format!(
@@ -792,11 +801,11 @@ impl SettingsWindow {
                 this.focus_area = SettingsFocus::Content;
                 cx.notify();
             }))
-            .child(
-                div()
-                    .w(px(140.0))
-                    .child(self.render_key_badge(chord, muted_foreground, secondary)),
-            )
+            .child(div().w(px(140.0)).child(self.render_key_badge(
+                chord,
+                muted_foreground,
+                secondary,
+            )))
             .child(
                 div()
                     .flex_1()
@@ -937,8 +946,8 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let is_list_focused = self.focus_area == SettingsFocus::Content
-            && self.ssh_focus == SshFocus::ProfileList;
+        let is_list_focused =
+            self.focus_area == SettingsFocus::Content && self.ssh_focus == SshFocus::ProfileList;
         let is_new_button_focused = is_list_focused && self.ssh_selected_idx.is_none();
 
         div()
@@ -1094,16 +1103,12 @@ impl SettingsWindow {
             .flex_col()
             .overflow_hidden()
             .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
-                    ),
+                div().p_4().border_b_1().border_color(border).child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
+                ),
             )
             .child(
                 div()
@@ -1203,6 +1208,110 @@ impl SettingsWindow {
                                     })),
                             )
                     }),
+            )
+    }
+
+    fn render_about_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+        const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
+        const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+
+        #[cfg(debug_assertions)]
+        const PROFILE: &str = "debug";
+        #[cfg(not(debug_assertions))]
+        const PROFILE: &str = "release";
+
+        let issues_url = format!("{}/issues", REPOSITORY);
+        let author_name = AUTHORS.split('<').next().unwrap_or(AUTHORS).trim();
+        let license_display = LICENSE.replace(" OR ", " and ");
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div().p_4().border_b_1().border_color(theme.border).child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("About"),
+                ),
+            )
+            .child(
+                div().flex_1().p_6().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xl()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("DBFlux"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("{} ({})", VERSION, PROFILE)),
+                                ),
+                        )
+                        .child(
+                            div().text_sm().child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id("link-issues")
+                                            .text_color(theme.link)
+                                            .cursor_pointer()
+                                            .hover(|d| d.underline())
+                                            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                                                cx.open_url(&issues_url);
+                                            })
+                                            .child("Report a bug"),
+                                    )
+                                    .child("or")
+                                    .child(
+                                        div()
+                                            .id("link-repo")
+                                            .text_color(theme.link)
+                                            .cursor_pointer()
+                                            .hover(|d| d.underline())
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.open_url(REPOSITORY);
+                                            })
+                                            .child("view the source code"),
+                                    )
+                                    .child("on GitHub."),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(format!(
+                                    "Copyright © 2025 {} and contributors.",
+                                    author_name
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("Licensed under the {} licenses.", license_display)),
+                        ),
+                ),
             )
     }
 
@@ -1358,42 +1467,39 @@ impl SettingsWindow {
 
         let is_save_secret_focused = is_form_focused && current_field == SshFormField::SaveSecret;
 
-        let save_checkbox = if keyring_available {
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .pb(px(2.0))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(if is_save_secret_focused {
-                        primary
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .child(
-                        Checkbox::new("save-secret")
-                            .checked(save_secret)
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+        let save_checkbox =
+            if keyring_available {
+                Some(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pb(px(2.0))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_save_secret_focused {
+                            primary
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(Checkbox::new("save-secret").checked(save_secret).on_click(
+                            cx.listener(|this, checked: &bool, _, cx| {
                                 this.form_save_secret = *checked;
                                 cx.notify();
-                            })),
-                    )
-                    .child(div().text_sm().child("Save")),
-            )
-        } else {
-            None
-        };
+                            }),
+                        ))
+                        .child(div().text_sm().child("Save")),
+                )
+            } else {
+                None
+            };
 
         match auth_method {
             SshAuthSelection::PrivateKey => {
-                let is_key_path_focused =
-                    is_form_focused && current_field == SshFormField::KeyPath;
-                let is_browse_focused =
-                    is_form_focused && current_field == SshFormField::KeyBrowse;
+                let is_key_path_focused = is_form_focused && current_field == SshFormField::KeyPath;
+                let is_browse_focused = is_form_focused && current_field == SshFormField::KeyBrowse;
                 let is_passphrase_focused =
                     is_form_focused && current_field == SshFormField::Passphrase;
 
@@ -1442,9 +1548,11 @@ impl SettingsWindow {
                                                     .label("Browse")
                                                     .small()
                                                     .ghost()
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.browse_ssh_key(window, cx);
-                                                    })),
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.browse_ssh_key(window, cx);
+                                                        },
+                                                    )),
                                             ),
                                     ),
                             )
@@ -1496,7 +1604,6 @@ impl SettingsWindow {
             }
         }
     }
-
 }
 
 pub struct DismissEvent;
@@ -1629,10 +1736,8 @@ impl SettingsWindow {
     }
 
     fn keybindings_move_next(&mut self, cx: &Context<Self>) {
-        let binding_count = self.get_visible_binding_count(
-            self.keybindings_selection.context_idx(),
-            cx,
-        );
+        let binding_count =
+            self.get_visible_binding_count(self.keybindings_selection.context_idx(), cx);
 
         match self.keybindings_selection {
             KeybindingsSelection::Context(ctx_idx) => {
@@ -1900,7 +2005,8 @@ impl SettingsWindow {
 
         match self.ssh_form_field {
             SshFormField::Name => {
-                self.input_tunnel_name.update(cx, |s, cx| s.focus(window, cx));
+                self.input_tunnel_name
+                    .update(cx, |s, cx| s.focus(window, cx));
             }
             SshFormField::Host => {
                 self.input_ssh_host.update(cx, |s, cx| s.focus(window, cx));
@@ -1912,13 +2018,16 @@ impl SettingsWindow {
                 self.input_ssh_user.update(cx, |s, cx| s.focus(window, cx));
             }
             SshFormField::KeyPath => {
-                self.input_ssh_key_path.update(cx, |s, cx| s.focus(window, cx));
+                self.input_ssh_key_path
+                    .update(cx, |s, cx| s.focus(window, cx));
             }
             SshFormField::Passphrase => {
-                self.input_ssh_key_passphrase.update(cx, |s, cx| s.focus(window, cx));
+                self.input_ssh_key_passphrase
+                    .update(cx, |s, cx| s.focus(window, cx));
             }
             SshFormField::Password => {
-                self.input_ssh_password.update(cx, |s, cx| s.focus(window, cx));
+                self.input_ssh_password
+                    .update(cx, |s, cx| s.focus(window, cx));
             }
             _ => {
                 self.ssh_editing_field = false;
@@ -2038,117 +2147,113 @@ impl SettingsWindow {
             && self.focus_area == SettingsFocus::Content
         {
             match self.ssh_focus {
-                SshFocus::ProfileList => {
-                    match (chord.key.as_str(), chord.modifiers) {
-                        ("j", m) | ("down", m) if m == Modifiers::none() => {
-                            self.ssh_move_next_profile(cx);
-                            self.ssh_load_selected_profile(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("k", m) | ("up", m) if m == Modifiers::none() => {
-                            self.ssh_move_prev_profile(cx);
-                            self.ssh_load_selected_profile(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("l", m) | ("right", m) | ("enter", m) if m == Modifiers::none() => {
-                            self.ssh_enter_form(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("d", m) if m == Modifiers::none() => {
-                            if let Some(idx) = self.ssh_selected_idx {
-                                let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
-                                if let Some(tunnel) = tunnels.get(idx) {
-                                    self.request_delete_tunnel(tunnel.id, cx);
-                                }
-                            }
-                            return;
-                        }
-                        ("g", m) if m == Modifiers::none() => {
-                            self.ssh_selected_idx = None;
-                            self.ssh_load_selected_profile(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("g", m) if m == Modifiers::shift() => {
-                            let count = self.ssh_tunnel_count(cx);
-                            if count > 0 {
-                                self.ssh_selected_idx = Some(count - 1);
-                                self.ssh_load_selected_profile(window, cx);
-                            }
-                            cx.notify();
-                            return;
-                        }
-                        ("h", m) | ("left", m) if m == Modifiers::none() => {
-                            self.focus_area = SettingsFocus::Sidebar;
-                            cx.notify();
-                            return;
-                        }
-                        ("escape", m) if m == Modifiers::none() => {
-                            self.focus_area = SettingsFocus::Sidebar;
-                            cx.notify();
-                            return;
-                        }
-                        _ => {}
+                SshFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.ssh_move_next_profile(cx);
+                        self.ssh_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
                     }
-                }
-                SshFocus::Form => {
-                    match (chord.key.as_str(), chord.modifiers) {
-                        ("escape", m) if m == Modifiers::none() => {
-                            self.ssh_exit_form(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("j", m) | ("down", m) if m == Modifiers::none() => {
-                            self.ssh_move_down();
-                            cx.notify();
-                            return;
-                        }
-                        ("k", m) | ("up", m) if m == Modifiers::none() => {
-                            self.ssh_move_up();
-                            cx.notify();
-                            return;
-                        }
-                        ("h", m) | ("left", m) if m == Modifiers::none() => {
-                            self.ssh_move_left();
-                            cx.notify();
-                            return;
-                        }
-                        ("l", m) | ("right", m) if m == Modifiers::none() => {
-                            self.ssh_move_right();
-                            cx.notify();
-                            return;
-                        }
-                        ("enter", m) | ("space", m) if m == Modifiers::none() => {
-                            self.ssh_activate_current_field(window, cx);
-                            cx.notify();
-                            return;
-                        }
-                        ("tab", m) if m == Modifiers::none() => {
-                            self.ssh_tab_next();
-                            cx.notify();
-                            return;
-                        }
-                        ("tab", m) if m == Modifiers::shift() => {
-                            self.ssh_tab_prev();
-                            cx.notify();
-                            return;
-                        }
-                        ("g", m) if m == Modifiers::none() => {
-                            self.ssh_move_first();
-                            cx.notify();
-                            return;
-                        }
-                        ("g", m) if m == Modifiers::shift() => {
-                            self.ssh_move_last();
-                            cx.notify();
-                            return;
-                        }
-                        _ => {}
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.ssh_move_prev_profile(cx);
+                        self.ssh_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
                     }
-                }
+                    ("l", m) | ("right", m) | ("enter", m) if m == Modifiers::none() => {
+                        self.ssh_enter_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("d", m) if m == Modifiers::none() => {
+                        if let Some(idx) = self.ssh_selected_idx {
+                            let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+                            if let Some(tunnel) = tunnels.get(idx) {
+                                self.request_delete_tunnel(tunnel.id, cx);
+                            }
+                        }
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.ssh_selected_idx = None;
+                        self.ssh_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        let count = self.ssh_tunnel_count(cx);
+                        if count > 0 {
+                            self.ssh_selected_idx = Some(count - 1);
+                            self.ssh_load_selected_profile(window, cx);
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.focus_area = SettingsFocus::Sidebar;
+                        cx.notify();
+                        return;
+                    }
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.focus_area = SettingsFocus::Sidebar;
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
+                SshFocus::Form => match (chord.key.as_str(), chord.modifiers) {
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.ssh_exit_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.ssh_move_down();
+                        cx.notify();
+                        return;
+                    }
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.ssh_move_up();
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.ssh_move_left();
+                        cx.notify();
+                        return;
+                    }
+                    ("l", m) | ("right", m) if m == Modifiers::none() => {
+                        self.ssh_move_right();
+                        cx.notify();
+                        return;
+                    }
+                    ("enter", m) | ("space", m) if m == Modifiers::none() => {
+                        self.ssh_activate_current_field(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::none() => {
+                        self.ssh_tab_next();
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::shift() => {
+                        self.ssh_tab_prev();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.ssh_move_first();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        self.ssh_move_last();
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
             }
         }
 
@@ -2171,8 +2276,7 @@ impl SettingsWindow {
                     SettingsFocus::Content => {
                         if self.active_section == SettingsSection::Keybindings {
                             self.keybindings_move_next(cx);
-                            self.keybindings_pending_scroll =
-                                Some(self.keybindings_flat_index(cx));
+                            self.keybindings_pending_scroll = Some(self.keybindings_flat_index(cx));
                         }
                     }
                 }
@@ -2192,8 +2296,7 @@ impl SettingsWindow {
                     SettingsFocus::Content => {
                         if self.active_section == SettingsSection::Keybindings {
                             self.keybindings_move_prev(cx);
-                            self.keybindings_pending_scroll =
-                                Some(self.keybindings_flat_index(cx));
+                            self.keybindings_pending_scroll = Some(self.keybindings_flat_index(cx));
                         }
                     }
                 }
@@ -2300,6 +2403,7 @@ impl Render for SettingsWindow {
                 SettingsSection::SshTunnels => {
                     self.render_ssh_tunnels_section(cx).into_any_element()
                 }
+                SettingsSection::About => self.render_about_section(cx).into_any_element(),
             })
             .when(show_delete_confirm, |el| {
                 let this = cx.entity().clone();

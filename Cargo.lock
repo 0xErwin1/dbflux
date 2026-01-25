@@ -1335,7 +1335,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbflux"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_postgres",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_sqlite"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "dbflux_core",
  "log",

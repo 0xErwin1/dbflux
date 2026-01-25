@@ -1,8 +1,13 @@
 [package]
 name = "dbflux_driver_postgres"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 publish = false
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
 
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
