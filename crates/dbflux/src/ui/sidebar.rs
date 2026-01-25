@@ -9,14 +9,16 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
-use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+pub enum SidebarEvent {
+    GenerateSql(String),
+    RequestFocus,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TreeNodeKind {
@@ -64,6 +66,35 @@ impl TreeNodeKind {
     }
 }
 
+#[derive(Clone)]
+pub struct ContextMenuItem {
+    pub label: String,
+    pub action: ContextMenuAction,
+}
+
+#[derive(Clone)]
+pub enum ContextMenuAction {
+    Open,
+    ViewSchema,
+    GenerateSelectStar,
+    Connect,
+    Disconnect,
+    Edit,
+    Delete,
+    SwitchToDatabase,
+    Submenu(Vec<ContextMenuItem>),
+}
+
+pub struct ContextMenuState {
+    pub item_id: String,
+    pub selected_index: usize,
+    pub items: Vec<ContextMenuItem>,
+    /// Stack of parent menus for submenu navigation
+    pub parent_stack: Vec<(Vec<ContextMenuItem>, usize)>,
+    /// Position where the menu should appear (captured from click or calculated)
+    pub position: Point<Pixels>,
+}
+
 pub struct Sidebar {
     app_state: Entity<AppState>,
     #[allow(dead_code)]
@@ -76,6 +107,8 @@ pub struct Sidebar {
     visible_entry_count: usize,
     /// User overrides for expansion state (item_id -> is_expanded)
     expansion_overrides: HashMap<String, bool>,
+    /// State for the keyboard-triggered context menu
+    context_menu: Option<ContextMenuState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -83,6 +116,8 @@ struct PendingToast {
     message: String,
     is_error: bool,
 }
+
+impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
     pub fn new(
@@ -110,6 +145,7 @@ impl Sidebar {
             connections_focused: false,
             visible_entry_count,
             expansion_overrides: HashMap::new(),
+            context_menu: None,
             _subscriptions: vec![app_state_subscription],
         }
     }
@@ -236,59 +272,401 @@ impl Sidebar {
         let entry = self.tree_state.read(cx).selected_entry().cloned();
         if let Some(entry) = entry {
             let item_id = entry.item().id.to_string();
-            let node_kind = TreeNodeKind::from_id(&item_id);
+            self.execute_item(&item_id, cx);
+        }
+    }
 
-            // For tables and views, simulate double-click to view data
-            // For other nodes, simulate single-click
-            let click_count = match node_kind {
-                TreeNodeKind::Table | TreeNodeKind::View => 2,
-                _ => 1,
-            };
+    fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let node_kind = TreeNodeKind::from_id(item_id);
 
-            self.handle_item_click(&item_id, click_count, cx);
+        match node_kind {
+            TreeNodeKind::Table | TreeNodeKind::View => {
+                self.browse_table(item_id, cx);
+            }
+            TreeNodeKind::Profile => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    let is_connected = self
+                        .app_state
+                        .read(cx)
+                        .connections
+                        .contains_key(&profile_id);
+                    if is_connected {
+                        self.app_state.update(cx, |state, cx| {
+                            state.set_active_connection(profile_id);
+                            cx.notify();
+                        });
+                    } else {
+                        self.connect_to_profile(profile_id, cx);
+                    }
+                }
+            }
+            TreeNodeKind::Database => {
+                self.handle_database_click(item_id, cx);
+            }
+            _ => {}
         }
     }
 
     fn handle_item_click(&mut self, item_id: &str, click_count: usize, cx: &mut Context<Self>) {
-        if click_count == 2 && (item_id.starts_with("table_") || item_id.starts_with("view_")) {
-            let qualified_name = if let Some(rest) = item_id.strip_prefix("table_") {
-                Self::parse_qualified_table_name(rest)
-            } else if let Some(rest) = item_id.strip_prefix("view_") {
-                Self::parse_qualified_table_name(rest)
-            } else {
-                None
-            };
+        cx.emit(SidebarEvent::RequestFocus);
 
-            if let Some(name) = qualified_name {
-                self.pending_view_table = Some(name);
+        if let Some(idx) = self.find_item_index(item_id, cx) {
+            self.tree_state.update(cx, |state, cx| {
+                state.set_selected_index(Some(idx), cx);
+            });
+        }
+
+        if click_count == 2 {
+            self.execute_item(item_id, cx);
+        }
+
+        cx.notify();
+    }
+
+    fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let qualified_name = Self::extract_qualified_name(item_id);
+        if let Some(name) = qualified_name {
+            self.pending_view_table = Some(name);
+            cx.notify();
+        }
+    }
+
+    fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let items = self.build_tree_items_with_overrides(cx);
+        let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
+        self.set_expanded(item_id, !currently_expanded, cx);
+    }
+
+    fn find_item_expanded(items: &[TreeItem], target_id: &str) -> Option<bool> {
+        for item in items {
+            if item.id.as_ref() == target_id {
+                return Some(item.is_expanded());
+            }
+            if let Some(expanded) = Self::find_item_expanded(&item.children, target_id) {
+                return Some(expanded);
+            }
+        }
+        None
+    }
+
+    fn generate_select_star(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(qualified_name) = Self::extract_qualified_name(item_id) {
+            let sql = format!("SELECT * FROM {} LIMIT 100;", qualified_name);
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
+    }
+
+    pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let entry = self.tree_state.read(cx).selected_entry().cloned();
+
+        let Some(entry) = entry else {
+            return;
+        };
+
+        let item_id = entry.item().id.to_string();
+        self.open_menu_for_item(&item_id, position, cx);
+    }
+
+    pub fn open_menu_for_item(
+        &mut self,
+        item_id: &str,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let node_kind = TreeNodeKind::from_id(item_id);
+        let items = self.build_context_menu_items(node_kind, item_id, cx);
+
+        if items.is_empty() {
+            return;
+        }
+
+        self.context_menu = Some(ContextMenuState {
+            item_id: item_id.to_string(),
+            selected_index: 0,
+            items,
+            parent_stack: Vec::new(),
+            position,
+        });
+        cx.notify();
+    }
+
+    fn build_context_menu_items(
+        &self,
+        node_kind: TreeNodeKind,
+        item_id: &str,
+        cx: &App,
+    ) -> Vec<ContextMenuItem> {
+        match node_kind {
+            TreeNodeKind::Table | TreeNodeKind::View => {
+                vec![
+                    ContextMenuItem {
+                        label: "Open".into(),
+                        action: ContextMenuAction::Open,
+                    },
+                    ContextMenuItem {
+                        label: "View Schema".into(),
+                        action: ContextMenuAction::ViewSchema,
+                    },
+                    ContextMenuItem {
+                        label: "Generate SQL".into(),
+                        action: ContextMenuAction::Submenu(vec![ContextMenuItem {
+                            label: "SELECT *".into(),
+                            action: ContextMenuAction::GenerateSelectStar,
+                        }]),
+                    },
+                ]
+            }
+            TreeNodeKind::Profile => {
+                let is_connected = if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
+                    if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
+                        self.app_state.read(cx).connections.contains_key(&profile_id)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                let mut items = vec![];
+                if is_connected {
+                    items.push(ContextMenuItem {
+                        label: "Disconnect".into(),
+                        action: ContextMenuAction::Disconnect,
+                    });
+                } else {
+                    items.push(ContextMenuItem {
+                        label: "Connect".into(),
+                        action: ContextMenuAction::Connect,
+                    });
+                }
+                items.push(ContextMenuItem {
+                    label: "Edit".into(),
+                    action: ContextMenuAction::Edit,
+                });
+                items.push(ContextMenuItem {
+                    label: "Delete".into(),
+                    action: ContextMenuAction::Delete,
+                });
+                items
+            }
+            TreeNodeKind::Database => {
+                let is_current = self.is_current_database(item_id, cx);
+                if is_current {
+                    vec![]
+                } else {
+                    vec![ContextMenuItem {
+                        label: "Switch to Database".into(),
+                        action: ContextMenuAction::SwitchToDatabase,
+                    }]
+                }
+            }
+            _ => vec![],
+        }
+    }
+
+    fn is_current_database(&self, item_id: &str, cx: &App) -> bool {
+        let Some(rest) = item_id.strip_prefix("db_") else {
+            return false;
+        };
+        if rest.len() < 37 {
+            return false;
+        }
+        let profile_id_str = &rest[..36];
+        let db_name = &rest[37..];
+        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        if let Some(conn) = state.connections.get(&profile_id) {
+            conn.schema
+                .as_ref()
+                .and_then(|s| s.current_database.as_ref())
+                == Some(&db_name.to_string())
+        } else {
+            false
+        }
+    }
+
+    pub fn context_menu_select_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && menu.selected_index < menu.items.len().saturating_sub(1)
+        {
+            menu.selected_index += 1;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_select_prev(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && menu.selected_index > 0
+        {
+            menu.selected_index -= 1;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_select_first(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu
+            && menu.selected_index != 0
+        {
+            menu.selected_index = 0;
+            cx.notify();
+        }
+    }
+
+    pub fn context_menu_select_last(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            let last = menu.items.len().saturating_sub(1);
+            if menu.selected_index != last {
+                menu.selected_index = last;
                 cx.notify();
             }
-            return;
         }
+    }
 
-        if click_count != 1 {
+    pub fn context_menu_execute(&mut self, cx: &mut Context<Self>) {
+        let Some(ref mut menu) = self.context_menu else {
             return;
-        }
+        };
 
-        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-        {
-            let is_connected = self
-                .app_state
-                .read(cx)
-                .connections
-                .contains_key(&profile_id);
-            if is_connected {
-                self.app_state.update(cx, |state, cx| {
-                    state.set_active_connection(profile_id);
-                    cx.notify();
-                });
-            } else {
-                self.connect_to_profile(profile_id, cx);
+        let Some(item) = menu.items.get(menu.selected_index).cloned() else {
+            return;
+        };
+
+        let item_id = menu.item_id.clone();
+
+        match item.action {
+            ContextMenuAction::Submenu(sub_items) => {
+                // Navigate into submenu
+                let current_items = std::mem::take(&mut menu.items);
+                let current_index = menu.selected_index;
+                menu.parent_stack.push((current_items, current_index));
+                menu.items = sub_items;
+                menu.selected_index = 0;
+                cx.notify();
+                return;
             }
-        } else if item_id.starts_with("db_") {
-            self.handle_database_click(item_id, cx);
+            ContextMenuAction::Open => {
+                self.browse_table(&item_id, cx);
+            }
+            ContextMenuAction::ViewSchema => {
+                self.toggle_item_expansion(&item_id, cx);
+            }
+            ContextMenuAction::GenerateSelectStar => {
+                self.generate_select_star(&item_id, cx);
+            }
+            ContextMenuAction::Connect => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.connect_to_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Disconnect => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.disconnect_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Edit => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.edit_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::Delete => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.delete_profile(profile_id, cx);
+                }
+            }
+            ContextMenuAction::SwitchToDatabase => {
+                self.handle_database_click(&item_id, cx);
+            }
         }
+
+        // Close menu after executing action
+        self.context_menu = None;
+        cx.notify();
+    }
+
+    /// Execute menu action at a specific index (for mouse clicks).
+    pub fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(ref mut menu) = self.context_menu {
+            if index >= menu.items.len() {
+                log::warn!(
+                    "context_menu_execute_at: invalid index {} for {} items",
+                    index,
+                    menu.items.len()
+                );
+                return;
+            }
+            menu.selected_index = index;
+        }
+        self.context_menu_execute(cx);
+    }
+
+    pub fn context_menu_go_back(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(ref mut menu) = self.context_menu else {
+            return false;
+        };
+
+        if let Some((parent_items, parent_index)) = menu.parent_stack.pop() {
+            menu.items = parent_items;
+            menu.selected_index = parent_index;
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Go back to parent menu and execute action at given index.
+    pub fn context_menu_parent_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.context_menu_go_back(cx) {
+            self.context_menu_execute_at(index, cx);
+        }
+    }
+
+    pub fn close_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            self.context_menu = None;
+            cx.notify();
+        }
+    }
+
+    pub fn has_context_menu_open(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    pub fn context_menu_state(&self) -> Option<&ContextMenuState> {
+        self.context_menu.as_ref()
+    }
+
+    /// Returns an approximate position for the context menu based on the selected item.
+    /// Used for keyboard-triggered menu opening (m key).
+    pub fn selected_item_menu_position(&self, cx: &App) -> Point<Pixels> {
+        let header_height = px(40.0);
+        let row_height = px(28.0);
+        let menu_x = px(180.0);
+
+        let index = self.tree_state.read(cx).selected_index().unwrap_or(0);
+        let y = header_height + (row_height * (index as f32));
+
+        Point::new(menu_x, y)
+    }
+
+    fn extract_qualified_name(item_id: &str) -> Option<String> {
+        let rest = item_id
+            .strip_prefix("table_")
+            .or_else(|| item_id.strip_prefix("view_"))?;
+        Self::parse_qualified_table_name(rest)
     }
 
     fn parse_qualified_table_name(rest: &str) -> Option<String> {
@@ -397,16 +775,20 @@ impl Sidebar {
     }
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        // Preserve selection across refresh
         let selected_index = self.tree_state.read(cx).selected_index();
 
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
 
+        if let Some(ref menu) = self.context_menu
+            && Self::find_item_index_in_tree(&items, &menu.item_id, &mut 0).is_none()
+        {
+            self.context_menu = None;
+        }
+
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
 
-            // Restore selection, clamping to valid range
             if let Some(idx) = selected_index {
                 let new_idx = idx.min(self.visible_entry_count.saturating_sub(1));
                 state.set_selected_index(Some(new_idx), cx);
@@ -521,6 +903,33 @@ impl Sidebar {
         }
 
         items.iter().map(count_recursive).sum()
+    }
+
+    fn find_item_index(&self, item_id: &str, cx: &Context<Self>) -> Option<usize> {
+        let items = self.build_tree_items_with_overrides(cx);
+        Self::find_item_index_in_tree(&items, item_id, &mut 0)
+    }
+
+    fn find_item_index_in_tree(
+        items: &[TreeItem],
+        target_id: &str,
+        current_index: &mut usize,
+    ) -> Option<usize> {
+        for item in items {
+            if item.id.as_ref() == target_id {
+                return Some(*current_index);
+            }
+            *current_index += 1;
+
+            if item.is_expanded()
+                && item.is_folder()
+                && let Some(idx) =
+                    Self::find_item_index_in_tree(&item.children, target_id, current_index)
+            {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     fn build_schema_children(
@@ -813,6 +1222,62 @@ impl Sidebar {
         .ok();
     }
 
+    pub fn render_menu_panel(
+        theme: &gpui_component::Theme,
+        items: &[ContextMenuItem],
+        selected_index: Option<usize>,
+        sidebar: Option<Entity<Self>>,
+        panel_id: &str,
+        is_parent_menu: bool,
+    ) -> impl IntoElement {
+        div()
+            .min_w_40()
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(Radii::MD)
+            .shadow_lg()
+            .py_1()
+            .children(items.iter().enumerate().map(|(idx, item)| {
+                let is_selected = selected_index == Some(idx);
+                let is_submenu = matches!(item.action, ContextMenuAction::Submenu(_));
+                let sidebar_for_click = sidebar.clone();
+                let item_id = SharedString::from(format!("{}-item-{}", panel_id, idx));
+
+                div()
+                    .id(item_id)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_3()
+                    .py(px(6.0))
+                    .text_size(FontSizes::SM)
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .when(is_selected, |d| {
+                        d.bg(theme.accent).text_color(theme.accent_foreground)
+                    })
+                    .when(!is_selected, |d| {
+                        d.text_color(theme.foreground)
+                            .hover(|d| d.bg(theme.list_active))
+                    })
+                    .when_some(sidebar_for_click, |d, sidebar| {
+                        d.on_click(move |_, _, cx| {
+                            if is_parent_menu {
+                                sidebar.update(cx, |s, cx| s.context_menu_parent_execute_at(idx, cx));
+                            } else {
+                                sidebar.update(cx, |s, cx| s.context_menu_execute_at(idx, cx));
+                            }
+                        })
+                    })
+                    .child(item.label.clone())
+                    .when(is_submenu, |d| {
+                        d.child(div().text_color(theme.muted_foreground).child("›"))
+                    })
+            }))
+    }
+
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let app_state = self.app_state.clone();
@@ -1056,12 +1521,47 @@ impl Render for Sidebar {
                         TreeNodeKind::Unknown => theme.muted_foreground,
                     };
 
+                    let is_table_or_view =
+                        matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View);
+
+                    let sidebar_for_mousedown = sidebar_entity.clone();
+                    let item_id_for_mousedown = item_id.clone();
+                    let sidebar_for_click = sidebar_entity.clone();
+                    let item_id_for_click = item_id.clone();
+
                     let mut list_item = ListItem::new(ix).selected(selected).py(Spacing::XS).child(
                         div()
+                            .id(SharedString::from(format!("row-{}", item_id)))
+                            .w_full()
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
                             .pl(indent)
+                            .when(is_table_or_view, |el| {
+                                let sidebar_md = sidebar_for_mousedown.clone();
+                                let id_md = item_id_for_mousedown.clone();
+                                let sidebar_cl = sidebar_for_click.clone();
+                                let id_cl = item_id_for_click.clone();
+                                el.on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    sidebar_md.update(cx, |this, cx| {
+                                        if let Some(idx) = this.find_item_index(&id_md, cx) {
+                                            this.tree_state.update(cx, |state, cx| {
+                                                state.set_selected_index(Some(idx), cx);
+                                            });
+                                        }
+                                        cx.emit(SidebarEvent::RequestFocus);
+                                        cx.notify();
+                                    });
+                                })
+                                .on_click(move |event, _window, cx| {
+                                    if event.click_count() == 2 {
+                                        sidebar_cl.update(cx, |this, cx| {
+                                            this.browse_table(&id_cl, cx);
+                                        });
+                                    }
+                                })
+                            })
                             .child(
                                 div()
                                     .w(px(12.0))
@@ -1106,10 +1606,11 @@ impl Render for Sidebar {
                         list_item = list_item.cursor(CursorStyle::PointingHand);
                     }
 
-                    if node_kind.needs_click_handler() {
+                    if !is_table_or_view && node_kind.needs_click_handler() {
                         let item_id_for_click = item_id.clone();
                         let sidebar = sidebar_entity.clone();
                         list_item = list_item.on_click(move |event, _window, cx| {
+                            cx.stop_propagation();
                             let click_count = event.click_count();
                             sidebar.update(cx, |this, cx| {
                                 this.handle_item_click(&item_id_for_click, click_count, cx);
@@ -1117,70 +1618,99 @@ impl Render for Sidebar {
                         });
                     }
 
-                    if node_kind == TreeNodeKind::Profile
-                        && let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                        && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                    {
+                    if node_kind == TreeNodeKind::Profile {
                         let sidebar_for_menu = sidebar_entity.clone();
-                        let profile_connected = is_connected;
-
-                        let btn_id: SharedString = format!("menu-{}", profile_id).into();
+                        let item_id_for_menu = item_id.clone();
+                        let hover_bg = theme.secondary;
 
                         list_item = list_item.suffix(move |_window, _cx| {
                             let sidebar = sidebar_for_menu.clone();
-                            let sidebar_action = sidebar.clone();
-                            let sidebar_edit = sidebar.clone();
-                            let sidebar_delete = sidebar.clone();
+                            let item_id = item_id_for_menu.clone();
 
-                            Button::new(btn_id.clone())
-                                .ghost()
-                                .small()
-                                .label("⋯")
-                                .on_click(|_ev, _window, cx| {
+                            div()
+                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                .px_1()
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(move |d| d.bg(hover_bg))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
-                                .dropdown_menu(move |menu, _window, _cx| {
-                                    let menu = if profile_connected {
-                                        let sidebar_disconnect = sidebar_action.clone();
-                                        menu.item(PopupMenuItem::new("Disconnect").on_click(
-                                            move |_ev, _window, cx| {
-                                                sidebar_disconnect.update(cx, |this, cx| {
-                                                    this.disconnect_profile(profile_id, cx);
-                                                });
-                                            },
-                                        ))
-                                    } else {
-                                        let sidebar_connect = sidebar_action.clone();
-                                        menu.item(PopupMenuItem::new("Connect").on_click(
-                                            move |_ev, _window, cx| {
-                                                sidebar_connect.update(cx, |this, cx| {
-                                                    this.connect_to_profile(profile_id, cx);
-                                                });
-                                            },
-                                        ))
-                                    };
-
-                                    let sidebar_ed = sidebar_edit.clone();
-                                    let sidebar_del = sidebar_delete.clone();
-                                    menu.item(PopupMenuItem::new("Edit").on_click(
-                                        move |_ev, _window, cx| {
-                                            sidebar_ed.update(cx, |this, cx| {
-                                                this.edit_profile(profile_id, cx);
-                                            });
-                                        },
-                                    ))
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("Delete").on_click(
-                                            move |_ev, _window, cx| {
-                                                sidebar_del.update(cx, |this, cx| {
-                                                    this.delete_profile(profile_id, cx);
-                                                });
-                                            },
-                                        ),
-                                    )
+                                .on_click(move |event, _, cx| {
+                                    cx.stop_propagation();
+                                    let position = event.position();
+                                    sidebar.update(cx, |this, cx| {
+                                        cx.emit(SidebarEvent::RequestFocus);
+                                        this.open_menu_for_item(&item_id, position, cx);
+                                    });
                                 })
+                                .child("⋯")
                         });
+                    }
+
+                    // Table/View menu
+                    if matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View) {
+                        let item_id_for_menu = item_id.clone();
+                        let sidebar_for_menu = sidebar_entity.clone();
+                        let hover_bg = theme.secondary;
+
+                        list_item = list_item.suffix(move |_window, _cx| {
+                            let sidebar = sidebar_for_menu.clone();
+                            let item_id = item_id_for_menu.clone();
+
+                            div()
+                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                .px_1()
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(move |d| d.bg(hover_bg))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .on_click(move |event, _, cx| {
+                                    cx.stop_propagation();
+                                    let position = event.position();
+                                    sidebar.update(cx, |this, cx| {
+                                        cx.emit(SidebarEvent::RequestFocus);
+                                        this.open_menu_for_item(&item_id, position, cx);
+                                    });
+                                })
+                                .child("⋯")
+                        });
+                    }
+
+                    // Database menu (only show if not current database)
+                    if node_kind == TreeNodeKind::Database {
+                        let is_current = item.label.contains("(current)");
+                        if !is_current {
+                            let item_id_for_menu = item_id.clone();
+                            let sidebar_for_menu = sidebar_entity.clone();
+                            let hover_bg = theme.secondary;
+
+                            list_item = list_item.suffix(move |_window, _cx| {
+                                let sidebar = sidebar_for_menu.clone();
+                                let item_id = item_id_for_menu.clone();
+
+                                div()
+                                    .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                    .px_1()
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .hover(move |d| d.bg(hover_bg))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                    .on_click(move |event, _, cx| {
+                                        cx.stop_propagation();
+                                        let position = event.position();
+                                        sidebar.update(cx, |this, cx| {
+                                            cx.emit(SidebarEvent::RequestFocus);
+                                            this.open_menu_for_item(&item_id, position, cx);
+                                        });
+                                    })
+                                    .child("⋯")
+                            });
+                        }
                     }
 
                     list_item

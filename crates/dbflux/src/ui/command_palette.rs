@@ -391,6 +391,13 @@ impl Render for CommandPalette {
                             .children(commands_to_render.into_iter().map(
                                 |(idx, cmd, is_selected)| {
                                     Self::render_command_item(idx, cmd, is_selected, theme)
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.selected_index = idx;
+                                            this.execute_selected(window, cx);
+                                        }))
                                 },
                             ))
                             .when(self.filtered.is_empty(), |d| {

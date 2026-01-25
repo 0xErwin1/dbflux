@@ -55,6 +55,8 @@ actions!(
         SaveQuery,
         // Settings
         OpenSettings,
+        // Item menu
+        OpenItemMenu,
     ]
 );
 

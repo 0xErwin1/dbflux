@@ -62,6 +62,7 @@ pub enum Command {
     RefreshSchema,
     OpenConnectionManager,
     Disconnect,
+    OpenItemMenu,
 
     // === View ===
     ToggleEditor,
@@ -124,6 +125,7 @@ impl Command {
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
             Command::Disconnect => "Disconnect",
+            Command::OpenItemMenu => "Open Item Menu",
 
             Command::ToggleEditor => "Toggle Editor Panel",
             Command::ToggleResults => "Toggle Results Panel",
@@ -181,9 +183,10 @@ impl Command {
                 "Results"
             }
 
-            Command::RefreshSchema | Command::OpenConnectionManager | Command::Disconnect => {
-                "Connections"
-            }
+            Command::RefreshSchema
+            | Command::OpenConnectionManager
+            | Command::Disconnect
+            | Command::OpenItemMenu => "Connections",
 
             Command::ToggleEditor
             | Command::ToggleResults

@@ -132,6 +132,7 @@ fn sidebar_layer() -> KeymapLayer {
         Command::OpenConnectionManager,
     );
     layer.bind(KeyChord::new("d", Modifiers::none()), Command::Disconnect);
+    layer.bind(KeyChord::new("m", Modifiers::none()), Command::OpenItemMenu);
 
     layer
 }
@@ -392,7 +393,7 @@ mod tests {
 
         let alt_h = KeyChord::new("h", Modifiers::alt());
         let ctrl_p = KeyChord::new("p", Modifiers::ctrl());
-        let ctrl_shift_s = KeyChord::new("s", Modifiers::ctrl_shift());
+        let ctrl_s = KeyChord::new("s", Modifiers::ctrl());
 
         assert_eq!(
             keymap.resolve(ContextId::Editor, &alt_h),
@@ -403,7 +404,7 @@ mod tests {
             Some(Command::OpenSavedQueries)
         );
         assert_eq!(
-            keymap.resolve(ContextId::Editor, &ctrl_shift_s),
+            keymap.resolve(ContextId::Editor, &ctrl_s),
             Some(Command::SaveQuery)
         );
     }

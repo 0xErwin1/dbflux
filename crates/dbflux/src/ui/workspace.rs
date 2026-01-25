@@ -7,7 +7,8 @@ use crate::ui::command_palette::{
 };
 use crate::ui::editor::EditorPane;
 use crate::ui::results::{ResultsPane, ResultsReceived};
-use crate::ui::sidebar::Sidebar;
+use crate::ui::sidebar::{Sidebar, SidebarEvent};
+use crate::ui::tokens::Spacing;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::ToastManager;
@@ -53,6 +54,8 @@ pub struct Workspace {
     results_state: PanelState,
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
+    pending_sql: Option<String>,
+    pending_focus: Option<FocusTarget>,
     needs_focus_restore: bool,
 
     focus_target: FocusTarget,
@@ -107,6 +110,18 @@ impl Workspace {
         })
         .detach();
 
+        cx.subscribe(&sidebar, |this, _, event: &SidebarEvent, cx| match event {
+            SidebarEvent::GenerateSql(sql) => {
+                this.pending_sql = Some(sql.clone());
+                cx.notify();
+            }
+            SidebarEvent::RequestFocus => {
+                this.pending_focus = Some(FocusTarget::Sidebar);
+                cx.notify();
+            }
+        })
+        .detach();
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
@@ -123,6 +138,8 @@ impl Workspace {
             results_state: PanelState::Expanded,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
+            pending_sql: None,
+            pending_focus: None,
             needs_focus_restore: false,
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
@@ -518,6 +535,17 @@ impl Render for Workspace {
             self.focus_handle.focus(window);
         }
 
+        if let Some(sql) = self.pending_sql.take() {
+            self.editor.update(cx, |editor, cx| {
+                editor.add_tab_with_content(sql, None, None, window, cx);
+            });
+            self.set_focus(FocusTarget::Editor, window, cx);
+        }
+
+        if let Some(target) = self.pending_focus.take() {
+            self.set_focus(target, window, cx);
+        }
+
         if self.needs_focus_restore {
             self.needs_focus_restore = false;
             self.focus_handle.focus(window);
@@ -581,9 +609,18 @@ impl Render for Workspace {
                     })
                     .child(
                         div()
+                            .id("editor-panel")
                             .flex()
                             .flex_col()
                             .size_full()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Editor {
+                                        this.set_focus(FocusTarget::Editor, window, cx);
+                                    }
+                                }),
+                            )
                             .child(editor_header)
                             .when(editor_expanded, |el| {
                                 el.child(
@@ -611,9 +648,18 @@ impl Render for Workspace {
                     })
                     .child(
                         div()
+                            .id("results-panel")
                             .flex()
                             .flex_col()
                             .size_full()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Results {
+                                        this.set_focus(FocusTarget::Results, window, cx);
+                                    }
+                                }),
+                            )
                             .child(results_header)
                             .when(results_expanded, |el| {
                                 el.child(
@@ -641,9 +687,18 @@ impl Render for Workspace {
                     })
                     .child(
                         div()
+                            .id("tasks-panel")
                             .flex()
                             .flex_col()
                             .size_full()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::BackgroundTasks {
+                                        this.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                                    }
+                                }),
+                            )
                             .child(tasks_header)
                             .when(tasks_expanded, |el| {
                                 el.child(div().flex_1().overflow_hidden().child(tasks_panel))
@@ -868,7 +923,25 @@ impl Render for Workspace {
                                     resizable_panel()
                                         .size(px(240.0))
                                         .size_range(px(150.0)..px(500.0))
-                                        .child(sidebar),
+                                        .child(
+                                            div()
+                                                .id("sidebar-panel")
+                                                .size_full()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, window, cx| {
+                                                        if this.focus_target != FocusTarget::Sidebar
+                                                        {
+                                                            this.set_focus(
+                                                                FocusTarget::Sidebar,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    }),
+                                                )
+                                                .child(sidebar),
+                                        ),
                                 )
                                 .child(resizable_panel().child(right_pane)),
                         ),
@@ -877,11 +950,113 @@ impl Render for Workspace {
             )
             .child(command_palette)
             .child(notification_list)
+            // Context menu rendered at workspace level for proper positioning
+            .when_some(
+                self.sidebar.read(cx).context_menu_state(),
+                |this, menu| {
+                    let theme = cx.theme();
+                    let sidebar_entity = self.sidebar.clone();
+
+                    let menu_x = menu.position.x;
+                    let menu_y = menu.position.y;
+                    let menu_width = px(160.0);
+                    let menu_gap = Spacing::XS;
+                    let menu_item_height = px(32.0);
+                    let menu_container_padding = px(4.0);
+
+                    let in_submenu = !menu.parent_stack.is_empty();
+
+                    let submenu_y_offset = if in_submenu {
+                        let (_, parent_selected) = menu.parent_stack.last().unwrap();
+                        menu_container_padding + (menu_item_height * (*parent_selected as f32))
+                    } else {
+                        px(0.0)
+                    };
+
+                    this
+                        // Full-screen overlay to capture clicks outside
+                        .child(
+                            div()
+                                .id("context-menu-overlay")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .on_mouse_down(MouseButton::Left, {
+                                    let sidebar = sidebar_entity.clone();
+                                    move |_, _, cx| {
+                                        sidebar.update(cx, |s, cx| s.close_context_menu(cx));
+                                    }
+                                }),
+                        )
+                        // Parent menu (shown when in submenu, at original position)
+                        .when(in_submenu, |d| {
+                            let (parent_items, parent_selected) =
+                                menu.parent_stack.last().unwrap();
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .top(menu_y)
+                                    .left(menu_x)
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                    .child(Sidebar::render_menu_panel(
+                                        theme,
+                                        parent_items,
+                                        Some(*parent_selected),
+                                        Some(sidebar_entity.clone()),
+                                        "parent-menu",
+                                        true, // is_parent_menu
+                                    )),
+                            )
+                        })
+                        // Current menu (submenu to the right of parent, or main menu at click position)
+                        .child(
+                            div()
+                                .absolute()
+                                .top(menu_y + submenu_y_offset)
+                                .left(if in_submenu {
+                                    menu_x + menu_width + menu_gap
+                                } else {
+                                    menu_x
+                                })
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .child(Sidebar::render_menu_panel(
+                                    theme,
+                                    &menu.items,
+                                    Some(menu.selected_index),
+                                    Some(sidebar_entity.clone()),
+                                    "context-menu",
+                                    false, // is_parent_menu
+                                )),
+                        )
+                },
+            )
     }
 }
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // When context menu is open, only allow menu-related commands
+        if self.focus_target == FocusTarget::Sidebar
+            && self.sidebar.read(cx).has_context_menu_open()
+        {
+            match cmd {
+                Command::SelectNext
+                | Command::SelectPrev
+                | Command::SelectFirst
+                | Command::SelectLast
+                | Command::Execute
+                | Command::ColumnLeft
+                | Command::ColumnRight
+                | Command::Cancel => {}
+                _ => return true,
+            }
+        }
+
         match cmd {
             Command::ToggleCommandPalette => {
                 self.toggle_command_palette(window, cx);
@@ -1006,6 +1181,10 @@ impl CommandDispatcher for Workspace {
                     self.focus_handle.focus(window);
                     return true;
                 }
+                if self.sidebar.read(cx).has_context_menu_open() {
+                    self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
+                    return true;
+                }
                 if self.editor.read(cx).history_modal_open(cx) {
                     self.editor.update(cx, |editor, cx| {
                         editor.history_modal.update(cx, |modal, cx| modal.close(cx));
@@ -1025,7 +1204,11 @@ impl CommandDispatcher for Workspace {
 
             Command::SelectNext => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.select_next(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        self.sidebar.update(cx, |s, cx| s.context_menu_select_next(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.select_next(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1037,7 +1220,11 @@ impl CommandDispatcher for Workspace {
 
             Command::SelectPrev => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.select_prev(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        self.sidebar.update(cx, |s, cx| s.context_menu_select_prev(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.select_prev(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1049,7 +1236,12 @@ impl CommandDispatcher for Workspace {
 
             Command::SelectFirst => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.select_first(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        self.sidebar
+                            .update(cx, |s, cx| s.context_menu_select_first(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.select_first(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1061,7 +1253,12 @@ impl CommandDispatcher for Workspace {
 
             Command::SelectLast => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.select_last(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        self.sidebar
+                            .update(cx, |s, cx| s.context_menu_select_last(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.select_last(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1073,7 +1270,11 @@ impl CommandDispatcher for Workspace {
 
             Command::Execute => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.execute(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        self.sidebar.update(cx, |s, cx| s.context_menu_execute(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.execute(cx));
+                    }
                     true
                 }
                 FocusTarget::Editor => {
@@ -1094,7 +1295,16 @@ impl CommandDispatcher for Workspace {
 
             Command::ColumnLeft => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.collapse(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        // If in submenu, go back to parent; otherwise close menu
+                        let went_back =
+                            self.sidebar.update(cx, |s, cx| s.context_menu_go_back(cx));
+                        if !went_back {
+                            self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
+                        }
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.collapse(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1122,7 +1332,12 @@ impl CommandDispatcher for Workspace {
 
             Command::ColumnRight => match self.focus_target {
                 FocusTarget::Sidebar => {
-                    self.sidebar.update(cx, |s, cx| s.expand(cx));
+                    if self.sidebar.read(cx).has_context_menu_open() {
+                        // 'l' can also enter submenus (same as Enter)
+                        self.sidebar.update(cx, |s, cx| s.context_menu_execute(cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.expand(cx));
+                    }
                     true
                 }
                 FocusTarget::Results => {
@@ -1234,6 +1449,17 @@ impl CommandDispatcher for Workspace {
             Command::Rename | Command::FocusSearch => {
                 // These are context-specific (saved queries modal)
                 false
+            }
+
+            Command::OpenItemMenu => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    let position = self.sidebar.read(cx).selected_item_menu_position(cx);
+                    self.sidebar
+                        .update(cx, |s, cx| s.open_item_menu(position, cx));
+                    true
+                } else {
+                    false
+                }
             }
 
             Command::PageDown
