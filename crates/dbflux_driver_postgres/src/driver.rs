@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use dbflux_core::{
-    ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest,
-    QueryResult, Row, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle,
+    QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot, SshTunnelConfig, SslMode,
+    TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -296,6 +297,33 @@ impl QueryCancelHandle for PostgresCancelHandle {
     }
 }
 
+const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
+    CodeGeneratorInfo {
+        id: "select_star",
+        label: "SELECT *",
+        scope: CodeGenScope::TableOrView,
+        order: 0,
+    },
+    CodeGeneratorInfo {
+        id: "insert",
+        label: "INSERT INTO",
+        scope: CodeGenScope::Table,
+        order: 5,
+    },
+    CodeGeneratorInfo {
+        id: "update",
+        label: "UPDATE",
+        scope: CodeGenScope::Table,
+        order: 6,
+    },
+    CodeGeneratorInfo {
+        id: "create_table",
+        label: "CREATE TABLE",
+        scope: CodeGenScope::Table,
+        order: 10,
+    },
+];
+
 impl Connection for PostgresConnection {
     fn ping(&self) -> Result<(), DbError> {
         let mut client = self
@@ -570,6 +598,23 @@ impl Connection for PostgresConnection {
     fn kind(&self) -> DbKind {
         DbKind::Postgres
     }
+
+    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
+        POSTGRES_CODE_GENERATORS
+    }
+
+    fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
+        match generator_id {
+            "select_star" => Ok(pg_generate_select_star(table)),
+            "insert" => Ok(pg_generate_insert(table)),
+            "update" => Ok(pg_generate_update(table)),
+            "create_table" => Ok(pg_generate_create_table(table)),
+            _ => Err(DbError::NotSupported(format!(
+                "Code generator '{}' not supported",
+                generator_id
+            ))),
+        }
+    }
 }
 
 fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
@@ -765,7 +810,37 @@ fn get_all_columns_for_schema(
             SELECT
                 c.table_name,
                 c.column_name,
-                c.data_type,
+                CASE
+                    WHEN c.data_type = 'character varying' THEN
+                        'varchar' || COALESCE('(' || c.character_maximum_length || ')', '')
+                    WHEN c.data_type = 'character' THEN
+                        'char' || COALESCE('(' || c.character_maximum_length || ')', '')
+                    WHEN c.data_type = 'numeric' AND c.numeric_precision IS NOT NULL THEN
+                        'numeric(' || c.numeric_precision ||
+                        COALESCE(',' || c.numeric_scale, '') || ')'
+                    WHEN c.data_type = 'bit' AND c.character_maximum_length IS NOT NULL THEN
+                        'bit(' || c.character_maximum_length || ')'
+                    WHEN c.data_type = 'bit varying' AND c.character_maximum_length IS NOT NULL THEN
+                        'varbit(' || c.character_maximum_length || ')'
+                    WHEN c.data_type = 'time without time zone' AND c.datetime_precision IS NOT NULL
+                         AND c.datetime_precision != 6 THEN
+                        'time(' || c.datetime_precision || ')'
+                    WHEN c.data_type = 'time with time zone' AND c.datetime_precision IS NOT NULL
+                         AND c.datetime_precision != 6 THEN
+                        'timetz(' || c.datetime_precision || ')'
+                    WHEN c.data_type = 'timestamp without time zone' AND c.datetime_precision IS NOT NULL
+                         AND c.datetime_precision != 6 THEN
+                        'timestamp(' || c.datetime_precision || ')'
+                    WHEN c.data_type = 'timestamp with time zone' AND c.datetime_precision IS NOT NULL
+                         AND c.datetime_precision != 6 THEN
+                        'timestamptz(' || c.datetime_precision || ')'
+                    WHEN c.data_type = 'interval' AND c.datetime_precision IS NOT NULL
+                         AND c.datetime_precision != 6 THEN
+                        'interval(' || c.datetime_precision || ')'
+                    WHEN c.data_type = 'ARRAY' THEN
+                        c.udt_name
+                    ELSE c.data_type
+                END as type_name,
                 c.is_nullable = 'YES' as nullable,
                 c.column_default,
                 COALESCE(
@@ -965,4 +1040,150 @@ fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
 
     log::error!("PostgreSQL connection failed: {}", message);
     DbError::ConnectionFailed(message)
+}
+
+fn pg_quote_ident(ident: &str) -> String {
+    debug_assert!(!ident.is_empty(), "identifier cannot be empty");
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+fn pg_qualified_name(schema: Option<&str>, name: &str) -> String {
+    match schema {
+        Some(s) => format!("{}.{}", pg_quote_ident(s), pg_quote_ident(name)),
+        None => pg_quote_ident(name),
+    }
+}
+
+fn pg_generate_select_star(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    format!("SELECT * FROM {} LIMIT 100;", qualified)
+}
+
+fn pg_generate_insert(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+
+    if table.columns.is_empty() {
+        return format!("INSERT INTO {} DEFAULT VALUES;", qualified);
+    }
+
+    let columns: Vec<String> = table
+        .columns
+        .iter()
+        .map(|c| pg_quote_ident(&c.name))
+        .collect();
+
+    let placeholders: Vec<String> = (1..=table.columns.len())
+        .map(|i| format!("${}", i))
+        .collect();
+
+    format!(
+        "INSERT INTO {} ({})\nVALUES ({});",
+        qualified,
+        columns.join(", "),
+        placeholders.join(", ")
+    )
+}
+
+fn pg_generate_update(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+
+    if table.columns.is_empty() {
+        return format!(
+            "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
+            qualified
+        );
+    }
+
+    let pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let non_pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| !c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let set_columns = if non_pk_columns.is_empty() {
+        &table
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()[..]
+    } else {
+        &non_pk_columns[..]
+    };
+
+    let set_clauses: Vec<String> = set_columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), i + 1))
+        .collect();
+
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        let start_idx = set_columns.len() + 1;
+        pk_columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), start_idx + i))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!(
+        "UPDATE {}\nSET {}\nWHERE {};",
+        qualified,
+        set_clauses.join(",\n    "),
+        where_clause
+    )
+}
+
+fn pg_generate_create_table(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    let mut sql = format!("CREATE TABLE {} (\n", qualified);
+
+    let pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    for (i, col) in table.columns.iter().enumerate() {
+        // TODO: Consider normalizing type names for more canonical output
+        // (e.g., "character varying" → "varchar", handle arrays, domains, etc.)
+        let mut line = format!("    {} {}", pg_quote_ident(&col.name), col.type_name);
+
+        if !col.nullable {
+            line.push_str(" NOT NULL");
+        }
+
+        if let Some(ref default) = col.default_value {
+            line.push_str(&format!(" DEFAULT {}", default));
+        }
+
+        let is_last_column = i == table.columns.len() - 1;
+        let has_pk_constraint = !pk_columns.is_empty();
+
+        if !is_last_column || has_pk_constraint {
+            line.push(',');
+        }
+
+        sql.push_str(&line);
+        sql.push('\n');
+    }
+
+    if !pk_columns.is_empty() {
+        let pk_quoted: Vec<String> = pk_columns.iter().map(|c| pg_quote_ident(c)).collect();
+        sql.push_str(&format!("    PRIMARY KEY ({})\n", pk_quoted.join(", ")));
+    }
+
+    sql.push_str(");");
+    sql
 }

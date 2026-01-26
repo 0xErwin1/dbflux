@@ -1,7 +1,35 @@
 use crate::{
     ConnectionProfile, DatabaseInfo, DbError, DbKind, QueryHandle, QueryRequest, QueryResult,
-    SchemaSnapshot,
+    SchemaSnapshot, TableInfo,
 };
+
+/// Scope where a code generator can be applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeGenScope {
+    Table,
+    View,
+    TableOrView,
+    // Future: Schema, Database, Column
+}
+
+/// Metadata for a code generator available on a connection.
+///
+/// Drivers expose their available generators as a static slice, allowing
+/// the UI to build context menus dynamically based on the selected item type.
+#[derive(Debug, Clone, Copy)]
+pub struct CodeGeneratorInfo {
+    /// Unique identifier (e.g., "select_star", "create_table").
+    pub id: &'static str,
+
+    /// Human-readable label for the UI (e.g., "SELECT *", "CREATE TABLE").
+    pub label: &'static str,
+
+    /// Where this generator can be applied.
+    pub scope: CodeGenScope,
+
+    /// Display order in the menu (lower values appear first).
+    pub order: u32,
+}
 use std::sync::Arc;
 
 /// Handle for cancelling a running query.
@@ -181,4 +209,18 @@ pub trait Connection: Send + Sync {
 
     /// Returns the database kind for this connection.
     fn kind(&self) -> DbKind;
+
+    /// Returns available code generators for this connection.
+    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
+        &[]
+    }
+
+    /// Generate code for a table. Returns `DbError::NotSupported` for unknown IDs.
+    fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
+        let _ = table;
+        Err(DbError::NotSupported(format!(
+            "Code generator '{}' not supported",
+            generator_id
+        )))
+    }
 }

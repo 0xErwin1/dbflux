@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dbflux_core::{
-    ColumnInfo, ColumnMeta, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaSnapshot, TableInfo, Value, ViewInfo,
+    CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle,
+    QueryRequest, QueryResult, Row, SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -110,6 +110,33 @@ impl QueryCancelHandle for SqliteCancelHandle {
         self.cancelled.load(Ordering::SeqCst)
     }
 }
+
+const SQLITE_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
+    CodeGeneratorInfo {
+        id: "select_star",
+        label: "SELECT *",
+        scope: CodeGenScope::TableOrView,
+        order: 0,
+    },
+    CodeGeneratorInfo {
+        id: "insert",
+        label: "INSERT INTO",
+        scope: CodeGenScope::Table,
+        order: 5,
+    },
+    CodeGeneratorInfo {
+        id: "update",
+        label: "UPDATE",
+        scope: CodeGenScope::Table,
+        order: 6,
+    },
+    CodeGeneratorInfo {
+        id: "create_table",
+        label: "CREATE TABLE",
+        scope: CodeGenScope::Table,
+        order: 10,
+    },
+];
 
 impl Connection for SqliteConnection {
     fn ping(&self) -> Result<(), DbError> {
@@ -258,6 +285,23 @@ impl Connection for SqliteConnection {
     fn kind(&self) -> DbKind {
         DbKind::SQLite
     }
+
+    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
+        SQLITE_CODE_GENERATORS
+    }
+
+    fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
+        match generator_id {
+            "select_star" => Ok(sqlite_generate_select_star(table)),
+            "insert" => Ok(sqlite_generate_insert(table)),
+            "update" => Ok(sqlite_generate_update(table)),
+            "create_table" => Ok(sqlite_generate_create_table(table)),
+            _ => Err(DbError::NotSupported(format!(
+                "Code generator '{}' not supported",
+                generator_id
+            ))),
+        }
+    }
 }
 
 impl SqliteConnection {
@@ -382,4 +426,144 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
         Ok(ValueRef::Blob(b)) => Value::Bytes(b.to_vec()),
         Err(_) => Value::Null,
     }
+}
+
+fn sqlite_quote_ident(ident: &str) -> String {
+    debug_assert!(!ident.is_empty(), "identifier cannot be empty");
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+fn sqlite_generate_select_star(table: &TableInfo) -> String {
+    format!("SELECT * FROM {} LIMIT 100;", sqlite_quote_ident(&table.name))
+}
+
+fn sqlite_generate_insert(table: &TableInfo) -> String {
+    let quoted_name = sqlite_quote_ident(&table.name);
+
+    if table.columns.is_empty() {
+        return format!("INSERT INTO {} DEFAULT VALUES;", quoted_name);
+    }
+
+    let columns: Vec<String> = table
+        .columns
+        .iter()
+        .map(|c| sqlite_quote_ident(&c.name))
+        .collect();
+
+    let placeholders: Vec<&str> = vec!["?"; table.columns.len()];
+
+    format!(
+        "INSERT INTO {} ({})\nVALUES ({});",
+        quoted_name,
+        columns.join(", "),
+        placeholders.join(", ")
+    )
+}
+
+fn sqlite_generate_update(table: &TableInfo) -> String {
+    let quoted_name = sqlite_quote_ident(&table.name);
+
+    if table.columns.is_empty() {
+        return format!("UPDATE {}\nSET -- no columns\nWHERE <condition>;", quoted_name);
+    }
+
+    let pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let non_pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| !c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let set_columns = if non_pk_columns.is_empty() {
+        &table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
+    } else {
+        &non_pk_columns[..]
+    };
+
+    let set_clauses: Vec<String> = set_columns
+        .iter()
+        .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
+        .collect();
+
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        pk_columns
+            .iter()
+            .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!(
+        "UPDATE {}\nSET {}\nWHERE {};",
+        quoted_name,
+        set_clauses.join(",\n    "),
+        where_clause
+    )
+}
+
+fn sqlite_generate_create_table(table: &TableInfo) -> String {
+    let mut sql = format!("CREATE TABLE {} (\n", sqlite_quote_ident(&table.name));
+
+    let pk_columns: Vec<&ColumnInfo> = table
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .collect();
+
+    // SQLite: INTEGER PRIMARY KEY has special rowid semantics when inline
+    let single_integer_pk = pk_columns.len() == 1
+        && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
+
+    for (i, col) in table.columns.iter().enumerate() {
+        // Handle empty type names (SQLite allows columns without explicit types)
+        let mut line = if col.type_name.is_empty() {
+            format!("    {}", sqlite_quote_ident(&col.name))
+        } else {
+            format!("    {} {}", sqlite_quote_ident(&col.name), col.type_name)
+        };
+
+        if !col.nullable {
+            line.push_str(" NOT NULL");
+        }
+
+        // SQLite: INTEGER PRIMARY KEY inline for rowid semantics
+        if single_integer_pk && col.is_primary_key {
+            line.push_str(" PRIMARY KEY");
+        }
+
+        if let Some(ref default) = col.default_value {
+            line.push_str(&format!(" DEFAULT {}", default));
+        }
+
+        let is_last_column = i == table.columns.len() - 1;
+        let needs_pk_constraint = !pk_columns.is_empty() && !single_integer_pk;
+
+        if !is_last_column || needs_pk_constraint {
+            line.push(',');
+        }
+
+        sql.push_str(&line);
+        sql.push('\n');
+    }
+
+    // Add composite PRIMARY KEY constraint (only if not single INTEGER PK)
+    if !pk_columns.is_empty() && !single_integer_pk {
+        let pk_quoted: Vec<String> = pk_columns
+            .iter()
+            .map(|c| sqlite_quote_ident(&c.name))
+            .collect();
+        sql.push_str(&format!("    PRIMARY KEY ({})\n", pk_quoted.join(", ")));
+    }
+
+    sql.push_str(");");
+    sql
 }

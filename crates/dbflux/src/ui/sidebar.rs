@@ -4,7 +4,7 @@ use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
-use dbflux_core::TaskKind;
+use dbflux_core::{CodeGenScope, SchemaSnapshot, TableInfo, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -76,7 +76,7 @@ pub struct ContextMenuItem {
 pub enum ContextMenuAction {
     Open,
     ViewSchema,
-    GenerateSelectStar,
+    GenerateCode(String),
     Connect,
     Disconnect,
     Edit,
@@ -93,6 +93,13 @@ pub struct ContextMenuState {
     pub parent_stack: Vec<(Vec<ContextMenuItem>, usize)>,
     /// Position where the menu should appear (captured from click or calculated)
     pub position: Point<Pixels>,
+}
+
+/// Parsed components from a tree item ID (table or view).
+struct ItemIdParts {
+    profile_id: Uuid,
+    schema_name: String,
+    object_name: String,
 }
 
 pub struct Sidebar {
@@ -326,9 +333,9 @@ impl Sidebar {
     }
 
     fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let qualified_name = Self::extract_qualified_name(item_id);
-        if let Some(name) = qualified_name {
-            self.pending_view_table = Some(name);
+        if let Some(parts) = Self::parse_table_or_view_id(item_id) {
+            let qualified_name = format!("{}.{}", parts.schema_name, parts.object_name);
+            self.pending_view_table = Some(qualified_name);
             cx.notify();
         }
     }
@@ -351,11 +358,106 @@ impl Sidebar {
         None
     }
 
-    fn generate_select_star(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(qualified_name) = Self::extract_qualified_name(item_id) {
-            let sql = format!("SELECT * FROM {} LIMIT 100;", qualified_name);
-            cx.emit(SidebarEvent::GenerateSql(sql));
+    fn get_code_generators_for_item(
+        &self,
+        item_id: &str,
+        node_kind: TreeNodeKind,
+        cx: &App,
+    ) -> Vec<ContextMenuItem> {
+        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+            return vec![];
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&parts.profile_id) else {
+            return vec![];
+        };
+
+        let scope_filter = match node_kind {
+            TreeNodeKind::Table => |s: CodeGenScope| {
+                matches!(s, CodeGenScope::Table | CodeGenScope::TableOrView)
+            },
+            TreeNodeKind::View => |s: CodeGenScope| {
+                matches!(s, CodeGenScope::View | CodeGenScope::TableOrView)
+            },
+            _ => return vec![],
+        };
+
+        let mut generators: Vec<_> = conn
+            .connection
+            .code_generators()
+            .iter()
+            .filter(|g| scope_filter(g.scope))
+            .collect();
+
+        generators.sort_by_key(|g| g.order);
+
+        generators
+            .into_iter()
+            .map(|g| ContextMenuItem {
+                label: g.label.to_string(),
+                action: ContextMenuAction::GenerateCode(g.id.to_string()),
+            })
+            .collect()
+    }
+
+    fn generate_code(&mut self, item_id: &str, generator_id: &str, cx: &mut Context<Self>) {
+        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+            return;
+        };
+
+        let is_view = item_id.starts_with("view_");
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&parts.profile_id) else {
+            return;
+        };
+
+        let Some(table) = Self::find_table_for_item(&parts, &conn.schema) else {
+            if is_view {
+                log::warn!(
+                    "Code generation for view '{}' failed: view metadata not available",
+                    parts.object_name
+                );
+                self.pending_toast = Some(PendingToast {
+                    message: "Code generation for views is not yet supported".to_string(),
+                    is_error: true,
+                });
+                cx.notify();
+            }
+            return;
+        };
+
+        match conn.connection.generate_code(generator_id, table) {
+            Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
+            Err(e) => {
+                log::error!("Code generation failed: {}", e);
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Code generation failed: {}", e),
+                    is_error: true,
+                });
+                cx.notify();
+            }
         }
+    }
+
+    fn find_table_for_item<'a>(
+        parts: &ItemIdParts,
+        schema: &'a Option<SchemaSnapshot>,
+    ) -> Option<&'a TableInfo> {
+        let schema = schema.as_ref()?;
+
+        for db_schema in &schema.schemas {
+            if db_schema.name == parts.schema_name {
+                return db_schema
+                    .tables
+                    .iter()
+                    .find(|t| t.name == parts.object_name);
+            }
+        }
+
+        // For databases without schemas (fallback)
+        schema.tables.iter().find(|t| t.name == parts.object_name)
     }
 
     pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -400,7 +502,7 @@ impl Sidebar {
     ) -> Vec<ContextMenuItem> {
         match node_kind {
             TreeNodeKind::Table | TreeNodeKind::View => {
-                vec![
+                let mut items = vec![
                     ContextMenuItem {
                         label: "Open".into(),
                         action: ContextMenuAction::Open,
@@ -409,14 +511,18 @@ impl Sidebar {
                         label: "View Schema".into(),
                         action: ContextMenuAction::ViewSchema,
                     },
-                    ContextMenuItem {
+                ];
+
+                // Get code generators from driver (if connected)
+                let generators = self.get_code_generators_for_item(item_id, node_kind, cx);
+                if !generators.is_empty() {
+                    items.push(ContextMenuItem {
                         label: "Generate SQL".into(),
-                        action: ContextMenuAction::Submenu(vec![ContextMenuItem {
-                            label: "SELECT *".into(),
-                            action: ContextMenuAction::GenerateSelectStar,
-                        }]),
-                    },
-                ]
+                        action: ContextMenuAction::Submenu(generators),
+                    });
+                }
+
+                items
             }
             TreeNodeKind::Profile => {
                 let is_connected = if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
@@ -558,8 +664,8 @@ impl Sidebar {
             ContextMenuAction::ViewSchema => {
                 self.toggle_item_expansion(&item_id, cx);
             }
-            ContextMenuAction::GenerateSelectStar => {
-                self.generate_select_star(&item_id, cx);
+            ContextMenuAction::GenerateCode(generator_id) => {
+                self.generate_code(&item_id, &generator_id, cx);
             }
             ContextMenuAction::Connect => {
                 if let Some(profile_id_str) = item_id.strip_prefix("profile_")
@@ -665,31 +771,39 @@ impl Sidebar {
         Point::new(menu_x, y)
     }
 
-    fn extract_qualified_name(item_id: &str) -> Option<String> {
+    /// Parse a table/view item ID into its components.
+    ///
+    /// Format: `{prefix}_{uuid}__{schema}__{name}` where prefix is "table" or "view".
+    /// Uses `__` as separator to allow underscores in schema/table names.
+    ///
+    /// Uses `rsplit_once("__")` to handle table names containing `__`.
+    /// Ambiguous if both schema and table contain `__` (rare).
+    fn parse_table_or_view_id(item_id: &str) -> Option<ItemIdParts> {
         let rest = item_id
             .strip_prefix("table_")
             .or_else(|| item_id.strip_prefix("view_"))?;
-        Self::parse_qualified_table_name(rest)
-    }
 
-    fn parse_qualified_table_name(rest: &str) -> Option<String> {
+        // UUID is 36 chars, followed by "__"
         if rest.len() < 38 {
             return None;
         }
 
-        let uuid_part = rest.get(..36)?;
-        if Uuid::parse_str(uuid_part).is_err() {
+        let uuid_str = rest.get(..36)?;
+        let profile_id = Uuid::parse_str(uuid_str).ok()?;
+
+        let after_uuid = rest.get(36..)?;
+        let after_uuid = after_uuid.strip_prefix("__")?;
+        let (schema_name, object_name) = after_uuid.rsplit_once("__")?;
+
+        if schema_name.is_empty() || object_name.is_empty() {
             return None;
         }
 
-        let after_uuid = rest.get(37..)?;
-        let (schema, table) = after_uuid.split_once('_')?;
-
-        if schema.is_empty() || table.is_empty() {
-            return None;
-        }
-
-        Some(format!("{}.{}", schema, table))
+        Some(ItemIdParts {
+            profile_id,
+            schema_name: schema_name.to_string(),
+            object_name: object_name.to_string(),
+        })
     }
 
     fn handle_database_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -1018,7 +1132,7 @@ impl Sidebar {
                 .iter()
                 .map(|view| {
                     TreeItem::new(
-                        format!("view_{}_{}_{}", profile_id, db_schema.name, view.name),
+                        format!("view_{}__{}__{}", profile_id, db_schema.name, view.name),
                         view.name.clone(),
                     )
                 })
@@ -1053,7 +1167,7 @@ impl Sidebar {
                     let nullable = if col.nullable { "?" } else { "" };
                     let label = format!("{}: {}{}{}", col.name, col.type_name, nullable, pk_marker);
                     TreeItem::new(
-                        format!("col_{}_{}_{}", profile_id, table.name, col.name),
+                        format!("col_{}__{}__{}", profile_id, table.name, col.name),
                         label,
                     )
                 })
@@ -1061,7 +1175,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!("columns_{}_{}_{}", profile_id, schema_name, table.name),
+                    format!("columns_{}__{}__{}", profile_id, schema_name, table.name),
                     format!("Columns ({})", table.columns.len()),
                 )
                 .expanded(true)
@@ -1079,7 +1193,7 @@ impl Sidebar {
                     let cols = idx.columns.join(", ");
                     let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
                     TreeItem::new(
-                        format!("idx_{}_{}_{}", profile_id, table.name, idx.name),
+                        format!("idx_{}__{}__{}", profile_id, table.name, idx.name),
                         label,
                     )
                 })
@@ -1087,7 +1201,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!("indexes_{}_{}_{}", profile_id, schema_name, table.name),
+                    format!("indexes_{}__{}__{}", profile_id, schema_name, table.name),
                     format!("Indexes ({})", table.indexes.len()),
                 )
                 .expanded(false)
@@ -1096,7 +1210,7 @@ impl Sidebar {
         }
 
         TreeItem::new(
-            format!("table_{}_{}_{}", profile_id, schema_name, table.name),
+            format!("table_{}__{}__{}", profile_id, schema_name, table.name),
             table.name.clone(),
         )
         .expanded(false)
@@ -1772,5 +1886,92 @@ impl Render for Sidebar {
                 },
             )))
             .child(self.render_footer(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Sidebar;
+    use uuid::Uuid;
+
+    #[test]
+    fn parse_table_id_valid() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}__public__users");
+        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
+        assert_eq!(parts.profile_id, uuid);
+        assert_eq!(parts.schema_name, "public");
+        assert_eq!(parts.object_name, "users");
+    }
+
+    #[test]
+    fn parse_view_id_valid() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("view_{uuid}__analytics__monthly_stats");
+        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
+        assert_eq!(parts.profile_id, uuid);
+        assert_eq!(parts.schema_name, "analytics");
+        assert_eq!(parts.object_name, "monthly_stats");
+    }
+
+    #[test]
+    fn parse_table_id_with_underscores_in_table_name() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}__public__user_accounts_archive");
+        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
+        assert_eq!(parts.schema_name, "public");
+        assert_eq!(parts.object_name, "user_accounts_archive");
+    }
+
+    #[test]
+    fn parse_table_id_with_double_underscore_in_table_name() {
+        // Ambiguous: rsplit gives __ to schema, not table
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}__public__user__accounts");
+        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
+        assert_eq!(parts.schema_name, "public__user");
+        assert_eq!(parts.object_name, "accounts");
+    }
+
+    #[test]
+    fn parse_table_id_with_double_underscore_only_in_schema() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}__my__schema__users");
+        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
+        assert_eq!(parts.schema_name, "my__schema");
+        assert_eq!(parts.object_name, "users");
+    }
+
+    #[test]
+    fn parse_invalid_prefix() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("schema_{uuid}__public__users");
+        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
+    }
+
+    #[test]
+    fn parse_invalid_uuid() {
+        let item_id = "table_not-a-valid-uuid-at-all-here__public__users";
+        assert!(Sidebar::parse_table_or_view_id(item_id).is_none());
+    }
+
+    #[test]
+    fn parse_missing_schema() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}____users");
+        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
+    }
+
+    #[test]
+    fn parse_missing_name() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let item_id = format!("table_{uuid}__public__");
+        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
+    }
+
+    #[test]
+    fn parse_too_short() {
+        let item_id = "table_abc__public__users";
+        assert!(Sidebar::parse_table_or_view_id(item_id).is_none());
     }
 }
