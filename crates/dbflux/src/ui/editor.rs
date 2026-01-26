@@ -2,7 +2,7 @@ pub mod dangerous_query;
 pub mod toolbar;
 
 use crate::app::{AppState, AppStateChanged};
-use crate::ui::editor::dangerous_query::{detect_dangerous_query, DangerousQueryKind};
+use crate::ui::editor::dangerous_query::{DangerousQueryKind, detect_dangerous_query};
 use crate::ui::editor::toolbar::{EditorToolbar, ToolbarEvent};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected, QuerySaved};
 use crate::ui::results::ResultsPane;
@@ -11,6 +11,7 @@ use dbflux_core::{CancelToken, HistoryEntry, QueryRequest, TaskId, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants, DropdownButton};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::PopupMenuItem;
@@ -34,6 +35,7 @@ pub struct EditorPane {
     pending_open_history: bool,
     pending_save_query: bool,
     pending_dangerous_confirm: Option<PendingDangerousConfirm>,
+    dangerous_confirm_suppress: bool,
 }
 
 struct PendingDangerousConfirm {
@@ -160,6 +162,7 @@ impl EditorPane {
             pending_open_history: false,
             pending_save_query: false,
             pending_dangerous_confirm: None,
+            dangerous_confirm_suppress: false,
         }
     }
 
@@ -445,10 +448,22 @@ impl EditorPane {
         let sql_owned = sql.to_string();
 
         if let Some(kind) = detect_dangerous_query(&sql_owned) {
+            let is_suppressed = self
+                .app_state
+                .read(cx)
+                .dangerous_query_suppressions
+                .is_suppressed(kind);
+
+            if is_suppressed {
+                self.run_query_confirmed(sql_owned, window, cx);
+                return;
+            }
+
             self.pending_dangerous_confirm = Some(PendingDangerousConfirm {
                 sql: sql_owned,
                 kind,
             });
+            self.dangerous_confirm_suppress = false;
             cx.notify();
             return;
         }
@@ -581,7 +596,7 @@ impl EditorPane {
         .detach();
     }
 
-    pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
+    pub fn cancel_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(running) = self.running_query.take() {
             running.cancel_token.cancel();
 
@@ -601,6 +616,12 @@ impl EditorPane {
                 state.cancel_task(running.task_id);
                 cx.emit(AppStateChanged);
             });
+
+            use crate::ui::toast::ToastExt;
+            cx.toast_warning(
+                "Query cancelled. If in a manual transaction, you may need to ROLLBACK.",
+                window,
+            );
 
             cx.notify();
             info!("Query cancelled");
@@ -861,8 +882,8 @@ impl Render for EditorPane {
                                         .hover(|s| {
                                             s.bg(gpui::rgb(0xDC2626)).text_color(gpui::white())
                                         })
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.cancel_query(cx);
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.cancel_query(window, cx);
                                         }))
                                         .text_size(FontSizes::SM)
                                         .child("Cancel"),
@@ -967,8 +988,10 @@ impl Render for EditorPane {
                 |el, pending| {
                     let this = cx.entity().clone();
                     let this_cancel = this.clone();
+                    let this_checkbox = this.clone();
                     let sql = pending.sql.clone();
                     let kind = pending.kind;
+                    let suppress_checked = self.dangerous_confirm_suppress;
 
                     el.child(
                         Dialog::new(window, cx)
@@ -976,12 +999,26 @@ impl Render for EditorPane {
                             .confirm()
                             .on_ok(move |_, window, cx| {
                                 this.update(cx, |editor, cx| {
+                                    let should_suppress = editor.dangerous_confirm_suppress;
                                     editor.pending_dangerous_confirm = None;
+                                    editor.dangerous_confirm_suppress = false;
+
                                     if editor.running_query.is_some() {
                                         use crate::ui::toast::ToastExt;
                                         cx.toast_warning("A query is already running", window);
                                         return;
                                     }
+
+                                    if should_suppress {
+                                        editor
+                                            .app_state
+                                            .update(cx, |state, _| {
+                                                state
+                                                    .dangerous_query_suppressions
+                                                    .set_suppressed(kind);
+                                            });
+                                    }
+
                                     editor.run_query_confirmed(sql.clone(), window, cx);
                                 });
                                 true
@@ -990,6 +1027,7 @@ impl Render for EditorPane {
                                 use crate::ui::toast::ToastExt;
                                 this_cancel.update(cx, |editor, cx| {
                                     editor.pending_dangerous_confirm = None;
+                                    editor.dangerous_confirm_suppress = false;
                                     cx.toast_warning("Execution cancelled.", window);
                                 });
                                 true
@@ -998,13 +1036,42 @@ impl Render for EditorPane {
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap_2()
+                                    .gap_3()
                                     .child(div().text_sm().child(kind.message()))
                                     .child(
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
                                             .child("This may affect many rows. Continue?"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Checkbox::new("suppress-confirm")
+                                                    .checked(suppress_checked)
+                                                    .on_click(cx.listener(
+                                                        move |_this, checked: &bool, _, cx| {
+                                                            this_checkbox.update(
+                                                                cx,
+                                                                |editor, cx| {
+                                                                    editor
+                                                                        .dangerous_confirm_suppress =
+                                                                        *checked;
+                                                                    cx.notify();
+                                                                },
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("Don't ask again this session"),
+                                            ),
                                     ),
                             ),
                     )

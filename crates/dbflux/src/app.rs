@@ -32,6 +32,46 @@ pub struct ConnectedProfile {
     pub schema: Option<SchemaSnapshot>,
 }
 
+/// Session-based suppressions for dangerous query confirmations.
+#[derive(Default)]
+pub struct DangerousQuerySuppressions {
+    delete_no_where: bool,
+    update_no_where: bool,
+    truncate: bool,
+    drop: bool,
+    alter: bool,
+    script: bool,
+}
+
+impl DangerousQuerySuppressions {
+    pub fn is_suppressed(
+        &self,
+        kind: crate::ui::editor::dangerous_query::DangerousQueryKind,
+    ) -> bool {
+        use crate::ui::editor::dangerous_query::DangerousQueryKind;
+        match kind {
+            DangerousQueryKind::DeleteNoWhere => self.delete_no_where,
+            DangerousQueryKind::UpdateNoWhere => self.update_no_where,
+            DangerousQueryKind::Truncate => self.truncate,
+            DangerousQueryKind::Drop => self.drop,
+            DangerousQueryKind::Alter => self.alter,
+            DangerousQueryKind::Script => self.script,
+        }
+    }
+
+    pub fn set_suppressed(&mut self, kind: crate::ui::editor::dangerous_query::DangerousQueryKind) {
+        use crate::ui::editor::dangerous_query::DangerousQueryKind;
+        match kind {
+            DangerousQueryKind::DeleteNoWhere => self.delete_no_where = true,
+            DangerousQueryKind::UpdateNoWhere => self.update_no_where = true,
+            DangerousQueryKind::Truncate => self.truncate = true,
+            DangerousQueryKind::Drop => self.drop = true,
+            DangerousQueryKind::Alter => self.alter = true,
+            DangerousQueryKind::Script => self.script = true,
+        }
+    }
+}
+
 pub struct AppState {
     pub drivers: HashMap<DbKind, Arc<dyn DbDriver>>,
     pub profiles: Vec<ConnectionProfile>,
@@ -46,6 +86,7 @@ pub struct AppState {
     history_store: Option<HistoryStore>,
     saved_query_store: Option<SavedQueryStore>,
     pending_saved_query_warning: Option<String>,
+    pub dangerous_query_suppressions: DangerousQuerySuppressions,
 
     pub settings_window: Option<WindowHandle<Root>>,
 }
@@ -135,6 +176,7 @@ impl AppState {
             history_store,
             saved_query_store,
             pending_saved_query_warning,
+            dangerous_query_suppressions: DangerousQuerySuppressions::default(),
             settings_window: None,
         }
     }

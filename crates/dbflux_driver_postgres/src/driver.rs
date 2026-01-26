@@ -320,11 +320,32 @@ const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
         destructive: false,
     },
     CodeGeneratorInfo {
+        id: "delete",
+        label: "DELETE",
+        scope: CodeGenScope::Table,
+        order: 7,
+        destructive: false,
+    },
+    CodeGeneratorInfo {
         id: "create_table",
         label: "CREATE TABLE",
         scope: CodeGenScope::Table,
         order: 10,
         destructive: false,
+    },
+    CodeGeneratorInfo {
+        id: "truncate",
+        label: "TRUNCATE",
+        scope: CodeGenScope::Table,
+        order: 20,
+        destructive: true,
+    },
+    CodeGeneratorInfo {
+        id: "drop_table",
+        label: "DROP TABLE",
+        scope: CodeGenScope::Table,
+        order: 21,
+        destructive: true,
     },
 ];
 
@@ -612,7 +633,10 @@ impl Connection for PostgresConnection {
             "select_star" => Ok(pg_generate_select_star(table)),
             "insert" => Ok(pg_generate_insert(table)),
             "update" => Ok(pg_generate_update(table)),
+            "delete" => Ok(pg_generate_delete(table)),
             "create_table" => Ok(pg_generate_create_table(table)),
+            "truncate" => Ok(pg_generate_truncate(table)),
+            "drop_table" => Ok(pg_generate_drop_table(table)),
             _ => Err(DbError::NotSupported(format!(
                 "Code generator '{}' not supported",
                 generator_id
@@ -1148,6 +1172,30 @@ fn pg_generate_update(table: &TableInfo) -> String {
     )
 }
 
+fn pg_generate_delete(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+
+    let pk_columns: Vec<&str> = table
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        pk_columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!("DELETE FROM {}\nWHERE {};", qualified, where_clause)
+}
+
 fn pg_generate_create_table(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
     let mut sql = format!("CREATE TABLE {} (\n", qualified);
@@ -1190,4 +1238,14 @@ fn pg_generate_create_table(table: &TableInfo) -> String {
 
     sql.push_str(");");
     sql
+}
+
+fn pg_generate_truncate(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    format!("TRUNCATE {};", qualified)
+}
+
+fn pg_generate_drop_table(table: &TableInfo) -> String {
+    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    format!("DROP TABLE {};", qualified)
 }

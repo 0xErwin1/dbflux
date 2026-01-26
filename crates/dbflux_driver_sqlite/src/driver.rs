@@ -134,11 +134,25 @@ const SQLITE_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
         destructive: false,
     },
     CodeGeneratorInfo {
+        id: "delete",
+        label: "DELETE",
+        scope: CodeGenScope::Table,
+        order: 7,
+        destructive: false,
+    },
+    CodeGeneratorInfo {
         id: "create_table",
         label: "CREATE TABLE",
         scope: CodeGenScope::Table,
         order: 10,
         destructive: false,
+    },
+    CodeGeneratorInfo {
+        id: "drop_table",
+        label: "DROP TABLE",
+        scope: CodeGenScope::Table,
+        order: 20,
+        destructive: true,
     },
 ];
 
@@ -299,7 +313,9 @@ impl Connection for SqliteConnection {
             "select_star" => Ok(sqlite_generate_select_star(table)),
             "insert" => Ok(sqlite_generate_insert(table)),
             "update" => Ok(sqlite_generate_update(table)),
+            "delete" => Ok(sqlite_generate_delete(table)),
             "create_table" => Ok(sqlite_generate_create_table(table)),
+            "drop_table" => Ok(sqlite_generate_drop_table(table)),
             _ => Err(DbError::NotSupported(format!(
                 "Code generator '{}' not supported",
                 generator_id
@@ -438,7 +454,10 @@ fn sqlite_quote_ident(ident: &str) -> String {
 }
 
 fn sqlite_generate_select_star(table: &TableInfo) -> String {
-    format!("SELECT * FROM {} LIMIT 100;", sqlite_quote_ident(&table.name))
+    format!(
+        "SELECT * FROM {} LIMIT 100;",
+        sqlite_quote_ident(&table.name)
+    )
 }
 
 fn sqlite_generate_insert(table: &TableInfo) -> String {
@@ -468,7 +487,10 @@ fn sqlite_generate_update(table: &TableInfo) -> String {
     let quoted_name = sqlite_quote_ident(&table.name);
 
     if table.columns.is_empty() {
-        return format!("UPDATE {}\nSET -- no columns\nWHERE <condition>;", quoted_name);
+        return format!(
+            "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
+            quoted_name
+        );
     }
 
     let pk_columns: Vec<&str> = table
@@ -486,7 +508,11 @@ fn sqlite_generate_update(table: &TableInfo) -> String {
         .collect();
 
     let set_columns = if non_pk_columns.is_empty() {
-        &table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
+        &table
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()[..]
     } else {
         &non_pk_columns[..]
     };
@@ -514,18 +540,37 @@ fn sqlite_generate_update(table: &TableInfo) -> String {
     )
 }
 
-fn sqlite_generate_create_table(table: &TableInfo) -> String {
-    let mut sql = format!("CREATE TABLE {} (\n", sqlite_quote_ident(&table.name));
+fn sqlite_generate_delete(table: &TableInfo) -> String {
+    let quoted_name = sqlite_quote_ident(&table.name);
 
-    let pk_columns: Vec<&ColumnInfo> = table
+    let pk_columns: Vec<&str> = table
         .columns
         .iter()
         .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
         .collect();
 
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        pk_columns
+            .iter()
+            .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!("DELETE FROM {}\nWHERE {};", quoted_name, where_clause)
+}
+
+fn sqlite_generate_create_table(table: &TableInfo) -> String {
+    let mut sql = format!("CREATE TABLE {} (\n", sqlite_quote_ident(&table.name));
+
+    let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_primary_key).collect();
+
     // SQLite: INTEGER PRIMARY KEY has special rowid semantics when inline
-    let single_integer_pk = pk_columns.len() == 1
-        && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
+    let single_integer_pk =
+        pk_columns.len() == 1 && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
 
     for (i, col) in table.columns.iter().enumerate() {
         // Handle empty type names (SQLite allows columns without explicit types)
@@ -570,4 +615,8 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
 
     sql.push_str(");");
     sql
+}
+
+fn sqlite_generate_drop_table(table: &TableInfo) -> String {
+    format!("DROP TABLE {};", sqlite_quote_ident(&table.name))
 }

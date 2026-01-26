@@ -374,12 +374,12 @@ impl Sidebar {
         };
 
         let scope_filter = match node_kind {
-            TreeNodeKind::Table => |s: CodeGenScope| {
-                matches!(s, CodeGenScope::Table | CodeGenScope::TableOrView)
-            },
-            TreeNodeKind::View => |s: CodeGenScope| {
-                matches!(s, CodeGenScope::View | CodeGenScope::TableOrView)
-            },
+            TreeNodeKind::Table => {
+                |s: CodeGenScope| matches!(s, CodeGenScope::Table | CodeGenScope::TableOrView)
+            }
+            TreeNodeKind::View => {
+                |s: CodeGenScope| matches!(s, CodeGenScope::View | CodeGenScope::TableOrView)
+            }
             _ => return vec![],
         };
 

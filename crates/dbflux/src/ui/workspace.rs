@@ -239,7 +239,7 @@ impl Workspace {
             }
             "cancel_query" => {
                 self.editor.update(cx, |editor, cx| {
-                    editor.cancel_query(cx);
+                    editor.cancel_query(window, cx);
                 });
             }
 

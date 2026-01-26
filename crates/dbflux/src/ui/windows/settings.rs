@@ -1276,9 +1276,12 @@ impl SettingsWindow {
                                             .text_color(theme.link)
                                             .cursor_pointer()
                                             .hover(|d| d.underline())
-                                            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                                                cx.open_url(&issues_url);
-                                            })
+                                            .on_mouse_down(
+                                                gpui::MouseButton::Left,
+                                                move |_, _, cx| {
+                                                    cx.open_url(&issues_url);
+                                                },
+                                            )
                                             .child("Report a bug"),
                                     )
                                     .child("or")
