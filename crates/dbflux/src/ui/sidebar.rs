@@ -394,9 +394,16 @@ impl Sidebar {
 
         generators
             .into_iter()
-            .map(|g| ContextMenuItem {
-                label: g.label.to_string(),
-                action: ContextMenuAction::GenerateCode(g.id.to_string()),
+            .map(|g| {
+                let label = if g.destructive {
+                    format!("\u{26A0} {}", g.label)
+                } else {
+                    g.label.to_string()
+                };
+                ContextMenuItem {
+                    label,
+                    action: ContextMenuAction::GenerateCode(g.id.to_string()),
+                }
             })
             .collect()
     }

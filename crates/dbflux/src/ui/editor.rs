@@ -1,6 +1,8 @@
+pub mod dangerous_query;
 pub mod toolbar;
 
 use crate::app::{AppState, AppStateChanged};
+use crate::ui::editor::dangerous_query::{detect_dangerous_query, DangerousQueryKind};
 use crate::ui::editor::toolbar::{EditorToolbar, ToolbarEvent};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected, QuerySaved};
 use crate::ui::results::ResultsPane;
@@ -9,6 +11,7 @@ use dbflux_core::{CancelToken, HistoryEntry, QueryRequest, TaskId, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants, DropdownButton};
+use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::PopupMenuItem;
 use gpui_component::{ActiveTheme, InteractiveElementExt, Sizable};
@@ -30,6 +33,12 @@ pub struct EditorPane {
     pending_set_query: Option<HistoryQuerySelected>,
     pending_open_history: bool,
     pending_save_query: bool,
+    pending_dangerous_confirm: Option<PendingDangerousConfirm>,
+}
+
+struct PendingDangerousConfirm {
+    sql: String,
+    kind: DangerousQueryKind,
 }
 
 struct RunningQuery {
@@ -150,6 +159,7 @@ impl EditorPane {
             pending_set_query: None,
             pending_open_history: false,
             pending_save_query: false,
+            pending_dangerous_confirm: None,
         }
     }
 
@@ -415,11 +425,6 @@ impl EditorPane {
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::toast::ToastExt;
 
-        if self.running_query.is_some() {
-            cx.toast_warning("A query is already running", window);
-            return;
-        }
-
         let sql = self.tabs[self.active_tab].input_state.read(cx).value();
 
         if sql.trim().is_empty() {
@@ -427,7 +432,39 @@ impl EditorPane {
             return;
         }
 
-        info!("Running query: {}", sql);
+        if self.running_query.is_some() {
+            cx.toast_warning("A query is already running", window);
+            return;
+        }
+
+        if self.pending_dangerous_confirm.is_some() {
+            cx.toast_warning("Confirmation pending", window);
+            return;
+        }
+
+        let sql_owned = sql.to_string();
+
+        if let Some(kind) = detect_dangerous_query(&sql_owned) {
+            self.pending_dangerous_confirm = Some(PendingDangerousConfirm {
+                sql: sql_owned,
+                kind,
+            });
+            cx.notify();
+            return;
+        }
+
+        self.run_query_confirmed(sql_owned, window, cx);
+    }
+
+    fn run_query_confirmed(
+        &mut self,
+        sql_owned: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::toast::ToastExt;
+
+        info!("Running query: {}", sql_owned);
 
         let (conn, database, connection_name) = {
             let state = self.app_state.read(cx);
@@ -444,11 +481,11 @@ impl EditorPane {
             return;
         };
 
-        let sql_owned = sql.to_string();
-        let sql_preview = if sql_owned.len() > 50 {
-            format!("{}...", &sql_owned[..50])
+        let sql_preview: String = sql_owned.chars().take(50).collect();
+        let sql_preview = if sql_owned.len() > sql_preview.len() {
+            format!("{}...", sql_preview)
         } else {
-            sql_owned.clone()
+            sql_preview
         };
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
@@ -925,5 +962,53 @@ impl Render for EditorPane {
                     .child(Input::new(&active_input).h_full()),
             )
             .child(self.history_modal.clone())
+            .when_some(
+                self.pending_dangerous_confirm.as_ref(),
+                |el, pending| {
+                    let this = cx.entity().clone();
+                    let this_cancel = this.clone();
+                    let sql = pending.sql.clone();
+                    let kind = pending.kind;
+
+                    el.child(
+                        Dialog::new(window, cx)
+                            .title("\u{26A0} Confirm execution")
+                            .confirm()
+                            .on_ok(move |_, window, cx| {
+                                this.update(cx, |editor, cx| {
+                                    editor.pending_dangerous_confirm = None;
+                                    if editor.running_query.is_some() {
+                                        use crate::ui::toast::ToastExt;
+                                        cx.toast_warning("A query is already running", window);
+                                        return;
+                                    }
+                                    editor.run_query_confirmed(sql.clone(), window, cx);
+                                });
+                                true
+                            })
+                            .on_cancel(move |_, window, cx| {
+                                use crate::ui::toast::ToastExt;
+                                this_cancel.update(cx, |editor, cx| {
+                                    editor.pending_dangerous_confirm = None;
+                                    cx.toast_warning("Execution cancelled.", window);
+                                });
+                                true
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(div().text_sm().child(kind.message()))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("This may affect many rows. Continue?"),
+                                    ),
+                            ),
+                    )
+                },
+            )
     }
 }

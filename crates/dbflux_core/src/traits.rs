@@ -29,6 +29,9 @@ pub struct CodeGeneratorInfo {
 
     /// Display order in the menu (lower values appear first).
     pub order: u32,
+
+    /// Whether this generator produces destructive SQL (e.g., DROP, TRUNCATE).
+    pub destructive: bool,
 }
 use std::sync::Arc;
 

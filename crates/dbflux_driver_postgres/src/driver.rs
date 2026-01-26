@@ -303,24 +303,28 @@ const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
         label: "SELECT *",
         scope: CodeGenScope::TableOrView,
         order: 0,
+        destructive: false,
     },
     CodeGeneratorInfo {
         id: "insert",
         label: "INSERT INTO",
         scope: CodeGenScope::Table,
         order: 5,
+        destructive: false,
     },
     CodeGeneratorInfo {
         id: "update",
         label: "UPDATE",
         scope: CodeGenScope::Table,
         order: 6,
+        destructive: false,
     },
     CodeGeneratorInfo {
         id: "create_table",
         label: "CREATE TABLE",
         scope: CodeGenScope::Table,
         order: 10,
+        destructive: false,
     },
 ];
 
