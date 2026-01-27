@@ -105,6 +105,25 @@ struct ItemIdParts {
     object_name: String,
 }
 
+/// Action to execute after table details finish loading.
+#[derive(Clone)]
+enum PendingAction {
+    ViewSchema {
+        item_id: String,
+    },
+    GenerateCode {
+        item_id: String,
+        generator_id: String,
+    },
+}
+
+/// Result of checking whether table details are available.
+enum TableDetailsStatus {
+    Ready,
+    Loading,
+    NotFound,
+}
+
 pub struct Sidebar {
     app_state: Entity<AppState>,
     #[allow(dead_code)]
@@ -119,6 +138,8 @@ pub struct Sidebar {
     expansion_overrides: HashMap<String, bool>,
     /// State for the keyboard-triggered context menu
     context_menu: Option<ContextMenuState>,
+    /// Action to execute after table details finish loading
+    pending_action: Option<PendingAction>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -156,6 +177,7 @@ impl Sidebar {
             visible_entry_count,
             expansion_overrides: HashMap::new(),
             context_menu: None,
+            pending_action: None,
             _subscriptions: vec![app_state_subscription],
         }
     }
@@ -258,6 +280,14 @@ impl Sidebar {
     }
 
     fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        // Trigger lazy loading when expanding a table without columns
+        if expanded && item_id.starts_with("table_") {
+            let pending = PendingAction::ViewSchema {
+                item_id: item_id.to_string(),
+            };
+            let _ = self.ensure_table_details(item_id, pending, cx);
+        }
+
         self.expansion_overrides
             .insert(item_id.to_string(), expanded);
         self.rebuild_tree_with_overrides(cx);
@@ -419,55 +449,109 @@ impl Sidebar {
     }
 
     fn generate_code(&mut self, item_id: &str, generator_id: &str, cx: &mut Context<Self>) {
+        let is_view = item_id.starts_with("view_");
+
+        // For views, generate code directly (no columns needed)
+        if is_view {
+            self.generate_code_for_view(item_id, generator_id, cx);
+            return;
+        }
+
+        // For tables, ensure details are loaded first
+        let pending = PendingAction::GenerateCode {
+            item_id: item_id.to_string(),
+            generator_id: generator_id.to_string(),
+        };
+
+        match self.ensure_table_details(item_id, pending, cx) {
+            TableDetailsStatus::Ready => {
+                self.generate_code_impl(item_id, generator_id, cx);
+            }
+            TableDetailsStatus::Loading => {
+                // Will be handled by complete_pending_action when done
+            }
+            TableDetailsStatus::NotFound => {
+                log::warn!("Code generation failed: table not found");
+            }
+        }
+    }
+
+    fn generate_code_for_view(
+        &mut self,
+        item_id: &str,
+        generator_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(parts) = Self::parse_table_or_view_id(item_id) else {
             return;
         };
-
-        let is_view = item_id.starts_with("view_");
 
         let state = self.app_state.read(cx);
         let Some(conn) = state.connections.get(&parts.profile_id) else {
             return;
         };
 
-        // For views, we create a TableInfo from the ViewInfo
-        // This allows SELECT * and basic code generation to work
-        if is_view {
-            // Try to find view in database_schemas (MySQL/MariaDB)
-            let view_from_db_schemas = conn
-                .database_schemas
-                .get(&parts.schema_name)
-                .and_then(|db_schema| {
-                    db_schema
-                        .views
-                        .iter()
-                        .find(|v| v.name == parts.object_name)
+        // Try to find view in database_schemas (MySQL/MariaDB)
+        let view_from_db_schemas = conn
+            .database_schemas
+            .get(&parts.schema_name)
+            .and_then(|db_schema| {
+                db_schema
+                    .views
+                    .iter()
+                    .find(|v| v.name == parts.object_name)
+            });
+
+        // Fall back to schema.schemas (PostgreSQL/SQLite)
+        let view =
+            view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+
+        let Some(view) = view else {
+            log::warn!(
+                "Code generation for view '{}' failed: view not found",
+                parts.object_name
+            );
+            return;
+        };
+
+        // Create a TableInfo from the ViewInfo for code generation
+        let table_info = TableInfo {
+            name: view.name.clone(),
+            schema: view.schema.clone(),
+            columns: None,
+            indexes: None,
+        };
+
+        match conn.connection.generate_code(generator_id, &table_info) {
+            Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
+            Err(e) => {
+                log::error!("Code generation for view failed: {}", e);
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Code generation failed: {}", e),
+                    is_error: true,
                 });
+                cx.notify();
+            }
+        }
+    }
 
-            // Fall back to schema.schemas (PostgreSQL/SQLite)
-            let view =
-                view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+    fn generate_code_impl(&mut self, item_id: &str, generator_id: &str, cx: &mut Context<Self>) {
+        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+            return;
+        };
 
-            let Some(view) = view else {
-                log::warn!(
-                    "Code generation for view '{}' failed: view not found",
-                    parts.object_name
-                );
-                return;
-            };
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&parts.profile_id) else {
+            return;
+        };
 
-            // Create a TableInfo from the ViewInfo for code generation
-            let table_info = TableInfo {
-                name: view.name.clone(),
-                schema: view.schema.clone(),
-                columns: None,
-                indexes: None,
-            };
-
-            match conn.connection.generate_code(generator_id, &table_info) {
+        // First check the table_details cache (populated by ensure_table_details)
+        let cache_key = (parts.schema_name.clone(), parts.object_name.clone());
+        if let Some(table) = conn.table_details.get(&cache_key) {
+            match conn.connection.generate_code(generator_id, table) {
                 Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
                 Err(e) => {
-                    log::error!("Code generation for view failed: {}", e);
+                    log::error!("Code generation failed: {}", e);
                     self.pending_toast = Some(PendingToast {
                         message: format!("Code generation failed: {}", e),
                         is_error: true,
@@ -478,7 +562,7 @@ impl Sidebar {
             return;
         }
 
-        // For tables, search in database_schemas first (MySQL/MariaDB lazy loading)
+        // Fallback: search in database_schemas (MySQL/MariaDB)
         let table_from_db_schemas = conn
             .database_schemas
             .get(&parts.schema_name)
@@ -490,9 +574,14 @@ impl Sidebar {
             });
 
         // Fall back to schema.schemas (PostgreSQL/SQLite)
-        let table = table_from_db_schemas.or_else(|| Self::find_table_for_item(&parts, &conn.schema));
+        let table =
+            table_from_db_schemas.or_else(|| Self::find_table_for_item(&parts, &conn.schema));
 
         let Some(table) = table else {
+            log::warn!(
+                "Code generation for '{}' failed: table not found",
+                parts.object_name
+            );
             return;
         };
 
@@ -545,6 +634,165 @@ impl Sidebar {
 
         // For databases without schemas (fallback)
         schema.views.iter().find(|v| v.name == parts.object_name)
+    }
+
+    /// Check if a table has detailed schema (columns/indexes) loaded.
+    /// If not, spawns a background task to fetch them and returns `Loading`.
+    fn ensure_table_details(
+        &mut self,
+        item_id: &str,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> TableDetailsStatus {
+        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+            return TableDetailsStatus::NotFound;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&parts.profile_id) else {
+            return TableDetailsStatus::NotFound;
+        };
+
+        // First check the table_details cache for detailed info
+        let cache_key = (parts.schema_name.clone(), parts.object_name.clone());
+        if conn.table_details.contains_key(&cache_key) {
+            return TableDetailsStatus::Ready;
+        }
+
+        // Check database_schemas for a table that already has columns loaded
+        if let Some(db_schema) = conn.database_schemas.get(&parts.schema_name)
+            && let Some(table) = db_schema.tables.iter().find(|t| t.name == parts.object_name)
+            && table.columns.is_some()
+        {
+            return TableDetailsStatus::Ready;
+        }
+
+        // Check schema.schemas (PostgreSQL/SQLite path)
+        if let Some(ref schema) = conn.schema {
+            for db_schema in &schema.schemas {
+                if db_schema.name == parts.schema_name
+                    && let Some(table) =
+                        db_schema.tables.iter().find(|t| t.name == parts.object_name)
+                    && table.columns.is_some()
+                {
+                    return TableDetailsStatus::Ready;
+                }
+            }
+        }
+
+        // Table needs details fetched - spawn async task
+        self.spawn_fetch_table_details(&parts, pending_action, cx);
+        TableDetailsStatus::Loading
+    }
+
+    /// Spawn a background task to fetch table details (columns, indexes).
+    fn spawn_fetch_table_details(
+        &mut self,
+        parts: &ItemIdParts,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self.app_state.read(cx).prepare_fetch_table_details(
+            parts.profile_id,
+            &parts.schema_name,
+            &parts.object_name,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                if e != "Table details already cached" {
+                    log::warn!("Cannot fetch table details: {}", e);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!("Cannot load table schema: {}", e),
+                        is_error: true,
+                    });
+                    cx.notify();
+                }
+                return;
+            }
+        };
+
+        self.pending_action = Some(pending_action);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let profile_id = parts.profile_id;
+        let db_name = parts.schema_name.clone();
+        let table_name = parts.object_name.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                match result {
+                    Ok(res) => {
+                        app_state.update(cx, |state, cx| {
+                            state.set_table_details(
+                                res.profile_id,
+                                res.database,
+                                res.table,
+                                res.details,
+                            );
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.complete_pending_action(cx);
+                        });
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to fetch table details for {}.{}: {}",
+                            db_name,
+                            table_name,
+                            e
+                        );
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_action = None;
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: format!("Failed to load table schema: {}", e),
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    }
+                }
+
+                app_state.update(cx, |state, cx| {
+                    state.finish_pending_operation(profile_id, Some(&db_name));
+                    cx.emit(AppStateChanged);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Called when table details finish loading to execute the stored action.
+    fn complete_pending_action(&mut self, cx: &mut Context<Self>) {
+        let Some(action) = self.pending_action.take() else {
+            return;
+        };
+
+        match action {
+            PendingAction::ViewSchema { item_id } => {
+                self.view_table_schema(&item_id, cx);
+            }
+            PendingAction::GenerateCode {
+                item_id,
+                generator_id,
+            } => {
+                self.generate_code_impl(&item_id, &generator_id, cx);
+            }
+        }
+    }
+
+    fn view_table_schema(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        self.set_expanded(item_id, true, cx);
     }
 
     pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -774,7 +1022,21 @@ impl Sidebar {
                 self.browse_table(&item_id, cx);
             }
             ContextMenuAction::ViewSchema => {
-                self.toggle_item_expansion(&item_id, cx);
+                let pending = PendingAction::ViewSchema {
+                    item_id: item_id.clone(),
+                };
+                match self.ensure_table_details(&item_id, pending, cx) {
+                    TableDetailsStatus::Ready => {
+                        self.view_table_schema(&item_id, cx);
+                    }
+                    TableDetailsStatus::Loading => {
+                        // Will be handled by complete_pending_action when done
+                    }
+                    TableDetailsStatus::NotFound => {
+                        // Table not found, just toggle expansion as fallback
+                        self.toggle_item_expansion(&item_id, cx);
+                    }
+                }
             }
             ContextMenuAction::GenerateCode(generator_id) => {
                 self.generate_code(&item_id, &generator_id, cx);
@@ -1303,7 +1565,11 @@ impl Sidebar {
 
                         let db_children = if uses_lazy_loading {
                             if let Some(db_schema) = connected.database_schemas.get(&db.name) {
-                                Self::build_db_schema_content(profile_id, db_schema)
+                                Self::build_db_schema_content(
+                                    profile_id,
+                                    db_schema,
+                                    &connected.table_details,
+                                )
                             } else if is_pending {
                                 vec![TreeItem::new(
                                     format!("loading_{}_{}", profile_id, db.name),
@@ -1313,7 +1579,11 @@ impl Sidebar {
                                 Vec::new()
                             }
                         } else if db.is_current {
-                            Self::build_schema_children(profile_id, schema)
+                            Self::build_schema_children(
+                                profile_id,
+                                schema,
+                                &connected.table_details,
+                            )
                         } else {
                             Vec::new()
                         };
@@ -1341,7 +1611,11 @@ impl Sidebar {
                         );
                     }
                 } else {
-                    profile_children = Self::build_schema_children(profile_id, schema);
+                    profile_children = Self::build_schema_children(
+                        profile_id,
+                        schema,
+                        &connected.table_details,
+                    );
                 }
 
                 profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -1397,11 +1671,13 @@ impl Sidebar {
     fn build_schema_children(
         profile_id: Uuid,
         snapshot: &dbflux_core::SchemaSnapshot,
+        table_details: &HashMap<(String, String), TableInfo>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
         for db_schema in &snapshot.schemas {
-            let schema_content = Self::build_db_schema_content(profile_id, db_schema);
+            let schema_content =
+                Self::build_db_schema_content(profile_id, db_schema, table_details);
 
             children.push(
                 TreeItem::new(
@@ -1419,6 +1695,7 @@ impl Sidebar {
     fn build_db_schema_content(
         profile_id: Uuid,
         db_schema: &dbflux_core::DbSchemaInfo,
+        table_details: &HashMap<(String, String), TableInfo>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
@@ -1426,7 +1703,9 @@ impl Sidebar {
             let table_children: Vec<TreeItem> = db_schema
                 .tables
                 .iter()
-                .map(|table| Self::build_table_item(profile_id, &db_schema.name, table))
+                .map(|table| {
+                    Self::build_table_item(profile_id, &db_schema.name, table, table_details)
+                })
                 .collect();
 
             content.push(
@@ -1468,11 +1747,17 @@ impl Sidebar {
         profile_id: Uuid,
         schema_name: &str,
         table: &dbflux_core::TableInfo,
+        table_details: &HashMap<(String, String), TableInfo>,
     ) -> TreeItem {
+        // Check if we have detailed info in the cache (lazy-loaded)
+        let cache_key = (schema_name.to_string(), table.name.clone());
+        let effective_table = table_details.get(&cache_key).unwrap_or(table);
+
         let mut table_sections: Vec<TreeItem> = Vec::new();
+        let columns_not_loaded = effective_table.columns.is_none();
 
         // columns: None = not loaded yet, Some([]) = loaded but empty
-        if let Some(ref columns) = table.columns
+        if let Some(ref columns) = effective_table.columns
             && !columns.is_empty()
         {
             let column_children: Vec<TreeItem> = columns
@@ -1499,7 +1784,7 @@ impl Sidebar {
         }
 
         // indexes: None = not loaded yet, Some([]) = loaded but empty
-        if let Some(ref indexes) = table.indexes
+        if let Some(ref indexes) = effective_table.indexes
             && !indexes.is_empty()
         {
             let index_children: Vec<TreeItem> = indexes
@@ -1524,6 +1809,14 @@ impl Sidebar {
                 .expanded(false)
                 .children(index_children),
             );
+        }
+
+        // Add placeholder when columns not loaded yet (shows chevron indicator)
+        if columns_not_loaded && table_sections.is_empty() {
+            table_sections.push(TreeItem::new(
+                format!("placeholder_{}__{}__{}", profile_id, schema_name, table.name),
+                "Click to load schema...".to_string(),
+            ));
         }
 
         TreeItem::new(
