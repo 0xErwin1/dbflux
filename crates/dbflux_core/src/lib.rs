@@ -35,6 +35,7 @@ pub use table_browser::{Pagination, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, NoopCancelHandle, QueryCancelHandle,
+    SchemaLoadingStrategy,
 };
 pub use value::Value;
 

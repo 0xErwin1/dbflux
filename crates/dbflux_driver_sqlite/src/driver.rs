@@ -7,8 +7,8 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues, IndexInfo,
-    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SQLITE_FORM, SchemaSnapshot,
-    TableInfo, Value, ViewInfo,
+    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SQLITE_FORM,
+    SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -188,9 +188,9 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
         conn.execute_batch("SELECT 1")
-            .map_err(|e| DbError::QueryFailed(e.to_string()))
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))
     }
 
     fn close(&mut self) -> Result<(), DbError> {
@@ -204,7 +204,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let stmt_result = conn.prepare(&req.sql);
 
@@ -215,7 +215,7 @@ impl Connection for SqliteConnection {
                     log::info!("[QUERY] SQLite query was interrupted");
                     return Err(DbError::Cancelled);
                 }
-                return Err(DbError::QueryFailed(e.to_string()));
+                return Err(DbError::QueryFailed(format!("{:?}", e)));
             }
         };
 
@@ -240,7 +240,7 @@ impl Connection for SqliteConnection {
                     log::info!("[QUERY] SQLite query was interrupted");
                     return Err(DbError::Cancelled);
                 }
-                return Err(DbError::QueryFailed(e.to_string()));
+                return Err(DbError::QueryFailed(format!("{:?}", e)));
             }
         };
 
@@ -268,7 +268,7 @@ impl Connection for SqliteConnection {
                         log::info!("[QUERY] SQLite query was interrupted during iteration");
                         return Err(DbError::Cancelled);
                     }
-                    return Err(DbError::QueryFailed(e.to_string()));
+                    return Err(DbError::QueryFailed(format!("{:?}", e)));
                 }
             }
         }
@@ -307,7 +307,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let tables = self.get_tables(&conn)?;
         let views = self.get_views(&conn)?;
@@ -329,6 +329,10 @@ impl Connection for SqliteConnection {
 
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+        SchemaLoadingStrategy::SingleDatabase
     }
 
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
@@ -355,11 +359,11 @@ impl SqliteConnection {
     fn get_tables(&self, conn: &RusqliteConnection) -> Result<Vec<TableInfo>, DbError> {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let table_names: Vec<String> = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -370,8 +374,8 @@ impl SqliteConnection {
             tables.push(TableInfo {
                 name,
                 schema: None,
-                columns,
-                indexes,
+                columns: Some(columns),
+                indexes: Some(indexes),
             });
         }
 
@@ -385,7 +389,7 @@ impl SqliteConnection {
     ) -> Result<Vec<ColumnInfo>, DbError> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA table_info('{}')", table))
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let columns = stmt
             .query_map([], |row| {
@@ -397,7 +401,7 @@ impl SqliteConnection {
                     default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
                 })
             })
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -411,11 +415,11 @@ impl SqliteConnection {
     ) -> Result<Vec<IndexInfo>, DbError> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA index_list('{}')", table))
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let index_list: Vec<(String, bool)> = stmt
             .query_map([], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -423,11 +427,11 @@ impl SqliteConnection {
         for (index_name, is_unique) in index_list {
             let mut col_stmt = conn
                 .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
             let columns: Vec<String> = col_stmt
                 .query_map([], |row| row.get(2))
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -445,7 +449,7 @@ impl SqliteConnection {
     fn get_views(&self, conn: &RusqliteConnection) -> Result<Vec<ViewInfo>, DbError> {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let views = stmt
             .query_map([], |row| {
@@ -454,7 +458,7 @@ impl SqliteConnection {
                     schema: None,
                 })
             })
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -489,18 +493,15 @@ fn sqlite_generate_select_star(table: &TableInfo) -> String {
 
 fn sqlite_generate_insert(table: &TableInfo) -> String {
     let quoted_name = sqlite_quote_ident(&table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    if table.columns.is_empty() {
+    if cols.is_empty() {
         return format!("INSERT INTO {} DEFAULT VALUES;", quoted_name);
     }
 
-    let columns: Vec<String> = table
-        .columns
-        .iter()
-        .map(|c| sqlite_quote_ident(&c.name))
-        .collect();
+    let columns: Vec<String> = cols.iter().map(|c| sqlite_quote_ident(&c.name)).collect();
 
-    let placeholders: Vec<&str> = vec!["?"; table.columns.len()];
+    let placeholders: Vec<&str> = vec!["?"; cols.len()];
 
     format!(
         "INSERT INTO {} ({})\nVALUES ({});",
@@ -512,34 +513,29 @@ fn sqlite_generate_insert(table: &TableInfo) -> String {
 
 fn sqlite_generate_update(table: &TableInfo) -> String {
     let quoted_name = sqlite_quote_ident(&table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    if table.columns.is_empty() {
+    if cols.is_empty() {
         return format!(
             "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
             quoted_name
         );
     }
 
-    let pk_columns: Vec<&str> = table
-        .columns
+    let pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| c.is_primary_key)
         .map(|c| c.name.as_str())
         .collect();
 
-    let non_pk_columns: Vec<&str> = table
-        .columns
+    let non_pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| !c.is_primary_key)
         .map(|c| c.name.as_str())
         .collect();
 
     let set_columns = if non_pk_columns.is_empty() {
-        &table
-            .columns
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>()[..]
+        &cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
     } else {
         &non_pk_columns[..]
     };
@@ -569,9 +565,9 @@ fn sqlite_generate_update(table: &TableInfo) -> String {
 
 fn sqlite_generate_delete(table: &TableInfo) -> String {
     let quoted_name = sqlite_quote_ident(&table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    let pk_columns: Vec<&str> = table
-        .columns
+    let pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| c.is_primary_key)
         .map(|c| c.name.as_str())
@@ -592,14 +588,15 @@ fn sqlite_generate_delete(table: &TableInfo) -> String {
 
 fn sqlite_generate_create_table(table: &TableInfo) -> String {
     let mut sql = format!("CREATE TABLE {} (\n", sqlite_quote_ident(&table.name));
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    let pk_columns: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.is_primary_key).collect();
+    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
 
     // SQLite: INTEGER PRIMARY KEY has special rowid semantics when inline
     let single_integer_pk =
         pk_columns.len() == 1 && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
 
-    for (i, col) in table.columns.iter().enumerate() {
+    for (i, col) in cols.iter().enumerate() {
         // Handle empty type names (SQLite allows columns without explicit types)
         let mut line = if col.type_name.is_empty() {
             format!("    {}", sqlite_quote_ident(&col.name))
@@ -620,7 +617,7 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
             line.push_str(&format!(" DEFAULT {}", default));
         }
 
-        let is_last_column = i == table.columns.len() - 1;
+        let is_last_column = i == cols.len() - 1;
         let needs_pk_constraint = !pk_columns.is_empty() && !single_integer_pk;
 
         if !is_last_column || needs_pk_constraint {

@@ -14,6 +14,7 @@ use gpui_component::{ActiveTheme, Sizable};
 use log::info;
 use std::fs::File;
 use std::io::BufWriter;
+use uuid::Uuid;
 
 pub struct ResultsReceived;
 
@@ -22,6 +23,7 @@ impl EventEmitter<ResultsReceived> for ResultsPane {}
 enum ResultSource {
     Query,
     TableView {
+        profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
         order_by: Vec<String>,
@@ -39,6 +41,7 @@ struct ResultTab {
 }
 
 struct PendingTableResult {
+    profile_id: Uuid,
     table: TableRef,
     pagination: Pagination,
     order_by: Vec<String>,
@@ -223,6 +226,7 @@ impl ResultsPane {
     #[allow(clippy::too_many_arguments)]
     fn apply_table_result(
         &mut self,
+        profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
         order_by: Vec<String>,
@@ -247,6 +251,7 @@ impl ResultsPane {
             self.tabs[idx].result = result;
             self.tabs[idx].table_state = table_state;
             self.tabs[idx].source = ResultSource::TableView {
+                profile_id,
                 table,
                 pagination,
                 order_by,
@@ -258,6 +263,7 @@ impl ResultsPane {
                 id: self.next_tab_id,
                 title: table.name.clone(),
                 source: ResultSource::TableView {
+                    profile_id,
                     table,
                     pagination,
                     order_by,
@@ -288,7 +294,13 @@ impl ResultsPane {
         }
     }
 
-    pub fn view_table(&mut self, table_name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn view_table_for_connection(
+        &mut self,
+        profile_id: Uuid,
+        table_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let table = TableRef::from_qualified(table_name);
         let qualified = table.qualified_name();
 
@@ -300,45 +312,65 @@ impl ResultsPane {
             return;
         }
 
+        let db_kind = {
+            let state = self.app_state.read(cx);
+            state
+                .connections
+                .get(&profile_id)
+                .map(|c| c.connection.kind())
+                .unwrap_or(DbKind::Postgres)
+        };
+
         self.filter_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
 
-        let order_by = self.get_primary_key_columns(&table, cx);
+        let order_by = self.get_primary_key_columns_for_connection(profile_id, &table, cx);
         let pagination = Pagination::default();
 
-        self.run_table_query_internal(table.clone(), pagination, order_by, None, None, window, cx);
-        self.fetch_total_count(table, None, cx);
+        self.run_table_query_for_connection(
+            profile_id,
+            table.clone(),
+            pagination,
+            order_by,
+            None,
+            None,
+            window,
+            cx,
+        );
+        self.fetch_total_count_for_connection(profile_id, table, None, db_kind, cx);
     }
 
-    fn fetch_total_count(
+    fn fetch_total_count_for_connection(
         &mut self,
+        profile_id: Uuid,
         table: TableRef,
         filter: Option<String>,
+        db_kind: DbKind,
         cx: &mut Context<Self>,
     ) {
         let (conn, active_database) = {
             let state = self.app_state.read(cx);
-            let active = state.active_connection();
-            (
-                active.map(|c| c.connection.clone()),
-                active.and_then(|c| c.active_database.clone()),
-            )
+            match state.connections.get(&profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                None => (None, None),
+            }
         };
 
         let Some(conn) = conn else {
             return;
         };
 
+        let quoted_table = table.quoted_for_kind(db_kind);
         let sql = if let Some(ref f) = filter {
             let trimmed = f.trim();
             if trimmed.is_empty() {
-                format!("SELECT COUNT(*) FROM {}", table.quoted())
+                format!("SELECT COUNT(*) FROM {}", quoted_table)
             } else {
-                format!("SELECT COUNT(*) FROM {} WHERE {}", table.quoted(), trimmed)
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, trimmed)
             }
         } else {
-            format!("SELECT COUNT(*) FROM {}", table.quoted())
+            format!("SELECT COUNT(*) FROM {}", quoted_table)
         };
 
         let request = QueryRequest::new(sql).with_database(active_database);
@@ -377,19 +409,30 @@ impl ResultsPane {
             return;
         };
 
-        let (table, pagination, order_by, total_rows) = match &tab.source {
+        let (profile_id, table, pagination, order_by, total_rows) = match &tab.source {
             ResultSource::TableView {
+                profile_id,
                 table,
                 pagination,
                 order_by,
                 total_rows,
             } => (
+                *profile_id,
                 table.clone(),
                 pagination.clone(),
                 order_by.clone(),
                 *total_rows,
             ),
             _ => return,
+        };
+
+        let db_kind = {
+            let state = self.app_state.read(cx);
+            state
+                .connections
+                .get(&profile_id)
+                .map(|c| c.connection.kind())
+                .unwrap_or(DbKind::Postgres)
         };
 
         let filter_value = self.filter_input.read(cx).value();
@@ -417,7 +460,8 @@ impl ResultsPane {
             Err(_) => pagination,
         };
 
-        self.run_table_query_internal(
+        self.run_table_query_for_connection(
+            profile_id,
             table.clone(),
             pagination,
             order_by,
@@ -428,15 +472,40 @@ impl ResultsPane {
         );
 
         if total_rows.is_none() {
-            self.fetch_total_count(table, filter, cx);
+            self.fetch_total_count_for_connection(profile_id, table, filter, db_kind, cx);
         }
     }
 
-    fn get_primary_key_columns(&self, table: &TableRef, cx: &Context<Self>) -> Vec<String> {
+    fn get_primary_key_columns_for_connection(
+        &self,
+        profile_id: Uuid,
+        table: &TableRef,
+        cx: &Context<Self>,
+    ) -> Vec<String> {
         let state = self.app_state.read(cx);
-        let Some(connected) = state.active_connection() else {
+        let Some(connected) = state.connections.get(&profile_id) else {
             return Vec::new();
         };
+
+        // Check database_schemas first (for MySQL/MariaDB lazy loading)
+        if let Some(schema_name) = &table.schema
+            && let Some(db_schema) = connected.database_schemas.get(schema_name)
+        {
+            for t in &db_schema.tables {
+                if t.name == table.name {
+                    return t
+                        .columns
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter(|c| c.is_primary_key)
+                        .map(|c| c.name.clone())
+                        .collect();
+                }
+            }
+        }
+
+        // Fall back to schema.schemas (for PostgreSQL/SQLite)
         let Some(schema) = &connected.schema else {
             return Vec::new();
         };
@@ -447,6 +516,8 @@ impl ResultsPane {
                     if t.name == table.name {
                         return t
                             .columns
+                            .as_deref()
+                            .unwrap_or(&[])
                             .iter()
                             .filter(|c| c.is_primary_key)
                             .map(|c| c.name.clone())
@@ -460,8 +531,9 @@ impl ResultsPane {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_table_query_internal(
+    fn run_table_query_for_connection(
         &mut self,
+        profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
         order_by: Vec<String>,
@@ -487,18 +559,21 @@ impl ResultsPane {
 
         let (conn, db_kind, active_database) = {
             let state = self.app_state.read(cx);
-            match state.active_connection() {
+            match state.connections.get(&profile_id) {
                 Some(c) => (
                     Some(c.connection.clone()),
                     c.connection.kind(),
                     c.active_database.clone(),
                 ),
-                None => (None, DbKind::Postgres, None), // fallback, won't be used
+                None => {
+                    cx.toast_error("Connection not found", window);
+                    return;
+                }
             }
         };
 
         let Some(conn) = conn else {
-            cx.toast_error("No active connection", window);
+            cx.toast_error("Connection not available", window);
             return;
         };
 
@@ -562,6 +637,7 @@ impl ResultsPane {
 
                         results_entity.update(cx, |pane, cx| {
                             pane.pending_table_result = Some(PendingTableResult {
+                                profile_id,
                                 table,
                                 pagination,
                                 order_by,
@@ -599,13 +675,15 @@ impl ResultsPane {
             return;
         };
 
-        let (table, pagination, order_by, total_rows) = match &tab.source {
+        let (profile_id, table, pagination, order_by, total_rows) = match &tab.source {
             ResultSource::TableView {
+                profile_id,
                 table,
                 pagination,
                 order_by,
                 total_rows,
             } => (
+                *profile_id,
                 table.clone(),
                 pagination.next_page(),
                 order_by.clone(),
@@ -621,7 +699,16 @@ impl ResultsPane {
             Some(filter_value.to_string())
         };
 
-        self.run_table_query_internal(table, pagination, order_by, filter, total_rows, window, cx);
+        self.run_table_query_for_connection(
+            profile_id,
+            table,
+            pagination,
+            order_by,
+            filter,
+            total_rows,
+            window,
+            cx,
+        );
     }
 
     pub fn go_to_prev_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -629,8 +716,9 @@ impl ResultsPane {
             return;
         };
 
-        let (table, pagination, order_by, total_rows) = match &tab.source {
+        let (profile_id, table, pagination, order_by, total_rows) = match &tab.source {
             ResultSource::TableView {
+                profile_id,
                 table,
                 pagination,
                 order_by,
@@ -639,7 +727,7 @@ impl ResultsPane {
                 let Some(prev) = pagination.prev_page() else {
                     return;
                 };
-                (table.clone(), prev, order_by.clone(), *total_rows)
+                (*profile_id, table.clone(), prev, order_by.clone(), *total_rows)
             }
             _ => return,
         };
@@ -651,7 +739,16 @@ impl ResultsPane {
             Some(filter_value.to_string())
         };
 
-        self.run_table_query_internal(table, pagination, order_by, filter, total_rows, window, cx);
+        self.run_table_query_for_connection(
+            profile_id,
+            table,
+            pagination,
+            order_by,
+            filter,
+            total_rows,
+            window,
+            cx,
+        );
     }
 
     fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -1014,6 +1111,7 @@ impl Render for ResultsPane {
 
         if let Some(pending) = self.pending_table_result.take() {
             self.apply_table_result(
+                pending.profile_id,
                 pending.table,
                 pending.pagination,
                 pending.order_by,

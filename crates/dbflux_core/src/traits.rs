@@ -3,6 +3,31 @@ use crate::{
     QueryHandle, QueryRequest, QueryResult, SchemaSnapshot, TableInfo, ViewInfo,
 };
 
+/// Describes how a database driver handles schema loading for multiple databases.
+///
+/// Different database systems have fundamentally different approaches:
+/// - MySQL/MariaDB: Single connection can switch between databases with `USE`
+/// - PostgreSQL: Each database requires a separate connection
+/// - SQLite: Single database per file, no database switching
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaLoadingStrategy {
+    /// Schema is loaded lazily per database on the same connection.
+    /// Clicking a database loads its schema without reconnecting.
+    /// Supports "closing" a database (unloading schema) without disconnecting.
+    /// Used by: MySQL, MariaDB
+    LazyPerDatabase,
+
+    /// Each database requires a separate connection.
+    /// Clicking a different database prompts to create a new connection.
+    /// Used by: PostgreSQL
+    ConnectionPerDatabase,
+
+    /// Single database, no switching needed.
+    /// Schema is loaded once at connection time.
+    /// Used by: SQLite
+    SingleDatabase,
+}
+
 /// Scope where a code generator can be applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeGenScope {
@@ -272,6 +297,14 @@ pub trait Connection: Send + Sync {
 
     /// Returns the database kind for this connection.
     fn kind(&self) -> DbKind;
+
+    /// Returns the schema loading strategy for this connection.
+    ///
+    /// This determines how the UI handles database clicks in the sidebar:
+    /// - `LazyPerDatabase`: Load schema on click, support closing databases
+    /// - `ConnectionPerDatabase`: Prompt to create new connection
+    /// - `SingleDatabase`: No database switching needed
+    fn schema_loading_strategy(&self) -> SchemaLoadingStrategy;
 
     /// Returns available code generators for this connection.
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {

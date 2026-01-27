@@ -6,8 +6,9 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -415,10 +416,10 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
         client
             .simple_query("SELECT 1")
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
         Ok(())
     }
 
@@ -476,7 +477,7 @@ impl Connection for PostgresConnection {
                 log::info!("[QUERY] Query {} was cancelled", query_id);
                 DbError::Cancelled
             } else {
-                DbError::QueryFailed(e.to_string())
+                DbError::QueryFailed(format!("{:?}", e))
             }
         })?;
 
@@ -607,7 +608,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         if let Err(e) = client.simple_query("ROLLBACK") {
             log::warn!(
@@ -629,7 +630,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         let phase_start = Instant::now();
         let databases = get_databases(&mut client)?;
@@ -676,13 +677,17 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
         get_databases(&mut client)
     }
 
     fn kind(&self) -> DbKind {
         DbKind::Postgres
+    }
+
+    fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+        SchemaLoadingStrategy::ConnectionPerDatabase
     }
 
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
@@ -719,7 +724,7 @@ fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
             "#,
             &[],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     Ok(rows
         .iter()
@@ -734,7 +739,7 @@ fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
 fn get_current_database(client: &mut Client) -> Result<Option<String>, DbError> {
     let rows = client
         .query("SELECT current_database()", &[])
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     Ok(rows.first().map(|row| row.get(0)))
 }
@@ -751,7 +756,7 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
             "#,
             &[],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     log::info!(
         "[SCHEMA] Found {} schemas in {:.2}ms",
@@ -798,7 +803,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     let table_names: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
 
@@ -817,8 +822,8 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
             TableInfo {
                 name,
                 schema: Some(schema.to_string()),
-                columns,
-                indexes,
+                columns: Some(columns),
+                indexes: Some(indexes),
             }
         })
         .collect();
@@ -837,7 +842,7 @@ fn get_views_for_schema(client: &mut Client, schema: &str) -> Result<Vec<ViewInf
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     Ok(rows
         .iter()
@@ -875,7 +880,7 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     Ok(rows
         .iter()
@@ -951,7 +956,7 @@ fn get_all_columns_for_schema(
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     let mut result: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
 
@@ -995,7 +1000,7 @@ fn get_all_indexes_for_schema(
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     let mut result: HashMap<String, Vec<IndexInfo>> = HashMap::new();
 
@@ -1036,7 +1041,7 @@ fn get_indexes(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Ind
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
     Ok(rows
         .iter()
@@ -1150,20 +1155,15 @@ fn pg_generate_select_star(table: &TableInfo) -> String {
 
 fn pg_generate_insert(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    if table.columns.is_empty() {
+    if cols.is_empty() {
         return format!("INSERT INTO {} DEFAULT VALUES;", qualified);
     }
 
-    let columns: Vec<String> = table
-        .columns
-        .iter()
-        .map(|c| pg_quote_ident(&c.name))
-        .collect();
+    let columns: Vec<String> = cols.iter().map(|c| pg_quote_ident(&c.name)).collect();
 
-    let placeholders: Vec<String> = (1..=table.columns.len())
-        .map(|i| format!("${}", i))
-        .collect();
+    let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
 
     format!(
         "INSERT INTO {} ({})\nVALUES ({});",
@@ -1175,34 +1175,29 @@ fn pg_generate_insert(table: &TableInfo) -> String {
 
 fn pg_generate_update(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    if table.columns.is_empty() {
+    if cols.is_empty() {
         return format!(
             "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
             qualified
         );
     }
 
-    let pk_columns: Vec<&str> = table
-        .columns
+    let pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| c.is_primary_key)
         .map(|c| c.name.as_str())
         .collect();
 
-    let non_pk_columns: Vec<&str> = table
-        .columns
+    let non_pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| !c.is_primary_key)
         .map(|c| c.name.as_str())
         .collect();
 
     let set_columns = if non_pk_columns.is_empty() {
-        &table
-            .columns
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>()[..]
+        &cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
     } else {
         &non_pk_columns[..]
     };
@@ -1235,9 +1230,9 @@ fn pg_generate_update(table: &TableInfo) -> String {
 
 fn pg_generate_delete(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    let pk_columns: Vec<&str> = table
-        .columns
+    let pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| c.is_primary_key)
         .map(|c| c.name.as_str())
@@ -1260,15 +1255,15 @@ fn pg_generate_delete(table: &TableInfo) -> String {
 fn pg_generate_create_table(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
     let mut sql = format!("CREATE TABLE {} (\n", qualified);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
 
-    let pk_columns: Vec<&str> = table
-        .columns
+    let pk_columns: Vec<&str> = cols
         .iter()
         .filter(|c| c.is_primary_key)
         .map(|c| c.name.as_str())
         .collect();
 
-    for (i, col) in table.columns.iter().enumerate() {
+    for (i, col) in cols.iter().enumerate() {
         // TODO: Consider normalizing type names for more canonical output
         // (e.g., "character varying" → "varchar", handle arrays, domains, etc.)
         let mut line = format!("    {} {}", pg_quote_ident(&col.name), col.type_name);
@@ -1281,7 +1276,7 @@ fn pg_generate_create_table(table: &TableInfo) -> String {
             line.push_str(&format!(" DEFAULT {}", default));
         }
 
-        let is_last_column = i == table.columns.len() - 1;
+        let is_last_column = i == cols.len() - 1;
         let has_pk_constraint = !pk_columns.is_empty();
 
         if !is_last_column || has_pk_constraint {

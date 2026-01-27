@@ -4,7 +4,9 @@ use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
-use dbflux_core::{CodeGenScope, DbKind, SchemaSnapshot, TableInfo, TaskKind};
+use dbflux_core::{
+    CodeGenScope, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, TaskKind, ViewInfo,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -81,7 +83,8 @@ pub enum ContextMenuAction {
     Disconnect,
     Edit,
     Delete,
-    SwitchToDatabase,
+    OpenDatabase,
+    CloseDatabase,
     Submenu(Vec<ContextMenuItem>),
 }
 
@@ -108,7 +111,7 @@ pub struct Sidebar {
     editor: Entity<EditorPane>,
     results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
-    pending_view_table: Option<String>,
+    pending_view_table: Option<(Uuid, String)>,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
     visible_entry_count: usize,
@@ -327,6 +330,13 @@ impl Sidebar {
 
         if click_count == 2 {
             self.execute_item(item_id, cx);
+        } else {
+            // Single click on Profile or Database: also toggle expansion
+            // This keeps our expansion_overrides in sync with user intent
+            let node_kind = TreeNodeKind::from_id(item_id);
+            if matches!(node_kind, TreeNodeKind::Profile | TreeNodeKind::Database) {
+                self.toggle_item_expansion(item_id, cx);
+            }
         }
 
         cx.notify();
@@ -335,7 +345,7 @@ impl Sidebar {
     fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {
         if let Some(parts) = Self::parse_table_or_view_id(item_id) {
             let qualified_name = format!("{}.{}", parts.schema_name, parts.object_name);
-            self.pending_view_table = Some(qualified_name);
+            self.pending_view_table = Some((parts.profile_id, qualified_name));
             cx.notify();
         }
     }
@@ -420,18 +430,69 @@ impl Sidebar {
             return;
         };
 
-        let Some(table) = Self::find_table_for_item(&parts, &conn.schema) else {
-            if is_view {
+        // For views, we create a TableInfo from the ViewInfo
+        // This allows SELECT * and basic code generation to work
+        if is_view {
+            // Try to find view in database_schemas (MySQL/MariaDB)
+            let view_from_db_schemas = conn
+                .database_schemas
+                .get(&parts.schema_name)
+                .and_then(|db_schema| {
+                    db_schema
+                        .views
+                        .iter()
+                        .find(|v| v.name == parts.object_name)
+                });
+
+            // Fall back to schema.schemas (PostgreSQL/SQLite)
+            let view =
+                view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+
+            let Some(view) = view else {
                 log::warn!(
-                    "Code generation for view '{}' failed: view metadata not available",
+                    "Code generation for view '{}' failed: view not found",
                     parts.object_name
                 );
-                self.pending_toast = Some(PendingToast {
-                    message: "Code generation for views is not yet supported".to_string(),
-                    is_error: true,
-                });
-                cx.notify();
+                return;
+            };
+
+            // Create a TableInfo from the ViewInfo for code generation
+            let table_info = TableInfo {
+                name: view.name.clone(),
+                schema: view.schema.clone(),
+                columns: None,
+                indexes: None,
+            };
+
+            match conn.connection.generate_code(generator_id, &table_info) {
+                Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
+                Err(e) => {
+                    log::error!("Code generation for view failed: {}", e);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!("Code generation failed: {}", e),
+                        is_error: true,
+                    });
+                    cx.notify();
+                }
             }
+            return;
+        }
+
+        // For tables, search in database_schemas first (MySQL/MariaDB lazy loading)
+        let table_from_db_schemas = conn
+            .database_schemas
+            .get(&parts.schema_name)
+            .and_then(|db_schema| {
+                db_schema
+                    .tables
+                    .iter()
+                    .find(|t| t.name == parts.object_name)
+            });
+
+        // Fall back to schema.schemas (PostgreSQL/SQLite)
+        let table = table_from_db_schemas.or_else(|| Self::find_table_for_item(&parts, &conn.schema));
+
+        let Some(table) = table else {
             return;
         };
 
@@ -465,6 +526,25 @@ impl Sidebar {
 
         // For databases without schemas (fallback)
         schema.tables.iter().find(|t| t.name == parts.object_name)
+    }
+
+    fn find_view_for_item<'a>(
+        parts: &ItemIdParts,
+        schema: &'a Option<SchemaSnapshot>,
+    ) -> Option<&'a ViewInfo> {
+        let schema = schema.as_ref()?;
+
+        for db_schema in &schema.schemas {
+            if db_schema.name == parts.schema_name {
+                return db_schema
+                    .views
+                    .iter()
+                    .find(|v| v.name == parts.object_name);
+            }
+        }
+
+        // For databases without schemas (fallback)
+        schema.views.iter().find(|v| v.name == parts.object_name)
     }
 
     pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -568,13 +648,21 @@ impl Sidebar {
                 items
             }
             TreeNodeKind::Database => {
-                let is_current = self.is_current_database(item_id, cx);
-                if is_current {
-                    vec![]
+                let is_loaded = self.is_database_schema_loaded(item_id, cx);
+                if is_loaded {
+                    // Only show Close for databases that support it (MySQL/MariaDB)
+                    if self.database_supports_close(item_id, cx) {
+                        vec![ContextMenuItem {
+                            label: "Close".into(),
+                            action: ContextMenuAction::CloseDatabase,
+                        }]
+                    } else {
+                        vec![]
+                    }
                 } else {
                     vec![ContextMenuItem {
-                        label: "Switch to Database".into(),
-                        action: ContextMenuAction::SwitchToDatabase,
+                        label: "Open".into(),
+                        action: ContextMenuAction::OpenDatabase,
                     }]
                 }
             }
@@ -582,7 +670,7 @@ impl Sidebar {
         }
     }
 
-    fn is_current_database(&self, item_id: &str, cx: &App) -> bool {
+    fn is_database_schema_loaded(&self, item_id: &str, cx: &App) -> bool {
         let Some(rest) = item_id.strip_prefix("db_") else {
             return false;
         };
@@ -597,10 +685,27 @@ impl Sidebar {
 
         let state = self.app_state.read(cx);
         if let Some(conn) = state.connections.get(&profile_id) {
-            conn.schema
-                .as_ref()
-                .and_then(|s| s.current_database.as_ref())
-                == Some(&db_name.to_string())
+            conn.database_schemas.contains_key(db_name)
+        } else {
+            false
+        }
+    }
+
+    fn database_supports_close(&self, item_id: &str, cx: &App) -> bool {
+        let Some(rest) = item_id.strip_prefix("db_") else {
+            return false;
+        };
+        if rest.len() < 37 {
+            return false;
+        }
+        let profile_id_str = &rest[..36];
+        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        if let Some(conn) = state.connections.get(&profile_id) {
+            conn.connection.schema_loading_strategy() == SchemaLoadingStrategy::LazyPerDatabase
         } else {
             false
         }
@@ -702,8 +807,11 @@ impl Sidebar {
                     self.delete_profile(profile_id, cx);
                 }
             }
-            ContextMenuAction::SwitchToDatabase => {
+            ContextMenuAction::OpenDatabase => {
                 self.handle_database_click(&item_id, cx);
+            }
+            ContextMenuAction::CloseDatabase => {
+                self.close_database(&item_id, cx);
             }
         }
 
@@ -831,27 +939,62 @@ impl Sidebar {
             return;
         };
 
-        let db_kind = self
+        let strategy = self
             .app_state
             .read(cx)
             .connections
             .get(&profile_id)
-            .map(|c| c.profile.kind());
+            .map(|c| c.connection.schema_loading_strategy());
 
-        match db_kind {
-            Some(DbKind::MySQL) | Some(DbKind::MariaDB) => {
-                self.handle_mysql_database_click(profile_id, db_name, cx);
+        match strategy {
+            Some(SchemaLoadingStrategy::LazyPerDatabase) => {
+                self.handle_lazy_database_click(profile_id, db_name, cx);
             }
-            Some(DbKind::Postgres) => {
-                self.handle_postgres_database_click(profile_id, db_name, cx);
+            Some(SchemaLoadingStrategy::ConnectionPerDatabase) => {
+                self.handle_connection_per_database_click(profile_id, db_name, cx);
             }
-            _ => {
-                log::info!("Database click not supported for this database type");
+            Some(SchemaLoadingStrategy::SingleDatabase) | None => {
+                log::info!("Database click not applicable for this database type");
             }
         }
     }
 
-    fn handle_mysql_database_click(
+    fn close_database(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(rest) = item_id.strip_prefix("db_") else {
+            return;
+        };
+
+        if rest.len() < 37 {
+            return;
+        }
+
+        let profile_id_str = &rest[..36];
+        let db_name = &rest[37..];
+
+        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+            return;
+        };
+
+        self.app_state.update(cx, |state, cx| {
+            if let Some(conn) = state.connections.get_mut(&profile_id) {
+                // Remove the database schema
+                conn.database_schemas.remove(db_name);
+
+                // If this was the active database, clear it
+                if conn.active_database.as_deref() == Some(db_name) {
+                    conn.active_database = None;
+                }
+            }
+            cx.emit(AppStateChanged);
+        });
+
+        // Collapse the database node in the tree
+        self.set_expanded(item_id, false, cx);
+
+        self.refresh_tree(cx);
+    }
+
+    fn handle_lazy_database_click(
         &mut self,
         profile_id: Uuid,
         db_name: &str,
@@ -966,7 +1109,7 @@ impl Sidebar {
         .detach();
     }
 
-    fn handle_postgres_database_click(
+    fn handle_connection_per_database_click(
         &mut self,
         profile_id: Uuid,
         db_name: &str,
@@ -1150,15 +1293,15 @@ impl Sidebar {
                 && let Some(ref schema) = connected.schema
             {
                 let mut profile_children = Vec::new();
-                let kind = connected.profile.kind();
-                let is_mysql_like = kind == DbKind::MySQL || kind == DbKind::MariaDB;
+                let strategy = connected.connection.schema_loading_strategy();
+                let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
 
                 if !schema.databases.is_empty() {
                     for db in &schema.databases {
                         let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                         let is_active_db = connected.active_database.as_deref() == Some(&db.name);
 
-                        let db_children = if is_mysql_like {
+                        let db_children = if uses_lazy_loading {
                             if let Some(db_schema) = connected.database_schemas.get(&db.name) {
                                 Self::build_db_schema_content(profile_id, db_schema)
                             } else if is_pending {
@@ -1177,15 +1320,15 @@ impl Sidebar {
 
                         let db_label = if is_pending {
                             format!("{} (loading...)", db.name)
-                        } else if is_active_db && is_mysql_like {
+                        } else if is_active_db && uses_lazy_loading {
                             format!("**{}**", db.name)
-                        } else if db.is_current && !is_mysql_like {
+                        } else if db.is_current && !uses_lazy_loading {
                             format!("{} (current)", db.name)
                         } else {
                             db.name.clone()
                         };
 
-                        let is_expanded = if is_mysql_like {
+                        let is_expanded = if uses_lazy_loading {
                             is_active_db
                         } else {
                             db.is_current
@@ -1328,9 +1471,11 @@ impl Sidebar {
     ) -> TreeItem {
         let mut table_sections: Vec<TreeItem> = Vec::new();
 
-        if !table.columns.is_empty() {
-            let column_children: Vec<TreeItem> = table
-                .columns
+        // columns: None = not loaded yet, Some([]) = loaded but empty
+        if let Some(ref columns) = table.columns
+            && !columns.is_empty()
+        {
+            let column_children: Vec<TreeItem> = columns
                 .iter()
                 .map(|col| {
                     let pk_marker = if col.is_primary_key { " PK" } else { "" };
@@ -1346,16 +1491,18 @@ impl Sidebar {
             table_sections.push(
                 TreeItem::new(
                     format!("columns_{}__{}__{}", profile_id, schema_name, table.name),
-                    format!("Columns ({})", table.columns.len()),
+                    format!("Columns ({})", columns.len()),
                 )
                 .expanded(true)
                 .children(column_children),
             );
         }
 
-        if !table.indexes.is_empty() {
-            let index_children: Vec<TreeItem> = table
-                .indexes
+        // indexes: None = not loaded yet, Some([]) = loaded but empty
+        if let Some(ref indexes) = table.indexes
+            && !indexes.is_empty()
+        {
+            let index_children: Vec<TreeItem> = indexes
                 .iter()
                 .map(|idx| {
                     let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
@@ -1372,7 +1519,7 @@ impl Sidebar {
             table_sections.push(
                 TreeItem::new(
                     format!("indexes_{}__{}__{}", profile_id, schema_name, table.name),
-                    format!("Indexes ({})", table.indexes.len()),
+                    format!("Indexes ({})", indexes.len()),
                 )
                 .expanded(false)
                 .children(index_children),
@@ -1675,9 +1822,9 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(table_name) = self.pending_view_table.take() {
+        if let Some((profile_id, table_name)) = self.pending_view_table.take() {
             self.results.update(cx, |results, cx| {
-                results.view_table(&table_name, window, cx);
+                results.view_table_for_connection(profile_id, &table_name, window, cx);
             });
         }
 
@@ -1865,6 +2012,8 @@ impl Render for Sidebar {
                     let item_id_for_mousedown = item_id.clone();
                     let sidebar_for_click = sidebar_entity.clone();
                     let item_id_for_click = item_id.clone();
+                    let sidebar_for_chevron = sidebar_entity.clone();
+                    let item_id_for_chevron = item_id.clone();
 
                     let mut list_item = ListItem::new(ix).selected(selected).py(Spacing::XS).child(
                         div()
@@ -1903,12 +2052,27 @@ impl Render for Sidebar {
                             })
                             .child(
                                 div()
+                                    .id(SharedString::from(format!("chevron-{}", item_id)))
                                     .w(px(12.0))
                                     .flex()
                                     .justify_center()
                                     .text_color(theme.muted_foreground)
                                     .when_some(chevron, |el, ch| {
-                                        el.text_size(FontSizes::XS).child(ch)
+                                        el.text_size(FontSizes::XS)
+                                            .cursor_pointer()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                sidebar_for_chevron.update(cx, |this, cx| {
+                                                    this.toggle_item_expansion(
+                                                        &item_id_for_chevron,
+                                                        cx,
+                                                    );
+                                                });
+                                            })
+                                            .child(ch)
                                     }),
                             )
                             .child(
@@ -1953,6 +2117,29 @@ impl Render for Sidebar {
                             let click_count = event.click_count();
                             sidebar.update(cx, |this, cx| {
                                 this.handle_item_click(&item_id_for_click, click_count, cx);
+                            });
+                        });
+                    }
+
+                    // Handle expansion for folder items that don't have special click handlers
+                    // (Schema, TablesFolder, ViewsFolder, ColumnsFolder, IndexesFolder)
+                    // This ensures our expansion_overrides stays in sync when users click to expand/collapse
+                    let is_other_folder = is_folder
+                        && matches!(
+                            node_kind,
+                            TreeNodeKind::Schema
+                                | TreeNodeKind::TablesFolder
+                                | TreeNodeKind::ViewsFolder
+                                | TreeNodeKind::ColumnsFolder
+                                | TreeNodeKind::IndexesFolder
+                        );
+                    if is_other_folder {
+                        let item_id_for_folder = item_id.clone();
+                        let sidebar_for_folder = sidebar_entity.clone();
+                        list_item = list_item.on_click(move |_, _window, cx| {
+                            cx.stop_propagation();
+                            sidebar_for_folder.update(cx, |this, cx| {
+                                this.toggle_item_expansion(&item_id_for_folder, cx);
                             });
                         });
                     }

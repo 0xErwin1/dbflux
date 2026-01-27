@@ -200,6 +200,15 @@ impl Workspace {
                 return ContextId::HistoryModal;
             }
         }
+
+        // When editing filter/limit inputs in Results, use TextInput context
+        // to let keyboard input pass through instead of triggering commands
+        if self.focus_target == FocusTarget::Results
+            && self.results.read(cx).edit_state() == EditState::Editing
+        {
+            return ContextId::TextInput;
+        }
+
         self.focus_target.to_context()
     }
 

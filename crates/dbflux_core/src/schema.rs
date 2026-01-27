@@ -46,8 +46,11 @@ pub struct TableInfo {
     /// Schema name (PostgreSQL) or `None` (SQLite).
     pub schema: Option<String>,
 
-    pub columns: Vec<ColumnInfo>,
-    pub indexes: Vec<IndexInfo>,
+    /// Column metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
+    pub columns: Option<Vec<ColumnInfo>>,
+
+    /// Index metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
+    pub indexes: Option<Vec<IndexInfo>>,
 }
 
 /// View metadata.
