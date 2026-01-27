@@ -31,7 +31,7 @@ pub use secrets::{
     ssh_tunnel_secret_ref,
 };
 pub use store::{ProfileStore, SshTunnelStore};
-pub use table_browser::{Pagination, TableBrowseRequest, TableRef};
+pub use table_browser::{OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, NoopCancelHandle, QueryCancelHandle,

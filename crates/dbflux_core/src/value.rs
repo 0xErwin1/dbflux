@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 
 /// Database value type.
 ///
@@ -47,3 +48,51 @@ impl std::fmt::Display for Value {
         write!(f, "{}", self.as_display_string())
     }
 }
+
+impl Value {
+    fn type_order(&self) -> u8 {
+        match self {
+            Value::Bool(_) => 0,
+            Value::Int(_) => 1,
+            Value::Float(_) => 2,
+            Value::Text(_) => 3,
+            Value::Bytes(_) => 4,
+            Value::Null => 5,
+        }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use Value::*;
+
+        match (self, other) {
+            // Nulls last (SQL standard behavior)
+            (Null, Null) => Ordering::Equal,
+            (Null, _) => Ordering::Greater,
+            (_, Null) => Ordering::Less,
+
+            // Same type comparisons
+            (Bool(a), Bool(b)) => a.cmp(b),
+            (Int(a), Int(b)) => a.cmp(b),
+            (Float(a), Float(b)) => a.total_cmp(b),
+            (Text(a), Text(b)) => a.cmp(b),
+            (Bytes(a), Bytes(b)) => a.cmp(b),
+
+            // Cross-type numeric promotion
+            (Int(a), Float(b)) => (*a as f64).total_cmp(b),
+            (Float(a), Int(b)) => a.total_cmp(&(*b as f64)),
+
+            // Different types: fallback to type order
+            _ => self.type_order().cmp(&other.type_order()),
+        }
+    }
+}
+
+impl Eq for Value {}

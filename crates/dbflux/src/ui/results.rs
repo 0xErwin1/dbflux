@@ -1,17 +1,18 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, DbKind, Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef,
-    TaskId, TaskKind,
+    CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, SortDirection,
+    TableBrowseRequest, TableRef, TaskId, TaskKind,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::table::{Column, Table, TableDelegate, TableState};
+use gpui_component::table::{Column, ColumnSort, Table, TableDelegate, TableState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
+use std::cmp::Ordering;
 use std::fs::File;
 use std::io::BufWriter;
 use uuid::Uuid;
@@ -26,27 +27,47 @@ enum ResultSource {
         profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
-        order_by: Vec<String>,
+        order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
     },
 }
 
+/// Sort state for a result tab (used for in-memory sorting of Query results).
+#[derive(Clone, Copy)]
+struct SortState {
+    column_ix: usize,
+    direction: SortDirection,
+}
+
 struct ResultTab {
-    #[allow(dead_code)]
     id: usize,
     title: String,
     source: ResultSource,
     result: QueryResult,
     table_state: Entity<TableState<ResultsTableDelegate>>,
+    /// Sort state for Query tabs (in-memory sort).
+    sort_state: Option<SortState>,
+    /// Original row order for restoring after sort clear (indices into current rows).
+    original_row_order: Option<Vec<usize>>,
 }
 
 struct PendingTableResult {
     profile_id: Uuid,
     table: TableRef,
     pagination: Pagination,
-    order_by: Vec<String>,
+    order_by: Vec<OrderByColumn>,
     total_rows: Option<u64>,
     result: QueryResult,
+}
+
+/// Pending request to re-run a table query (triggered by sort change).
+struct PendingTableRequery {
+    profile_id: Uuid,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<OrderByColumn>,
+    filter: Option<String>,
+    total_rows: Option<u64>,
 }
 
 struct PendingTotalCount {
@@ -120,6 +141,11 @@ pub struct ResultsPane {
     running_table_query: Option<RunningTableQuery>,
     pending_toast: Option<PendingToast>,
 
+    /// Pending re-query triggered by sort change on TableView.
+    pending_table_requery: Option<PendingTableRequery>,
+    /// Tab index to rebuild after in-memory sort.
+    pending_table_rebuild: Option<usize>,
+
     focus_mode: FocusMode,
     toolbar_focus: ToolbarFocus,
     edit_state: EditState,
@@ -186,6 +212,8 @@ impl ResultsPane {
             pending_error: None,
             running_table_query: None,
             pending_toast: None,
+            pending_table_requery: None,
+            pending_table_rebuild: None,
             focus_mode: FocusMode::default(),
             toolbar_focus: ToolbarFocus::default(),
             edit_state: EditState::default(),
@@ -200,15 +228,19 @@ impl ResultsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let delegate = ResultsTableDelegate::new(result.clone());
+        let tab_id = self.next_tab_id;
+        let results_pane = cx.entity().clone();
+        let delegate = ResultsTableDelegate::new(result.clone(), results_pane, tab_id, None);
         let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
 
         let tab = ResultTab {
-            id: self.next_tab_id,
-            title: format!("Result {}", self.next_tab_id),
+            id: tab_id,
+            title: format!("Result {}", tab_id),
             source: ResultSource::Query,
             result,
             table_state,
+            sort_state: None,
+            original_row_order: None,
         };
 
         self.tabs.push(tab);
@@ -229,20 +261,54 @@ impl ResultsPane {
         profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
-        order_by: Vec<String>,
+        order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
         result: QueryResult,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let delegate = ResultsTableDelegate::new(result.clone());
-        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
-
         let qualified = table.qualified_name();
 
-        if let Some(idx) = self.tabs.iter().position(
+        info!(
+            "apply_table_result: table={}, order_by={:?}, result_columns={:?}",
+            qualified,
+            order_by
+                .iter()
+                .map(|c| format!("{} {:?}", c.name, c.direction))
+                .collect::<Vec<_>>(),
+            result.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
+        // Determine sort state from order_by for visual indicator
+        let sort_state = order_by.first().and_then(|col| {
+            let pos = result.columns.iter().position(|c| c.name == col.name);
+            info!(
+                "sort_state calculation: looking for '{}' in columns, found at {:?}",
+                col.name, pos
+            );
+            pos.map(|column_ix| SortState {
+                column_ix,
+                direction: col.direction,
+            })
+        });
+        info!("sort_state for delegate: {:?}", sort_state.map(|s| (s.column_ix, s.direction)));
+
+        // Find or create tab
+        let (tab_id, tab_idx) = if let Some(idx) = self.tabs.iter().position(
             |t| matches!(&t.source, ResultSource::TableView { table: tbl, .. } if tbl.qualified_name() == qualified),
         ) {
+            (self.tabs[idx].id, Some(idx))
+        } else {
+            let id = self.next_tab_id;
+            self.next_tab_id += 1;
+            (id, None)
+        };
+
+        let results_pane = cx.entity().clone();
+        let delegate = ResultsTableDelegate::new(result.clone(), results_pane, tab_id, sort_state);
+        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+
+        if let Some(idx) = tab_idx {
             let existing_total = match &self.tabs[idx].source {
                 ResultSource::TableView { total_rows, .. } => *total_rows,
                 _ => None,
@@ -257,10 +323,12 @@ impl ResultsPane {
                 order_by,
                 total_rows: total_rows.or(existing_total),
             };
+            self.tabs[idx].sort_state = None; // TableView uses server-side sort
+            self.tabs[idx].original_row_order = None;
             self.active_tab = idx;
         } else {
             let tab = ResultTab {
-                id: self.next_tab_id,
+                id: tab_id,
                 title: table.name.clone(),
                 source: ResultSource::TableView {
                     profile_id,
@@ -271,10 +339,11 @@ impl ResultsPane {
                 },
                 result,
                 table_state,
+                sort_state: None,
+                original_row_order: None,
             };
             self.tabs.push(tab);
             self.active_tab = self.tabs.len() - 1;
-            self.next_tab_id += 1;
         }
 
         cx.notify();
@@ -481,9 +550,10 @@ impl ResultsPane {
         profile_id: Uuid,
         table: &TableRef,
         cx: &Context<Self>,
-    ) -> Vec<String> {
+    ) -> Vec<OrderByColumn> {
         let state = self.app_state.read(cx);
         let Some(connected) = state.connections.get(&profile_id) else {
+            info!("get_primary_key_columns: connection not found");
             return Vec::new();
         };
 
@@ -499,7 +569,7 @@ impl ResultsPane {
                         .unwrap_or(&[])
                         .iter()
                         .filter(|c| c.is_primary_key)
-                        .map(|c| c.name.clone())
+                        .map(|c| OrderByColumn::asc(&c.name))
                         .collect();
                 }
             }
@@ -520,7 +590,7 @@ impl ResultsPane {
                             .unwrap_or(&[])
                             .iter()
                             .filter(|c| c.is_primary_key)
-                            .map(|c| c.name.clone())
+                            .map(|c| OrderByColumn::asc(&c.name))
                             .collect();
                     }
                 }
@@ -536,7 +606,7 @@ impl ResultsPane {
         profile_id: Uuid,
         table: TableRef,
         pagination: Pagination,
-        order_by: Vec<String>,
+        order_by: Vec<OrderByColumn>,
         filter: Option<String>,
         total_rows: Option<u64>,
         window: &mut Window,
@@ -751,6 +821,250 @@ impl ResultsPane {
         );
     }
 
+    /// Handle sort request from table delegate.
+    fn handle_sort_request(
+        &mut self,
+        tab_id: usize,
+        col_ix: usize,
+        direction: SortDirection,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+
+        // Extract info we need from the tab first
+        let tab = &self.tabs[tab_idx];
+        let col_name = tab
+            .result
+            .columns
+            .get(col_ix)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        let source_info = match &tab.source {
+            ResultSource::TableView {
+                profile_id,
+                table,
+                pagination,
+                total_rows,
+                ..
+            } => Some((
+                *profile_id,
+                table.clone(),
+                pagination.reset_offset(),
+                *total_rows,
+            )),
+            ResultSource::Query => None,
+        };
+
+        if let Some((profile_id, table, new_pagination, total_rows)) = source_info {
+            // Server-side sort: update source and queue re-query
+            let new_order_by = vec![OrderByColumn {
+                name: col_name,
+                direction,
+            }];
+
+            let filter_value = self.filter_input.read(cx).value();
+            let filter = if filter_value.trim().is_empty() {
+                None
+            } else {
+                Some(filter_value.to_string())
+            };
+
+            // Update source immediately for UI consistency
+            self.tabs[tab_idx].source = ResultSource::TableView {
+                profile_id,
+                table: table.clone(),
+                pagination: new_pagination.clone(),
+                order_by: new_order_by.clone(),
+                total_rows,
+            };
+
+            // Queue re-query
+            self.pending_table_requery = Some(PendingTableRequery {
+                profile_id,
+                table,
+                pagination: new_pagination,
+                order_by: new_order_by,
+                filter,
+                total_rows,
+            });
+
+            cx.notify();
+        } else {
+            // Client-side sort: sort in memory
+            self.apply_local_sort(tab_idx, col_ix, direction, cx);
+        }
+    }
+
+    /// Handle sort clear (restore original order).
+    fn handle_sort_clear(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        let Some(tab_idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+
+        // Extract info we need from the tab first
+        let source_info = match &self.tabs[tab_idx].source {
+            ResultSource::TableView {
+                profile_id,
+                table,
+                pagination,
+                total_rows,
+                ..
+            } => Some((
+                *profile_id,
+                table.clone(),
+                pagination.reset_offset(),
+                *total_rows,
+            )),
+            ResultSource::Query => None,
+        };
+
+        if let Some((profile_id, table, new_pagination, total_rows)) = source_info {
+            // Restore to PK order
+            let pk_order = self.get_primary_key_columns_for_connection(profile_id, &table, cx);
+
+            let filter_value = self.filter_input.read(cx).value();
+            let filter = if filter_value.trim().is_empty() {
+                None
+            } else {
+                Some(filter_value.to_string())
+            };
+
+            // Update source
+            self.tabs[tab_idx].source = ResultSource::TableView {
+                profile_id,
+                table: table.clone(),
+                pagination: new_pagination.clone(),
+                order_by: pk_order.clone(),
+                total_rows,
+            };
+
+            // Queue re-query
+            self.pending_table_requery = Some(PendingTableRequery {
+                profile_id,
+                table,
+                pagination: new_pagination,
+                order_by: pk_order,
+                filter,
+                total_rows,
+            });
+
+            cx.notify();
+        } else {
+            // Restore original row order for Query tab
+            let tab = &mut self.tabs[tab_idx];
+
+            if let Some(original_order) = tab.original_row_order.take() {
+                // Create mapping from current position to original position
+                let mut restore_indices: Vec<(usize, usize)> = original_order
+                    .iter()
+                    .enumerate()
+                    .map(|(current, &original)| (original, current))
+                    .collect();
+                restore_indices.sort_by_key(|(orig, _)| *orig);
+
+                let rows = std::mem::take(&mut tab.result.rows);
+                tab.result.rows = restore_indices
+                    .into_iter()
+                    .map(|(_, current)| rows[current].clone())
+                    .collect();
+            }
+
+            tab.sort_state = None;
+            self.pending_table_rebuild = Some(tab_idx);
+            cx.notify();
+        }
+    }
+
+    /// Check if the column at `col_ix` is currently the primary sort column with ascending order.
+    ///
+    /// This is used to detect when clicking a column that's already sorted ascending would
+    /// create a no-op if we reverted to PK order (because PK order is also ascending).
+    /// In that case, we should cycle to descending instead.
+    fn is_column_sorted_ascending(&self, tab_id: usize, col_ix: usize) -> bool {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return false;
+        };
+
+        match &tab.source {
+            ResultSource::TableView { order_by, .. } => {
+                // Check if the first order_by column matches col_ix and is ascending
+                if let Some(first_order) = order_by.first() {
+                    if first_order.direction != SortDirection::Ascending {
+                        return false;
+                    }
+                    // Check if the column name matches the column at col_ix
+                    if let Some(col) = tab.result.columns.get(col_ix) {
+                        return col.name == first_order.name;
+                    }
+                }
+                false
+            }
+            ResultSource::Query => {
+                // For Query tabs, check sort_state
+                tab.sort_state
+                    .map(|s| s.column_ix == col_ix && s.direction == SortDirection::Ascending)
+                    .unwrap_or(false)
+            }
+        }
+    }
+
+    /// Apply in-memory sort to a Query tab.
+    fn apply_local_sort(
+        &mut self,
+        tab_idx: usize,
+        col_ix: usize,
+        direction: SortDirection,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &mut self.tabs[tab_idx];
+
+        // Save original order if this is the first sort
+        if tab.original_row_order.is_none() {
+            tab.original_row_order = Some((0..tab.result.rows.len()).collect());
+        }
+
+        // Sort using indices for tracking
+        let mut indices: Vec<usize> = (0..tab.result.rows.len()).collect();
+        indices.sort_by(|&a, &b| {
+            let val_a = tab.result.rows[a].get(col_ix);
+            let val_b = tab.result.rows[b].get(col_ix);
+
+            let cmp = match (val_a, val_b) {
+                (Some(a), Some(b)) => a.cmp(b),
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (None, None) => Ordering::Equal,
+            };
+
+            match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            }
+        });
+
+        // Reorder rows according to sorted indices
+        let sorted_rows: Vec<_> = indices
+            .iter()
+            .map(|&i| tab.result.rows[i].clone())
+            .collect();
+        tab.result.rows = sorted_rows;
+
+        // Update original_row_order to map new order -> original
+        if let Some(ref mut orig) = tab.original_row_order {
+            *orig = indices.iter().map(|&i| orig[i]).collect();
+        }
+
+        tab.sort_state = Some(SortState {
+            column_ix: col_ix,
+            direction,
+        });
+        self.pending_table_rebuild = Some(tab_idx);
+        cx.notify();
+    }
+
     fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
         if idx >= self.tabs.len() {
             return;
@@ -837,6 +1151,35 @@ impl ResultsPane {
             return Some(1);
         }
         Some(total.div_ceil(limit))
+    }
+
+    /// Get current sort info for display: (column_name, direction, is_server_sort)
+    fn current_sort_info(&self) -> Option<(String, SortDirection, bool)> {
+        let tab = self.active_tab()?;
+
+        match &tab.source {
+            ResultSource::TableView { order_by, .. } => {
+                // Server-side sort from order_by
+                let result = order_by
+                    .first()
+                    .map(|col| (col.name.clone(), col.direction, true));
+                log::debug!(
+                    "current_sort_info TableView: order_by.len()={}, result={:?}",
+                    order_by.len(),
+                    result
+                );
+                result
+            }
+            ResultSource::Query => {
+                // Client-side sort from sort_state
+                tab.sort_state.and_then(|state| {
+                    tab.result
+                        .columns
+                        .get(state.column_ix)
+                        .map(|col| (col.name.clone(), state.direction, false))
+                })
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -1140,6 +1483,37 @@ impl Render for ResultsPane {
             }
         }
 
+        // Process pending table re-query (triggered by sort change on TableView)
+        if let Some(requery) = self.pending_table_requery.take() {
+            self.run_table_query_for_connection(
+                requery.profile_id,
+                requery.table,
+                requery.pagination,
+                requery.order_by,
+                requery.filter,
+                requery.total_rows,
+                window,
+                cx,
+            );
+        }
+
+        // Rebuild table state after in-memory sort
+        if let Some(tab_idx) = self.pending_table_rebuild.take()
+            && let Some(tab) = self.tabs.get(tab_idx)
+        {
+            let tab_id = tab.id;
+            let result = tab.result.clone();
+            let sort_state = tab.sort_state;
+            let results_pane = cx.entity().clone();
+
+            let delegate = ResultsTableDelegate::new(result, results_pane, tab_id, sort_state);
+            let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+
+            if let Some(tab) = self.tabs.get_mut(tab_idx) {
+                tab.table_state = table_state;
+            }
+        }
+
         let theme = cx.theme();
 
         let (row_count, exec_time) = self
@@ -1162,6 +1536,7 @@ impl Render for ResultsPane {
         let total_pages = self.total_pages();
         let can_prev = self.can_go_prev();
         let can_next = self.can_go_next();
+        let sort_info = self.current_sort_info();
 
         let focus_mode = self.focus_mode;
         let toolbar_focus = self.toolbar_focus;
@@ -1442,9 +1817,28 @@ impl Render for ResultsPane {
                     .bg(theme.tab_bar)
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{} rows", row_count)),
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                div()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} rows", row_count)),
+                            )
+                            .when_some(sort_info, |d, (col_name, direction, is_server)| {
+                                let arrow = match direction {
+                                    SortDirection::Ascending => "↑",
+                                    SortDirection::Descending => "↓",
+                                };
+                                let mode = if is_server { "db" } else { "local" };
+                                d.child(
+                                    div()
+                                        .text_size(FontSizes::XS)
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("{} {} ({})", arrow, col_name, mode)),
+                                )
+                            }),
                     )
                     .child(div().flex().items_center().gap(Spacing::SM).when(
                         is_table_view && pagination_info.is_some(),
@@ -1544,22 +1938,47 @@ impl Render for ResultsPane {
 struct ResultsTableDelegate {
     result: QueryResult,
     columns: Vec<Column>,
+    results_pane: Entity<ResultsPane>,
+    tab_id: usize,
 }
 
 impl ResultsTableDelegate {
-    fn new(result: QueryResult) -> Self {
+    fn new(
+        result: QueryResult,
+        results_pane: Entity<ResultsPane>,
+        tab_id: usize,
+        sort_state: Option<SortState>,
+    ) -> Self {
         let columns = result
             .columns
             .iter()
             .enumerate()
             .map(|(i, col)| {
-                Column::new(format!("col_{}", i), &col.name)
+                let mut column = Column::new(format!("col_{}", i), &col.name)
                     .width(120.)
                     .resizable(true)
+                    .sortable();
+
+                // Apply visual sort indicator if this column is sorted
+                if let Some(state) = sort_state
+                    && state.column_ix == i
+                {
+                    column = match state.direction {
+                        SortDirection::Ascending => column.ascending(),
+                        SortDirection::Descending => column.descending(),
+                    };
+                }
+
+                column
             })
             .collect();
 
-        Self { result, columns }
+        Self {
+            result,
+            columns,
+            results_pane,
+            tab_id,
+        }
     }
 }
 
@@ -1574,6 +1993,60 @@ impl TableDelegate for ResultsTableDelegate {
 
     fn column(&self, col_ix: usize, _cx: &App) -> &Column {
         &self.columns[col_ix]
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        let tab_id = self.tab_id;
+        let col_name = self
+            .result
+            .columns
+            .get(col_ix)
+            .map(|c| c.name.as_str())
+            .unwrap_or("?");
+
+        info!(
+            "perform_sort called: col_ix={}, col_name={}, sort={:?}",
+            col_ix, col_name, sort
+        );
+
+        match sort {
+            ColumnSort::Default => {
+                // gpui-component cycles: Default → Desc → Asc → Default
+                // So receiving Default means we just came FROM Ascending.
+                // If the column was already sorted ascending, cycling to "Default" (PK order)
+                // would be a no-op since PK order is also ascending. In that case, cycle to Desc.
+                let is_ascending = self.results_pane.read(cx).is_column_sorted_ascending(tab_id, col_ix);
+
+                if is_ascending {
+                    info!("Column already ascending, cycling to descending");
+                    self.results_pane.update(cx, |pane, cx| {
+                        pane.handle_sort_request(tab_id, col_ix, SortDirection::Descending, cx);
+                    });
+                } else {
+                    info!("Restoring to default order (PK)");
+                    self.results_pane.update(cx, |pane, cx| {
+                        pane.handle_sort_clear(tab_id, cx);
+                    });
+                }
+            }
+            ColumnSort::Ascending | ColumnSort::Descending => {
+                let direction = match sort {
+                    ColumnSort::Ascending => SortDirection::Ascending,
+                    ColumnSort::Descending => SortDirection::Descending,
+                    _ => unreachable!(),
+                };
+                info!("Sorting column {} {:?}", col_name, direction);
+                self.results_pane.update(cx, |pane, cx| {
+                    pane.handle_sort_request(tab_id, col_ix, direction, cx);
+                });
+            }
+        }
     }
 
     fn render_td(

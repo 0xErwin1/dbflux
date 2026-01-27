@@ -1,5 +1,43 @@
 use crate::DbKind;
 
+/// Sort direction for ORDER BY clauses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortDirection {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+/// Column with sort direction for ORDER BY clauses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderByColumn {
+    pub name: String,
+    pub direction: SortDirection,
+}
+
+impl OrderByColumn {
+    pub fn asc(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            direction: SortDirection::Ascending,
+        }
+    }
+
+    pub fn desc(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            direction: SortDirection::Descending,
+        }
+    }
+}
+
+/// Escape an identifier by doubling the quote character.
+fn escape_identifier(name: &str, quote_char: char) -> String {
+    let quote_str = quote_char.to_string();
+    let escaped = format!("{}{}", quote_char, quote_char);
+    name.replace(&quote_str, &escaped)
+}
+
 /// Pagination strategy for table browsing.
 ///
 /// Currently only supports OFFSET-based pagination.
@@ -139,15 +177,25 @@ impl TableRef {
     /// Quote identifier using the appropriate syntax for the database kind.
     /// - PostgreSQL/SQLite: double quotes ("schema"."table")
     /// - MySQL/MariaDB: backticks (`schema`.`table`)
+    ///
+    /// Escapes quote characters within identifiers by doubling them.
     pub fn quoted_for_kind(&self, kind: DbKind) -> String {
-        let (open, close) = match kind {
-            DbKind::MySQL | DbKind::MariaDB => ('`', '`'),
-            _ => ('"', '"'),
+        let quote = match kind {
+            DbKind::MySQL | DbKind::MariaDB => '`',
+            _ => '"',
         };
 
+        let escaped_name = escape_identifier(&self.name, quote);
+
         match &self.schema {
-            Some(s) => format!("{}{}{}.{}{}{}", open, s, close, open, self.name, close),
-            None => format!("{}{}{}", open, self.name, close),
+            Some(s) => {
+                let escaped_schema = escape_identifier(s, quote);
+                format!(
+                    "{}{}{}.{}{}{}",
+                    quote, escaped_schema, quote, quote, escaped_name, quote
+                )
+            }
+            None => format!("{}{}{}", quote, escaped_name, quote),
         }
     }
 }
@@ -157,7 +205,7 @@ impl TableRef {
 pub struct TableBrowseRequest {
     pub table: TableRef,
     pub pagination: Pagination,
-    pub order_by: Vec<String>,
+    pub order_by: Vec<OrderByColumn>,
     pub filter: Option<String>,
 }
 
@@ -176,7 +224,7 @@ impl TableBrowseRequest {
         self
     }
 
-    pub fn with_order_by(mut self, columns: Vec<String>) -> Self {
+    pub fn with_order_by(mut self, columns: Vec<OrderByColumn>) -> Self {
         self.order_by = columns;
         self
     }
@@ -197,9 +245,9 @@ impl TableBrowseRequest {
     /// Build the SQL query for this browse request using the appropriate syntax
     /// for the given database kind.
     pub fn build_sql_for_kind(&self, kind: DbKind) -> String {
-        let (open, close) = match kind {
-            DbKind::MySQL | DbKind::MariaDB => ('`', '`'),
-            _ => ('"', '"'),
+        let quote = match kind {
+            DbKind::MySQL | DbKind::MariaDB => '`',
+            _ => '"',
         };
 
         let mut sql = format!("SELECT * FROM {}", self.table.quoted_for_kind(kind));
@@ -217,7 +265,14 @@ impl TableBrowseRequest {
             let quoted_cols: Vec<String> = self
                 .order_by
                 .iter()
-                .map(|c| format!("{}{}{}", open, c, close))
+                .map(|col| {
+                    let escaped = escape_identifier(&col.name, quote);
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{}{}{} {}", quote, escaped, quote, dir)
+                })
                 .collect();
             sql.push_str(&quoted_cols.join(", "));
         }
@@ -274,11 +329,11 @@ mod tests {
                 limit: 50,
                 offset: 100,
             })
-            .with_order_by(vec!["id".to_string()]);
+            .with_order_by(vec![OrderByColumn::asc("id")]);
 
         assert_eq!(
             req.build_sql(),
-            "SELECT * FROM \"public\".\"users\" ORDER BY \"id\" LIMIT 50 OFFSET 100"
+            "SELECT * FROM \"public\".\"users\" ORDER BY \"id\" ASC LIMIT 50 OFFSET 100"
         );
     }
 
@@ -286,11 +341,33 @@ mod tests {
     fn test_build_sql_with_filter() {
         let req = TableBrowseRequest::new(TableRef::new("orders"))
             .with_filter("status = 'active'")
-            .with_order_by(vec!["created_at".to_string()]);
+            .with_order_by(vec![OrderByColumn::desc("created_at")]);
 
         assert_eq!(
             req.build_sql(),
-            "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" LIMIT 100 OFFSET 0"
+            "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn test_identifier_escaping() {
+        let req = TableBrowseRequest::new(TableRef::new("my\"table"))
+            .with_order_by(vec![OrderByColumn::asc("col\"name")]);
+
+        assert_eq!(
+            req.build_sql(),
+            "SELECT * FROM \"my\"\"table\" ORDER BY \"col\"\"name\" ASC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn test_mysql_identifier_escaping() {
+        let req = TableBrowseRequest::new(TableRef::new("my`table"))
+            .with_order_by(vec![OrderByColumn::asc("col`name")]);
+
+        assert_eq!(
+            req.build_sql_for_kind(DbKind::MySQL),
+            "SELECT * FROM `my``table` ORDER BY `col``name` ASC LIMIT 100 OFFSET 0"
         );
     }
 }
