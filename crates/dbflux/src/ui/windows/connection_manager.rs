@@ -2,7 +2,8 @@ use crate::app::AppState;
 use crate::keymap::{Command, ContextId, KeyChord, KeymapStack};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
+    ConnectionProfile, DbConfig, DbDriver, DbKind, FormFieldDef, FormFieldKind, FormTab,
+    SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -86,8 +87,8 @@ impl FormFocus {
     fn down_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
-        if state.is_sqlite {
-            // SQLite: Name -> Database -> TestConnection -> Save -> Name
+        if state.uses_file_form {
+            // File-based (SQLite): Name -> Database -> TestConnection -> Save -> Name
             match self {
                 Name => Database,
                 Database => TestConnection,
@@ -96,7 +97,7 @@ impl FormFocus {
                 _ => Name,
             }
         } else {
-            // PostgreSQL: Name -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
+            // Server-based (PostgreSQL, MySQL, MariaDB): Name -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
             match self {
                 Name => Host,
                 Host | Port => Database,
@@ -113,8 +114,8 @@ impl FormFocus {
     fn up_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
-        if state.is_sqlite {
-            // SQLite: Name <- Database <- TestConnection <- Save <- Name
+        if state.uses_file_form {
+            // File-based (SQLite): Name <- Database <- TestConnection <- Save <- Name
             match self {
                 Name => Save,
                 Database => Name,
@@ -123,7 +124,7 @@ impl FormFocus {
                 _ => Save,
             }
         } else {
-            // PostgreSQL
+            // Server-based (PostgreSQL, MySQL, MariaDB)
             match self {
                 Name => Save,
                 Host | Port => Name,
@@ -142,14 +143,14 @@ impl FormFocus {
     fn left_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
-        if state.is_sqlite {
-            // SQLite: only TestConnection <-> Save horizontal pair
+        if state.uses_file_form {
+            // File-based (SQLite): only TestConnection <-> Save horizontal pair
             match self {
                 Save => TestConnection,
                 other => other,
             }
         } else {
-            // PostgreSQL
+            // Server-based (PostgreSQL, MySQL, MariaDB)
             match self {
                 Port => Host,
                 PasswordSave => Password,
@@ -162,14 +163,14 @@ impl FormFocus {
     fn right_main(self, state: MainNavState) -> Self {
         use FormFocus::*;
 
-        if state.is_sqlite {
-            // SQLite: only TestConnection <-> Save horizontal pair
+        if state.uses_file_form {
+            // File-based (SQLite): only TestConnection <-> Save horizontal pair
             match self {
                 TestConnection => Save,
                 other => other,
             }
         } else {
-            // PostgreSQL
+            // Server-based (PostgreSQL, MySQL, MariaDB)
             match self {
                 Host => Port,
                 Password => PasswordSave,
@@ -405,7 +406,8 @@ impl SshNavState {
 /// State needed for Main tab navigation (depends on database type)
 #[derive(Clone, Copy)]
 struct MainNavState {
-    is_sqlite: bool,
+    /// True for file-based databases (SQLite), false for server-based (PostgreSQL, MySQL, MariaDB)
+    uses_file_form: bool,
 }
 
 /// Edit state within the form - determines how keyboard input is handled
@@ -425,7 +427,7 @@ enum View {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum FormTab {
+enum ActiveTab {
     Main,
     Ssh,
 }
@@ -454,7 +456,7 @@ struct DriverInfo {
 pub struct ConnectionManagerWindow {
     app_state: Entity<AppState>,
     view: View,
-    active_tab: FormTab,
+    active_tab: ActiveTab,
     available_drivers: Vec<DriverInfo>,
     selected_driver: Option<Arc<dyn DbDriver>>,
     form_save_password: bool,
@@ -623,7 +625,7 @@ impl ConnectionManagerWindow {
         Self {
             app_state,
             view: View::DriverSelect,
-            active_tab: FormTab::Main,
+            active_tab: ActiveTab::Main,
             available_drivers,
             selected_driver: None,
             form_save_password: false,
@@ -757,6 +759,72 @@ impl ConnectionManagerWindow {
                     state.set_value(&path_str, window, cx);
                 });
             }
+            DbConfig::MySQL {
+                host,
+                port,
+                user,
+                database,
+                ssh_tunnel,
+                ..
+            } => {
+                instance.input_host.update(cx, |state, cx| {
+                    state.set_value(host, window, cx);
+                });
+                instance.input_port.update(cx, |state, cx| {
+                    state.set_value(port.to_string(), window, cx);
+                });
+                instance.input_user.update(cx, |state, cx| {
+                    state.set_value(user, window, cx);
+                });
+                let db_value = database.clone().unwrap_or_default();
+                instance.input_database.update(cx, |state, cx| {
+                    state.set_value(&db_value, window, cx);
+                });
+
+                if let Some(ssh) = ssh_tunnel {
+                    instance.ssh_enabled = true;
+                    instance.input_ssh_host.update(cx, |state, cx| {
+                        state.set_value(&ssh.host, window, cx);
+                    });
+                    instance.input_ssh_port.update(cx, |state, cx| {
+                        state.set_value(ssh.port.to_string(), window, cx);
+                    });
+                    instance.input_ssh_user.update(cx, |state, cx| {
+                        state.set_value(&ssh.user, window, cx);
+                    });
+
+                    match &ssh.auth_method {
+                        SshAuthMethod::PrivateKey { key_path } => {
+                            instance.ssh_auth_method = SshAuthSelection::PrivateKey;
+                            if let Some(path) = key_path {
+                                let path_str: String = path.to_string_lossy().into_owned();
+                                instance.input_ssh_key_path.update(cx, |state, cx| {
+                                    state.set_value(path_str, window, cx);
+                                });
+                            }
+                        }
+                        SshAuthMethod::Password => {
+                            instance.ssh_auth_method = SshAuthSelection::Password;
+                        }
+                    }
+
+                    if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
+                        match instance.ssh_auth_method {
+                            SshAuthSelection::PrivateKey => {
+                                instance.input_ssh_key_passphrase.update(cx, |state, cx| {
+                                    state.set_value(&ssh_secret, window, cx);
+                                });
+                            }
+                            SshAuthSelection::Password => {
+                                instance.input_ssh_password.update(cx, |state, cx| {
+                                    state.set_value(&ssh_secret, window, cx);
+                                });
+                            }
+                        }
+                        instance.form_save_ssh_secret = true;
+                    }
+                }
+            }
         }
 
         instance
@@ -769,7 +837,7 @@ impl ConnectionManagerWindow {
         self.ssh_enabled = false;
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form_save_ssh_secret = false;
-        self.active_tab = FormTab::Main;
+        self.active_tab = ActiveTab::Main;
         self.validation_errors.clear();
         self.test_status = TestStatus::None;
         self.test_error = None;
@@ -816,6 +884,41 @@ impl ConnectionManagerWindow {
             }
             DbKind::SQLite => {
                 self.input_path.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+            }
+            DbKind::MySQL | DbKind::MariaDB => {
+                self.input_host.update(cx, |state, cx| {
+                    state.set_value("localhost", window, cx);
+                });
+                self.input_port.update(cx, |state, cx| {
+                    state.set_value("3306", window, cx);
+                });
+                self.input_user.update(cx, |state, cx| {
+                    state.set_value("root", window, cx);
+                });
+                self.input_password.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_database.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_ssh_host.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_ssh_port.update(cx, |state, cx| {
+                    state.set_value("22", window, cx);
+                });
+                self.input_ssh_user.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_ssh_key_path.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_ssh_key_passphrase.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                });
+                self.input_ssh_password.update(cx, |state, cx| {
                     state.set_value("", window, cx);
                 });
             }
@@ -932,6 +1035,32 @@ impl ConnectionManagerWindow {
         self.selected_driver.as_ref().map(|d| d.kind())
     }
 
+    /// Returns true if this driver uses the server form (host/port/user/database)
+    /// instead of a file-based form (path only).
+    #[allow(dead_code)]
+    fn uses_server_form(&self) -> bool {
+        let Some(driver) = &self.selected_driver else {
+            return false;
+        };
+        !driver.form_definition().uses_file_form()
+    }
+
+    /// Returns true if this driver uses a file-based form (path only).
+    fn uses_file_form(&self) -> bool {
+        let Some(driver) = &self.selected_driver else {
+            return false;
+        };
+        driver.form_definition().uses_file_form()
+    }
+
+    /// Returns true if this driver supports SSH tunneling.
+    fn supports_ssh(&self) -> bool {
+        let Some(driver) = &self.selected_driver else {
+            return false;
+        };
+        driver.form_definition().supports_ssh()
+    }
+
     fn validate_form(&mut self, cx: &mut Context<Self>) -> bool {
         self.validation_errors.clear();
 
@@ -998,6 +1127,47 @@ impl ConnectionManagerWindow {
                 if path.trim().is_empty() {
                     self.validation_errors
                         .push("Database path is required".to_string());
+                }
+            }
+            DbKind::MySQL | DbKind::MariaDB => {
+                let host = self.input_host.read(cx).value().to_string();
+                if host.trim().is_empty() {
+                    self.validation_errors.push("Host is required".to_string());
+                }
+
+                let port_str = self.input_port.read(cx).value().to_string();
+                if port_str.trim().is_empty() {
+                    self.validation_errors.push("Port is required".to_string());
+                } else if port_str.parse::<u16>().is_err() {
+                    self.validation_errors
+                        .push("Port must be a valid number (1-65535)".to_string());
+                }
+
+                let user = self.input_user.read(cx).value().to_string();
+                if user.trim().is_empty() {
+                    self.validation_errors.push("User is required".to_string());
+                }
+
+                // Note: database is optional for MySQL/MariaDB
+
+                if self.ssh_enabled {
+                    let ssh_host = self.input_ssh_host.read(cx).value().to_string();
+                    if ssh_host.trim().is_empty() {
+                        self.validation_errors
+                            .push("SSH Host is required when SSH is enabled".to_string());
+                    }
+
+                    let ssh_user = self.input_ssh_user.read(cx).value().to_string();
+                    if ssh_user.trim().is_empty() {
+                        self.validation_errors
+                            .push("SSH User is required when SSH is enabled".to_string());
+                    }
+
+                    let ssh_port_str = self.input_ssh_port.read(cx).value().to_string();
+                    if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
+                        self.validation_errors
+                            .push("SSH Port must be a valid number".to_string());
+                    }
                 }
             }
         }
@@ -1096,19 +1266,38 @@ impl ConnectionManagerWindow {
                     path: PathBuf::from(path),
                 }
             }
+            DbKind::MySQL | DbKind::MariaDB => {
+                let port = self.input_port.read(cx).value().parse().unwrap_or(3306);
+                let database_str = self.input_database.read(cx).value().to_string();
+                let database = if database_str.trim().is_empty() {
+                    None
+                } else {
+                    Some(database_str)
+                };
+                DbConfig::MySQL {
+                    host: self.input_host.read(cx).value().to_string(),
+                    port,
+                    user: self.input_user.read(cx).value().to_string(),
+                    database,
+                    ssl_mode: dbflux_core::SslMode::Disable,
+                    ssh_tunnel: self.build_ssh_config(cx),
+                    ssh_tunnel_profile_id: self.selected_ssh_tunnel_id,
+                }
+            }
         })
     }
 
     fn build_profile(&self, cx: &Context<Self>) -> Option<ConnectionProfile> {
         let name = self.input_name.read(cx).value().to_string();
+        let kind = self.selected_kind()?;
         let config = self.build_config(cx)?;
 
         let mut profile = if let Some(existing_id) = self.editing_profile_id {
-            let mut p = ConnectionProfile::new(name, config);
+            let mut p = ConnectionProfile::new_with_kind(name, kind, config);
             p.id = existing_id;
             p
         } else {
-            ConnectionProfile::new(name, config)
+            ConnectionProfile::new_with_kind(name, kind, config)
         };
 
         profile.save_password = self.form_save_password;
@@ -1260,65 +1449,24 @@ impl ConnectionManagerWindow {
         self.ssh_test_error = None;
         cx.notify();
 
-        let host = self.input_ssh_host.read(cx).value().to_string();
-        let port = self
-            .input_ssh_port
-            .read(cx)
-            .value()
-            .parse::<u16>()
-            .unwrap_or(22);
-        let user = self.input_ssh_user.read(cx).value().to_string();
-
-        let auth_args = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                let key_path = self.input_ssh_key_path.read(cx).value().to_string();
-                if key_path.is_empty() {
-                    vec![]
-                } else {
-                    let expanded = if key_path.starts_with("~/") {
-                        dirs::home_dir()
-                            .map(|h| h.join(&key_path[2..]).to_string_lossy().to_string())
-                            .unwrap_or(key_path)
-                    } else {
-                        key_path
-                    };
-                    vec!["-i".to_string(), expanded]
-                }
-            }
-            SshAuthSelection::Password => vec![],
+        // Build SSH tunnel config from form inputs
+        let Some(ssh_config) = self.build_ssh_config(cx) else {
+            self.ssh_test_status = TestStatus::Failed;
+            self.ssh_test_error = Some("SSH configuration incomplete".to_string());
+            cx.notify();
+            return;
         };
+
+        // Get the secret (passphrase or password)
+        let ssh_secret = self.get_ssh_secret(cx);
 
         let this = cx.entity().clone();
 
+        // Use the same establish_session function that the actual connection uses
         let task = cx.background_executor().spawn(async move {
-            use std::process::Command;
-
-            let mut cmd = Command::new("ssh");
-            cmd.arg("-o")
-                .arg("BatchMode=yes")
-                .arg("-o")
-                .arg("ConnectTimeout=10")
-                .arg("-o")
-                .arg("StrictHostKeyChecking=accept-new")
-                .arg("-p")
-                .arg(port.to_string());
-
-            for arg in &auth_args {
-                cmd.arg(arg);
-            }
-
-            cmd.arg(format!("{}@{}", user, host)).arg("echo").arg("ok");
-
-            match cmd.output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        Ok(())
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(stderr.trim().to_string())
-                    }
-                }
-                Err(e) => Err(format!("Failed to run ssh: {}", e)),
+            match dbflux_ssh::establish_session(&ssh_config, ssh_secret.as_deref()) {
+                Ok(_session) => Ok(()),
+                Err(e) => Err(format!("{:?}", e)),
             }
         });
 
@@ -1609,7 +1757,7 @@ impl ConnectionManagerWindow {
 
     fn main_nav_state(&self) -> MainNavState {
         MainNavState {
-            is_sqlite: self.selected_kind() == Some(DbKind::SQLite),
+            uses_file_form: self.uses_file_form(),
         }
     }
 
@@ -1618,7 +1766,7 @@ impl ConnectionManagerWindow {
     fn focus_scroll_index(&self) -> usize {
         use FormFocus::*;
         match self.active_tab {
-            FormTab::Main => match self.form_focus {
+            ActiveTab::Main => match self.form_focus {
                 // Section 0: Server (Host, Port, Database)
                 Host | Port | Database => 0,
                 // Section 1: Authentication (User, Password)
@@ -1626,7 +1774,7 @@ impl ConnectionManagerWindow {
                 // Footer buttons are outside scroll area
                 _ => 0,
             },
-            FormTab::Ssh => {
+            ActiveTab::Ssh => {
                 // Sections depend on whether tunnel_selector is present
                 // tunnel_selector is added when ssh_enabled && !ssh_tunnels.is_empty()
                 let has_tunnels = self.ssh_enabled && !self.ssh_tunnel_uuids.is_empty();
@@ -1661,8 +1809,8 @@ impl ConnectionManagerWindow {
 
     fn focus_down(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.down_main(self.main_nav_state()),
-            FormTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Main => self.form_focus.down_main(self.main_nav_state()),
+            ActiveTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -1670,8 +1818,8 @@ impl ConnectionManagerWindow {
 
     fn focus_up(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.up_main(self.main_nav_state()),
-            FormTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Main => self.form_focus.up_main(self.main_nav_state()),
+            ActiveTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -1679,8 +1827,8 @@ impl ConnectionManagerWindow {
 
     fn focus_left(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.left_main(self.main_nav_state()),
-            FormTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Main => self.form_focus.left_main(self.main_nav_state()),
+            ActiveTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -1688,23 +1836,23 @@ impl ConnectionManagerWindow {
 
     fn focus_right(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
-            FormTab::Main => self.form_focus.right_main(self.main_nav_state()),
-            FormTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Main => self.form_focus.right_main(self.main_nav_state()),
+            ActiveTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
     }
 
     fn next_tab(&mut self, cx: &mut Context<Self>) {
-        if self.selected_kind() == Some(DbKind::Postgres) {
+        if self.supports_ssh() {
             self.active_tab = match self.active_tab {
-                FormTab::Main => FormTab::Ssh,
-                FormTab::Ssh => FormTab::Main,
+                ActiveTab::Main => ActiveTab::Ssh,
+                ActiveTab::Ssh => ActiveTab::Main,
             };
             // Reset focus to first field of the new tab
             self.form_focus = match self.active_tab {
-                FormTab::Main => FormFocus::Name,
-                FormTab::Ssh => FormFocus::SshEnabled,
+                ActiveTab::Main => FormFocus::Name,
+                ActiveTab::Ssh => FormFocus::SshEnabled,
             };
             self.scroll_to_focused();
             cx.notify();
@@ -1966,16 +2114,16 @@ impl ConnectionManagerWindow {
                     .py_2()
                     .cursor_pointer()
                     .border_b_2()
-                    .when(active_tab == FormTab::Main, |d| {
+                    .when(active_tab == ActiveTab::Main, |d| {
                         d.border_color(theme.primary).text_color(theme.foreground)
                     })
-                    .when(active_tab != FormTab::Main, |d| {
+                    .when(active_tab != ActiveTab::Main, |d| {
                         d.border_color(gpui::transparent_black())
                             .text_color(theme.muted_foreground)
                     })
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = FormTab::Main;
+                        this.active_tab = ActiveTab::Main;
                         cx.notify();
                     }))
                     .child(div().text_sm().child("Main")),
@@ -1987,16 +2135,16 @@ impl ConnectionManagerWindow {
                     .py_2()
                     .cursor_pointer()
                     .border_b_2()
-                    .when(active_tab == FormTab::Ssh, |d| {
+                    .when(active_tab == ActiveTab::Ssh, |d| {
                         d.border_color(theme.primary).text_color(theme.foreground)
                     })
-                    .when(active_tab != FormTab::Ssh, |d| {
+                    .when(active_tab != ActiveTab::Ssh, |d| {
                         d.border_color(gpui::transparent_black())
                             .text_color(theme.muted_foreground)
                     })
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = FormTab::Ssh;
+                        this.active_tab = ActiveTab::Ssh;
                         cx.notify();
                     }))
                     .child(
@@ -2019,119 +2167,41 @@ impl ConnectionManagerWindow {
     }
 
     fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let is_postgres = self.selected_kind() == Some(DbKind::Postgres);
+        let Some(driver) = &self.selected_driver else {
+            return Vec::new();
+        };
+
         let keyring_available = self.app_state.read(cx).secret_store_available();
-        let requires_password = self
-            .selected_driver
-            .as_ref()
-            .map(|d| d.requires_password())
-            .unwrap_or(true);
+        let requires_password = driver.requires_password();
         let save_password = self.form_save_password;
 
         let show_focus =
-            self.edit_state == EditState::Navigating && self.active_tab == FormTab::Main;
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
         let focus = self.form_focus;
 
-        let theme = cx.theme().clone();
-        let ring_color = theme.ring;
+        let ring_color = cx.theme().ring;
 
-        let mut sections: Vec<AnyElement> = Vec::new();
+        let form_def = driver.form_definition();
+        let Some(main_tab) = form_def.main_tab() else {
+            return Vec::new();
+        };
 
-        if is_postgres {
-            // Section 0: Server
-            sections.push(
-                self.render_section(
-                    "Server",
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(
-                            div()
-                                .flex()
-                                .gap_3()
-                                .child(div().flex_1().child(self.form_field_input(
-                                    "Host",
-                                    &self.input_host,
-                                    true,
-                                    show_focus && focus == FormFocus::Host,
-                                    ring_color,
-                                    FormFocus::Host,
-                                    cx,
-                                )))
-                                .child(div().w(px(80.0)).child(self.form_field_input(
-                                    "Port",
-                                    &self.input_port,
-                                    true,
-                                    show_focus && focus == FormFocus::Port,
-                                    ring_color,
-                                    FormFocus::Port,
-                                    cx,
-                                ))),
-                        )
-                        .child(self.form_field_input(
-                            "Database",
-                            &self.input_database,
-                            true,
-                            show_focus && focus == FormFocus::Database,
-                            ring_color,
-                            FormFocus::Database,
-                            cx,
-                        )),
-                    &theme,
-                )
-                .into_any_element(),
-            );
+        let mut sections = self.render_form_tab(main_tab, false, show_focus, ring_color, cx);
 
-            // Section 1: Authentication
+        // Add password field to the last section (Authentication) if driver requires password.
+        // Password is not included in dynamic rendering because it has special UI
+        // (visibility toggle, save checkbox).
+        if requires_password {
             let password_field = self.render_password_field(
                 show_focus && focus == FormFocus::Password,
                 show_focus && focus == FormFocus::PasswordSave,
-                keyring_available && requires_password,
+                keyring_available,
                 save_password,
                 ring_color,
                 cx,
             );
 
-            sections.push(
-                self.render_section(
-                    "Authentication",
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(self.form_field_input(
-                            "Username",
-                            &self.input_user,
-                            true,
-                            show_focus && focus == FormFocus::User,
-                            ring_color,
-                            FormFocus::User,
-                            cx,
-                        ))
-                        .child(password_field),
-                    &theme,
-                )
-                .into_any_element(),
-            );
-        } else {
-            // Section 0: Database (SQLite)
-            sections.push(
-                self.render_section(
-                    "Database",
-                    self.form_field_input(
-                        "File Path",
-                        &self.input_path,
-                        true,
-                        show_focus && focus == FormFocus::Database,
-                        ring_color,
-                        FormFocus::Database,
-                        cx,
-                    ),
-                    &theme,
-                )
-                .into_any_element(),
-            );
+            sections.push(password_field);
         }
 
         sections
@@ -2227,7 +2297,7 @@ impl ConnectionManagerWindow {
         let selected_tunnel_id = self.selected_ssh_tunnel_id;
 
         let show_focus =
-            self.edit_state == EditState::Navigating && self.active_tab == FormTab::Ssh;
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Ssh;
         let focus = self.form_focus;
 
         // Get ring_color early, before mutable borrows
@@ -2962,14 +3032,60 @@ impl ConnectionManagerWindow {
             .child(content)
     }
 
+    /// Map a field ID to its corresponding input state entity.
+    fn input_state_for_field(&self, field_id: &str) -> Option<&Entity<InputState>> {
+        match field_id {
+            "host" => Some(&self.input_host),
+            "port" => Some(&self.input_port),
+            "user" => Some(&self.input_user),
+            "password" => Some(&self.input_password),
+            "database" => Some(&self.input_database),
+            "path" => Some(&self.input_path),
+            "ssh_host" => Some(&self.input_ssh_host),
+            "ssh_port" => Some(&self.input_ssh_port),
+            "ssh_user" => Some(&self.input_ssh_user),
+            "ssh_key_path" => Some(&self.input_ssh_key_path),
+            "ssh_passphrase" => Some(&self.input_ssh_key_passphrase),
+            "ssh_password" => Some(&self.input_ssh_password),
+            _ => None,
+        }
+    }
+
+    /// Map a field ID to its FormFocus variant.
+    fn field_id_to_focus(field_id: &str, is_ssh_tab: bool) -> Option<FormFocus> {
+        use FormFocus::*;
+
+        if is_ssh_tab {
+            match field_id {
+                "ssh_enabled" => Some(SshEnabled),
+                "ssh_host" => Some(SshHost),
+                "ssh_port" => Some(SshPort),
+                "ssh_user" => Some(SshUser),
+                "ssh_key_path" => Some(SshKeyPath),
+                "ssh_passphrase" => Some(SshPassphrase),
+                "ssh_password" => Some(SshPassword),
+                _ => None,
+            }
+        } else {
+            match field_id {
+                "host" => Some(Host),
+                "port" => Some(Port),
+                "database" => Some(Database),
+                "user" => Some(User),
+                "password" => Some(Password),
+                "path" => Some(Database),
+                _ => None,
+            }
+        }
+    }
+
     fn render_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(driver) = &self.selected_driver else {
             return div().into_any_element();
         };
 
-        let kind = driver.kind();
         let driver_name = driver.display_name().to_string();
-        let is_postgres = kind == DbKind::Postgres;
+        let supports_ssh = self.supports_ssh();
         let validation_errors = self.validation_errors.clone();
         let test_status = self.test_status;
         let test_error = self.test_error.clone();
@@ -2986,15 +3102,15 @@ impl ConnectionManagerWindow {
         let test_focused = show_focus && focus == FormFocus::TestConnection;
         let save_focused = show_focus && focus == FormFocus::Save;
 
-        let tab_bar = if is_postgres {
+        let tab_bar = if supports_ssh {
             Some(self.render_tab_bar(cx).into_any_element())
         } else {
             None
         };
 
-        let tab_content: Vec<AnyElement> = match (is_postgres, self.active_tab) {
-            (true, FormTab::Main) => self.render_main_tab(cx),
-            (true, FormTab::Ssh) => self.render_ssh_tab(cx),
+        let tab_content: Vec<AnyElement> = match (supports_ssh, self.active_tab) {
+            (true, ActiveTab::Main) => self.render_main_tab(cx),
+            (true, ActiveTab::Ssh) => self.render_ssh_tab(cx),
             (false, _) => self.render_main_tab(cx),
         };
 
@@ -3147,6 +3263,210 @@ impl ConnectionManagerWindow {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Render a form field based on its definition.
+    fn render_form_field(
+        &self,
+        field_def: &FormFieldDef,
+        is_ssh_tab: bool,
+        show_focus: bool,
+        ring_color: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let field_focus = Self::field_id_to_focus(field_def.id, is_ssh_tab);
+        let focused = show_focus && field_focus == Some(self.form_focus);
+
+        match field_def.kind {
+            FormFieldKind::Text | FormFieldKind::Password | FormFieldKind::Number | FormFieldKind::FilePath => {
+                let Some(input_state) = self.input_state_for_field(field_def.id) else {
+                    return div().into_any_element();
+                };
+
+                div()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(focused, |d| d.border_color(ring_color))
+                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
+                    .p(px(2.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            if let Some(field) = field_focus {
+                                this.enter_edit_mode_for_field(field, window, cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .mb_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(field_def.label),
+                            )
+                            .when(field_def.required, |d| {
+                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                            }),
+                    )
+                    .child(Input::new(input_state))
+                    .into_any_element()
+            }
+
+            FormFieldKind::Checkbox => {
+                let field_id = field_def.id;
+                let is_checked = if field_id == "ssh_enabled" {
+                    self.ssh_enabled
+                } else {
+                    false
+                };
+
+                Checkbox::new(field_id)
+                    .checked(is_checked)
+                    .label(field_def.label)
+                    .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                        if field_id == "ssh_enabled" {
+                            this.ssh_enabled = *checked;
+                            window.focus(&this.focus_handle);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }
+
+            FormFieldKind::Select { options } => {
+                if field_def.id == "ssh_auth_method" {
+                    let selected_index = match self.ssh_auth_method {
+                        SshAuthSelection::PrivateKey => 0,
+                        SshAuthSelection::Password => 1,
+                    };
+
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(field_def.label),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .children(options.iter().enumerate().map(|(idx, opt)| {
+                                    let is_selected = idx == selected_index;
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.ssh_auth_method = if idx == 0 {
+                                                    SshAuthSelection::PrivateKey
+                                                } else {
+                                                    SshAuthSelection::Password
+                                                };
+                                                window.focus(&this.focus_handle);
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded(px(3.0))
+                                                .border_2()
+                                                .border_color(cx.theme().muted_foreground)
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .when(is_selected, |d| {
+                                                    d.bg(cx.theme().ring)
+                                                        .border_color(cx.theme().ring)
+                                                })
+                                                .when(is_selected, |d| {
+                                                    d.child(
+                                                        div()
+                                                            .w(px(8.0))
+                                                            .h(px(8.0))
+                                                            .rounded(px(1.0))
+                                                            .bg(gpui::white()),
+                                                    )
+                                                }),
+                                        )
+                                        .child(div().text_sm().child(opt.label))
+                                        .into_any_element()
+                                })),
+                        )
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }
+            }
+        }
+    }
+
+    /// Render all sections in a tab.
+    ///
+    /// For the main tab, password is skipped since it's handled by `render_password_field`
+    /// which includes the visibility toggle and save checkbox.
+    fn render_form_tab(
+        &mut self,
+        tab: &FormTab,
+        is_ssh_tab: bool,
+        show_focus: bool,
+        ring_color: Hsla,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        for section in tab.sections {
+            let field_elements: Vec<AnyElement> = section
+                .fields
+                .iter()
+                .filter(|field| {
+                    // Skip password field on main tab - it's rendered separately
+                    // with visibility toggle and save checkbox
+                    field.id != "password" || is_ssh_tab
+                })
+                .map(|field| {
+                    self.render_form_field(field, is_ssh_tab, show_focus, ring_color, cx)
+                        .into_any_element()
+                })
+                .collect();
+
+            // Don't render empty sections
+            if field_elements.is_empty() {
+                continue;
+            }
+
+            sections.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child(section.title.to_uppercase()),
+                    )
+                    .children(field_elements)
+                    .into_any_element(),
+            );
+        }
+
+        sections
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle,
-    QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot, SshTunnelConfig, SslMode,
-    TableInfo, Value, ViewInfo,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
+    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot,
+    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -72,6 +72,67 @@ impl DbDriver for PostgresDriver {
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
         let conn = self.connect_with_secrets(profile, None, None)?;
         conn.ping()
+    }
+
+    fn form_definition(&self) -> &'static DriverFormDef {
+        &POSTGRES_FORM
+    }
+
+    fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
+        let host = values
+            .get("host")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DbError::InvalidProfile("Host is required".to_string()))?
+            .clone();
+
+        let port: u16 = values
+            .get("port")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DbError::InvalidProfile("Port is required".to_string()))?
+            .parse()
+            .map_err(|_| DbError::InvalidProfile("Invalid port number".to_string()))?;
+
+        let user = values
+            .get("user")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DbError::InvalidProfile("User is required".to_string()))?
+            .clone();
+
+        let database = values
+            .get("database")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DbError::InvalidProfile("Database is required".to_string()))?
+            .clone();
+
+        Ok(DbConfig::Postgres {
+            host,
+            port,
+            user,
+            database,
+            ssl_mode: SslMode::Prefer,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        })
+    }
+
+    fn extract_values(&self, config: &DbConfig) -> FormValues {
+        let mut values = HashMap::new();
+
+        if let DbConfig::Postgres {
+            host,
+            port,
+            user,
+            database,
+            ..
+        } = config
+        {
+            values.insert("host".to_string(), host.clone());
+            values.insert("port".to_string(), port.to_string());
+            values.insert("user".to_string(), user.clone());
+            values.insert("database".to_string(), database.clone());
+        }
+
+        values
     }
 }
 

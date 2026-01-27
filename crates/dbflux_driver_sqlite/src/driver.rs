@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,8 +6,9 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, IndexInfo, QueryCancelHandle, QueryHandle,
-    QueryRequest, QueryResult, Row, SchemaSnapshot, TableInfo, Value, ViewInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues, IndexInfo,
+    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot, TableInfo,
+    Value, ViewInfo, SQLITE_FORM,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -82,6 +84,31 @@ impl DbDriver for SqliteDriver {
             .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
 
         Ok(())
+    }
+
+    fn form_definition(&self) -> &'static DriverFormDef {
+        &SQLITE_FORM
+    }
+
+    fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
+        let path = values
+            .get("path")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| DbError::InvalidProfile("File path is required".to_string()))?;
+
+        Ok(DbConfig::SQLite {
+            path: PathBuf::from(path),
+        })
+    }
+
+    fn extract_values(&self, config: &DbConfig) -> FormValues {
+        let mut values = HashMap::new();
+
+        if let DbConfig::SQLite { path } = config {
+            values.insert("path".to_string(), path.to_string_lossy().to_string());
+        }
+
+        values
     }
 }
 

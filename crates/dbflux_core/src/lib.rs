@@ -1,3 +1,4 @@
+mod driver_form;
 mod error;
 mod history;
 mod profile;
@@ -11,6 +12,10 @@ mod task;
 mod traits;
 mod value;
 
+pub use driver_form::{
+    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MYSQL_FORM,
+    POSTGRES_FORM, SQLITE_FORM,
+};
 pub use error::DbError;
 pub use history::{HistoryEntry, HistoryStore};
 pub use profile::{

@@ -4,6 +4,7 @@ use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -88,8 +89,18 @@ enum SshFormField {
     Passphrase,
     Password,
     SaveSecret,
+    TestButton,
     SaveButton,
     DeleteButton,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+enum SshTestStatus {
+    #[default]
+    None,
+    Testing,
+    Success,
+    Failed,
 }
 
 pub struct SettingsWindow {
@@ -123,6 +134,10 @@ pub struct SettingsWindow {
     ssh_selected_idx: Option<usize>,
     ssh_form_field: SshFormField,
     ssh_editing_field: bool,
+
+    // SSH test connection state
+    ssh_test_status: SshTestStatus,
+    ssh_test_error: Option<String>,
 
     pending_ssh_key_path: Option<String>,
     pending_delete_tunnel_id: Option<Uuid>,
@@ -191,6 +206,9 @@ impl SettingsWindow {
             ssh_form_field: SshFormField::Name,
             ssh_editing_field: false,
 
+            ssh_test_status: SshTestStatus::None,
+            ssh_test_error: None,
+
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
             _subscriptions: vec![subscription],
@@ -201,6 +219,8 @@ impl SettingsWindow {
         self.editing_tunnel_id = None;
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
         self.form_save_secret = false;
+        self.ssh_test_status = SshTestStatus::None;
+        self.ssh_test_error = None;
 
         self.input_tunnel_name
             .update(cx, |s, cx| s.set_value("", window, cx));
@@ -227,6 +247,8 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) {
         self.editing_tunnel_id = Some(tunnel.id);
+        self.ssh_test_status = SshTestStatus::None;
+        self.ssh_test_error = None;
 
         self.input_tunnel_name
             .update(cx, |s, cx| s.set_value(&tunnel.name, window, cx));
@@ -327,6 +349,94 @@ impl SettingsWindow {
         });
 
         self.clear_form(window, cx);
+    }
+
+    fn test_ssh_tunnel(&mut self, cx: &mut Context<Self>) {
+        // Build SSH config from form inputs
+        let host = self.input_ssh_host.read(cx).value().to_string();
+        let port = self.input_ssh_port.read(cx).value().parse().unwrap_or(22);
+        let user = self.input_ssh_user.read(cx).value().to_string();
+
+        if host.trim().is_empty() || user.trim().is_empty() {
+            self.ssh_test_status = SshTestStatus::Failed;
+            self.ssh_test_error = Some("Host and user are required".to_string());
+            cx.notify();
+            return;
+        }
+
+        let auth_method = match self.ssh_auth_method {
+            SshAuthSelection::PrivateKey => {
+                let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
+                let key_path = if key_path_str.trim().is_empty() {
+                    None
+                } else {
+                    Some(Self::expand_path(&key_path_str))
+                };
+                SshAuthMethod::PrivateKey { key_path }
+            }
+            SshAuthSelection::Password => SshAuthMethod::Password,
+        };
+
+        let secret = match self.ssh_auth_method {
+            SshAuthSelection::PrivateKey => {
+                let s = self.input_ssh_key_passphrase.read(cx).value().to_string();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            }
+            SshAuthSelection::Password => {
+                let s = self.input_ssh_password.read(cx).value().to_string();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            }
+        };
+
+        let config = SshTunnelConfig {
+            host,
+            port,
+            user,
+            auth_method,
+        };
+
+        self.ssh_test_status = SshTestStatus::Testing;
+        self.ssh_test_error = None;
+        cx.notify();
+
+        let this = cx.entity().clone();
+
+        let task = cx.background_executor().spawn(async move {
+            match dbflux_ssh::establish_session(&config, secret.as_deref()) {
+                Ok(_session) => Ok(()),
+                Err(e) => Err(format!("{:?}", e)),
+            }
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    match result {
+                        Ok(()) => {
+                            this.ssh_test_status = SshTestStatus::Success;
+                            this.ssh_test_error = None;
+                        }
+                        Err(e) => {
+                            this.ssh_test_status = SshTestStatus::Failed;
+                            this.ssh_test_error = Some(e);
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn request_delete_tunnel(&mut self, tunnel_id: Uuid, cx: &mut Context<Self>) {
@@ -1071,6 +1181,7 @@ impl SettingsWindow {
         let theme = cx.theme();
         let primary = theme.primary;
         let border = theme.border;
+        let muted_fg = theme.muted_foreground;
 
         let is_form_focused =
             self.focus_area == SettingsFocus::Content && self.ssh_focus == SshFocus::Form;
@@ -1156,58 +1267,116 @@ impl SettingsWindow {
                     .border_t_1()
                     .border_color(border)
                     .flex()
+                    .flex_col()
                     .gap_2()
-                    .justify_end()
-                    .when(editing_id.is_some(), |d| {
-                        let tunnel_id = editing_id.unwrap();
-                        let is_delete_focused =
-                            is_form_focused && current_field == SshFormField::DeleteButton;
-                        d.child(
-                            div()
-                                .rounded(px(4.0))
-                                .border_1()
-                                .border_color(if is_delete_focused {
-                                    primary
-                                } else {
-                                    gpui::transparent_black()
-                                })
-                                .child(
-                                    Button::new("delete-tunnel")
-                                        .label("Delete")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.request_delete_tunnel(tunnel_id, cx);
-                                        })),
-                                ),
-                        )
-                        .child(div().flex_1())
-                    })
-                    .child({
-                        let is_save_focused =
-                            is_form_focused && current_field == SshFormField::SaveButton;
+                    .child(
+                        // Test status message
                         div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                gpui::transparent_black()
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .when(self.ssh_test_status == SshTestStatus::Testing, |d| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(muted_fg)
+                                        .child("Testing SSH connection..."),
+                                )
                             })
-                            .child(
-                                Button::new("save-tunnel")
-                                    .label(if editing_id.is_some() {
-                                        "Update"
+                            .when(self.ssh_test_status == SshTestStatus::Success, |d| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(gpui::rgb(0x22C55E))
+                                        .child("SSH connection successful"),
+                                )
+                            })
+                            .when(self.ssh_test_status == SshTestStatus::Failed, |d| {
+                                let error = self
+                                    .ssh_test_error
+                                    .clone()
+                                    .unwrap_or_else(|| "Connection failed".to_string());
+                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child(error))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .justify_end()
+                            .when(editing_id.is_some(), |d| {
+                                let tunnel_id = editing_id.unwrap();
+                                let is_delete_focused =
+                                    is_form_focused && current_field == SshFormField::DeleteButton;
+                                d.child(
+                                    div()
+                                        .rounded(px(4.0))
+                                        .border_1()
+                                        .border_color(if is_delete_focused {
+                                            primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        })
+                                        .child(
+                                            Button::new("delete-tunnel")
+                                                .label("Delete")
+                                                .small()
+                                                .danger()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.request_delete_tunnel(tunnel_id, cx);
+                                                })),
+                                        ),
+                                )
+                            })
+                            .child(div().flex_1())
+                            .child({
+                                let is_test_focused =
+                                    is_form_focused && current_field == SshFormField::TestButton;
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(if is_test_focused {
+                                        primary
                                     } else {
-                                        "Create"
+                                        gpui::transparent_black()
                                     })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.save_tunnel(window, cx);
-                                    })),
-                            )
-                    }),
+                                    .child(
+                                        Button::new("test-tunnel")
+                                            .label("Test Connection")
+                                            .small()
+                                            .ghost()
+                                            .disabled(self.ssh_test_status == SshTestStatus::Testing)
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.test_ssh_tunnel(cx);
+                                            })),
+                                    )
+                            })
+                            .child({
+                                let is_save_focused =
+                                    is_form_focused && current_field == SshFormField::SaveButton;
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(if is_save_focused {
+                                        primary
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .child(
+                                        Button::new("save-tunnel")
+                                            .label(if editing_id.is_some() {
+                                                "Update"
+                                            } else {
+                                                "Create"
+                                            })
+                                            .small()
+                                            .primary()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.save_tunnel(window, cx);
+                                            })),
+                                    )
+                            }),
+                    ),
             )
     }
 
@@ -1900,9 +2069,13 @@ impl SettingsWindow {
         }
 
         if self.editing_tunnel_id.is_some() {
-            rows.push(vec![SshFormField::DeleteButton, SshFormField::SaveButton]);
+            rows.push(vec![
+                SshFormField::DeleteButton,
+                SshFormField::TestButton,
+                SshFormField::SaveButton,
+            ]);
         } else {
-            rows.push(vec![SshFormField::SaveButton]);
+            rows.push(vec![SshFormField::TestButton, SshFormField::SaveButton]);
         }
 
         rows
@@ -2057,6 +2230,9 @@ impl SettingsWindow {
             }
             SshFormField::SaveButton => {
                 self.save_tunnel(window, cx);
+            }
+            SshFormField::TestButton => {
+                self.test_ssh_tunnel(cx);
             }
             SshFormField::DeleteButton => {
                 if let Some(id) = self.editing_tunnel_id {

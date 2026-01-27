@@ -163,21 +163,67 @@ pub fn establish_session(
     Ok(session)
 }
 
+/// Expand `~` at the start of a path to the user's home directory.
+fn expand_tilde(path: &Path) -> std::path::PathBuf {
+    let path_str = path.to_string_lossy();
+
+    let Some(home) = dirs::home_dir() else {
+        return path.to_path_buf();
+    };
+
+    if let Some(stripped) = path_str.strip_prefix("~/") {
+        return home.join(stripped);
+    }
+
+    if path_str == "~" {
+        return home;
+    }
+
+    path.to_path_buf()
+}
+
 fn authenticate_with_key(
     session: &Session,
     user: &str,
     key_path: Option<&Path>,
     passphrase: Option<&str>,
 ) -> Result<(), DbError> {
-    if session.userauth_agent(user).is_ok() && session.authenticated() {
-        log::info!("Authenticated via SSH agent");
-        return Ok(());
+    // Only try SSH agent if no explicit key path was provided.
+    // When a key path is specified, the user wants to use that specific key,
+    // and the agent call can hang indefinitely in some configurations.
+    if key_path.is_none() {
+        log::info!("[SSH] No key path specified, trying SSH agent authentication...");
+        match session.userauth_agent(user) {
+            Ok(()) if session.authenticated() => {
+                log::info!("[SSH] Authenticated via SSH agent");
+                return Ok(());
+            }
+            Ok(()) => {
+                log::info!("[SSH] SSH agent returned OK but not authenticated");
+            }
+            Err(e) => {
+                log::info!("[SSH] SSH agent not available or failed: {}", e);
+            }
+        }
+    } else {
+        log::info!("[SSH] Key path specified, skipping SSH agent");
     }
 
+    // Build list of key paths to try
     let key_paths: Vec<std::path::PathBuf> = if let Some(path) = key_path {
-        vec![path.to_path_buf()]
+        let expanded = expand_tilde(path);
+        log::info!(
+            "[SSH] Using specified key path: {} (expanded: {})",
+            path.display(),
+            expanded.display()
+        );
+        vec![expanded]
     } else {
         let home = dirs::home_dir().unwrap_or_default();
+        log::info!(
+            "[SSH] No key path specified, trying default paths in {}",
+            home.display()
+        );
         vec![
             home.join(".ssh/id_rsa"),
             home.join(".ssh/id_ed25519"),
@@ -185,31 +231,47 @@ fn authenticate_with_key(
         ]
     };
 
+    let mut last_error: Option<String> = None;
+
     for path in &key_paths {
         if !path.exists() {
+            log::info!("[SSH] Key file not found: {}", path.display());
             continue;
         }
 
-        log::debug!("Trying key: {}", path.display());
+        log::info!(
+            "[SSH] Trying key: {} (passphrase: {})",
+            path.display(),
+            if passphrase.is_some() { "yes" } else { "no" }
+        );
 
         let result = session.userauth_pubkey_file(user, None, path, passphrase);
 
         match result {
             Ok(()) if session.authenticated() => {
-                log::info!("Authenticated with key: {}", path.display());
+                log::info!("[SSH] Authenticated with key: {}", path.display());
                 return Ok(());
             }
-            Ok(()) => continue,
+            Ok(()) => {
+                log::info!(
+                    "[SSH] Key {} returned OK but not authenticated",
+                    path.display()
+                );
+                last_error = Some(format!("Key {} not accepted by server", path.display()));
+            }
             Err(e) => {
-                log::debug!("Key {} failed: {}", path.display(), e);
-                continue;
+                let err_msg = format!("{}", e);
+                log::info!("[SSH] Key {} failed: {}", path.display(), err_msg);
+                last_error = Some(err_msg);
             }
         }
     }
 
-    Err(DbError::ConnectionFailed(
-        "SSH key authentication failed. Check your key path and passphrase.".to_string(),
-    ))
+    let error_detail = last_error.unwrap_or_else(|| "No valid SSH keys found".to_string());
+    Err(DbError::ConnectionFailed(format!(
+        "SSH key authentication failed: {}",
+        error_detail
+    )))
 }
 
 fn run_tunnel_loop(

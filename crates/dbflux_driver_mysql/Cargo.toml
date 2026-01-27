@@ -1,0 +1,20 @@
+[package]
+name = "dbflux_driver_mysql"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core.workspace = true
+dbflux_ssh.workspace = true
+log.workspace = true
+mysql.workspace = true
+uuid.workspace = true

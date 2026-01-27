@@ -20,6 +20,9 @@ use dbflux_driver_sqlite::SqliteDriver;
 #[cfg(feature = "postgres")]
 use dbflux_driver_postgres::PostgresDriver;
 
+#[cfg(feature = "mysql")]
+use dbflux_driver_mysql::MysqlDriver;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PendingOperation {
     pub profile_id: Uuid,
@@ -103,6 +106,12 @@ impl AppState {
         #[cfg(feature = "postgres")]
         {
             drivers.insert(DbKind::Postgres, Arc::new(PostgresDriver::new()));
+        }
+
+        #[cfg(feature = "mysql")]
+        {
+            drivers.insert(DbKind::MySQL, Arc::new(MysqlDriver::new(DbKind::MySQL)));
+            drivers.insert(DbKind::MariaDB, Arc::new(MysqlDriver::new(DbKind::MariaDB)));
         }
 
         let (profile_store, profiles) = match ProfileStore::new() {
@@ -616,6 +625,10 @@ impl AppState {
     fn get_ssh_secret_for_profile(&self, profile: &ConnectionProfile) -> Option<String> {
         let tunnel_profile_id = match &profile.config {
             DbConfig::Postgres {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            } => *id,
+            DbConfig::MySQL {
                 ssh_tunnel_profile_id: Some(id),
                 ..
             } => *id,

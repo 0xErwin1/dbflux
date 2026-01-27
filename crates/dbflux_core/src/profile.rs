@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub enum DbKind {
     Postgres,
     SQLite,
+    MySQL,
+    MariaDB,
 }
 
 impl DbKind {
@@ -14,6 +16,8 @@ impl DbKind {
         match self {
             DbKind::Postgres => "PostgreSQL",
             DbKind::SQLite => "SQLite",
+            DbKind::MySQL => "MySQL",
+            DbKind::MariaDB => "MariaDB",
         }
     }
 }
@@ -111,13 +115,29 @@ pub enum DbConfig {
     SQLite {
         path: PathBuf,
     },
+    MySQL {
+        host: String,
+        port: u16,
+        user: String,
+        /// Optional database name. If None, user can browse all databases.
+        database: Option<String>,
+        ssl_mode: SslMode,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
 }
 
 impl DbConfig {
+    /// Returns the base database kind for this config.
+    ///
+    /// Note: For MySQL configs, this always returns `DbKind::MySQL`.
+    /// Use `ConnectionProfile::kind()` to get the actual kind (MySQL vs MariaDB).
     pub fn kind(&self) -> DbKind {
         match self {
             DbConfig::Postgres { .. } => DbKind::Postgres,
             DbConfig::SQLite { .. } => DbKind::SQLite,
+            DbConfig::MySQL { .. } => DbKind::MySQL,
         }
     }
 
@@ -138,6 +158,18 @@ impl DbConfig {
             path: PathBuf::new(),
         }
     }
+
+    pub fn default_mysql() -> Self {
+        DbConfig::MySQL {
+            host: "localhost".to_string(),
+            port: 3306,
+            user: "root".to_string(),
+            database: None,
+            ssl_mode: SslMode::default(),
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
 }
 
 /// Saved connection profile.
@@ -152,6 +184,13 @@ pub struct ConnectionProfile {
     /// User-defined name shown in the UI.
     pub name: String,
 
+    /// The database type (e.g., MySQL vs MariaDB).
+    ///
+    /// This is the authoritative source for driver selection.
+    /// For legacy profiles without this field, falls back to `config.kind()`.
+    #[serde(default)]
+    kind: Option<DbKind>,
+
     /// Database-specific connection parameters.
     pub config: DbConfig,
 
@@ -162,16 +201,44 @@ pub struct ConnectionProfile {
 
 impl ConnectionProfile {
     pub fn new(name: impl Into<String>, config: DbConfig) -> Self {
+        let kind = config.kind();
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
+            kind: Some(kind),
             config,
             save_password: false,
         }
     }
 
+    /// Creates a new profile with an explicit database kind.
+    ///
+    /// Use this when the kind differs from what `config.kind()` would return,
+    /// such as MariaDB (which uses `DbConfig::MySQL` but `DbKind::MariaDB`).
+    pub fn new_with_kind(name: impl Into<String>, kind: DbKind, config: DbConfig) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            kind: Some(kind),
+            config,
+            save_password: false,
+        }
+    }
+
+    /// Returns the database kind for this profile.
+    ///
+    /// This is the authoritative source for driver selection.
+    /// Use this instead of `config.kind()` when selecting drivers.
     pub fn kind(&self) -> DbKind {
-        self.config.kind()
+        self.kind.unwrap_or_else(|| self.config.kind())
+    }
+
+    /// Sets the database kind explicitly.
+    ///
+    /// Use this when changing the kind (e.g., MySQL to MariaDB)
+    /// without changing the underlying config.
+    pub fn set_kind(&mut self, kind: DbKind) {
+        self.kind = Some(kind);
     }
 
     pub fn secret_ref(&self) -> String {

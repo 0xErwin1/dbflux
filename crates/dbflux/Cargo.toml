@@ -17,6 +17,7 @@ gpui.workspace = true
 gpui-component.workspace = true
 dbflux_core.workspace = true
 dbflux_export.workspace = true
+dbflux_ssh.workspace = true
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -32,7 +33,12 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_driver_mysql]
+workspace = true
+optional = true
+
 [features]
-default = ["sqlite", "postgres"]
+default = ["sqlite", "postgres", "mysql"]
 sqlite = ["dbflux_driver_sqlite"]
 postgres = ["dbflux_driver_postgres"]
+mysql = ["dbflux_driver_mysql"]

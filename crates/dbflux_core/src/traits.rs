@@ -1,6 +1,6 @@
 use crate::{
-    ConnectionProfile, DatabaseInfo, DbError, DbKind, QueryHandle, QueryRequest, QueryResult,
-    SchemaSnapshot, TableInfo,
+    ConnectionProfile, DatabaseInfo, DbError, DbKind, DriverFormDef, FormValues, QueryHandle,
+    QueryRequest, QueryResult, SchemaSnapshot, TableInfo,
 };
 
 /// Scope where a code generator can be applied.
@@ -85,6 +85,23 @@ pub trait DbDriver: Send + Sync {
     fn description(&self) -> &'static str {
         ""
     }
+
+    /// Returns the form field definitions for the connection manager UI.
+    ///
+    /// The UI uses this to render connection forms dynamically without
+    /// hardcoding driver-specific logic.
+    fn form_definition(&self) -> &'static DriverFormDef;
+
+    /// Build a DbConfig from form values collected by the UI.
+    ///
+    /// The `values` map contains field IDs as keys and user input as values.
+    /// Returns `DbError::InvalidProfile` if required fields are missing or invalid.
+    fn build_config(&self, values: &FormValues) -> Result<crate::DbConfig, DbError>;
+
+    /// Extract form values from an existing DbConfig for editing.
+    ///
+    /// Used when loading a saved connection profile into the form.
+    fn extract_values(&self, config: &crate::DbConfig) -> FormValues;
 
     /// Whether this database type requires a password for connection.
     ///
