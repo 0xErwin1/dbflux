@@ -280,12 +280,18 @@ impl Sidebar {
     }
 
     fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
-        // Trigger lazy loading when expanding a table without columns
+        // When expanding a table, check if columns need to be lazy loaded
         if expanded && item_id.starts_with("table_") {
             let pending = PendingAction::ViewSchema {
                 item_id: item_id.to_string(),
             };
-            let _ = self.ensure_table_details(item_id, pending, cx);
+            let status = self.ensure_table_details(item_id, pending, cx);
+
+            // Only expand immediately if details are ready (cached)
+            // If Loading, complete_pending_action will handle expansion after fetch
+            if !matches!(status, TableDetailsStatus::Ready) {
+                return;
+            }
         }
 
         self.expansion_overrides
@@ -1022,21 +1028,7 @@ impl Sidebar {
                 self.browse_table(&item_id, cx);
             }
             ContextMenuAction::ViewSchema => {
-                let pending = PendingAction::ViewSchema {
-                    item_id: item_id.clone(),
-                };
-                match self.ensure_table_details(&item_id, pending, cx) {
-                    TableDetailsStatus::Ready => {
-                        self.view_table_schema(&item_id, cx);
-                    }
-                    TableDetailsStatus::Loading => {
-                        // Will be handled by complete_pending_action when done
-                    }
-                    TableDetailsStatus::NotFound => {
-                        // Table not found, just toggle expansion as fallback
-                        self.toggle_item_expansion(&item_id, cx);
-                    }
-                }
+                self.set_expanded(&item_id, true, cx);
             }
             ContextMenuAction::GenerateCode(generator_id) => {
                 self.generate_code(&item_id, &generator_id, cx);
