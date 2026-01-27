@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot,
-    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, MYSQL_FORM,
+    IndexInfo, MYSQL_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -229,12 +229,12 @@ impl MysqlDriver {
             ssl_mode
         );
 
-        // For Prefer mode, try SSL first and fall back to non-SSL if it fails
-        let (opts, mut conn) = if ssl_mode == SslMode::Prefer {
+        // Create catalog connection with SSL fallback (this is the first real connection)
+        let (opts, catalog_conn) = if ssl_mode == SslMode::Prefer {
             let ssl_opts = build_mysql_opts(host, port, user, database, password, SslMode::Prefer);
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
-                    log::info!("[SSL] Connected with SSL (Prefer mode)");
+                    log::info!("[SSL] Catalog connection established with SSL (Prefer mode)");
                     (ssl_opts, c)
                 }
                 Err(ssl_err) => {
@@ -255,23 +255,32 @@ impl MysqlDriver {
             (opts, c)
         };
 
-        // Get connection ID for cancellation support
-        let connection_id: u64 = conn
+        log::info!("[CONNECT] Catalog connection established");
+
+        // Create query connection (reusing same opts that worked for catalog)
+        let mut query_conn =
+            Conn::new(opts.clone()).map_err(|e| format_mysql_error(&e, host, port))?;
+
+        // Get connection ID from query connection for KILL QUERY support
+        let query_connection_id: u64 = query_conn
             .query_first("SELECT CONNECTION_ID()")
             .map_err(|e| DbError::QueryFailed(e.to_string()))?
             .unwrap_or(0);
 
         log::info!(
-            "Successfully connected to {}:{} (connection_id: {})",
-            host,
-            port,
-            connection_id
+            "[CONNECT] Query connection established (id: {})",
+            query_connection_id
         );
 
         Ok(Box::new(MysqlConnection {
-            conn: Mutex::new(conn),
-            ssh_tunnel: None,
-            connection_id,
+            catalog_conn: Mutex::new(catalog_conn),
+            query_conn: Mutex::new(QueryConnState {
+                conn: query_conn,
+                current_database: None,
+            }),
+            ssh_catalog_tunnel: None,
+            ssh_query_tunnel: None,
+            query_connection_id,
             kill_opts: opts,
             cancelled: Arc::new(AtomicBool::new(false)),
             kind: self.kind,
@@ -293,7 +302,7 @@ impl MysqlDriver {
         let total_start = Instant::now();
 
         log::info!(
-            "[SSH] Starting tunnel to {}:{} via {}@{}:{}",
+            "[SSH] Starting dual tunnels to {}:{} via {}@{}:{}",
             db_host,
             db_port,
             tunnel_config.user,
@@ -301,68 +310,90 @@ impl MysqlDriver {
             tunnel_config.port
         );
 
-        // Establish SSH session
-        let session = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
+        // === Tunnel 1: Catalog connection ===
+        log::info!("[SSH] Creating catalog tunnel (session 1/2)");
+        let session1 = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
+        let tunnel1 = SshTunnel::start(session1, db_host.to_string(), db_port)?;
+        let local_port1 = tunnel1.local_port();
+        log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
+        let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
 
-        // Start the tunnel
-        let tunnel = SshTunnel::start(session, db_host.to_string(), db_port)?;
-        let local_port = tunnel.local_port();
-
-        log::info!("[SSH] Tunnel established on local port {}", local_port);
-        log::info!("[DB] Connecting to MySQL via tunnel (ssl: {:?})", ssl_mode);
-
-        // Note: SSL over SSH tunnel is redundant but supported for consistency
-        // For Prefer mode, try SSL first and fall back to non-SSL if it fails
-        let (opts, mut conn) = if ssl_mode == SslMode::Prefer {
+        // Create catalog connection with SSL fallback
+        log::info!("[DB] Connecting catalog via tunnel (ssl: {:?})", ssl_mode);
+        let (working_ssl_mode, catalog_conn) = if ssl_mode == SslMode::Prefer {
             let ssl_opts = build_mysql_opts(
                 "127.0.0.1",
-                local_port,
+                local_port1,
                 db_user,
                 database,
                 db_password,
                 SslMode::Prefer,
             );
-            match Conn::new(ssl_opts.clone()) {
+            match Conn::new(ssl_opts) {
                 Ok(c) => {
-                    log::info!("[SSL] Connected with SSL via tunnel (Prefer mode)");
-                    (ssl_opts, c)
+                    log::info!("[SSL] Catalog connection established with SSL");
+                    (SslMode::Prefer, c)
                 }
                 Err(ssl_err) => {
-                    log::info!(
-                        "[SSL] SSL connection failed via tunnel ({}), falling back to non-SSL",
-                        ssl_err
-                    );
+                    log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
                     let no_ssl_opts = build_mysql_opts(
                         "127.0.0.1",
-                        local_port,
+                        local_port1,
                         db_user,
                         database,
                         db_password,
                         SslMode::Disable,
                     );
-                    let c = Conn::new(no_ssl_opts.clone())
-                        .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port))?;
-                    (no_ssl_opts, c)
+                    let c = Conn::new(no_ssl_opts)
+                        .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
+                    (SslMode::Disable, c)
                 }
             }
         } else {
             let opts = build_mysql_opts(
                 "127.0.0.1",
-                local_port,
+                local_port1,
                 db_user,
                 database,
                 db_password,
                 ssl_mode,
             );
-            let c = Conn::new(opts.clone())
-                .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port))?;
-            (opts, c)
+            let c =
+                Conn::new(opts).map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
+            (ssl_mode, c)
         };
+        log::info!("[CONNECT] Catalog connection established");
 
-        let connection_id: u64 = conn
+        // === Tunnel 2: Query connection ===
+        log::info!("[SSH] Creating query tunnel (session 2/2)");
+        let session2 = dbflux_ssh::establish_session(tunnel_config, ssh_secret)?;
+        let tunnel2 = SshTunnel::start(session2, db_host.to_string(), db_port)?;
+        let local_port2 = tunnel2.local_port();
+        log::info!("[SSH] Query tunnel on local port {}", local_port2);
+        let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
+
+        // Create query connection using the SSL mode that worked for catalog
+        let query_opts = build_mysql_opts(
+            "127.0.0.1",
+            local_port2,
+            db_user,
+            database,
+            db_password,
+            working_ssl_mode,
+        );
+        let mut query_conn = Conn::new(query_opts.clone())
+            .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port2))?;
+
+        // Get connection ID for KILL QUERY support
+        let query_connection_id: u64 = query_conn
             .query_first("SELECT CONNECTION_ID()")
             .map_err(|e| DbError::QueryFailed(e.to_string()))?
             .unwrap_or(0);
+
+        log::info!(
+            "[CONNECT] Query connection established (id: {})",
+            query_connection_id
+        );
 
         log::info!(
             "[CONNECT] Total connection time: {:.2}ms ({}:{} via SSH {})",
@@ -373,10 +404,15 @@ impl MysqlDriver {
         );
 
         Ok(Box::new(MysqlConnection {
-            conn: Mutex::new(conn),
-            ssh_tunnel: Some(tunnel),
-            connection_id,
-            kill_opts: opts,
+            catalog_conn: Mutex::new(catalog_conn),
+            query_conn: Mutex::new(QueryConnState {
+                conn: query_conn,
+                current_database: None,
+            }),
+            ssh_catalog_tunnel: Some(ssh_catalog_tunnel),
+            ssh_query_tunnel: Some(ssh_query_tunnel),
+            query_connection_id,
+            kill_opts: query_opts, // Use query tunnel's opts for KILL
             cancelled: Arc::new(AtomicBool::new(false)),
             kind: self.kind,
         }))
@@ -411,11 +447,30 @@ fn format_mysql_error(e: &mysql::Error, host: &str, port: u16) -> DbError {
     }
 }
 
+/// State for the query connection, bundled in a single mutex to avoid deadlocks.
+struct QueryConnState {
+    conn: Conn,
+    current_database: Option<String>,
+}
+
 pub struct MysqlConnection {
-    conn: Mutex<Conn>,
+    /// Connection for catalog/schema operations (schema browsing, table details).
+    catalog_conn: Mutex<Conn>,
+
+    /// Connection for query execution (editor queries, table browser).
+    query_conn: Mutex<QueryConnState>,
+
+    /// SSH tunnel for catalog connection (kept alive while connection exists).
     #[allow(dead_code)]
-    ssh_tunnel: Option<SshTunnel>,
-    connection_id: u64,
+    ssh_catalog_tunnel: Option<Arc<std::sync::Mutex<SshTunnel>>>,
+
+    /// SSH tunnel for query connection (kept alive while connection exists).
+    #[allow(dead_code)]
+    ssh_query_tunnel: Option<Arc<std::sync::Mutex<SshTunnel>>>,
+
+    /// Connection ID of the query connection (for KILL QUERY).
+    query_connection_id: u64,
+
     kill_opts: Opts,
     cancelled: Arc<AtomicBool>,
     kind: DbKind,
@@ -423,7 +478,7 @@ pub struct MysqlConnection {
 
 struct MysqlCancelHandle {
     kill_opts: Opts,
-    connection_id: u64,
+    query_connection_id: u64,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -436,19 +491,19 @@ impl QueryCancelHandle for MysqlCancelHandle {
             .map_err(|e| DbError::QueryFailed(format!("Failed to open kill connection: {}", e)))?;
 
         // Try KILL QUERY first (just cancels the query)
-        let kill_query = format!("KILL QUERY {}", self.connection_id);
+        let kill_query = format!("KILL QUERY {}", self.query_connection_id);
         match kill_conn.query_drop(&kill_query) {
             Ok(_) => {
                 log::info!(
                     "[CANCEL] KILL QUERY {} sent successfully",
-                    self.connection_id
+                    self.query_connection_id
                 );
                 Ok(())
             }
             Err(e) => {
                 // If KILL QUERY fails (e.g., no permission), try KILL (kills whole connection)
                 log::warn!("[CANCEL] KILL QUERY failed ({}), trying KILL...", e);
-                let kill_conn_cmd = format!("KILL {}", self.connection_id);
+                let kill_conn_cmd = format!("KILL {}", self.query_connection_id);
                 kill_conn.query_drop(&kill_conn_cmd).map_err(|e2| {
                     log::error!("[CANCEL] Both KILL QUERY and KILL failed: {}", e2);
                     DbError::QueryFailed(format!(
@@ -520,7 +575,7 @@ const MYSQL_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
 impl Connection for MysqlConnection {
     fn ping(&self) -> Result<(), DbError> {
         let mut conn = self
-            .conn
+            .catalog_conn
             .lock()
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -544,7 +599,7 @@ impl Connection for MysqlConnection {
         };
         log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
 
-        let mut conn = match self.conn.lock() {
+        let mut state = match self.query_conn.lock() {
             Ok(guard) => guard,
             Err(poison_err) => {
                 log::warn!("[CLEANUP] Recovering from poisoned mutex");
@@ -552,8 +607,20 @@ impl Connection for MysqlConnection {
             }
         };
 
-        // Execute the query using query_iter for flexibility
-        let result: Result<Vec<mysql::Row>, mysql::Error> = conn.query(&req.sql);
+        // Switch database if needed (USE statement)
+        if let Some(ref db) = req.database
+            && state.current_database.as_ref() != Some(db)
+        {
+            log::debug!("[USE] Switching to database: {}", db);
+            state
+                .conn
+                .query_drop(format!("USE `{}`", db))
+                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+            state.current_database = Some(db.clone());
+        }
+
+        // Execute the query
+        let result: Result<Vec<mysql::Row>, mysql::Error> = state.conn.query(&req.sql);
 
         let query_time = start.elapsed();
 
@@ -578,7 +645,7 @@ impl Connection for MysqlConnection {
                         });
                     } else {
                         // Non-SELECT query, get affected rows from conn
-                        let affected = conn.affected_rows();
+                        let affected = state.conn.affected_rows();
                         log::debug!(
                             "[QUERY] Completed in {:.2}ms, {} rows affected",
                             query_time.as_secs_f64() * 1000.0,
@@ -644,7 +711,7 @@ impl Connection for MysqlConnection {
     fn cancel_active(&self) -> Result<(), DbError> {
         let handle = MysqlCancelHandle {
             kill_opts: self.kill_opts.clone(),
-            connection_id: self.connection_id,
+            query_connection_id: self.query_connection_id,
             cancelled: self.cancelled.clone(),
         };
         handle.cancel()
@@ -653,7 +720,7 @@ impl Connection for MysqlConnection {
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(MysqlCancelHandle {
             kill_opts: self.kill_opts.clone(),
-            connection_id: self.connection_id,
+            query_connection_id: self.query_connection_id,
             cancelled: self.cancelled.clone(),
         })
     }
@@ -663,79 +730,95 @@ impl Connection for MysqlConnection {
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-        log::info!("[SCHEMA] Starting schema fetch");
-
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-        log::info!("[SCHEMA] Got connection lock, querying SHOW DATABASES");
-
-        // Get list of databases
-        let databases: Vec<String> = conn
-            .query("SHOW DATABASES")
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
+        let databases = self.list_databases()?;
         log::info!("[SCHEMA] Found {} databases", databases.len());
 
-        // Filter out system databases
-        let user_databases: Vec<String> = databases
-            .into_iter()
-            .filter(|db| {
-                db != "information_schema"
-                    && db != "mysql"
-                    && db != "performance_schema"
-                    && db != "sys"
-            })
-            .collect();
-
-        let mut db_schemas: Vec<DbSchemaInfo> = Vec::new();
-
-        log::info!(
-            "[SCHEMA] Fetching schema for {} user databases: {:?}",
-            user_databases.len(),
-            user_databases
-        );
-
-        for db_name in &user_databases {
-            log::info!("[SCHEMA] Fetching tables for database: {}", db_name);
-            let tables = fetch_tables(&mut conn, db_name)?;
-            log::info!(
-                "[SCHEMA] Found {} tables in {}, fetching views",
-                tables.len(),
-                db_name
-            );
-            let views = fetch_views(&mut conn, db_name)?;
-            log::info!("[SCHEMA] Found {} views in {}", views.len(), db_name);
-
-            db_schemas.push(DbSchemaInfo {
-                name: db_name.clone(),
-                tables,
-                views,
-            });
-        }
-
-        log::info!("[SCHEMA] Schema fetch complete");
-
         Ok(SchemaSnapshot {
-            databases: user_databases
-                .iter()
-                .map(|db| DatabaseInfo {
-                    name: db.clone(),
-                    is_current: false,
-                })
-                .collect(),
+            databases,
             current_database: None,
-            schemas: db_schemas,
+            schemas: Vec::new(),
             tables: Vec::new(),
             views: Vec::new(),
         })
     }
 
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        log::info!("[SCHEMA] Fetching schema for database: {}", database);
+
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        // Fetch tables (shallow - without columns/indexes)
+        let tables = fetch_tables_shallow(&mut conn, database)?;
+        log::info!("[SCHEMA] Found {} tables in {}", tables.len(), database);
+
+        // Fetch views
+        let views = fetch_views(&mut conn, database)?;
+        log::info!("[SCHEMA] Found {} views in {}", views.len(), database);
+
+        Ok(DbSchemaInfo {
+            name: database.to_string(),
+            tables,
+            views,
+        })
+    }
+
+    fn table_details(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        log::info!(
+            "[SCHEMA] Fetching details for table: {}.{}",
+            database,
+            table
+        );
+
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        let columns = fetch_columns(&mut conn, database, table)?;
+        let indexes = fetch_indexes(&mut conn, database, table)?;
+
+        log::info!(
+            "[SCHEMA] Table {}.{}: {} columns, {} indexes",
+            database,
+            table,
+            columns.len(),
+            indexes.len()
+        );
+
+        Ok(TableInfo {
+            name: table.to_string(),
+            schema: Some(database.to_string()),
+            columns,
+            indexes,
+        })
+    }
+
+    fn view_details(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        view: &str,
+    ) -> Result<ViewInfo, DbError> {
+        log::info!("[SCHEMA] Fetching details for view: {}.{}", database, view);
+
+        // Views don't have columns/indexes in our model, just return basic info
+        Ok(ViewInfo {
+            name: view.to_string(),
+            schema: Some(database.to_string()),
+        })
+    }
+
     fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
         let mut conn = self
-            .conn
+            .catalog_conn
             .lock()
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -780,6 +863,36 @@ impl Connection for MysqlConnection {
                 generator_id
             ))),
         }
+    }
+
+    fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+        let mut state = self
+            .query_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        // Skip if already on the same database
+        if state.current_database.as_deref() == database {
+            return Ok(());
+        }
+
+        if let Some(db) = database {
+            log::info!("[USE] Switching to database: {}", db);
+            state
+                .conn
+                .query_drop(format!("USE `{}`", db))
+                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+        }
+
+        state.current_database = database.map(|s| s.to_string());
+        Ok(())
+    }
+
+    fn active_database(&self) -> Option<String> {
+        self.query_conn
+            .lock()
+            .ok()
+            .and_then(|state| state.current_database.clone())
     }
 }
 
@@ -860,7 +973,7 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         .unwrap_or(Value::Null)
 }
 
-fn fetch_tables(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
+fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
     let query = format!(
         r#"
         SELECT table_name
@@ -876,21 +989,15 @@ fn fetch_tables(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbErr
         .query(&query)
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-    let mut tables = Vec::new();
-
-    for table_name in table_names {
-        let columns = fetch_columns(conn, database, &table_name)?;
-        let indexes = fetch_indexes(conn, database, &table_name)?;
-
-        tables.push(TableInfo {
-            name: table_name,
+    Ok(table_names
+        .into_iter()
+        .map(|name| TableInfo {
+            name,
             schema: Some(database.to_string()),
-            columns,
-            indexes,
-        });
-    }
-
-    Ok(tables)
+            columns: Vec::new(),
+            indexes: Vec::new(),
+        })
+        .collect())
 }
 
 fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError> {
@@ -1083,7 +1190,7 @@ fn mysql_generate_drop_table(table: &TableInfo) -> String {
 impl MysqlConnection {
     fn mysql_generate_create_table(&self, table: &TableInfo) -> Result<String, DbError> {
         let mut conn = self
-            .conn
+            .catalog_conn
             .lock()
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 

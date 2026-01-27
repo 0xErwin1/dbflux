@@ -1,8 +1,8 @@
 use dbflux_core::{
-    CancelToken, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, HistoryEntry,
-    HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot, SecretStore,
-    SshTunnelProfile, SshTunnelStore, TaskId, TaskKind, TaskManager, TaskSnapshot,
-    create_secret_store,
+    CancelToken, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, DbSchemaInfo,
+    HistoryEntry, HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot,
+    SecretStore, SshTunnelProfile, SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager,
+    TaskSnapshot, create_secret_store,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -33,6 +33,12 @@ pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+    /// Lazy-loaded schemas per database (MySQL/MariaDB).
+    pub database_schemas: HashMap<String, DbSchemaInfo>,
+    #[allow(dead_code)]
+    pub table_details: HashMap<(String, String), TableInfo>,
+    /// Active database for query context (MySQL/MariaDB USE).
+    pub active_database: Option<String>,
 }
 
 /// Session-based suppressions for dangerous query confirmations.
@@ -229,6 +235,9 @@ impl AppState {
                 profile,
                 connection,
                 schema,
+                database_schemas: HashMap::new(),
+                table_details: HashMap::new(),
+                active_database: None,
             },
         );
         self.active_connection_id = Some(id);
@@ -256,6 +265,79 @@ impl AppState {
         let ids: Vec<Uuid> = self.connections.keys().copied().collect();
         for id in ids {
             self.disconnect(id);
+        }
+    }
+
+    // --- Lazy schema cache ---
+
+    #[allow(dead_code)]
+    pub fn get_database_schema(&self, profile_id: Uuid, database: &str) -> Option<&DbSchemaInfo> {
+        self.connections
+            .get(&profile_id)
+            .and_then(|c| c.database_schemas.get(database))
+    }
+
+    pub fn set_database_schema(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: DbSchemaInfo,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.database_schemas.insert(database, schema);
+        }
+    }
+
+    pub fn needs_database_schema(&self, profile_id: Uuid, database: &str) -> bool {
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.database_schemas.contains_key(database))
+    }
+
+    #[allow(dead_code)]
+    pub fn get_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        table: &str,
+    ) -> Option<&TableInfo> {
+        self.connections.get(&profile_id).and_then(|c| {
+            c.table_details
+                .get(&(database.to_string(), table.to_string()))
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn set_table_details(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        details: TableInfo,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.table_details.insert((database, table), details);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
+        self.connections.get(&profile_id).is_some_and(|c| {
+            !c.table_details
+                .contains_key(&(database.to_string(), table.to_string()))
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn get_active_database(&self, profile_id: Uuid) -> Option<String> {
+        self.connections
+            .get(&profile_id)
+            .and_then(|c| c.active_database.clone())
+    }
+
+    pub fn set_active_database(&mut self, profile_id: Uuid, database: Option<String>) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.active_database = database;
         }
     }
 
@@ -808,9 +890,127 @@ impl AppState {
                 profile: original_profile,
                 connection,
                 schema,
+                database_schemas: HashMap::new(),
+                table_details: HashMap::new(),
+                active_database: None,
             },
         );
     }
+
+    /// Fetch schema for a database without reconnecting (MySQL/MariaDB).
+    pub fn prepare_fetch_database_schema(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<FetchDatabaseSchemaParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        // Only for MySQL/MariaDB
+        let kind = connected.profile.kind();
+        if kind != DbKind::MySQL && kind != DbKind::MariaDB {
+            return Err("Database schema fetch only supported for MySQL/MariaDB".to_string());
+        }
+
+        // Check if already cached
+        if connected.database_schemas.contains_key(database) {
+            return Err("Schema already cached".to_string());
+        }
+
+        Ok(FetchDatabaseSchemaParams {
+            profile_id,
+            database: database.to_string(),
+            connection: connected.connection.clone(),
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn prepare_fetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        table: &str,
+    ) -> Result<FetchTableDetailsParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        // Check if already cached
+        let key = (database.to_string(), table.to_string());
+        if connected.table_details.contains_key(&key) {
+            return Err("Table details already cached".to_string());
+        }
+
+        Ok(FetchTableDetailsParams {
+            profile_id,
+            database: database.to_string(),
+            table: table.to_string(),
+            connection: connected.connection.clone(),
+        })
+    }
+}
+
+pub struct FetchDatabaseSchemaParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchDatabaseSchemaParams {
+    pub fn execute(self) -> Result<FetchDatabaseSchemaResult, String> {
+        let schema = self
+            .connection
+            .schema_for_database(&self.database)
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchDatabaseSchemaResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema,
+        })
+    }
+}
+
+pub struct FetchDatabaseSchemaResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: DbSchemaInfo,
+}
+
+#[allow(dead_code)]
+pub struct FetchTableDetailsParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub table: String,
+    pub connection: Arc<dyn Connection>,
+}
+
+#[allow(dead_code)]
+impl FetchTableDetailsParams {
+    pub fn execute(self) -> Result<FetchTableDetailsResult, String> {
+        let details = self
+            .connection
+            .table_details(&self.database, None, &self.table)
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchTableDetailsResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            table: self.table,
+            details,
+        })
+    }
+}
+
+#[allow(dead_code)]
+pub struct FetchTableDetailsResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub table: String,
+    pub details: TableInfo,
 }
 
 pub struct ConnectProfileParams {

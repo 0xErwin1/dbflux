@@ -1,8 +1,8 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef, TaskId,
-    TaskKind,
+    CancelToken, DbKind, Pagination, QueryRequest, QueryResult, TableBrowseRequest, TableRef,
+    TaskId, TaskKind,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
@@ -317,9 +317,13 @@ impl ResultsPane {
         filter: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let conn = {
+        let (conn, active_database) = {
             let state = self.app_state.read(cx);
-            state.active_connection().map(|c| c.connection.clone())
+            let active = state.active_connection();
+            (
+                active.map(|c| c.connection.clone()),
+                active.and_then(|c| c.active_database.clone()),
+            )
         };
 
         let Some(conn) = conn else {
@@ -337,7 +341,7 @@ impl ResultsPane {
             format!("SELECT COUNT(*) FROM {}", table.quoted())
         };
 
-        let request = QueryRequest::new(sql);
+        let request = QueryRequest::new(sql).with_database(active_database);
         let results_entity = cx.entity().clone();
         let qualified = table.qualified_name();
 
@@ -481,18 +485,25 @@ impl ResultsPane {
             request = request.with_filter(f.clone());
         }
 
-        let sql = request.build_sql();
-        info!("Running table query: {}", sql);
-
-        let conn = {
+        let (conn, db_kind, active_database) = {
             let state = self.app_state.read(cx);
-            state.active_connection().map(|c| c.connection.clone())
+            match state.active_connection() {
+                Some(c) => (
+                    Some(c.connection.clone()),
+                    c.connection.kind(),
+                    c.active_database.clone(),
+                ),
+                None => (None, DbKind::Postgres, None), // fallback, won't be used
+            }
         };
 
         let Some(conn) = conn else {
             cx.toast_error("No active connection", window);
             return;
         };
+
+        let sql = request.build_sql_for_kind(db_kind);
+        info!("Running table query: {}", sql);
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
@@ -508,7 +519,7 @@ impl ResultsPane {
             cancel_token: cancel_token.clone(),
         });
 
-        let query_request = QueryRequest::new(sql);
+        let query_request = QueryRequest::new(sql).with_database(active_database);
         let results_entity = cx.entity().clone();
         let app_state = self.app_state.clone();
 

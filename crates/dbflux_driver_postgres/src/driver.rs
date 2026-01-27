@@ -6,8 +6,8 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot,
-    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, POSTGRES_FORM,
+    IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;

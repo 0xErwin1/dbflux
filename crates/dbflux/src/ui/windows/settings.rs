@@ -380,19 +380,11 @@ impl SettingsWindow {
         let secret = match self.ssh_auth_method {
             SshAuthSelection::PrivateKey => {
                 let s = self.input_ssh_key_passphrase.read(cx).value().to_string();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
+                if s.is_empty() { None } else { Some(s) }
             }
             SshAuthSelection::Password => {
                 let s = self.input_ssh_password.read(cx).value().to_string();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
+                if s.is_empty() { None } else { Some(s) }
             }
         };
 
@@ -1296,7 +1288,9 @@ impl SettingsWindow {
                                     .ssh_test_error
                                     .clone()
                                     .unwrap_or_else(|| "Connection failed".to_string());
-                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child(error))
+                                d.child(
+                                    div().text_sm().text_color(gpui::rgb(0xEF4444)).child(error),
+                                )
                             }),
                     )
                     .child(
@@ -1345,7 +1339,9 @@ impl SettingsWindow {
                                             .label("Test Connection")
                                             .small()
                                             .ghost()
-                                            .disabled(self.ssh_test_status == SshTestStatus::Testing)
+                                            .disabled(
+                                                self.ssh_test_status == SshTestStatus::Testing,
+                                            )
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.test_ssh_tunnel(cx);
                                             })),

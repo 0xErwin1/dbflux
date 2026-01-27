@@ -4,7 +4,7 @@ use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
-use dbflux_core::{CodeGenScope, SchemaSnapshot, TableInfo, TaskKind};
+use dbflux_core::{CodeGenScope, DbKind, SchemaSnapshot, TableInfo, TaskKind};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -831,6 +831,147 @@ impl Sidebar {
             return;
         };
 
+        let db_kind = self
+            .app_state
+            .read(cx)
+            .connections
+            .get(&profile_id)
+            .map(|c| c.profile.kind());
+
+        match db_kind {
+            Some(DbKind::MySQL) | Some(DbKind::MariaDB) => {
+                self.handle_mysql_database_click(profile_id, db_name, cx);
+            }
+            Some(DbKind::Postgres) => {
+                self.handle_postgres_database_click(profile_id, db_name, cx);
+            }
+            _ => {
+                log::info!("Database click not supported for this database type");
+            }
+        }
+    }
+
+    fn handle_mysql_database_click(
+        &mut self,
+        profile_id: Uuid,
+        db_name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let needs_fetch = self
+            .app_state
+            .read(cx)
+            .needs_database_schema(profile_id, db_name);
+
+        // UI state only; driver issues USE at query time via QueryRequest.database
+        self.app_state.update(cx, |state, cx| {
+            state.set_active_database(profile_id, Some(db_name.to_string()));
+            cx.emit(AppStateChanged);
+        });
+
+        if !needs_fetch {
+            self.refresh_tree(cx);
+            return;
+        }
+
+        let params = match self.app_state.update(cx, |state, cx| {
+            if state.is_operation_pending(profile_id, Some(db_name)) {
+                return Err("Operation already pending".to_string());
+            }
+
+            let result = state.prepare_fetch_database_schema(profile_id, db_name);
+
+            if result.is_ok() && !state.start_pending_operation(profile_id, Some(db_name)) {
+                return Err("Operation started by another thread".to_string());
+            }
+
+            cx.notify();
+            result
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                log::info!("Fetch database schema skipped: {}", e);
+                self.refresh_tree(cx);
+                return;
+            }
+        };
+
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            let result =
+                state.start_task(TaskKind::LoadSchema, format!("Loading schema: {}", db_name));
+            cx.emit(AppStateChanged);
+            result
+        });
+
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let db_name_owned = db_name.to_string();
+        let sidebar = cx.entity().clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Fetch database schema task was cancelled");
+                    app_state.update(cx, |state, cx| {
+                        state.finish_pending_operation(profile_id, Some(&db_name_owned));
+                        cx.emit(AppStateChanged);
+                    });
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.refresh_tree(cx);
+                    });
+                    return;
+                }
+
+                let toast = match &result {
+                    Ok(_) => {
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
+                        });
+                        None
+                    }
+                    Err(e) => {
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.clone());
+                        });
+                        Some(PendingToast {
+                            message: format!("Failed to load schema: {}", e),
+                            is_error: true,
+                        })
+                    }
+                };
+
+                app_state.update(cx, |state, cx| {
+                    state.finish_pending_operation(profile_id, Some(&db_name_owned));
+
+                    if let Ok(res) = result {
+                        state.set_database_schema(res.profile_id, res.database, res.schema);
+                    }
+
+                    cx.emit(AppStateChanged);
+                    cx.notify();
+                });
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_toast = toast;
+                    sidebar.refresh_tree(cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn handle_postgres_database_click(
+        &mut self,
+        profile_id: Uuid,
+        db_name: &str,
+        cx: &mut Context<Self>,
+    ) {
         let params = match self.app_state.update(cx, |state, cx| {
             if state.is_operation_pending(profile_id, Some(db_name)) {
                 return Err("Operation already pending".to_string());
@@ -1009,12 +1150,26 @@ impl Sidebar {
                 && let Some(ref schema) = connected.schema
             {
                 let mut profile_children = Vec::new();
+                let kind = connected.profile.kind();
+                let is_mysql_like = kind == DbKind::MySQL || kind == DbKind::MariaDB;
 
                 if !schema.databases.is_empty() {
                     for db in &schema.databases {
                         let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
+                        let is_active_db = connected.active_database.as_deref() == Some(&db.name);
 
-                        let db_children = if db.is_current {
+                        let db_children = if is_mysql_like {
+                            if let Some(db_schema) = connected.database_schemas.get(&db.name) {
+                                Self::build_db_schema_content(profile_id, db_schema)
+                            } else if is_pending {
+                                vec![TreeItem::new(
+                                    format!("loading_{}_{}", profile_id, db.name),
+                                    "Loading...".to_string(),
+                                )]
+                            } else {
+                                Vec::new()
+                            }
+                        } else if db.is_current {
                             Self::build_schema_children(profile_id, schema)
                         } else {
                             Vec::new()
@@ -1022,15 +1177,23 @@ impl Sidebar {
 
                         let db_label = if is_pending {
                             format!("{} (loading...)", db.name)
-                        } else if db.is_current {
+                        } else if is_active_db && is_mysql_like {
+                            format!("**{}**", db.name)
+                        } else if db.is_current && !is_mysql_like {
                             format!("{} (current)", db.name)
                         } else {
                             db.name.clone()
                         };
 
+                        let is_expanded = if is_mysql_like {
+                            is_active_db
+                        } else {
+                            db.is_current
+                        };
+
                         profile_children.push(
                             TreeItem::new(format!("db_{}_{}", profile_id, db.name), db_label)
-                                .expanded(db.is_current)
+                                .expanded(is_expanded)
                                 .children(db_children),
                         );
                     }

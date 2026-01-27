@@ -13,6 +13,8 @@ pub enum TaskKind {
     Connect,
     Disconnect,
     SwitchDatabase,
+    /// Lazy schema loading for a single database (MySQL/MariaDB).
+    LoadSchema,
     SchemaRefresh,
     Export,
 }
@@ -24,6 +26,7 @@ impl TaskKind {
             TaskKind::Connect => "Connect",
             TaskKind::Disconnect => "Disconnect",
             TaskKind::SwitchDatabase => "Switch Database",
+            TaskKind::LoadSchema => "Load Schema",
             TaskKind::SchemaRefresh => "Schema Refresh",
             TaskKind::Export => "Export",
         }

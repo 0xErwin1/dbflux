@@ -7,8 +7,8 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues, IndexInfo,
-    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaSnapshot, TableInfo,
-    Value, ViewInfo, SQLITE_FORM,
+    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SQLITE_FORM, SchemaSnapshot,
+    TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 

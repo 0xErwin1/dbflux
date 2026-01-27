@@ -1,3 +1,5 @@
+use crate::DbKind;
+
 /// Pagination strategy for table browsing.
 ///
 /// Currently only supports OFFSET-based pagination.
@@ -133,6 +135,21 @@ impl TableRef {
             None => format!("\"{}\"", self.name),
         }
     }
+
+    /// Quote identifier using the appropriate syntax for the database kind.
+    /// - PostgreSQL/SQLite: double quotes ("schema"."table")
+    /// - MySQL/MariaDB: backticks (`schema`.`table`)
+    pub fn quoted_for_kind(&self, kind: DbKind) -> String {
+        let (open, close) = match kind {
+            DbKind::MySQL | DbKind::MariaDB => ('`', '`'),
+            _ => ('"', '"'),
+        };
+
+        match &self.schema {
+            Some(s) => format!("{}{}{}.{}{}{}", open, s, close, open, self.name, close),
+            None => format!("{}{}{}", open, self.name, close),
+        }
+    }
 }
 
 /// State for table browsing with pagination.
@@ -169,12 +186,23 @@ impl TableBrowseRequest {
         self
     }
 
-    /// Build the SQL query for this browse request.
+    /// Build the SQL query for this browse request (PostgreSQL syntax).
     ///
     /// If no ORDER BY columns are specified, the query may return inconsistent
     /// results across pages. The caller should ensure proper ordering.
     pub fn build_sql(&self) -> String {
-        let mut sql = format!("SELECT * FROM {}", self.table.quoted());
+        self.build_sql_for_kind(DbKind::Postgres)
+    }
+
+    /// Build the SQL query for this browse request using the appropriate syntax
+    /// for the given database kind.
+    pub fn build_sql_for_kind(&self, kind: DbKind) -> String {
+        let (open, close) = match kind {
+            DbKind::MySQL | DbKind::MariaDB => ('`', '`'),
+            _ => ('"', '"'),
+        };
+
+        let mut sql = format!("SELECT * FROM {}", self.table.quoted_for_kind(kind));
 
         if let Some(ref filter) = self.filter {
             let trimmed = filter.trim();
@@ -186,8 +214,11 @@ impl TableBrowseRequest {
 
         if !self.order_by.is_empty() {
             sql.push_str(" ORDER BY ");
-            let quoted_cols: Vec<String> =
-                self.order_by.iter().map(|c| format!("\"{}\"", c)).collect();
+            let quoted_cols: Vec<String> = self
+                .order_by
+                .iter()
+                .map(|c| format!("{}{}{}", open, c, close))
+                .collect();
             sql.push_str(&quoted_cols.join(", "));
         }
 

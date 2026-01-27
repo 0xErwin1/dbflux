@@ -20,6 +20,13 @@ pub struct QueryRequest {
 
     /// Maximum time to wait for query completion.
     pub statement_timeout: Option<Duration>,
+
+    /// Target database for query execution (MySQL/MariaDB).
+    ///
+    /// When set, the driver issues `USE database` before executing the query
+    /// if the connection's current database differs. Ignored by PostgreSQL
+    /// and SQLite (which use connection-level database selection).
+    pub database: Option<String>,
 }
 
 impl QueryRequest {
@@ -37,6 +44,11 @@ impl QueryRequest {
 
     pub fn with_offset(mut self, offset: u32) -> Self {
         self.offset = Some(offset);
+        self
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
         self
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
-    ConnectionProfile, DatabaseInfo, DbError, DbKind, DriverFormDef, FormValues, QueryHandle,
-    QueryRequest, QueryResult, SchemaSnapshot, TableInfo,
+    ConnectionProfile, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
+    QueryHandle, QueryRequest, QueryResult, SchemaSnapshot, TableInfo, ViewInfo,
 };
 
 /// Scope where a code generator can be applied.
@@ -225,6 +225,49 @@ pub trait Connection: Send + Sync {
     /// The default implementation returns an empty list (suitable for SQLite).
     fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
         Ok(Vec::new())
+    }
+
+    /// Fetch tables and views for a database (without column details).
+    /// Returns empty `columns`/`indexes`; use `table_details()` for full info.
+    fn schema_for_database(&self, _database: &str) -> Result<DbSchemaInfo, DbError> {
+        Err(DbError::NotSupported(
+            "schema_for_database not supported".to_string(),
+        ))
+    }
+
+    /// Fetch columns and indexes for a table.
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<TableInfo, DbError> {
+        Err(DbError::NotSupported(
+            "table_details not supported".to_string(),
+        ))
+    }
+
+    /// Fetch view metadata.
+    fn view_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _view: &str,
+    ) -> Result<ViewInfo, DbError> {
+        Err(DbError::NotSupported(
+            "view_details not supported".to_string(),
+        ))
+    }
+
+    /// Set active database for query execution (MySQL/MariaDB only).
+    /// Issues `USE database` before queries. No-op for Postgres/SQLite.
+    fn set_active_database(&self, _database: Option<&str>) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    /// Returns the currently active database, if any.
+    fn active_database(&self) -> Option<String> {
+        None
     }
 
     /// Returns the database kind for this connection.

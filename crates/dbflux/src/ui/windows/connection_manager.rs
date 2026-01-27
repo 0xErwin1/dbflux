@@ -3278,7 +3278,10 @@ impl ConnectionManagerWindow {
         let focused = show_focus && field_focus == Some(self.form_focus);
 
         match field_def.kind {
-            FormFieldKind::Text | FormFieldKind::Password | FormFieldKind::Number | FormFieldKind::FilePath => {
+            FormFieldKind::Text
+            | FormFieldKind::Password
+            | FormFieldKind::Number
+            | FormFieldKind::FilePath => {
                 let Some(input_state) = self.input_state_for_field(field_def.id) else {
                     return div().into_any_element();
                 };

@@ -140,6 +140,15 @@ impl EditorPane {
         })
         .detach();
 
+        // Re-render toolbar when active connection/database changes
+        cx.subscribe(
+            &app_state,
+            |_this, _app_state, _event: &AppStateChanged, cx| {
+                cx.notify();
+            },
+        )
+        .detach();
+
         Self {
             app_state,
             results_pane,
@@ -481,13 +490,14 @@ impl EditorPane {
 
         info!("Running query: {}", sql_owned);
 
-        let (conn, database, connection_name) = {
+        let (conn, database, connection_name, active_database) = {
             let state = self.app_state.read(cx);
             let active = state.active_connection();
             (
                 active.map(|c| c.connection.clone()),
                 active.and_then(|c| c.schema.as_ref().and_then(|s| s.current_database.clone())),
                 active.map(|c| c.profile.name.clone()),
+                active.and_then(|c| c.active_database.clone()),
             )
         };
 
@@ -515,7 +525,7 @@ impl EditorPane {
         });
         cx.notify();
 
-        let request = QueryRequest::new(sql_owned.clone());
+        let request = QueryRequest::new(sql_owned.clone()).with_database(active_database);
         let app_state = self.app_state.clone();
         let results_pane = self.results_pane.clone();
         let editor_entity = cx.entity().clone();
@@ -689,9 +699,12 @@ impl Render for EditorPane {
         let connection_name = active_conn
             .map(|c| c.profile.name.clone())
             .unwrap_or_default();
-        let current_db = active_conn
-            .and_then(|c| c.schema.as_ref())
-            .and_then(|s| s.current_database.clone());
+        // For MySQL/MariaDB use active_database, for Postgres use schema.current_database
+        let current_db = active_conn.and_then(|c| {
+            c.active_database
+                .clone()
+                .or_else(|| c.schema.as_ref().and_then(|s| s.current_database.clone()))
+        });
         let has_multiple_connections = state.connections.len() > 1;
 
         let connection_items = self.build_connection_menu_items(cx);
