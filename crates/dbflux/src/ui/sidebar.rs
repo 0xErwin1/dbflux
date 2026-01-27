@@ -140,6 +140,8 @@ pub struct Sidebar {
     context_menu: Option<ContextMenuState>,
     /// Action to execute after table details finish loading
     pending_action: Option<PendingAction>,
+    /// Maps profile_id -> active database name (for styling in render)
+    active_databases: HashMap<Uuid, String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -178,6 +180,7 @@ impl Sidebar {
             expansion_overrides: HashMap::new(),
             context_menu: None,
             pending_action: None,
+            active_databases: HashMap::new(),
             _subscriptions: vec![app_state_subscription],
         }
     }
@@ -301,6 +304,8 @@ impl Sidebar {
 
     fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_index = self.tree_state.read(cx).selected_index();
+        self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
+
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
 
@@ -1470,6 +1475,7 @@ impl Sidebar {
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let selected_index = self.tree_state.read(cx).selected_index();
+        self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
@@ -1494,6 +1500,20 @@ impl Sidebar {
     fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
         let items = Self::build_tree_items(self.app_state.read(cx));
         self.apply_expansion_overrides(items)
+    }
+
+    /// Extracts active database for each connection from AppState.
+    fn extract_active_databases(state: &AppState) -> HashMap<Uuid, String> {
+        state
+            .connections
+            .iter()
+            .filter_map(|(profile_id, connected)| {
+                connected
+                    .active_database
+                    .clone()
+                    .map(|db| (*profile_id, db))
+            })
+            .collect()
     }
 
     fn apply_expansion_overrides(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
@@ -1582,10 +1602,6 @@ impl Sidebar {
 
                         let db_label = if is_pending {
                             format!("{} (loading...)", db.name)
-                        } else if is_active_db && uses_lazy_loading {
-                            format!("**{}**", db.name)
-                        } else if db.is_current && !uses_lazy_loading {
-                            format!("{} (current)", db.name)
                         } else {
                             db.name.clone()
                         };
@@ -2127,6 +2143,7 @@ impl Render for Sidebar {
         let state = self.app_state.read(cx);
         let active_id = state.active_connection_id;
         let connections = state.connections.keys().copied().collect::<Vec<_>>();
+        let active_databases = self.active_databases.clone();
         let sidebar_entity = cx.entity().clone();
 
         let color_teal: Hsla = gpui::rgb(0x4EC9B0).into();
@@ -2231,6 +2248,25 @@ impl Render for Sidebar {
                             .strip_prefix("profile_")
                             .and_then(|id_str| Uuid::parse_str(id_str).ok())
                             .is_some_and(|id| active_id == Some(id))
+                    } else {
+                        false
+                    };
+
+                    // Check if this database is the active one for its connection
+                    let is_active_database = if node_kind == TreeNodeKind::Database {
+                        item_id
+                            .strip_prefix("db_")
+                            .and_then(|rest| {
+                                // Format: db_{profile_id}_{db_name}
+                                let underscore_pos = rest.find('_')?;
+                                let profile_id_str = &rest[..underscore_pos];
+                                let db_name = &rest[underscore_pos + 1..];
+                                let profile_id = Uuid::parse_str(profile_id_str).ok()?;
+                                active_databases
+                                    .get(&profile_id)
+                                    .map(|active_db| active_db == db_name)
+                            })
+                            .unwrap_or(false)
                     } else {
                         false
                     };
@@ -2371,9 +2407,15 @@ impl Render for Sidebar {
                             )
                             .child(
                                 div()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
                                     .text_size(FontSizes::SM)
                                     .text_color(label_color)
                                     .when(node_kind == TreeNodeKind::Profile && is_active, |d| {
+                                        d.font_weight(FontWeight::SEMIBOLD)
+                                    })
+                                    .when(is_active_database, |d| {
                                         d.font_weight(FontWeight::SEMIBOLD)
                                     })
                                     .when(
@@ -2491,37 +2533,34 @@ impl Render for Sidebar {
                     }
 
                     // Database menu (only show if not current database)
-                    if node_kind == TreeNodeKind::Database {
-                        let is_current = item.label.contains("(current)");
-                        if !is_current {
-                            let item_id_for_menu = item_id.clone();
-                            let sidebar_for_menu = sidebar_entity.clone();
-                            let hover_bg = theme.secondary;
+                    if node_kind == TreeNodeKind::Database && !is_active_database {
+                        let item_id_for_menu = item_id.clone();
+                        let sidebar_for_menu = sidebar_entity.clone();
+                        let hover_bg = theme.secondary;
 
-                            list_item = list_item.suffix(move |_window, _cx| {
-                                let sidebar = sidebar_for_menu.clone();
-                                let item_id = item_id_for_menu.clone();
+                        list_item = list_item.suffix(move |_window, _cx| {
+                            let sidebar = sidebar_for_menu.clone();
+                            let item_id = item_id_for_menu.clone();
 
-                                div()
-                                    .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                    .px_1()
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .hover(move |d| d.bg(hover_bg))
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .on_click(move |event, _, cx| {
-                                        cx.stop_propagation();
-                                        let position = event.position();
-                                        sidebar.update(cx, |this, cx| {
-                                            cx.emit(SidebarEvent::RequestFocus);
-                                            this.open_menu_for_item(&item_id, position, cx);
-                                        });
-                                    })
-                                    .child("⋯")
-                            });
-                        }
+                            div()
+                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                .px_1()
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(move |d| d.bg(hover_bg))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .on_click(move |event, _, cx| {
+                                    cx.stop_propagation();
+                                    let position = event.position();
+                                    sidebar.update(cx, |this, cx| {
+                                        cx.emit(SidebarEvent::RequestFocus);
+                                        this.open_menu_for_item(&item_id, position, cx);
+                                    });
+                                })
+                                .child("⋯")
+                        });
                     }
 
                     list_item
