@@ -68,7 +68,10 @@ impl TreeNodeKind {
     }
 
     fn shows_pointer_cursor(&self) -> bool {
-        matches!(self, Self::Profile | Self::Database | Self::ConnectionFolder)
+        matches!(
+            self,
+            Self::Profile | Self::Database | Self::ConnectionFolder
+        )
     }
 }
 
@@ -96,6 +99,35 @@ pub enum ContextMenuAction {
     RenameFolder,
     DeleteFolder,
     MoveToFolder(Option<Uuid>),
+}
+
+#[derive(Clone)]
+struct SidebarDragState {
+    node_id: Uuid,
+    #[allow(dead_code)]
+    is_folder: bool,
+    label: String,
+}
+
+struct DragPreview {
+    label: String,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .bg(theme.sidebar)
+            .border_1()
+            .border_color(theme.drag_border)
+            .rounded(Radii::SM)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .text_size(FontSizes::SM)
+            .text_color(theme.foreground)
+            .shadow_md()
+            .child(self.label.clone())
+    }
 }
 
 pub struct ContextMenuState {
@@ -188,8 +220,10 @@ impl Sidebar {
             this.refresh_tree(cx);
         });
 
-        let rename_subscription = cx.subscribe_in(&rename_input, window, |this, _, event: &InputEvent, _, cx| {
-            match event {
+        let rename_subscription = cx.subscribe_in(
+            &rename_input,
+            window,
+            |this, _, event: &InputEvent, _, cx| match event {
                 InputEvent::PressEnter { .. } => {
                     this.commit_rename(cx);
                 }
@@ -197,8 +231,8 @@ impl Sidebar {
                     this.cancel_rename(cx);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
         Self {
             app_state,
@@ -987,7 +1021,7 @@ impl Sidebar {
                 }
             }
             TreeNodeKind::ConnectionFolder => {
-                vec![
+                let mut items = vec![
                     ContextMenuItem {
                         label: "New Connection".into(),
                         action: ContextMenuAction::NewConnection,
@@ -1004,27 +1038,41 @@ impl Sidebar {
                         label: "Delete".into(),
                         action: ContextMenuAction::DeleteFolder,
                     },
-                ]
+                ];
+
+                let move_to_items = self.build_move_to_submenu(item_id, cx);
+                if !move_to_items.is_empty() {
+                    items.push(ContextMenuItem {
+                        label: "Move to...".into(),
+                        action: ContextMenuAction::Submenu(move_to_items),
+                    });
+                }
+
+                items
             }
             _ => vec![],
         }
     }
 
-    /// Builds the "Move to..." submenu items for a profile.
+    /// Builds the "Move to..." submenu items for a profile or folder.
     fn build_move_to_submenu(&self, item_id: &str, cx: &App) -> Vec<ContextMenuItem> {
         let state = self.app_state.read(cx);
         let mut items = Vec::new();
 
-        // Get current parent of this profile
-        let current_parent = if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+        // Determine current node info (works for both profiles and folders)
+        let (current_parent, current_node_id) = if let Some(profile_id_str) =
+            item_id.strip_prefix("profile_")
             && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
         {
-            state
-                .connection_tree
-                .find_by_profile(profile_id)
-                .and_then(|node| node.parent_id)
+            let node = state.connection_tree.find_by_profile(profile_id);
+            (node.and_then(|n| n.parent_id), node.map(|n| n.id))
+        } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        {
+            let node = state.connection_tree.find_by_id(folder_id);
+            (node.and_then(|n| n.parent_id), Some(folder_id))
         } else {
-            None
+            (None, None)
         };
 
         // Add "Root" option if not already at root
@@ -1035,10 +1083,22 @@ impl Sidebar {
             });
         }
 
-        // Add all folders
+        // Add all folders (except self and descendants for folders)
+        let descendants = current_node_id
+            .map(|id| state.connection_tree.get_descendants(id))
+            .unwrap_or_default();
+
         for folder in state.connection_tree.folders() {
             // Skip if this is the current parent
             if Some(folder.id) == current_parent {
+                continue;
+            }
+            // Skip self (for folders)
+            if Some(folder.id) == current_node_id {
+                continue;
+            }
+            // Skip descendants (would create cycle)
+            if descendants.contains(&folder.id) {
                 continue;
             }
 
@@ -1207,7 +1267,7 @@ impl Sidebar {
                 self.delete_folder_from_context(&item_id, cx);
             }
             ContextMenuAction::MoveToFolder(target_folder_id) => {
-                self.move_profile_to_folder(&item_id, target_folder_id, cx);
+                self.move_item_to_folder(&item_id, target_folder_id, cx);
             }
         }
 
@@ -1487,24 +1547,34 @@ impl Sidebar {
         }
     }
 
-    fn move_profile_to_folder(
+    fn move_item_to_folder(
         &mut self,
         item_id: &str,
         target_folder_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+        let node_id = if let Some(profile_id_str) = item_id.strip_prefix("profile_")
             && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
         {
+            self.app_state
+                .read(cx)
+                .connection_tree
+                .find_by_profile(profile_id)
+                .map(|n| n.id)
+        } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        {
+            Some(folder_id)
+        } else {
+            None
+        };
+
+        if let Some(node_id) = node_id {
             self.app_state.update(cx, |state, cx| {
-                // Find the tree node for this profile
-                if let Some(node) = state.connection_tree.find_by_profile(profile_id) {
-                    let node_id = node.id;
-                    state.move_tree_node(node_id, target_folder_id);
+                if state.move_tree_node(node_id, target_folder_id) {
                     cx.emit(AppStateChanged);
                 }
             });
-
             self.refresh_tree(cx);
         }
     }
@@ -1545,6 +1615,41 @@ impl Sidebar {
     pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         self.editing_id = None;
         cx.notify();
+    }
+
+    fn handle_drop(
+        &mut self,
+        node_id: Uuid,
+        target_parent_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        let would_cycle = self
+            .app_state
+            .read(cx)
+            .connection_tree
+            .would_create_cycle(node_id, target_parent_id);
+
+        if would_cycle {
+            return;
+        }
+
+        let tree_node_id = {
+            let state = self.app_state.read(cx);
+            if state.connection_tree.find_by_id(node_id).is_some() {
+                Some(node_id)
+            } else {
+                state.connection_tree.find_by_profile(node_id).map(|n| n.id)
+            }
+        };
+
+        if let Some(tree_node_id) = tree_node_id {
+            self.app_state.update(cx, |state, cx| {
+                if state.move_tree_node(tree_node_id, target_parent_id) {
+                    cx.emit(AppStateChanged);
+                }
+            });
+            self.refresh_tree(cx);
+        }
     }
 
     /// Returns true if currently renaming an item.
@@ -1863,12 +1968,10 @@ impl Sidebar {
                         children_nodes.into_iter().collect();
                     let children = Self::build_tree_nodes_recursive(&children_refs, state);
 
-                    let folder_item = TreeItem::new(
-                        format!("conn_folder_{}", node.id),
-                        node.name.clone(),
-                    )
-                    .expanded(!node.collapsed)
-                    .children(children);
+                    let folder_item =
+                        TreeItem::new(format!("conn_folder_{}", node.id), node.name.clone())
+                            .expanded(!node.collapsed)
+                            .children(children);
 
                     items.push(folder_item);
                 }
@@ -1887,10 +1990,7 @@ impl Sidebar {
         items
     }
 
-    fn build_profile_item(
-        profile: &dbflux_core::ConnectionProfile,
-        state: &AppState,
-    ) -> TreeItem {
+    fn build_profile_item(profile: &dbflux_core::ConnectionProfile, state: &AppState) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections.contains_key(&profile_id);
         let is_active = state.active_connection_id == Some(profile_id);
@@ -1933,11 +2033,7 @@ impl Sidebar {
                             Vec::new()
                         }
                     } else if db.is_current {
-                        Self::build_schema_children(
-                            profile_id,
-                            schema,
-                            &connected.table_details,
-                        )
+                        Self::build_schema_children(profile_id, schema, &connected.table_details)
                     } else {
                         Vec::new()
                     };
@@ -2658,366 +2754,455 @@ impl Render for Sidebar {
                         ),
                 )
             })
-            .child(div().flex_1().overflow_hidden().child(tree(
-                &self.tree_state,
-                move |ix, entry, selected, _window, cx| {
-                    let item = entry.item();
-                    let item_id = item.id.clone();
-                    let depth = entry.depth();
+            .child({
+                let sidebar_for_root_drop = sidebar_entity.clone();
 
-                    let node_kind = TreeNodeKind::from_id(&item_id);
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .on_drop(move |state: &SidebarDragState, _, cx| {
+                        sidebar_for_root_drop.update(cx, |this, cx| {
+                            this.handle_drop(state.node_id, None, cx);
+                        });
+                    })
+                    .child(tree(
+                        &self.tree_state,
+                        move |ix, entry, selected, _window, cx| {
+                            let item = entry.item();
+                            let item_id = item.id.clone();
+                            let depth = entry.depth();
 
-                    let is_connected = if node_kind == TreeNodeKind::Profile {
-                        item_id
-                            .strip_prefix("profile_")
-                            .and_then(|id_str| Uuid::parse_str(id_str).ok())
-                            .is_some_and(|id| connections.contains(&id))
-                    } else {
-                        false
-                    };
+                            let node_kind = TreeNodeKind::from_id(&item_id);
 
-                    let is_active = if node_kind == TreeNodeKind::Profile {
-                        item_id
-                            .strip_prefix("profile_")
-                            .and_then(|id_str| Uuid::parse_str(id_str).ok())
-                            .is_some_and(|id| active_id == Some(id))
-                    } else {
-                        false
-                    };
+                            let is_connected = if node_kind == TreeNodeKind::Profile {
+                                item_id
+                                    .strip_prefix("profile_")
+                                    .and_then(|id_str| Uuid::parse_str(id_str).ok())
+                                    .is_some_and(|id| connections.contains(&id))
+                            } else {
+                                false
+                            };
 
-                    // Check if this database is the active one for its connection
-                    let is_active_database = if node_kind == TreeNodeKind::Database {
-                        item_id
-                            .strip_prefix("db_")
-                            .and_then(|rest| {
-                                // Format: db_{profile_id}_{db_name}
-                                let underscore_pos = rest.find('_')?;
-                                let profile_id_str = &rest[..underscore_pos];
-                                let db_name = &rest[underscore_pos + 1..];
-                                let profile_id = Uuid::parse_str(profile_id_str).ok()?;
-                                active_databases
-                                    .get(&profile_id)
-                                    .map(|active_db| active_db == db_name)
-                            })
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
+                            let is_active = if node_kind == TreeNodeKind::Profile {
+                                item_id
+                                    .strip_prefix("profile_")
+                                    .and_then(|id_str| Uuid::parse_str(id_str).ok())
+                                    .is_some_and(|id| active_id == Some(id))
+                            } else {
+                                false
+                            };
 
-                    let theme = cx.theme();
-                    let indent_per_level = 12.0_f32;
-                    let is_folder = entry.is_folder();
-                    let is_expanded = entry.is_expanded();
+                            // Check if this database is the active one for its connection
+                            let is_active_database = if node_kind == TreeNodeKind::Database {
+                                item_id
+                                    .strip_prefix("db_")
+                                    .and_then(|rest| {
+                                        // Format: db_{profile_id}_{db_name}
+                                        let underscore_pos = rest.find('_')?;
+                                        let profile_id_str = &rest[..underscore_pos];
+                                        let db_name = &rest[underscore_pos + 1..];
+                                        let profile_id = Uuid::parse_str(profile_id_str).ok()?;
+                                        active_databases
+                                            .get(&profile_id)
+                                            .map(|active_db| active_db == db_name)
+                                    })
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
 
-                    let needs_chevron = is_folder
-                        && matches!(
-                            node_kind,
-                            TreeNodeKind::ConnectionFolder
-                                | TreeNodeKind::Table
-                                | TreeNodeKind::View
-                                | TreeNodeKind::Schema
-                                | TreeNodeKind::TablesFolder
+                            let theme = cx.theme();
+                            let indent_per_level = 12.0_f32;
+                            let is_folder = entry.is_folder();
+                            let is_expanded = entry.is_expanded();
+
+                            let needs_chevron = is_folder
+                                && matches!(
+                                    node_kind,
+                                    TreeNodeKind::ConnectionFolder
+                                        | TreeNodeKind::Table
+                                        | TreeNodeKind::View
+                                        | TreeNodeKind::Schema
+                                        | TreeNodeKind::TablesFolder
+                                        | TreeNodeKind::ViewsFolder
+                                        | TreeNodeKind::ColumnsFolder
+                                        | TreeNodeKind::IndexesFolder
+                                        | TreeNodeKind::Database
+                                        | TreeNodeKind::Profile
+                                );
+                            let chevron: Option<&str> = if needs_chevron {
+                                Some(if is_expanded { "▾" } else { "▸" })
+                            } else {
+                                None
+                            };
+
+                            let (icon, icon_color): (&str, Hsla) = match node_kind {
+                                TreeNodeKind::ConnectionFolder => ("▢", theme.muted_foreground),
+                                TreeNodeKind::Profile if is_connected => ("●", color_green),
+                                TreeNodeKind::Profile => ("○", theme.muted_foreground),
+                                TreeNodeKind::Database => ("⬡", color_orange),
+                                TreeNodeKind::Schema => ("▣", color_schema),
+                                TreeNodeKind::TablesFolder => ("▤", color_teal),
+                                TreeNodeKind::ViewsFolder => ("◫", color_yellow),
+                                TreeNodeKind::Table => ("▦", color_teal),
+                                TreeNodeKind::View => ("◧", color_yellow),
+                                TreeNodeKind::ColumnsFolder => ("◈", color_blue),
+                                TreeNodeKind::IndexesFolder => ("◇", color_purple),
+                                TreeNodeKind::Column => ("•", color_blue),
+                                TreeNodeKind::Index => ("◆", color_purple),
+                                TreeNodeKind::Unknown => ("", theme.muted_foreground),
+                            };
+
+                            let label_color: Hsla = match node_kind {
+                                TreeNodeKind::ConnectionFolder => theme.foreground,
+                                TreeNodeKind::Profile => theme.foreground,
+                                TreeNodeKind::Database => color_orange,
+                                TreeNodeKind::Schema => color_schema,
+                                TreeNodeKind::TablesFolder
                                 | TreeNodeKind::ViewsFolder
                                 | TreeNodeKind::ColumnsFolder
-                                | TreeNodeKind::IndexesFolder
-                                | TreeNodeKind::Database
-                                | TreeNodeKind::Profile
-                        );
-                    let chevron: Option<&str> = if needs_chevron {
-                        Some(if is_expanded { "▾" } else { "▸" })
-                    } else {
-                        None
-                    };
+                                | TreeNodeKind::IndexesFolder => color_gray,
+                                TreeNodeKind::Table => color_teal,
+                                TreeNodeKind::View => color_yellow,
+                                TreeNodeKind::Column => color_blue,
+                                TreeNodeKind::Index => color_purple,
+                                TreeNodeKind::Unknown => theme.muted_foreground,
+                            };
 
-                    let (icon, icon_color): (&str, Hsla) = match node_kind {
-                        TreeNodeKind::ConnectionFolder => ("▢", theme.muted_foreground),
-                        TreeNodeKind::Profile if is_connected => ("●", color_green),
-                        TreeNodeKind::Profile => ("○", theme.muted_foreground),
-                        TreeNodeKind::Database => ("⬡", color_orange),
-                        TreeNodeKind::Schema => ("▣", color_schema),
-                        TreeNodeKind::TablesFolder => ("▤", color_teal),
-                        TreeNodeKind::ViewsFolder => ("◫", color_yellow),
-                        TreeNodeKind::Table => ("▦", color_teal),
-                        TreeNodeKind::View => ("◧", color_yellow),
-                        TreeNodeKind::ColumnsFolder => ("◈", color_blue),
-                        TreeNodeKind::IndexesFolder => ("◇", color_purple),
-                        TreeNodeKind::Column => ("•", color_blue),
-                        TreeNodeKind::Index => ("◆", color_purple),
-                        TreeNodeKind::Unknown => ("", theme.muted_foreground),
-                    };
+                            let is_table_or_view =
+                                matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View);
 
-                    let label_color: Hsla = match node_kind {
-                        TreeNodeKind::ConnectionFolder => theme.foreground,
-                        TreeNodeKind::Profile => theme.foreground,
-                        TreeNodeKind::Database => color_orange,
-                        TreeNodeKind::Schema => color_schema,
-                        TreeNodeKind::TablesFolder
-                        | TreeNodeKind::ViewsFolder
-                        | TreeNodeKind::ColumnsFolder
-                        | TreeNodeKind::IndexesFolder => color_gray,
-                        TreeNodeKind::Table => color_teal,
-                        TreeNodeKind::View => color_yellow,
-                        TreeNodeKind::Column => color_blue,
-                        TreeNodeKind::Index => color_purple,
-                        TreeNodeKind::Unknown => theme.muted_foreground,
-                    };
+                            let sidebar_for_mousedown = sidebar_entity.clone();
+                            let item_id_for_mousedown = item_id.clone();
+                            let sidebar_for_click = sidebar_entity.clone();
+                            let item_id_for_click = item_id.clone();
+                            let sidebar_for_chevron = sidebar_entity.clone();
+                            let item_id_for_chevron = item_id.clone();
 
-                    let is_table_or_view =
-                        matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View);
-
-                    let sidebar_for_mousedown = sidebar_entity.clone();
-                    let item_id_for_mousedown = item_id.clone();
-                    let sidebar_for_click = sidebar_entity.clone();
-                    let item_id_for_click = item_id.clone();
-                    let sidebar_for_chevron = sidebar_entity.clone();
-                    let item_id_for_chevron = item_id.clone();
-
-                    let guide_lines: Vec<_> = (0..depth)
-                        .map(|_| {
-                            div()
-                                .w(px(indent_per_level))
-                                .h_full()
-                                .flex()
-                                .justify_center()
-                                .child(
+                            let guide_lines: Vec<_> = (0..depth)
+                                .map(|_| {
                                     div()
-                                        .w(px(1.0))
+                                        .w(px(indent_per_level))
                                         .h_full()
-                                        .bg(theme.border),
-                                )
-                        })
-                        .collect();
-
-                    let mut list_item = ListItem::new(ix).selected(selected).py(Spacing::XS).child(
-                        div()
-                            .id(SharedString::from(format!("row-{}", item_id)))
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .children(guide_lines)
-                            .when(is_table_or_view, |el| {
-                                let sidebar_md = sidebar_for_mousedown.clone();
-                                let id_md = item_id_for_mousedown.clone();
-                                let sidebar_cl = sidebar_for_click.clone();
-                                let id_cl = item_id_for_click.clone();
-                                el.on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    sidebar_md.update(cx, |this, cx| {
-                                        if let Some(idx) = this.find_item_index(&id_md, cx) {
-                                            this.tree_state.update(cx, |state, cx| {
-                                                state.set_selected_index(Some(idx), cx);
-                                            });
-                                        }
-                                        cx.emit(SidebarEvent::RequestFocus);
-                                        cx.notify();
-                                    });
+                                        .flex()
+                                        .justify_center()
+                                        .child(div().w(px(1.0)).h_full().bg(theme.border))
                                 })
-                                .on_click(
-                                    move |event, _window, cx| {
-                                        if event.click_count() == 2 {
-                                            sidebar_cl.update(cx, |this, cx| {
-                                                this.browse_table(&id_cl, cx);
-                                            });
-                                        }
-                                    },
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("chevron-{}", item_id)))
-                                    .w(px(12.0))
-                                    .flex()
-                                    .justify_center()
-                                    .text_color(theme.muted_foreground)
-                                    .when_some(chevron, |el, ch| {
-                                        el.text_size(FontSizes::XS)
-                                            .cursor_pointer()
-                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                .collect();
+
+                            let mut list_item =
+                                ListItem::new(ix).selected(selected).py(Spacing::XS).child(
+                                    div()
+                                        .id(SharedString::from(format!("row-{}", item_id)))
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::XS)
+                                        .children(guide_lines)
+                                        .when(is_table_or_view, |el| {
+                                            let sidebar_md = sidebar_for_mousedown.clone();
+                                            let id_md = item_id_for_mousedown.clone();
+                                            let sidebar_cl = sidebar_for_click.clone();
+                                            let id_cl = item_id_for_click.clone();
+                                            el.on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                 cx.stop_propagation();
-                                            })
-                                            .on_click(move |_, _, cx| {
-                                                cx.stop_propagation();
-                                                sidebar_for_chevron.update(cx, |this, cx| {
-                                                    this.toggle_item_expansion(
-                                                        &item_id_for_chevron,
-                                                        cx,
-                                                    );
+                                                sidebar_md.update(cx, |this, cx| {
+                                                    if let Some(idx) =
+                                                        this.find_item_index(&id_md, cx)
+                                                    {
+                                                        this.tree_state.update(cx, |state, cx| {
+                                                            state.set_selected_index(Some(idx), cx);
+                                                        });
+                                                    }
+                                                    cx.emit(SidebarEvent::RequestFocus);
+                                                    cx.notify();
                                                 });
                                             })
-                                            .child(ch)
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .w(Heights::ICON_SM)
-                                    .flex()
-                                    .justify_center()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(icon_color)
-                                    .child(icon),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(label_color)
-                                    .when(node_kind == TreeNodeKind::Profile && is_active, |d| {
-                                        d.font_weight(FontWeight::SEMIBOLD)
-                                    })
-                                    .when(is_active_database, |d| {
-                                        d.font_weight(FontWeight::SEMIBOLD)
-                                    })
-                                    .when(
-                                        matches!(
-                                            node_kind,
-                                            TreeNodeKind::TablesFolder
-                                                | TreeNodeKind::ViewsFolder
-                                                | TreeNodeKind::ColumnsFolder
-                                                | TreeNodeKind::IndexesFolder
-                                        ),
-                                        |d| d.font_weight(FontWeight::MEDIUM),
-                                    )
-                                    .child(item.label.clone()),
-                            ),
-                    );
+                                            .on_click(
+                                                move |event, _window, cx| {
+                                                    if event.click_count() == 2 {
+                                                        sidebar_cl.update(cx, |this, cx| {
+                                                            this.browse_table(&id_cl, cx);
+                                                        });
+                                                    }
+                                                },
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "chevron-{}",
+                                                    item_id
+                                                )))
+                                                .w(px(12.0))
+                                                .flex()
+                                                .justify_center()
+                                                .text_color(theme.muted_foreground)
+                                                .when_some(chevron, |el, ch| {
+                                                    el.text_size(FontSizes::XS)
+                                                        .cursor_pointer()
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            |_, _, cx| {
+                                                                cx.stop_propagation();
+                                                            },
+                                                        )
+                                                        .on_click(move |_, _, cx| {
+                                                            cx.stop_propagation();
+                                                            sidebar_for_chevron.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.toggle_item_expansion(
+                                                                        &item_id_for_chevron,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        })
+                                                        .child(ch)
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(Heights::ICON_SM)
+                                                .flex()
+                                                .justify_center()
+                                                .text_size(FontSizes::SM)
+                                                .text_color(icon_color)
+                                                .child(icon),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .text_size(FontSizes::SM)
+                                                .text_color(label_color)
+                                                .when(
+                                                    node_kind == TreeNodeKind::Profile && is_active,
+                                                    |d| d.font_weight(FontWeight::SEMIBOLD),
+                                                )
+                                                .when(is_active_database, |d| {
+                                                    d.font_weight(FontWeight::SEMIBOLD)
+                                                })
+                                                .when(
+                                                    matches!(
+                                                        node_kind,
+                                                        TreeNodeKind::TablesFolder
+                                                            | TreeNodeKind::ViewsFolder
+                                                            | TreeNodeKind::ColumnsFolder
+                                                            | TreeNodeKind::IndexesFolder
+                                                    ),
+                                                    |d| d.font_weight(FontWeight::MEDIUM),
+                                                )
+                                                .child(item.label.clone()),
+                                        )
+                                        .when(
+                                            matches!(
+                                                node_kind,
+                                                TreeNodeKind::Profile
+                                                    | TreeNodeKind::ConnectionFolder
+                                            ),
+                                            |el| {
+                                                let drag_node_id = match node_kind {
+                                                    TreeNodeKind::Profile => item_id
+                                                        .strip_prefix("profile_")
+                                                        .and_then(|s| Uuid::parse_str(s).ok()),
+                                                    TreeNodeKind::ConnectionFolder => item_id
+                                                        .strip_prefix("conn_folder_")
+                                                        .and_then(|s| Uuid::parse_str(s).ok()),
+                                                    _ => None,
+                                                };
 
-                    if node_kind.shows_pointer_cursor() {
-                        list_item = list_item.cursor(CursorStyle::PointingHand);
-                    }
+                                                if let Some(node_id) = drag_node_id {
+                                                    let drag_label = item.label.to_string();
+                                                    let is_folder =
+                                                        node_kind == TreeNodeKind::ConnectionFolder;
 
-                    if !is_table_or_view && node_kind.needs_click_handler() {
-                        let item_id_for_click = item_id.clone();
-                        let sidebar = sidebar_entity.clone();
-                        list_item = list_item.on_click(move |event, _window, cx| {
-                            cx.stop_propagation();
-                            let click_count = event.click_count();
-                            sidebar.update(cx, |this, cx| {
-                                this.handle_item_click(&item_id_for_click, click_count, cx);
-                            });
-                        });
-                    }
+                                                    el.on_drag(
+                                                        SidebarDragState {
+                                                            node_id,
+                                                            is_folder,
+                                                            label: drag_label,
+                                                        },
+                                                        |state, _, _, cx| {
+                                                            cx.new(|_| DragPreview {
+                                                                label: state.label.clone(),
+                                                            })
+                                                        },
+                                                    )
+                                                } else {
+                                                    el
+                                                }
+                                            },
+                                        )
+                                        .when(node_kind == TreeNodeKind::ConnectionFolder, |el| {
+                                            if let Some(folder_id) = item_id
+                                                .strip_prefix("conn_folder_")
+                                                .and_then(|s| Uuid::parse_str(s).ok())
+                                            {
+                                                let sidebar_for_drop = sidebar_entity.clone();
+                                                let drop_target_bg = theme.drop_target;
 
-                    let is_other_folder = is_folder
-                        && matches!(
-                            node_kind,
-                            TreeNodeKind::Schema
-                                | TreeNodeKind::TablesFolder
-                                | TreeNodeKind::ViewsFolder
-                                | TreeNodeKind::ColumnsFolder
-                                | TreeNodeKind::IndexesFolder
-                        );
-                    if is_other_folder {
-                        let item_id_for_folder = item_id.clone();
-                        let sidebar_for_folder = sidebar_entity.clone();
-                        list_item = list_item.on_click(move |_, _window, cx| {
-                            cx.stop_propagation();
-                            sidebar_for_folder.update(cx, |this, cx| {
-                                this.toggle_item_expansion(&item_id_for_folder, cx);
-                            });
-                        });
-                    }
+                                                el.drag_over::<SidebarDragState>(
+                                                    move |style, state, _, _| {
+                                                        if state.node_id != folder_id {
+                                                            style.bg(drop_target_bg)
+                                                        } else {
+                                                            style
+                                                        }
+                                                    },
+                                                )
+                                                .on_drop(move |state: &SidebarDragState, _, cx| {
+                                                    sidebar_for_drop.update(cx, |this, cx| {
+                                                        this.handle_drop(
+                                                            state.node_id,
+                                                            Some(folder_id),
+                                                            cx,
+                                                        );
+                                                    });
+                                                })
+                                            } else {
+                                                el
+                                            }
+                                        }),
+                                );
 
-                    if matches!(
-                        node_kind,
-                        TreeNodeKind::Profile | TreeNodeKind::ConnectionFolder
-                    ) {
-                        let sidebar_for_menu = sidebar_entity.clone();
-                        let item_id_for_menu = item_id.clone();
-                        let hover_bg = theme.secondary;
+                            if node_kind.shows_pointer_cursor() {
+                                list_item = list_item.cursor(CursorStyle::PointingHand);
+                            }
 
-                        list_item = list_item.suffix(move |_window, _cx| {
-                            let sidebar = sidebar_for_menu.clone();
-                            let item_id = item_id_for_menu.clone();
-
-                            div()
-                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                .px_1()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(move |d| d.bg(hover_bg))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            if !is_table_or_view && node_kind.needs_click_handler() {
+                                let item_id_for_click = item_id.clone();
+                                let sidebar = sidebar_entity.clone();
+                                list_item = list_item.on_click(move |event, _window, cx| {
                                     cx.stop_propagation();
-                                })
-                                .on_click(move |event, _, cx| {
-                                    cx.stop_propagation();
-                                    let position = event.position();
+                                    let click_count = event.click_count();
                                     sidebar.update(cx, |this, cx| {
-                                        cx.emit(SidebarEvent::RequestFocus);
-                                        this.open_menu_for_item(&item_id, position, cx);
+                                        this.handle_item_click(&item_id_for_click, click_count, cx);
                                     });
-                                })
-                                .child("⋯")
-                        });
-                    }
+                                });
+                            }
 
-                    // Table/View menu
-                    if matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View) {
-                        let item_id_for_menu = item_id.clone();
-                        let sidebar_for_menu = sidebar_entity.clone();
-                        let hover_bg = theme.secondary;
-
-                        list_item = list_item.suffix(move |_window, _cx| {
-                            let sidebar = sidebar_for_menu.clone();
-                            let item_id = item_id_for_menu.clone();
-
-                            div()
-                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                .px_1()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(move |d| d.bg(hover_bg))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            let is_other_folder = is_folder
+                                && matches!(
+                                    node_kind,
+                                    TreeNodeKind::Schema
+                                        | TreeNodeKind::TablesFolder
+                                        | TreeNodeKind::ViewsFolder
+                                        | TreeNodeKind::ColumnsFolder
+                                        | TreeNodeKind::IndexesFolder
+                                );
+                            if is_other_folder {
+                                let item_id_for_folder = item_id.clone();
+                                let sidebar_for_folder = sidebar_entity.clone();
+                                list_item = list_item.on_click(move |_, _window, cx| {
                                     cx.stop_propagation();
-                                })
-                                .on_click(move |event, _, cx| {
-                                    cx.stop_propagation();
-                                    let position = event.position();
-                                    sidebar.update(cx, |this, cx| {
-                                        cx.emit(SidebarEvent::RequestFocus);
-                                        this.open_menu_for_item(&item_id, position, cx);
+                                    sidebar_for_folder.update(cx, |this, cx| {
+                                        this.toggle_item_expansion(&item_id_for_folder, cx);
                                     });
-                                })
-                                .child("⋯")
-                        });
-                    }
+                                });
+                            }
 
-                    // Database menu (only show if not current database)
-                    if node_kind == TreeNodeKind::Database && !is_active_database {
-                        let item_id_for_menu = item_id.clone();
-                        let sidebar_for_menu = sidebar_entity.clone();
-                        let hover_bg = theme.secondary;
+                            if matches!(
+                                node_kind,
+                                TreeNodeKind::Profile | TreeNodeKind::ConnectionFolder
+                            ) {
+                                let sidebar_for_menu = sidebar_entity.clone();
+                                let item_id_for_menu = item_id.clone();
+                                let hover_bg = theme.secondary;
 
-                        list_item = list_item.suffix(move |_window, _cx| {
-                            let sidebar = sidebar_for_menu.clone();
-                            let item_id = item_id_for_menu.clone();
+                                list_item = list_item.suffix(move |_window, _cx| {
+                                    let sidebar = sidebar_for_menu.clone();
+                                    let item_id = item_id_for_menu.clone();
 
-                            div()
-                                .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                .px_1()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(move |d| d.bg(hover_bg))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation();
-                                })
-                                .on_click(move |event, _, cx| {
-                                    cx.stop_propagation();
-                                    let position = event.position();
-                                    sidebar.update(cx, |this, cx| {
-                                        cx.emit(SidebarEvent::RequestFocus);
-                                        this.open_menu_for_item(&item_id, position, cx);
-                                    });
-                                })
-                                .child("⋯")
-                        });
-                    }
+                                    div()
+                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                        .px_1()
+                                        .rounded(Radii::SM)
+                                        .cursor_pointer()
+                                        .hover(move |d| d.bg(hover_bg))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(move |event, _, cx| {
+                                            cx.stop_propagation();
+                                            let position = event.position();
+                                            sidebar.update(cx, |this, cx| {
+                                                cx.emit(SidebarEvent::RequestFocus);
+                                                this.open_menu_for_item(&item_id, position, cx);
+                                            });
+                                        })
+                                        .child("⋯")
+                                });
+                            }
 
-                    list_item
-                },
-            )))
+                            // Table/View menu
+                            if matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View) {
+                                let item_id_for_menu = item_id.clone();
+                                let sidebar_for_menu = sidebar_entity.clone();
+                                let hover_bg = theme.secondary;
+
+                                list_item = list_item.suffix(move |_window, _cx| {
+                                    let sidebar = sidebar_for_menu.clone();
+                                    let item_id = item_id_for_menu.clone();
+
+                                    div()
+                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                        .px_1()
+                                        .rounded(Radii::SM)
+                                        .cursor_pointer()
+                                        .hover(move |d| d.bg(hover_bg))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(move |event, _, cx| {
+                                            cx.stop_propagation();
+                                            let position = event.position();
+                                            sidebar.update(cx, |this, cx| {
+                                                cx.emit(SidebarEvent::RequestFocus);
+                                                this.open_menu_for_item(&item_id, position, cx);
+                                            });
+                                        })
+                                        .child("⋯")
+                                });
+                            }
+
+                            // Database menu (only show if not current database)
+                            if node_kind == TreeNodeKind::Database && !is_active_database {
+                                let item_id_for_menu = item_id.clone();
+                                let sidebar_for_menu = sidebar_entity.clone();
+                                let hover_bg = theme.secondary;
+
+                                list_item = list_item.suffix(move |_window, _cx| {
+                                    let sidebar = sidebar_for_menu.clone();
+                                    let item_id = item_id_for_menu.clone();
+
+                                    div()
+                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
+                                        .px_1()
+                                        .rounded(Radii::SM)
+                                        .cursor_pointer()
+                                        .hover(move |d| d.bg(hover_bg))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(move |event, _, cx| {
+                                            cx.stop_propagation();
+                                            let position = event.position();
+                                            sidebar.update(cx, |this, cx| {
+                                                cx.emit(SidebarEvent::RequestFocus);
+                                                this.open_menu_for_item(&item_id, position, cx);
+                                            });
+                                        })
+                                        .child("⋯")
+                                });
+                            }
+
+                            list_item
+                        },
+                    ))
+            })
             .child(self.render_footer(cx))
     }
 }

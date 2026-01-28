@@ -133,9 +133,7 @@ impl ConnectionTree {
 
     /// Finds a node by its profile ID (for connection references).
     pub fn find_by_profile(&self, profile_id: Uuid) -> Option<&ConnectionTreeNode> {
-        self.nodes
-            .iter()
-            .find(|n| n.profile_id == Some(profile_id))
+        self.nodes.iter().find(|n| n.profile_id == Some(profile_id))
     }
 
     /// Finds a node by its profile ID (mutable reference).
@@ -257,8 +255,16 @@ impl ConnectionTree {
 
     /// Moves a node to a new parent (or root if `new_parent_id` is `None`).
     ///
-    /// Returns `true` if the move was successful, `false` if it would create a cycle.
+    /// Returns `true` if the move was successful, `false` if it would create a cycle
+    /// or the node is already at the target parent.
     pub fn move_node(&mut self, node_id: Uuid, new_parent_id: Option<Uuid>) -> bool {
+        // Check if already at target parent (no-op)
+        if let Some(node) = self.find_by_id(node_id) {
+            if node.parent_id == new_parent_id {
+                return false;
+            }
+        }
+
         if self.would_create_cycle(node_id, new_parent_id) {
             return false;
         }
@@ -326,6 +332,31 @@ impl ConnectionTree {
         }
 
         descendants
+    }
+
+    /// Repairs orphaned nodes by moving them to root.
+    ///
+    /// Orphaned nodes are those with a `parent_id` that points to a non-existent folder.
+    /// Returns the number of nodes repaired.
+    pub fn repair_orphans(&mut self) -> usize {
+        let valid_folder_ids: std::collections::HashSet<Uuid> =
+            self.folders().iter().map(|f| f.id).collect();
+
+        let mut repaired = 0;
+        for node in &mut self.nodes {
+            if let Some(parent_id) = node.parent_id {
+                if !valid_folder_ids.contains(&parent_id) {
+                    log::warn!(
+                        "Repairing orphaned node {} (invalid parent {})",
+                        node.id,
+                        parent_id
+                    );
+                    node.parent_id = None;
+                    repaired += 1;
+                }
+            }
+        }
+        repaired
     }
 
     /// Deletes a folder, moving its children to the folder's parent (or root).
@@ -497,5 +528,63 @@ mod tests {
 
         let sub = tree.find_by_id(subfolder_id).unwrap();
         assert!(sub.parent_id.is_none());
+    }
+
+    #[test]
+    fn test_move_to_same_parent_is_noop() {
+        let mut tree = ConnectionTree::new();
+
+        let folder = ConnectionTreeNode::new_folder("Folder", None, 1000);
+        let folder_id = folder.id;
+        tree.add_node(folder);
+
+        let profile_id = Uuid::new_v4();
+        let conn_ref = ConnectionTreeNode::new_connection_ref(profile_id, Some(folder_id), 1000);
+        let conn_ref_id = conn_ref.id;
+        let original_sort_index = conn_ref.sort_index;
+        tree.add_node(conn_ref);
+
+        // Move to same parent should return false and not change sort_index
+        let result = tree.move_node(conn_ref_id, Some(folder_id));
+        assert!(!result);
+
+        let node = tree.find_by_id(conn_ref_id).unwrap();
+        assert_eq!(node.sort_index, original_sort_index);
+    }
+
+    #[test]
+    fn test_repair_orphans() {
+        let mut tree = ConnectionTree::new();
+
+        // Create a valid folder
+        let folder = ConnectionTreeNode::new_folder("Valid Folder", None, 1000);
+        let folder_id = folder.id;
+        tree.add_node(folder);
+
+        // Create a node with valid parent
+        let profile1 = Uuid::new_v4();
+        let conn1 = ConnectionTreeNode::new_connection_ref(profile1, Some(folder_id), 1000);
+        let conn1_id = conn1.id;
+        tree.add_node(conn1);
+
+        // Create a node with invalid parent (orphan)
+        let invalid_parent = Uuid::new_v4();
+        let profile2 = Uuid::new_v4();
+        let mut orphan = ConnectionTreeNode::new_connection_ref(profile2, None, 2000);
+        orphan.parent_id = Some(invalid_parent);
+        let orphan_id = orphan.id;
+        tree.add_node(orphan);
+
+        // Repair should fix the orphan
+        let repaired = tree.repair_orphans();
+        assert_eq!(repaired, 1);
+
+        // Valid node should still have its parent
+        let node1 = tree.find_by_id(conn1_id).unwrap();
+        assert_eq!(node1.parent_id, Some(folder_id));
+
+        // Orphan should be moved to root
+        let node2 = tree.find_by_id(orphan_id).unwrap();
+        assert!(node2.parent_id.is_none());
     }
 }

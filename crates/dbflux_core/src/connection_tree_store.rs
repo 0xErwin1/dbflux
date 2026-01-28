@@ -40,7 +40,13 @@ impl ConnectionTreeStore {
         let content = fs::read_to_string(&self.path).map_err(DbError::IoError)?;
 
         match serde_json::from_str::<ConnectionTree>(&content) {
-            Ok(tree) => Ok(tree),
+            Ok(mut tree) => {
+                let repaired = tree.repair_orphans();
+                if repaired > 0 {
+                    log::info!("Repaired {} orphaned nodes in connection tree", repaired);
+                }
+                Ok(tree)
+            }
             Err(e) => {
                 log::warn!(
                     "Failed to parse connection tree ({}), starting with empty tree",

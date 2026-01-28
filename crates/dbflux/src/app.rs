@@ -187,10 +187,7 @@ impl AppState {
                     error!("Failed to load connection tree: {:?}", e);
                     ConnectionTree::new()
                 });
-                info!(
-                    "Loaded connection tree with {} nodes",
-                    tree.nodes.len()
-                );
+                info!("Loaded connection tree with {} nodes", tree.nodes.len());
                 (Some(store), tree)
             }
             Err(e) => {
@@ -491,6 +488,7 @@ impl AppState {
     /// Toggles the collapsed state of a folder.
     ///
     /// Returns the new collapsed state, or `None` if the folder wasn't found.
+    #[allow(dead_code)]
     pub fn toggle_folder_collapsed(&mut self, folder_id: Uuid) -> Option<bool> {
         let result = self.connection_tree.toggle_folder_collapsed(folder_id);
         if result.is_some() {
@@ -501,7 +499,8 @@ impl AppState {
 
     /// Sets the collapsed state of a folder.
     pub fn set_folder_collapsed(&mut self, folder_id: Uuid, collapsed: bool) {
-        self.connection_tree.set_folder_collapsed(folder_id, collapsed);
+        self.connection_tree
+            .set_folder_collapsed(folder_id, collapsed);
         self.save_connection_tree();
     }
 

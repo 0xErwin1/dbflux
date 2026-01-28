@@ -14,6 +14,8 @@ mod task;
 mod traits;
 mod value;
 
+pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
+pub use connection_tree_store::ConnectionTreeStore;
 pub use driver_form::{
     DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MYSQL_FORM,
     POSTGRES_FORM, SQLITE_FORM,
@@ -32,8 +34,6 @@ pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
     ssh_tunnel_secret_ref,
 };
-pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
-pub use connection_tree_store::ConnectionTreeStore;
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
