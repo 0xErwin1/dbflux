@@ -485,6 +485,27 @@ impl AppState {
         }
     }
 
+    /// Moves a node to a specific position within a parent.
+    ///
+    /// - `new_parent_id`: The target parent (`None` for root).
+    /// - `after_id`: Insert after this sibling (`None` to insert at the beginning).
+    pub fn move_tree_node_to_position(
+        &mut self,
+        node_id: Uuid,
+        new_parent_id: Option<Uuid>,
+        after_id: Option<Uuid>,
+    ) -> bool {
+        if self
+            .connection_tree
+            .move_node_to_position(node_id, new_parent_id, after_id)
+        {
+            self.save_connection_tree();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Toggles the collapsed state of a folder.
     ///
     /// Returns the new collapsed state, or `None` if the folder wasn't found.

@@ -1220,6 +1220,11 @@ impl CommandDispatcher for Workspace {
                     self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
                     return true;
                 }
+                // Clear multi-selection in sidebar
+                if self.sidebar.read(cx).has_multi_selection() {
+                    self.sidebar.update(cx, |s, cx| s.clear_selection(cx));
+                    return true;
+                }
                 if self.editor.read(cx).history_modal_open(cx) {
                     self.editor.update(cx, |editor, cx| {
                         editor.history_modal.update(cx, |modal, cx| modal.close(cx));
@@ -1565,6 +1570,54 @@ impl CommandDispatcher for Workspace {
                 if self.focus_target == FocusTarget::Results {
                     self.results
                         .update(cx, |r, cx| r.go_to_prev_page(window, cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::ExtendSelectNext => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.extend_select_next(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::ExtendSelectPrev => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.extend_select_prev(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::ToggleSelection => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar
+                        .update(cx, |s, cx| s.toggle_current_selection(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::MoveSelectedUp => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar
+                        .update(cx, |s, cx| s.move_selected_items(-1, cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::MoveSelectedDown => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar
+                        .update(cx, |s, cx| s.move_selected_items(1, cx));
                     true
                 } else {
                     false

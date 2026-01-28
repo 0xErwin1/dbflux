@@ -280,6 +280,84 @@ impl ConnectionTree {
         }
     }
 
+    /// Calculates a sort index for inserting between two siblings.
+    ///
+    /// - If `after_id` is `None`, returns an index before all siblings.
+    /// - If `after_id` points to the last sibling, returns an index after it.
+    /// - Otherwise, returns a midpoint between `after_id` and its next sibling.
+    ///
+    /// Returns `None` if `after_id` is provided but not found.
+    pub fn sort_index_between(
+        &self,
+        parent_id: Option<Uuid>,
+        after_id: Option<Uuid>,
+    ) -> Option<i32> {
+        let siblings: Vec<_> = if let Some(pid) = parent_id {
+            self.children_of(pid)
+        } else {
+            self.root_nodes()
+        };
+
+        match after_id {
+            None => {
+                // Insert at the beginning
+                let first_index = siblings
+                    .first()
+                    .map(|n| n.sort_index)
+                    .unwrap_or(SORT_INDEX_GAP);
+                Some(first_index - SORT_INDEX_GAP)
+            }
+            Some(after) => {
+                let after_pos = siblings.iter().position(|n| n.id == after)?;
+                let after_index = siblings[after_pos].sort_index;
+
+                if after_pos + 1 < siblings.len() {
+                    // Insert between after_id and the next sibling
+                    let next_index = siblings[after_pos + 1].sort_index;
+                    Some((after_index + next_index) / 2)
+                } else {
+                    // Insert at the end
+                    Some(after_index + SORT_INDEX_GAP)
+                }
+            }
+        }
+    }
+
+    /// Moves a node to a specific position within a parent.
+    ///
+    /// - `new_parent_id`: The target parent (`None` for root).
+    /// - `after_id`: Insert after this sibling (`None` to insert at the beginning).
+    ///
+    /// Returns `true` if the move was successful.
+    pub fn move_node_to_position(
+        &mut self,
+        node_id: Uuid,
+        new_parent_id: Option<Uuid>,
+        after_id: Option<Uuid>,
+    ) -> bool {
+        if self.would_create_cycle(node_id, new_parent_id) {
+            return false;
+        }
+
+        // Don't allow inserting after self
+        if after_id == Some(node_id) {
+            return false;
+        }
+
+        let sort_index = match self.sort_index_between(new_parent_id, after_id) {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        if let Some(node) = self.find_by_id_mut(node_id) {
+            node.parent_id = new_parent_id;
+            node.sort_index = sort_index;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Renames a folder node.
     ///
     /// Returns `true` if the folder was found and renamed.
@@ -586,5 +664,84 @@ mod tests {
         // Orphan should be moved to root
         let node2 = tree.find_by_id(orphan_id).unwrap();
         assert!(node2.parent_id.is_none());
+    }
+
+    #[test]
+    fn test_sort_index_between() {
+        let mut tree = ConnectionTree::new();
+
+        let p1 = Uuid::new_v4();
+        let p2 = Uuid::new_v4();
+        let p3 = Uuid::new_v4();
+
+        let n1 = ConnectionTreeNode::new_connection_ref(p1, None, 1000);
+        let n1_id = n1.id;
+        tree.add_node(n1);
+
+        let n2 = ConnectionTreeNode::new_connection_ref(p2, None, 2000);
+        let n2_id = n2.id;
+        tree.add_node(n2);
+
+        let n3 = ConnectionTreeNode::new_connection_ref(p3, None, 3000);
+        let n3_id = n3.id;
+        tree.add_node(n3);
+
+        // Insert at the beginning (before n1)
+        let idx = tree.sort_index_between(None, None).unwrap();
+        assert!(idx < 1000);
+
+        // Insert between n1 and n2
+        let idx = tree.sort_index_between(None, Some(n1_id)).unwrap();
+        assert!(idx > 1000 && idx < 2000);
+
+        // Insert between n2 and n3
+        let idx = tree.sort_index_between(None, Some(n2_id)).unwrap();
+        assert!(idx > 2000 && idx < 3000);
+
+        // Insert at the end (after n3)
+        let idx = tree.sort_index_between(None, Some(n3_id)).unwrap();
+        assert!(idx > 3000);
+
+        // Invalid after_id
+        let invalid_id = Uuid::new_v4();
+        assert!(tree.sort_index_between(None, Some(invalid_id)).is_none());
+    }
+
+    #[test]
+    fn test_move_node_to_position() {
+        let mut tree = ConnectionTree::new();
+
+        let p1 = Uuid::new_v4();
+        let p2 = Uuid::new_v4();
+        let p3 = Uuid::new_v4();
+
+        let n1 = ConnectionTreeNode::new_connection_ref(p1, None, 1000);
+        let n1_id = n1.id;
+        tree.add_node(n1);
+
+        let n2 = ConnectionTreeNode::new_connection_ref(p2, None, 2000);
+        let n2_id = n2.id;
+        tree.add_node(n2);
+
+        let n3 = ConnectionTreeNode::new_connection_ref(p3, None, 3000);
+        let n3_id = n3.id;
+        tree.add_node(n3);
+
+        // Move n3 to the beginning
+        assert!(tree.move_node_to_position(n3_id, None, None));
+        let roots = tree.root_nodes();
+        assert_eq!(roots[0].id, n3_id);
+        assert_eq!(roots[1].id, n1_id);
+        assert_eq!(roots[2].id, n2_id);
+
+        // Move n1 between n3 and n2 (after n3)
+        assert!(tree.move_node_to_position(n1_id, None, Some(n3_id)));
+        let roots = tree.root_nodes();
+        assert_eq!(roots[0].id, n3_id);
+        assert_eq!(roots[1].id, n1_id);
+        assert_eq!(roots[2].id, n2_id);
+
+        // Can't move after self
+        assert!(!tree.move_node_to_position(n1_id, None, Some(n1_id)));
     }
 }

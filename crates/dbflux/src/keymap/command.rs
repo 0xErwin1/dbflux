@@ -33,6 +33,13 @@ pub enum Command {
     PageDown,
     PageUp,
 
+    // === Multi-selection ===
+    ExtendSelectNext,
+    ExtendSelectPrev,
+    ToggleSelection,
+    MoveSelectedUp,
+    MoveSelectedDown,
+
     // === Column Navigation (Results) ===
     ColumnLeft,
     ColumnRight,
@@ -103,6 +110,12 @@ impl Command {
             Command::PageDown => "Page Down",
             Command::PageUp => "Page Up",
 
+            Command::ExtendSelectNext => "Extend Selection Down",
+            Command::ExtendSelectPrev => "Extend Selection Up",
+            Command::ToggleSelection => "Toggle Selection",
+            Command::MoveSelectedUp => "Move Selected Up",
+            Command::MoveSelectedDown => "Move Selected Down",
+
             Command::ColumnLeft => "Column Left",
             Command::ColumnRight => "Column Right",
 
@@ -165,7 +178,12 @@ impl Command {
             | Command::SelectFirst
             | Command::SelectLast
             | Command::PageDown
-            | Command::PageUp => "Navigation",
+            | Command::PageUp
+            | Command::ExtendSelectNext
+            | Command::ExtendSelectPrev
+            | Command::ToggleSelection
+            | Command::MoveSelectedUp
+            | Command::MoveSelectedDown => "Navigation",
 
             Command::ColumnLeft | Command::ColumnRight => "Results",
 

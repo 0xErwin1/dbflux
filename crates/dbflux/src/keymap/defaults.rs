@@ -140,6 +140,38 @@ fn sidebar_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("d", Modifiers::none()), Command::Disconnect);
     layer.bind(KeyChord::new("m", Modifiers::none()), Command::OpenItemMenu);
 
+    // Multi-selection
+    layer.bind(
+        KeyChord::new("j", Modifiers::shift()),
+        Command::ExtendSelectNext,
+    );
+    layer.bind(
+        KeyChord::new("down", Modifiers::shift()),
+        Command::ExtendSelectNext,
+    );
+    layer.bind(
+        KeyChord::new("k", Modifiers::shift()),
+        Command::ExtendSelectPrev,
+    );
+    layer.bind(
+        KeyChord::new("up", Modifiers::shift()),
+        Command::ExtendSelectPrev,
+    );
+    layer.bind(
+        KeyChord::new("space", Modifiers::shift()),
+        Command::ToggleSelection,
+    );
+
+    // Move selected items
+    layer.bind(
+        KeyChord::new("j", Modifiers::ctrl()),
+        Command::MoveSelectedDown,
+    );
+    layer.bind(
+        KeyChord::new("k", Modifiers::ctrl()),
+        Command::MoveSelectedUp,
+    );
+
     layer
 }
 
