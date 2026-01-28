@@ -172,6 +172,16 @@ fn sidebar_layer() -> KeymapLayer {
         Command::MoveSelectedUp,
     );
 
+    // Rename and delete
+    layer.bind(KeyChord::new("r", Modifiers::shift()), Command::Rename);
+    layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
+
+    // Create folder
+    layer.bind(
+        KeyChord::new("n", Modifiers::shift()),
+        Command::CreateFolder,
+    );
+
     layer
 }
 

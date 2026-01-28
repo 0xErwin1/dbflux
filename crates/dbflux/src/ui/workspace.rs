@@ -11,7 +11,7 @@ use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::ToastManager;
-use crate::ui::tokens::Spacing;
+use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use gpui::prelude::FluentBuilder;
@@ -1070,6 +1070,97 @@ impl Render for Workspace {
                             )),
                     )
             })
+            // Delete confirmation modal rendered at workspace level for proper centering
+            .when_some(
+                self.sidebar.read(cx).delete_modal_info(),
+                |el, (item_name, is_folder)| {
+                    let theme = cx.theme();
+                    let sidebar_confirm = self.sidebar.clone();
+                    let sidebar_cancel = self.sidebar.clone();
+
+                    let message = if is_folder {
+                        format!("Delete folder \"{}\"?", item_name)
+                    } else {
+                        format!("Delete connection \"{}\"?", item_name)
+                    };
+
+                    let btn_hover = theme.muted;
+
+                    el.child(
+                        div()
+                            .id("delete-modal-overlay")
+                            .absolute()
+                            .inset_0()
+                            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                div()
+                                    .bg(theme.sidebar)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .rounded(Radii::MD)
+                                    .p(Spacing::MD)
+                                    .min_w(px(250.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(Spacing::MD)
+                                    .child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.foreground)
+                                            .child(message),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .justify_end()
+                                            .gap(Spacing::SM)
+                                            .child(
+                                                div()
+                                                    .id("delete-cancel")
+                                                    .px(Spacing::SM)
+                                                    .py(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(theme.muted_foreground)
+                                                    .bg(theme.secondary)
+                                                    .hover(move |d| d.bg(btn_hover))
+                                                    .on_click(move |_, _, cx| {
+                                                        sidebar_cancel.update(cx, |this, cx| {
+                                                            this.cancel_modal_delete(cx);
+                                                        });
+                                                    })
+                                                    .child("Cancel"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("delete-confirm")
+                                                    .px(Spacing::SM)
+                                                    .py(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(theme.background)
+                                                    .bg(theme.danger)
+                                                    .hover(|d| d.opacity(0.9))
+                                                    .on_click(move |_, _, cx| {
+                                                        sidebar_confirm.update(cx, |this, cx| {
+                                                            this.confirm_modal_delete(cx);
+                                                        });
+                                                    })
+                                                    .child("Delete"),
+                                            ),
+                                    ),
+                            ),
+                    )
+                },
+            )
     }
 }
 
@@ -1216,10 +1307,24 @@ impl CommandDispatcher for Workspace {
                     self.focus_handle.focus(window);
                     return true;
                 }
+
+                // Cancel delete confirmation modal
+                if self.sidebar.read(cx).has_delete_modal() {
+                    self.sidebar.update(cx, |s, cx| s.cancel_modal_delete(cx));
+                    return true;
+                }
+
+                // Cancel pending delete (keyboard x)
+                if self.sidebar.read(cx).has_pending_delete() {
+                    self.sidebar.update(cx, |s, cx| s.cancel_pending_delete(cx));
+                    return true;
+                }
+
                 if self.sidebar.read(cx).has_context_menu_open() {
                     self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
                     return true;
                 }
+
                 // Clear multi-selection in sidebar
                 if self.sidebar.read(cx).has_multi_selection() {
                     self.sidebar.update(cx, |s, cx| s.clear_selection(cx));
@@ -1540,8 +1645,37 @@ impl CommandDispatcher for Workspace {
                 true
             }
 
-            Command::Rename | Command::FocusSearch => {
-                // These are context-specific (saved queries modal)
+            Command::Rename => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar
+                        .update(cx, |s, cx| s.start_rename_selected(window, cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::Delete => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar
+                        .update(cx, |s, cx| s.request_delete_selected(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::CreateFolder => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.create_root_folder(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
+            Command::FocusSearch => {
+                // Context-specific (saved queries modal)
                 false
             }
 
@@ -1624,7 +1758,7 @@ impl CommandDispatcher for Workspace {
                 }
             }
 
-            Command::PageDown | Command::PageUp | Command::Delete => {
+            Command::PageDown | Command::PageUp => {
                 log::debug!("Context-specific command {:?} not yet implemented", cmd);
                 false
             }

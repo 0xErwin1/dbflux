@@ -226,11 +226,23 @@ pub struct Sidebar {
     auto_scroll_direction: i32,
     /// Multi-selected items (item IDs) for bulk operations
     multi_selection: HashSet<String>,
+    /// Item ID pending delete confirmation (for keyboard x shortcut)
+    pending_delete_item: Option<String>,
+    /// Delete confirmation modal state (for context menu delete)
+    delete_confirm_modal: Option<DeleteConfirmState>,
+    /// Whether the add menu dropdown is open
+    add_menu_open: bool,
 }
 
 struct PendingToast {
     message: String,
     is_error: bool,
+}
+
+struct DeleteConfirmState {
+    item_id: String,
+    item_name: String,
+    is_folder: bool,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -290,6 +302,9 @@ impl Sidebar {
             drag_hover_start: None,
             auto_scroll_direction: 0,
             multi_selection: HashSet::new(),
+            pending_delete_item: None,
+            delete_confirm_modal: None,
+            add_menu_open: false,
         }
     }
 
@@ -304,6 +319,8 @@ impl Sidebar {
         if self.visible_entry_count == 0 {
             return;
         }
+
+        self.pending_delete_item = None;
 
         self.tree_state.update(cx, |state, cx| {
             let next = match state.selected_index() {
@@ -320,6 +337,8 @@ impl Sidebar {
         if self.visible_entry_count == 0 {
             return;
         }
+
+        self.pending_delete_item = None;
 
         self.tree_state.update(cx, |state, cx| {
             let prev = match state.selected_index() {
@@ -1374,11 +1393,7 @@ impl Sidebar {
                 }
             }
             ContextMenuAction::Delete => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
-                    self.delete_profile(profile_id, cx);
-                }
+                self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::OpenDatabase => {
                 self.handle_database_click(&item_id, cx);
@@ -1396,7 +1411,7 @@ impl Sidebar {
                 self.pending_rename_item = Some(item_id.clone());
             }
             ContextMenuAction::DeleteFolder => {
-                self.delete_folder_from_context(&item_id, cx);
+                self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::MoveToFolder(target_folder_id) => {
                 self.move_item_to_folder(&item_id, target_folder_id, cx);
@@ -1745,11 +1760,13 @@ impl Sidebar {
         });
 
         self.refresh_tree(cx);
+        cx.emit(SidebarEvent::RequestFocus);
     }
 
     /// Cancels the rename operation.
     pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         self.editing_id = None;
+        cx.emit(SidebarEvent::RequestFocus);
         cx.notify();
     }
 
@@ -2105,6 +2122,155 @@ impl Sidebar {
             self.multi_selection.clear();
             cx.notify();
         }
+    }
+
+    pub fn start_rename_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.tree_state.read(cx).selected_entry().cloned() else {
+            return;
+        };
+
+        let item_id = entry.item().id.to_string();
+        let kind = TreeNodeKind::from_id(&item_id);
+
+        if matches!(kind, TreeNodeKind::ConnectionFolder | TreeNodeKind::Profile) {
+            self.start_rename(&item_id, window, cx);
+        }
+    }
+
+    pub fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
+        if self.pending_delete_item.is_some() {
+            self.confirm_pending_delete(cx);
+            return;
+        }
+
+        let Some(entry) = self.tree_state.read(cx).selected_entry().cloned() else {
+            return;
+        };
+
+        let item_id = entry.item().id.to_string();
+        let kind = TreeNodeKind::from_id(&item_id);
+
+        if matches!(kind, TreeNodeKind::ConnectionFolder | TreeNodeKind::Profile) {
+            self.pending_delete_item = Some(item_id);
+            cx.notify();
+        }
+    }
+
+    fn confirm_pending_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(item_id) = self.pending_delete_item.take() else {
+            return;
+        };
+
+        self.execute_delete(&item_id, cx);
+    }
+
+    pub fn cancel_pending_delete(&mut self, cx: &mut Context<Self>) {
+        if self.pending_delete_item.is_some() {
+            self.pending_delete_item = None;
+            cx.notify();
+        }
+    }
+
+    pub fn has_pending_delete(&self) -> bool {
+        self.pending_delete_item.is_some()
+    }
+
+    pub fn show_delete_confirm_modal(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let kind = TreeNodeKind::from_id(item_id);
+        let state = self.app_state.read(cx);
+
+        let (item_name, is_folder) = match kind {
+            TreeNodeKind::ConnectionFolder => {
+                if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+                    && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+                    && let Some(node) = state.connection_tree.find_by_id(folder_id)
+                {
+                    (node.name.clone(), true)
+                } else {
+                    return;
+                }
+            }
+            TreeNodeKind::Profile => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                    && let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id)
+                {
+                    (profile.name.clone(), false)
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
+
+        self.delete_confirm_modal = Some(DeleteConfirmState {
+            item_id: item_id.to_string(),
+            item_name,
+            is_folder,
+        });
+        cx.notify();
+    }
+
+    pub fn confirm_modal_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = self.delete_confirm_modal.take() else {
+            return;
+        };
+
+        self.execute_delete(&modal.item_id, cx);
+    }
+
+    pub fn cancel_modal_delete(&mut self, cx: &mut Context<Self>) {
+        if self.delete_confirm_modal.is_some() {
+            self.delete_confirm_modal = None;
+            cx.notify();
+        }
+    }
+
+    pub fn has_delete_modal(&self) -> bool {
+        self.delete_confirm_modal.is_some()
+    }
+
+    pub fn delete_modal_info(&self) -> Option<(&str, bool)> {
+        self.delete_confirm_modal
+            .as_ref()
+            .map(|m| (m.item_name.as_str(), m.is_folder))
+    }
+
+    pub fn toggle_add_menu(&mut self, cx: &mut Context<Self>) {
+        self.add_menu_open = !self.add_menu_open;
+        cx.notify();
+    }
+
+    pub fn close_add_menu(&mut self, cx: &mut Context<Self>) {
+        if self.add_menu_open {
+            self.add_menu_open = false;
+            cx.notify();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_add_menu_open(&self) -> bool {
+        self.add_menu_open
+    }
+
+    fn execute_delete(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let kind = TreeNodeKind::from_id(item_id);
+
+        match kind {
+            TreeNodeKind::ConnectionFolder => {
+                self.delete_folder_from_context(item_id, cx);
+            }
+            TreeNodeKind::Profile => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.delete_profile(profile_id, cx);
+                }
+            }
+            _ => {}
+        }
+
+        self.refresh_tree(cx);
     }
 
     #[allow(dead_code)]
@@ -3179,13 +3345,13 @@ impl Render for Sidebar {
         }
 
         let theme = cx.theme();
-        let app_state = self.app_state.clone();
         let state = self.app_state.read(cx);
         let active_id = state.active_connection_id;
         let connections = state.connections.keys().copied().collect::<Vec<_>>();
         let active_databases = self.active_databases.clone();
         let sidebar_entity = cx.entity().clone();
         let multi_selection = self.multi_selection.clone();
+        let pending_delete = self.pending_delete_item.clone();
 
         let color_teal: Hsla = gpui::rgb(0x4EC9B0).into();
         let color_yellow: Hsla = gpui::rgb(0xDCDCAA).into();
@@ -3197,6 +3363,7 @@ impl Render for Sidebar {
         let color_green: Hsla = gpui::green();
 
         div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -3227,78 +3394,45 @@ impl Render for Sidebar {
                             })
                             .child("CONNECTIONS"),
                     )
-                    .child(
+                    .child({
+                        let sidebar_for_toggle = sidebar_entity.clone();
+                        let hover_bg = theme.secondary;
                         div()
+                            .id("add-button")
+                            .w(Heights::ICON_LG)
+                            .h(Heights::ICON_LG)
                             .flex()
                             .items_center()
-                            .gap(Spacing::XS)
-                            .child({
-                                let sidebar_for_folder = sidebar_entity.clone();
-                                div()
-                                    .id("add-folder")
-                                    .w(Heights::ICON_LG)
-                                    .h(Heights::ICON_LG)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(Radii::SM)
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.muted_foreground)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                                    .on_click(move |_, _, cx| {
-                                        sidebar_for_folder.update(cx, |this, cx| {
-                                            this.create_root_folder(cx);
-                                        });
-                                    })
-                                    .child("▢")
+                            .justify_center()
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::LG)
+                            .text_color(theme.muted_foreground)
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(hover_bg).text_color(theme.foreground))
+                            .on_click(move |_, _, cx| {
+                                sidebar_for_toggle.update(cx, |this, cx| {
+                                    this.toggle_add_menu(cx);
+                                });
                             })
-                            .child(
-                                div()
-                                    .id("add-connection")
-                                    .w(Heights::ICON_LG)
-                                    .h(Heights::ICON_LG)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(Radii::SM)
-                                    .text_size(FontSizes::LG)
-                                    .text_color(theme.muted_foreground)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                                    .on_click(move |_, _, cx| {
-                                        let app_state = app_state.clone();
-                                        cx.open_window(
-                                            WindowOptions {
-                                                titlebar: Some(TitlebarOptions {
-                                                    title: Some("Connection Manager".into()),
-                                                    ..Default::default()
-                                                }),
-                                                window_bounds: Some(WindowBounds::Windowed(
-                                                    Bounds::centered(
-                                                        None,
-                                                        size(px(600.0), px(550.0)),
-                                                        cx,
-                                                    ),
-                                                )),
-                                                kind: WindowKind::Floating,
-                                                ..Default::default()
-                                            },
-                                            |window, cx| {
-                                                let manager = cx.new(|cx| {
-                                                    ConnectionManagerWindow::new(
-                                                        app_state, window, cx,
-                                                    )
-                                                });
-                                                cx.new(|cx| Root::new(manager, window, cx))
-                                            },
-                                        )
-                                        .ok();
-                                    })
-                                    .child("+"),
-                            ),
-                    ),
+                            .child("+")
+                    }),
             )
+            .when(self.pending_delete_item.is_some(), |el| {
+                el.child(
+                    div()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .bg(gpui::rgb(0x5C1F1F))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(FontSizes::XS)
+                        .text_color(theme.foreground)
+                        .child("Press x to confirm delete, ESC to cancel"),
+                )
+            })
             .when(self.editing_id.is_some(), |el| {
                 let rename_input = self.rename_input.clone();
                 let sidebar_confirm = sidebar_entity.clone();
@@ -3505,14 +3639,21 @@ impl Render for Sidebar {
                                 })
                                 .collect();
 
-                            // Check if this item is in the multi-selection
                             let is_multi_selected = multi_selection.contains(item_id.as_ref());
                             let multi_select_bg = theme.list_active;
+
+                            let is_pending_delete = pending_delete
+                                .as_ref()
+                                .is_some_and(|id| id == item_id.as_ref());
+                            let pending_delete_bg: Hsla = gpui::rgb(0x5C1F1F).into();
 
                             let mut list_item = ListItem::new(ix)
                                 .selected(selected)
                                 .py(Spacing::XS)
-                                .when(is_multi_selected && !selected, |el| el.bg(multi_select_bg))
+                                .when(is_pending_delete, |el| el.bg(pending_delete_bg))
+                                .when(is_multi_selected && !selected && !is_pending_delete, |el| {
+                                    el.bg(multi_select_bg)
+                                })
                                 .child(
                                     div()
                                         .id(SharedString::from(format!("row-{}", item_id)))
@@ -3965,6 +4106,117 @@ impl Render for Sidebar {
                     ))
             })
             .child(self.render_footer(cx))
+            // Add menu dropdown
+            .when(self.add_menu_open, |el| {
+                let theme = cx.theme();
+                let app_state = self.app_state.clone();
+                let sidebar_for_folder = cx.entity().clone();
+                let sidebar_for_conn = cx.entity().clone();
+                let sidebar_for_close = cx.entity().clone();
+                let hover_bg = theme.list_active;
+
+                el.child(
+                    // Overlay to close on click outside
+                    div()
+                        .id("add-menu-overlay")
+                        .absolute()
+                        .inset_0()
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            sidebar_for_close.update(cx, |this, cx| {
+                                this.close_add_menu(cx);
+                            });
+                        }),
+                )
+                .child(
+                    // Menu dropdown positioned below the + button
+                    div()
+                        .absolute()
+                        .top(Heights::TOOLBAR)
+                        .right(Spacing::XS)
+                        .bg(theme.sidebar)
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded(Radii::SM)
+                        .py(Spacing::XS)
+                        .min_w(px(140.0))
+                        .shadow_md()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(
+                            div()
+                                .id("add-folder-option")
+                                .px(Spacing::SM)
+                                .py(Spacing::XS)
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .hover(move |d| d.bg(hover_bg))
+                                .on_click(move |_, _, cx| {
+                                    sidebar_for_folder.update(cx, |this, cx| {
+                                        this.close_add_menu(cx);
+                                        this.create_root_folder(cx);
+                                    });
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(div().text_color(theme.muted_foreground).child("▢"))
+                                        .child("New Folder"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("add-connection-option")
+                                .px(Spacing::SM)
+                                .py(Spacing::XS)
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .hover(move |d| d.bg(theme.list_active))
+                                .on_click(move |_, _, cx| {
+                                    sidebar_for_conn.update(cx, |this, cx| {
+                                        this.close_add_menu(cx);
+                                    });
+                                    let app_state = app_state.clone();
+                                    cx.open_window(
+                                        WindowOptions {
+                                            titlebar: Some(TitlebarOptions {
+                                                title: Some("Connection Manager".into()),
+                                                ..Default::default()
+                                            }),
+                                            window_bounds: Some(WindowBounds::Windowed(
+                                                Bounds::centered(
+                                                    None,
+                                                    size(px(600.0), px(550.0)),
+                                                    cx,
+                                                ),
+                                            )),
+                                            kind: WindowKind::Floating,
+                                            ..Default::default()
+                                        },
+                                        |window, cx| {
+                                            let manager = cx.new(|cx| {
+                                                ConnectionManagerWindow::new(app_state, window, cx)
+                                            });
+                                            cx.new(|cx| Root::new(manager, window, cx))
+                                        },
+                                    )
+                                    .ok();
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(div().text_color(theme.muted_foreground).child("○"))
+                                        .child("New Connection"),
+                                ),
+                        ),
+                )
+            })
     }
 }
 

@@ -72,6 +72,7 @@ pub enum Command {
     OpenConnectionManager,
     Disconnect,
     OpenItemMenu,
+    CreateFolder,
 
     // === View ===
     ToggleEditor,
@@ -143,6 +144,7 @@ impl Command {
             Command::OpenConnectionManager => "Open Connection Manager",
             Command::Disconnect => "Disconnect",
             Command::OpenItemMenu => "Open Item Menu",
+            Command::CreateFolder => "Create Folder",
 
             Command::ToggleEditor => "Toggle Editor Panel",
             Command::ToggleResults => "Toggle Results Panel",
@@ -209,7 +211,8 @@ impl Command {
             Command::RefreshSchema
             | Command::OpenConnectionManager
             | Command::Disconnect
-            | Command::OpenItemMenu => "Connections",
+            | Command::OpenItemMenu
+            | Command::CreateFolder => "Connections",
 
             Command::ToggleEditor
             | Command::ToggleResults
