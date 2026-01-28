@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    px, Context, EventEmitter, FocusHandle, Focusable, Pixels, ScrollHandle, Size,
-    UniformListScrollHandle,
+    Context, EventEmitter, FocusHandle, Focusable, Pixels, ScrollHandle, Size,
+    UniformListScrollHandle, px,
 };
 
 use super::clipboard;
@@ -31,12 +31,6 @@ pub struct DataTableState {
     /// Selection state.
     selection: SelectionState,
 
-    /// Currently hovered cell.
-    hovered_cell: Option<CellCoord>,
-
-    /// Currently hovered header column.
-    hovered_header: Option<usize>,
-
     /// Focus handle for keyboard input.
     focus_handle: FocusHandle,
 
@@ -64,8 +58,6 @@ impl DataTableState {
             sort: None,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
-            hovered_cell: None,
-            hovered_header: None,
             focus_handle: cx.focus_handle(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
             horizontal_scroll_handle: ScrollHandle::new(),
@@ -249,30 +241,6 @@ impl DataTableState {
         }
 
         self.scroll_to_row(new_coord.row);
-    }
-
-    // --- Hover ---
-
-    pub fn hovered_cell(&self) -> Option<CellCoord> {
-        self.hovered_cell
-    }
-
-    pub fn set_hovered_cell(&mut self, cell: Option<CellCoord>, cx: &mut Context<Self>) {
-        if self.hovered_cell != cell {
-            self.hovered_cell = cell;
-            cx.notify();
-        }
-    }
-
-    pub fn hovered_header(&self) -> Option<usize> {
-        self.hovered_header
-    }
-
-    pub fn set_hovered_header(&mut self, col: Option<usize>, cx: &mut Context<Self>) {
-        if self.hovered_header != col {
-            self.hovered_header = col;
-            cx.notify();
-        }
     }
 
     // --- Clipboard ---

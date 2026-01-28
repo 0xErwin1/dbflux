@@ -1,15 +1,15 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::ElementId;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, canvas, div, px, uniform_list, AnyElement, App, ClickEvent, Context, Entity,
-    InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior, ParentElement,
-    StatefulInteractiveElement, Styled, Window,
+    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
+    ListSizingBehavior, ParentElement, StatefulInteractiveElement, Styled, Window, actions, canvas,
+    div, px, uniform_list,
 };
-use gpui_component::scroll::Scrollbar;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::Scrollbar;
 
 use super::events::{Direction, Edge};
 use super::model::TableModel;
@@ -333,10 +333,7 @@ impl DataTable {
                     ""
                 };
 
-                let is_hovered = state.hovered_header() == Some(col_ix);
                 let state_for_click = state_entity.clone();
-                let state_for_hover = state_entity.clone();
-                let state_for_leave = state_entity.clone();
 
                 div()
                     .id(("header-col", col_ix))
@@ -350,25 +347,12 @@ impl DataTable {
                     .overflow_hidden()
                     .border_r_1()
                     .border_color(theme.border)
-                    .bg(if is_hovered {
-                        theme.table_hover
-                    } else {
-                        theme.table_head
-                    })
+                    .bg(theme.table_head)
+                    .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer()
                     .on_click(move |_event: &ClickEvent, _window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.cycle_sort(col_ix, cx);
-                        });
-                    })
-                    .on_mouse_move(move |_event, _window, cx| {
-                        state_for_hover.update(cx, |state, cx| {
-                            state.set_hovered_header(Some(col_ix), cx);
-                        });
-                    })
-                    .on_mouse_down_out(move |_event, _window, cx| {
-                        state_for_leave.update(cx, |state, cx| {
-                            state.set_hovered_header(None, cx);
                         });
                     })
                     .child(
@@ -398,8 +382,6 @@ impl DataTable {
             })
             .collect();
 
-        let state_for_header_leave = state_entity.clone();
-
         // Header uses overflow_hidden and applies horizontal offset via margin.
         // The phantom scroller owns the scroll handle; header just follows the offset.
         div()
@@ -409,11 +391,6 @@ impl DataTable {
             .overflow_hidden()
             .border_b_1()
             .border_color(theme.border)
-            .on_mouse_down_out(move |_event, _window, cx| {
-                state_for_header_leave.update(cx, |state, cx| {
-                    state.set_hovered_header(None, cx);
-                });
-            })
             .child(
                 div()
                     .flex()
@@ -427,15 +404,10 @@ impl DataTable {
     fn render_body(&self, row_count: usize, total_width: f32, cx: &gpui::App) -> impl IntoElement {
         let state = self.state.read(cx);
         let vertical_scroll_handle = state.vertical_scroll_handle().clone();
-        let state_entity = self.state.clone();
-
-        // Read horizontal offset from state (synced from scroll handle)
         let h_offset = state.horizontal_offset();
-
-        // Capture model and other state needed for row rendering
         let model = Arc::clone(state.model_arc());
-        let column_widths: Vec<f32> = state.column_widths().to_vec();
-        let selection = state.selection().clone();
+
+        let state_entity = self.state.clone();
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -451,15 +423,17 @@ impl DataTable {
                     row_count,
                     move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
                         let theme = cx.theme();
+                        // Read state INSIDE closure - only when actually rendering
+                        let state = state_entity.read(cx);
+
                         render_rows(
                             &state_entity,
                             visible_range,
                             &model,
-                            &column_widths,
-                            &selection,
+                            state.column_widths(),
+                            state.selection(),
                             total_width,
                             theme,
-                            cx,
                         )
                     },
                 )
@@ -481,16 +455,10 @@ fn render_rows(
     selection: &SelectionState,
     total_width: f32,
     theme: &gpui_component::theme::Theme,
-    cx: &App,
 ) -> Vec<AnyElement> {
-    // Read current state for hover info
-    let state = state_entity.read(cx);
-    let hovered_cell = state.hovered_cell();
-
     visible_range
         .map(|row_ix| {
             let row_data = model.rows.get(row_ix);
-            let is_row_hovered = hovered_cell.map(|c| c.row) == Some(row_ix);
 
             let cells: Vec<_> = (0..model.col_count())
                 .map(|col_ix| {
@@ -508,7 +476,6 @@ fn render_rows(
 
                     let state_for_click = state_entity.clone();
                     let state_for_shift_click = state_entity.clone();
-                    let state_for_hover = state_entity.clone();
 
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
@@ -541,11 +508,6 @@ fn render_rows(
                                 });
                             }
                         })
-                        .on_mouse_move(move |_event, _window, cx| {
-                            state_for_hover.update(cx, |state, cx| {
-                                state.set_hovered_cell(Some(coord), cx);
-                            });
-                        })
                         .child(
                             div()
                                 .text_sm()
@@ -563,8 +525,6 @@ fn render_rows(
                 })
                 .collect();
 
-            let state_for_row_leave = state_entity.clone();
-
             div()
                 .id(("row", row_ix))
                 .flex()
@@ -575,12 +535,6 @@ fn render_rows(
                 .border_b_1()
                 .border_color(theme.table_row_border)
                 .when(row_ix % 2 == 1, |d| d.bg(theme.table_even))
-                .when(is_row_hovered, |d| d.bg(theme.table_hover))
-                .on_mouse_down_out(move |_event, _window, cx| {
-                    state_for_row_leave.update(cx, |state, cx| {
-                        state.set_hovered_cell(None, cx);
-                    });
-                })
                 .children(cells)
                 .into_any_element()
         })

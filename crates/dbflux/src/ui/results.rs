@@ -10,7 +10,7 @@ use dbflux_core::{
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
-use gpui::*;
+use gpui::{Subscription, *};
 
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
@@ -54,6 +54,8 @@ struct ResultTab {
     sort_state: Option<SortState>,
     /// Original row order for restoring after sort clear (indices into current rows).
     original_row_order: Option<Vec<usize>>,
+    /// Subscription to table events (kept alive to receive events).
+    subscription: Subscription,
 }
 
 struct PendingTableResult {
@@ -238,7 +240,7 @@ impl ResultsPane {
         let table_state = cx.new(|cx| DataTableState::new(table_model, cx));
         let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
 
-        self.subscribe_to_table_events(&table_state, tab_id, cx);
+        let subscription = self.subscribe_to_table_events(&table_state, tab_id, cx);
 
         let tab = ResultTab {
             id: tab_id,
@@ -249,6 +251,7 @@ impl ResultsPane {
             data_table,
             sort_state: None,
             original_row_order: None,
+            subscription: subscription,
         };
 
         self.tabs.push(tab);
@@ -264,29 +267,31 @@ impl ResultsPane {
     }
 
     fn subscribe_to_table_events(
-        &mut self,
+        &self,
         table_state: &Entity<DataTableState>,
         tab_id: usize,
         cx: &mut Context<Self>,
-    ) {
-        cx.subscribe(table_state, move |this, _state, event: &DataTableEvent, cx| {
-            if let DataTableEvent::SortChanged(sort) = event {
-                match sort {
-                    Some(sort_state) => {
-                        this.handle_sort_request(
-                            tab_id,
-                            sort_state.column_ix,
-                            sort_state.direction,
-                            cx,
-                        );
-                    }
-                    None => {
-                        this.handle_sort_clear(tab_id, cx);
+    ) -> Subscription {
+        cx.subscribe(
+            table_state,
+            move |this, _state, event: &DataTableEvent, cx| {
+                if let DataTableEvent::SortChanged(sort) = event {
+                    match sort {
+                        Some(sort_state) => {
+                            this.handle_sort_request(
+                                tab_id,
+                                sort_state.column_ix,
+                                sort_state.direction,
+                                cx,
+                            );
+                        }
+                        None => {
+                            this.handle_sort_clear(tab_id, cx);
+                        }
                     }
                 }
-            }
-        })
-        .detach();
+            },
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -348,7 +353,7 @@ impl ResultsPane {
         });
         let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
 
-        self.subscribe_to_table_events(&table_state, tab_id, cx);
+        let subscription = self.subscribe_to_table_events(&table_state, tab_id, cx);
 
         if let Some(idx) = tab_idx {
             let existing_total = match &self.tabs[idx].source {
@@ -368,6 +373,7 @@ impl ResultsPane {
             };
             self.tabs[idx].sort_state = None; // TableView uses server-side sort
             self.tabs[idx].original_row_order = None;
+            self.tabs[idx].subscription = subscription;
             self.active_tab = idx;
         } else {
             let tab = ResultTab {
@@ -385,6 +391,7 @@ impl ResultsPane {
                 data_table,
                 sort_state: None,
                 original_row_order: None,
+                subscription,
             };
             self.tabs.push(tab);
             self.active_tab = self.tabs.len() - 1;
@@ -814,14 +821,7 @@ impl ResultsPane {
         };
 
         self.run_table_query_for_connection(
-            profile_id,
-            table,
-            pagination,
-            order_by,
-            filter,
-            total_rows,
-            window,
-            cx,
+            profile_id, table, pagination, order_by, filter, total_rows, window, cx,
         );
     }
 
@@ -841,7 +841,13 @@ impl ResultsPane {
                 let Some(prev) = pagination.prev_page() else {
                     return;
                 };
-                (*profile_id, table.clone(), prev, order_by.clone(), *total_rows)
+                (
+                    *profile_id,
+                    table.clone(),
+                    prev,
+                    order_by.clone(),
+                    *total_rows,
+                )
             }
             _ => return,
         };
@@ -854,14 +860,7 @@ impl ResultsPane {
         };
 
         self.run_table_query_for_connection(
-            profile_id,
-            table,
-            pagination,
-            order_by,
-            filter,
-            total_rows,
-            window,
-            cx,
+            profile_id, table, pagination, order_by, filter, total_rows, window, cx,
         );
     }
 
@@ -1505,11 +1504,12 @@ impl Render for ResultsPane {
             });
             let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
 
-            self.subscribe_to_table_events(&table_state, tab_id, cx);
+            let subscription = self.subscribe_to_table_events(&table_state, tab_id, cx);
 
             if let Some(tab) = self.tabs.get_mut(tab_idx) {
                 tab.table_state = table_state;
                 tab.data_table = data_table;
+                tab.subscription = subscription;
             }
         }
 

@@ -9,4 +9,4 @@ mod theme;
 pub use events::{DataTableEvent, Direction, Edge, SortState};
 pub use model::TableModel;
 pub use state::DataTableState;
-pub use table::{init, DataTable};
+pub use table::{DataTable, init};

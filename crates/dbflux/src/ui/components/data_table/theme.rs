@@ -1,4 +1,4 @@
-use gpui::{px, Pixels};
+use gpui::{Pixels, px};
 
 /// Height of each data row.
 pub const ROW_HEIGHT: Pixels = px(28.0);

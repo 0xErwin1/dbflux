@@ -506,16 +506,10 @@ impl Sidebar {
         let view_from_db_schemas = conn
             .database_schemas
             .get(&parts.schema_name)
-            .and_then(|db_schema| {
-                db_schema
-                    .views
-                    .iter()
-                    .find(|v| v.name == parts.object_name)
-            });
+            .and_then(|db_schema| db_schema.views.iter().find(|v| v.name == parts.object_name));
 
         // Fall back to schema.schemas (PostgreSQL/SQLite)
-        let view =
-            view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+        let view = view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
 
         let Some(view) = view else {
             log::warn!(
@@ -574,15 +568,15 @@ impl Sidebar {
         }
 
         // Fallback: search in database_schemas (MySQL/MariaDB)
-        let table_from_db_schemas = conn
-            .database_schemas
-            .get(&parts.schema_name)
-            .and_then(|db_schema| {
-                db_schema
-                    .tables
-                    .iter()
-                    .find(|t| t.name == parts.object_name)
-            });
+        let table_from_db_schemas =
+            conn.database_schemas
+                .get(&parts.schema_name)
+                .and_then(|db_schema| {
+                    db_schema
+                        .tables
+                        .iter()
+                        .find(|t| t.name == parts.object_name)
+                });
 
         // Fall back to schema.schemas (PostgreSQL/SQLite)
         let table =
@@ -636,10 +630,7 @@ impl Sidebar {
 
         for db_schema in &schema.schemas {
             if db_schema.name == parts.schema_name {
-                return db_schema
-                    .views
-                    .iter()
-                    .find(|v| v.name == parts.object_name);
+                return db_schema.views.iter().find(|v| v.name == parts.object_name);
             }
         }
 
@@ -672,7 +663,10 @@ impl Sidebar {
 
         // Check database_schemas for a table that already has columns loaded
         if let Some(db_schema) = conn.database_schemas.get(&parts.schema_name)
-            && let Some(table) = db_schema.tables.iter().find(|t| t.name == parts.object_name)
+            && let Some(table) = db_schema
+                .tables
+                .iter()
+                .find(|t| t.name == parts.object_name)
             && table.columns.is_some()
         {
             return TableDetailsStatus::Ready;
@@ -682,8 +676,10 @@ impl Sidebar {
         if let Some(ref schema) = conn.schema {
             for db_schema in &schema.schemas {
                 if db_schema.name == parts.schema_name
-                    && let Some(table) =
-                        db_schema.tables.iter().find(|t| t.name == parts.object_name)
+                    && let Some(table) = db_schema
+                        .tables
+                        .iter()
+                        .find(|t| t.name == parts.object_name)
                     && table.columns.is_some()
                 {
                     return TableDetailsStatus::Ready;
@@ -1619,11 +1615,8 @@ impl Sidebar {
                         );
                     }
                 } else {
-                    profile_children = Self::build_schema_children(
-                        profile_id,
-                        schema,
-                        &connected.table_details,
-                    );
+                    profile_children =
+                        Self::build_schema_children(profile_id, schema, &connected.table_details);
                 }
 
                 profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -1822,7 +1815,10 @@ impl Sidebar {
         // Add placeholder when columns not loaded yet (shows chevron indicator)
         if columns_not_loaded && table_sections.is_empty() {
             table_sections.push(TreeItem::new(
-                format!("placeholder_{}__{}__{}", profile_id, schema_name, table.name),
+                format!(
+                    "placeholder_{}__{}__{}",
+                    profile_id, schema_name, table.name
+                ),
                 "Click to load schema...".to_string(),
             ));
         }
