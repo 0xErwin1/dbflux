@@ -1,0 +1,80 @@
+use super::model::{CellValue, TableModel};
+use super::selection::{CellCoord, SelectionState};
+
+/// Format a single cell value for clipboard (TSV compatible).
+pub fn format_cell(cell: &CellValue) -> String {
+    match cell {
+        CellValue::Null => "".to_string(),
+        CellValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        CellValue::Int(i) => i.to_string(),
+        CellValue::Float(f) => f.to_string(),
+        CellValue::Text(s) => escape_tsv(s),
+        CellValue::Bytes(len) => format!("<{} bytes>", len),
+    }
+}
+
+/// Escape a string for TSV format.
+/// Replaces tabs and newlines with spaces.
+fn escape_tsv(s: &str) -> String {
+    s.replace('\t', " ").replace('\n', " ").replace('\r', "")
+}
+
+/// Copy a single cell to clipboard format.
+#[allow(dead_code)]
+pub fn copy_cell(model: &TableModel, coord: CellCoord) -> Option<String> {
+    model.cell(coord.row, coord.col).map(format_cell)
+}
+
+/// Copy an entire row to clipboard format (TSV).
+#[allow(dead_code)]
+pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
+    model.rows.get(row).map(|row_data| {
+        row_data
+            .cells
+            .iter()
+            .map(format_cell)
+            .collect::<Vec<_>>()
+            .join("\t")
+    })
+}
+
+/// Copy the current selection to clipboard format (TSV).
+pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
+    let range = selection.selected_range()?;
+
+    let mut lines = Vec::new();
+    for row in range.start.row..=range.end.row {
+        let mut cells = Vec::new();
+        for col in range.start.col..=range.end.col {
+            if let Some(cell) = model.cell(row, col) {
+                cells.push(format_cell(cell));
+            } else {
+                cells.push(String::new());
+            }
+        }
+        lines.push(cells.join("\t"));
+    }
+
+    Some(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_format_cell() {
+        assert_eq!(format_cell(&CellValue::Null), "");
+        assert_eq!(format_cell(&CellValue::Bool(true)), "true");
+        assert_eq!(format_cell(&CellValue::Int(42)), "42");
+        assert_eq!(format_cell(&CellValue::Float(3.14)), "3.14");
+        assert_eq!(format_cell(&CellValue::Text(Arc::from("hello"))), "hello");
+    }
+
+    #[test]
+    fn test_escape_tsv() {
+        assert_eq!(escape_tsv("hello\tworld"), "hello world");
+        assert_eq!(escape_tsv("line1\nline2"), "line1 line2");
+    }
+}

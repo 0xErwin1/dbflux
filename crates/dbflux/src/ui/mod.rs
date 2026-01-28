@@ -1,4 +1,5 @@
 pub mod command_palette;
+pub mod components;
 pub mod dropdown;
 pub mod editor;
 pub mod history_modal;

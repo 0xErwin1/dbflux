@@ -1,4 +1,8 @@
 use crate::app::{AppState, AppStateChanged};
+use crate::ui::components::data_table::{
+    DataTable, DataTableEvent, DataTableState, Direction, Edge, SortState as TableSortState,
+    TableModel,
+};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, SortDirection,
@@ -9,12 +13,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::table::{Column, ColumnSort, Table, TableDelegate, TableState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::BufWriter;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct ResultsReceived;
@@ -44,7 +48,8 @@ struct ResultTab {
     title: String,
     source: ResultSource,
     result: QueryResult,
-    table_state: Entity<TableState<ResultsTableDelegate>>,
+    table_state: Entity<DataTableState>,
+    data_table: Entity<DataTable>,
     /// Sort state for Query tabs (in-memory sort).
     sort_state: Option<SortState>,
     /// Original row order for restoring after sort clear (indices into current rows).
@@ -225,13 +230,15 @@ impl ResultsPane {
     pub fn set_query_result(
         &mut self,
         result: QueryResult,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let tab_id = self.next_tab_id;
-        let results_pane = cx.entity().clone();
-        let delegate = ResultsTableDelegate::new(result.clone(), results_pane, tab_id, None);
-        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let table_model = Arc::new(TableModel::from(&result));
+        let table_state = cx.new(|cx| DataTableState::new(table_model, cx));
+        let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
+
+        self.subscribe_to_table_events(&table_state, tab_id, cx);
 
         let tab = ResultTab {
             id: tab_id,
@@ -239,6 +246,7 @@ impl ResultsPane {
             source: ResultSource::Query,
             result,
             table_state,
+            data_table,
             sort_state: None,
             original_row_order: None,
         };
@@ -255,6 +263,32 @@ impl ResultsPane {
         cx.notify();
     }
 
+    fn subscribe_to_table_events(
+        &mut self,
+        table_state: &Entity<DataTableState>,
+        tab_id: usize,
+        cx: &mut Context<Self>,
+    ) {
+        cx.subscribe(table_state, move |this, _state, event: &DataTableEvent, cx| {
+            if let DataTableEvent::SortChanged(sort) = event {
+                match sort {
+                    Some(sort_state) => {
+                        this.handle_sort_request(
+                            tab_id,
+                            sort_state.column_ix,
+                            sort_state.direction,
+                            cx,
+                        );
+                    }
+                    None => {
+                        this.handle_sort_clear(tab_id, cx);
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_table_result(
         &mut self,
@@ -264,7 +298,7 @@ impl ResultsPane {
         order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
         result: QueryResult,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let qualified = table.qualified_name();
@@ -280,18 +314,18 @@ impl ResultsPane {
         );
 
         // Determine sort state from order_by for visual indicator
-        let sort_state = order_by.first().and_then(|col| {
+        let initial_sort = order_by.first().and_then(|col| {
             let pos = result.columns.iter().position(|c| c.name == col.name);
             info!(
                 "sort_state calculation: looking for '{}' in columns, found at {:?}",
                 col.name, pos
             );
-            pos.map(|column_ix| SortState {
-                column_ix,
-                direction: col.direction,
-            })
+            pos.map(|column_ix| TableSortState::new(column_ix, col.direction))
         });
-        info!("sort_state for delegate: {:?}", sort_state.map(|s| (s.column_ix, s.direction)));
+        info!(
+            "sort_state for DataTable: {:?}",
+            initial_sort.map(|s| (s.column_ix, s.direction))
+        );
 
         // Find or create tab
         let (tab_id, tab_idx) = if let Some(idx) = self.tabs.iter().position(
@@ -304,9 +338,17 @@ impl ResultsPane {
             (id, None)
         };
 
-        let results_pane = cx.entity().clone();
-        let delegate = ResultsTableDelegate::new(result.clone(), results_pane, tab_id, sort_state);
-        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let table_model = Arc::new(TableModel::from(&result));
+        let table_state = cx.new(|cx| {
+            let mut state = DataTableState::new(table_model, cx);
+            if let Some(sort) = initial_sort {
+                state.set_sort_without_emit(sort);
+            }
+            state
+        });
+        let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
+
+        self.subscribe_to_table_events(&table_state, tab_id, cx);
 
         if let Some(idx) = tab_idx {
             let existing_total = match &self.tabs[idx].source {
@@ -316,6 +358,7 @@ impl ResultsPane {
 
             self.tabs[idx].result = result;
             self.tabs[idx].table_state = table_state;
+            self.tabs[idx].data_table = data_table;
             self.tabs[idx].source = ResultSource::TableView {
                 profile_id,
                 table,
@@ -339,6 +382,7 @@ impl ResultsPane {
                 },
                 result,
                 table_state,
+                data_table,
                 sort_state: None,
                 original_row_order: None,
             };
@@ -978,39 +1022,6 @@ impl ResultsPane {
         }
     }
 
-    /// Check if the column at `col_ix` is currently the primary sort column with ascending order.
-    ///
-    /// This is used to detect when clicking a column that's already sorted ascending would
-    /// create a no-op if we reverted to PK order (because PK order is also ascending).
-    /// In that case, we should cycle to descending instead.
-    fn is_column_sorted_ascending(&self, tab_id: usize, col_ix: usize) -> bool {
-        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
-            return false;
-        };
-
-        match &tab.source {
-            ResultSource::TableView { order_by, .. } => {
-                // Check if the first order_by column matches col_ix and is ascending
-                if let Some(first_order) = order_by.first() {
-                    if first_order.direction != SortDirection::Ascending {
-                        return false;
-                    }
-                    // Check if the column name matches the column at col_ix
-                    if let Some(col) = tab.result.columns.get(col_ix) {
-                        return col.name == first_order.name;
-                    }
-                }
-                false
-            }
-            ResultSource::Query => {
-                // For Query tabs, check sort_state
-                tab.sort_state
-                    .map(|s| s.column_ix == col_ix && s.direction == SortDirection::Ascending)
-                    .unwrap_or(false)
-            }
-        }
-    }
-
     /// Apply in-memory sort to a Query tab.
     fn apply_local_sort(
         &mut self,
@@ -1198,19 +1209,13 @@ impl ResultsPane {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let row_count = tab.result.rows.len();
-        if row_count == 0 {
+        if tab.result.rows.is_empty() {
             return;
         }
 
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            let next = match state.selected_row() {
-                Some(current) => (current + 1).min(row_count.saturating_sub(1)),
-                None => 0,
-            };
-            state.set_selected_row(next, cx);
-            state.scroll_to_row(next, cx);
+            state.move_active(Direction::Down, false, cx);
         });
     }
 
@@ -1218,19 +1223,13 @@ impl ResultsPane {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let row_count = tab.result.rows.len();
-        if row_count == 0 {
+        if tab.result.rows.is_empty() {
             return;
         }
 
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            let prev = match state.selected_row() {
-                Some(current) => current.saturating_sub(1),
-                None => row_count.saturating_sub(1),
-            };
-            state.set_selected_row(prev, cx);
-            state.scroll_to_row(prev, cx);
+            state.move_active(Direction::Up, false, cx);
         });
     }
 
@@ -1244,8 +1243,7 @@ impl ResultsPane {
 
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            state.set_selected_row(0, cx);
-            state.scroll_to_row(0, cx);
+            state.move_to_edge(Edge::Home, false, cx);
         });
     }
 
@@ -1253,16 +1251,13 @@ impl ResultsPane {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let row_count = tab.result.rows.len();
-        if row_count == 0 {
+        if tab.result.rows.is_empty() {
             return;
         }
 
-        let last = row_count.saturating_sub(1);
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            state.set_selected_row(last, cx);
-            state.scroll_to_row(last, cx);
+            state.move_to_edge(Edge::End, false, cx);
         });
     }
 
@@ -1270,17 +1265,13 @@ impl ResultsPane {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let col_count = tab.result.columns.len();
-        if col_count == 0 {
+        if tab.result.columns.is_empty() {
             return;
         }
 
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            let current = state.selected_col().unwrap_or(0);
-            let prev = current.saturating_sub(1);
-            state.set_selected_col(prev, cx);
-            state.scroll_to_col(prev, cx);
+            state.move_active(Direction::Left, false, cx);
         });
     }
 
@@ -1288,17 +1279,13 @@ impl ResultsPane {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let col_count = tab.result.columns.len();
-        if col_count == 0 {
+        if tab.result.columns.is_empty() {
             return;
         }
 
         let table_state = tab.table_state.clone();
         table_state.update(cx, |state, cx| {
-            let current = state.selected_col().unwrap_or(0);
-            let next = (current + 1).min(col_count.saturating_sub(1));
-            state.set_selected_col(next, cx);
-            state.scroll_to_col(next, cx);
+            state.move_active(Direction::Right, false, cx);
         });
     }
 
@@ -1504,13 +1491,25 @@ impl Render for ResultsPane {
             let tab_id = tab.id;
             let result = tab.result.clone();
             let sort_state = tab.sort_state;
-            let results_pane = cx.entity().clone();
 
-            let delegate = ResultsTableDelegate::new(result, results_pane, tab_id, sort_state);
-            let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+            let table_model = Arc::new(TableModel::from(&result));
+            let table_state = cx.new(|cx| {
+                let mut state = DataTableState::new(table_model, cx);
+                if let Some(local_sort) = sort_state {
+                    state.set_sort_without_emit(TableSortState::new(
+                        local_sort.column_ix,
+                        local_sort.direction,
+                    ));
+                }
+                state
+            });
+            let data_table = cx.new(|cx| DataTable::new("results-table", table_state.clone(), cx));
+
+            self.subscribe_to_table_events(&table_state, tab_id, cx);
 
             if let Some(tab) = self.tabs.get_mut(tab_idx) {
                 tab.table_state = table_state;
+                tab.data_table = data_table;
             }
         }
 
@@ -1799,10 +1798,8 @@ impl Render for ResultsPane {
                         )
                     })
                     .when_some(
-                        self.active_tab().map(|t| t.table_state.clone()),
-                        |d, table_state| {
-                            d.child(Table::new(&table_state).stripe(true).bordered(true))
-                        },
+                        self.active_tab().map(|t| t.data_table.clone()),
+                        |d, data_table| d.child(data_table),
                     ),
             )
             .child(
@@ -1932,143 +1929,5 @@ impl Render for ResultsPane {
                             }),
                     ),
             )
-    }
-}
-
-struct ResultsTableDelegate {
-    result: QueryResult,
-    columns: Vec<Column>,
-    results_pane: Entity<ResultsPane>,
-    tab_id: usize,
-}
-
-impl ResultsTableDelegate {
-    fn new(
-        result: QueryResult,
-        results_pane: Entity<ResultsPane>,
-        tab_id: usize,
-        sort_state: Option<SortState>,
-    ) -> Self {
-        let columns = result
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| {
-                let mut column = Column::new(format!("col_{}", i), &col.name)
-                    .width(120.)
-                    .resizable(true)
-                    .sortable();
-
-                // Apply visual sort indicator if this column is sorted
-                if let Some(state) = sort_state
-                    && state.column_ix == i
-                {
-                    column = match state.direction {
-                        SortDirection::Ascending => column.ascending(),
-                        SortDirection::Descending => column.descending(),
-                    };
-                }
-
-                column
-            })
-            .collect();
-
-        Self {
-            result,
-            columns,
-            results_pane,
-            tab_id,
-        }
-    }
-}
-
-impl TableDelegate for ResultsTableDelegate {
-    fn columns_count(&self, _cx: &App) -> usize {
-        self.columns.len()
-    }
-
-    fn rows_count(&self, _cx: &App) -> usize {
-        self.result.rows.len()
-    }
-
-    fn column(&self, col_ix: usize, _cx: &App) -> &Column {
-        &self.columns[col_ix]
-    }
-
-    fn perform_sort(
-        &mut self,
-        col_ix: usize,
-        sort: ColumnSort,
-        _window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) {
-        let tab_id = self.tab_id;
-        let col_name = self
-            .result
-            .columns
-            .get(col_ix)
-            .map(|c| c.name.as_str())
-            .unwrap_or("?");
-
-        info!(
-            "perform_sort called: col_ix={}, col_name={}, sort={:?}",
-            col_ix, col_name, sort
-        );
-
-        match sort {
-            ColumnSort::Default => {
-                // gpui-component cycles: Default → Desc → Asc → Default
-                // So receiving Default means we just came FROM Ascending.
-                // If the column was already sorted ascending, cycling to "Default" (PK order)
-                // would be a no-op since PK order is also ascending. In that case, cycle to Desc.
-                let is_ascending = self.results_pane.read(cx).is_column_sorted_ascending(tab_id, col_ix);
-
-                if is_ascending {
-                    info!("Column already ascending, cycling to descending");
-                    self.results_pane.update(cx, |pane, cx| {
-                        pane.handle_sort_request(tab_id, col_ix, SortDirection::Descending, cx);
-                    });
-                } else {
-                    info!("Restoring to default order (PK)");
-                    self.results_pane.update(cx, |pane, cx| {
-                        pane.handle_sort_clear(tab_id, cx);
-                    });
-                }
-            }
-            ColumnSort::Ascending | ColumnSort::Descending => {
-                let direction = match sort {
-                    ColumnSort::Ascending => SortDirection::Ascending,
-                    ColumnSort::Descending => SortDirection::Descending,
-                    _ => unreachable!(),
-                };
-                info!("Sorting column {} {:?}", col_name, direction);
-                self.results_pane.update(cx, |pane, cx| {
-                    pane.handle_sort_request(tab_id, col_ix, direction, cx);
-                });
-            }
-        }
-    }
-
-    fn render_td(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
-        _window: &mut Window,
-        _cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let value = self
-            .result
-            .rows
-            .get(row_ix)
-            .and_then(|row| row.get(col_ix))
-            .map(|v| v.as_display_string_truncated(200))
-            .unwrap_or_default();
-
-        div()
-            .text_xs()
-            .overflow_hidden()
-            .text_ellipsis()
-            .whitespace_nowrap()
-            .child(value)
     }
 }

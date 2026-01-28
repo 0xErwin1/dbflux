@@ -15,6 +15,7 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         ui::theme::init(cx);
+        ui::components::data_table::init(cx);
         let app_state = cx.new(|_cx| AppState::new());
 
         let window_handle = cx
