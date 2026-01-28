@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{
-    Context, EventEmitter, FocusHandle, Focusable, Pixels, ScrollHandle, Size,
+    Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
     UniformListScrollHandle, px,
 };
 
@@ -212,7 +212,7 @@ impl DataTableState {
             self.select_cell(new_coord, cx);
         }
 
-        self.scroll_to_row(new_coord.row);
+        self.scroll_to_cell(new_coord.row, new_coord.col);
     }
 
     /// Move to an edge of the table.
@@ -240,7 +240,7 @@ impl DataTableState {
             self.select_cell(new_coord, cx);
         }
 
-        self.scroll_to_row(new_coord.row);
+        self.scroll_to_cell(new_coord.row, new_coord.col);
     }
 
     // --- Clipboard ---
@@ -302,6 +302,46 @@ impl DataTableState {
     pub fn scroll_to_row(&self, row: usize) {
         self.vertical_scroll_handle
             .scroll_to_item(row, gpui::ScrollStrategy::Center);
+    }
+
+    /// Scroll to ensure the given column is visible.
+    pub fn scroll_to_column(&self, col: usize) {
+        if col >= self.column_offsets.len() {
+            return;
+        }
+
+        let col_left = px(self.column_offsets[col]);
+        let col_right = px(*self.column_offsets.get(col + 1).unwrap_or(&self.column_offsets[col]));
+
+        let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
+        if viewport_width <= px(0.0) {
+            return;
+        }
+
+        let current_offset = self.horizontal_offset;
+        let visible_left = current_offset;
+        let visible_right = current_offset + viewport_width;
+
+        let new_offset = if col_left < visible_left {
+            col_left
+        } else if col_right > visible_right {
+            col_right - viewport_width
+        } else {
+            return;
+        };
+
+        let content_width = px(self.total_content_width());
+        let max_offset = (content_width - viewport_width).max(px(0.0));
+        let clamped = new_offset.clamp(px(0.0), max_offset);
+
+        self.horizontal_scroll_handle
+            .set_offset(Point::new(-clamped, px(0.0)));
+    }
+
+    /// Scroll to ensure the given cell is visible (both row and column).
+    pub fn scroll_to_cell(&self, row: usize, col: usize) {
+        self.scroll_to_row(row);
+        self.scroll_to_column(col);
     }
 }
 
