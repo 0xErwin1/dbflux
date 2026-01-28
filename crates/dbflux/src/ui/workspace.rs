@@ -209,6 +209,10 @@ impl Workspace {
             return ContextId::TextInput;
         }
 
+        if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {
+            return ContextId::TextInput;
+        }
+
         self.focus_target.to_context()
     }
 

@@ -5,15 +5,17 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    CodeGenScope, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, TaskKind, ViewInfo,
+    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, SchemaLoadingStrategy,
+    SchemaSnapshot, TableInfo, TaskKind, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{Icon, IconName};
+use gpui_component::{Icon, IconName, Sizable};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -24,6 +26,7 @@ pub enum SidebarEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TreeNodeKind {
+    ConnectionFolder,
     Profile,
     Database,
     Schema,
@@ -41,6 +44,7 @@ enum TreeNodeKind {
 impl TreeNodeKind {
     fn from_id(id: &str) -> Self {
         match id {
+            _ if id.starts_with("conn_folder_") => Self::ConnectionFolder,
             _ if id.starts_with("profile_") => Self::Profile,
             _ if id.starts_with("db_") => Self::Database,
             _ if id.starts_with("schema_") => Self::Schema,
@@ -59,12 +63,12 @@ impl TreeNodeKind {
     fn needs_click_handler(&self) -> bool {
         matches!(
             self,
-            Self::Profile | Self::Database | Self::Table | Self::View
+            Self::Profile | Self::Database | Self::Table | Self::View | Self::ConnectionFolder
         )
     }
 
     fn shows_pointer_cursor(&self) -> bool {
-        matches!(self, Self::Profile | Self::Database)
+        matches!(self, Self::Profile | Self::Database | Self::ConnectionFolder)
     }
 }
 
@@ -86,6 +90,12 @@ pub enum ContextMenuAction {
     OpenDatabase,
     CloseDatabase,
     Submenu(Vec<ContextMenuItem>),
+    // Folder actions
+    NewFolder,
+    NewConnection,
+    RenameFolder,
+    DeleteFolder,
+    MoveToFolder(Option<Uuid>),
 }
 
 pub struct ContextMenuState {
@@ -143,6 +153,14 @@ pub struct Sidebar {
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     _subscriptions: Vec<Subscription>,
+    /// ID currently being renamed (folder or profile)
+    editing_id: Option<Uuid>,
+    /// Type of item being renamed
+    editing_is_folder: bool,
+    /// Input state for rename
+    rename_input: Entity<InputState>,
+    /// Item ID pending rename (set by context menu, processed in render)
+    pending_rename_item: Option<String>,
 }
 
 struct PendingToast {
@@ -157,15 +175,29 @@ impl Sidebar {
         app_state: Entity<AppState>,
         editor: Entity<EditorPane>,
         results: Entity<ResultsPane>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
         let visible_entry_count = Self::count_visible_entries(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
 
+        let rename_input = cx.new(|cx| InputState::new(window, cx));
+
         let app_state_subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
             this.refresh_tree(cx);
+        });
+
+        let rename_subscription = cx.subscribe_in(&rename_input, window, |this, _, event: &InputEvent, _, cx| {
+            match event {
+                InputEvent::PressEnter { .. } => {
+                    this.commit_rename(cx);
+                }
+                InputEvent::Blur => {
+                    this.cancel_rename(cx);
+                }
+                _ => {}
+            }
         });
 
         Self {
@@ -181,7 +213,11 @@ impl Sidebar {
             context_menu: None,
             pending_action: None,
             active_databases: HashMap::new(),
-            _subscriptions: vec![app_state_subscription],
+            _subscriptions: vec![app_state_subscription, rename_subscription],
+            editing_id: None,
+            editing_is_folder: false,
+            rename_input,
+            pending_rename_item: None,
         }
     }
 
@@ -297,6 +333,17 @@ impl Sidebar {
             }
         }
 
+        // Sync folder collapsed state with AppState
+        if item_id.starts_with("conn_folder_") {
+            if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+                && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+            {
+                self.app_state.update(cx, |state, _cx| {
+                    state.set_folder_collapsed(folder_id, !expanded);
+                });
+            }
+        }
+
         self.expansion_overrides
             .insert(item_id.to_string(), expanded);
         self.rebuild_tree_with_overrides(cx);
@@ -356,6 +403,9 @@ impl Sidebar {
             TreeNodeKind::Database => {
                 self.handle_database_click(item_id, cx);
             }
+            TreeNodeKind::ConnectionFolder => {
+                self.toggle_item_expansion(item_id, cx);
+            }
             _ => {}
         }
     }
@@ -372,10 +422,11 @@ impl Sidebar {
         if click_count == 2 {
             self.execute_item(item_id, cx);
         } else {
-            // Single click on Profile or Database: also toggle expansion
-            // This keeps our expansion_overrides in sync with user intent
             let node_kind = TreeNodeKind::from_id(item_id);
-            if matches!(node_kind, TreeNodeKind::Profile | TreeNodeKind::Database) {
+            if matches!(
+                node_kind,
+                TreeNodeKind::Profile | TreeNodeKind::Database | TreeNodeKind::ConnectionFolder
+            ) {
                 self.toggle_item_expansion(item_id, cx);
             }
         }
@@ -897,9 +948,23 @@ impl Sidebar {
                     action: ContextMenuAction::Edit,
                 });
                 items.push(ContextMenuItem {
+                    label: "Rename".into(),
+                    action: ContextMenuAction::RenameFolder, // Reuse for profile rename
+                });
+                items.push(ContextMenuItem {
                     label: "Delete".into(),
                     action: ContextMenuAction::Delete,
                 });
+
+                // Add "Move to..." submenu with available folders
+                let move_to_items = self.build_move_to_submenu(item_id, cx);
+                if !move_to_items.is_empty() {
+                    items.push(ContextMenuItem {
+                        label: "Move to...".into(),
+                        action: ContextMenuAction::Submenu(move_to_items),
+                    });
+                }
+
                 items
             }
             TreeNodeKind::Database => {
@@ -921,8 +986,69 @@ impl Sidebar {
                     }]
                 }
             }
+            TreeNodeKind::ConnectionFolder => {
+                vec![
+                    ContextMenuItem {
+                        label: "New Connection".into(),
+                        action: ContextMenuAction::NewConnection,
+                    },
+                    ContextMenuItem {
+                        label: "New Folder".into(),
+                        action: ContextMenuAction::NewFolder,
+                    },
+                    ContextMenuItem {
+                        label: "Rename".into(),
+                        action: ContextMenuAction::RenameFolder,
+                    },
+                    ContextMenuItem {
+                        label: "Delete".into(),
+                        action: ContextMenuAction::DeleteFolder,
+                    },
+                ]
+            }
             _ => vec![],
         }
+    }
+
+    /// Builds the "Move to..." submenu items for a profile.
+    fn build_move_to_submenu(&self, item_id: &str, cx: &App) -> Vec<ContextMenuItem> {
+        let state = self.app_state.read(cx);
+        let mut items = Vec::new();
+
+        // Get current parent of this profile
+        let current_parent = if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+        {
+            state
+                .connection_tree
+                .find_by_profile(profile_id)
+                .and_then(|node| node.parent_id)
+        } else {
+            None
+        };
+
+        // Add "Root" option if not already at root
+        if current_parent.is_some() {
+            items.push(ContextMenuItem {
+                label: "Root".into(),
+                action: ContextMenuAction::MoveToFolder(None),
+            });
+        }
+
+        // Add all folders
+        for folder in state.connection_tree.folders() {
+            // Skip if this is the current parent
+            if Some(folder.id) == current_parent {
+                continue;
+            }
+
+            items.push(ContextMenuItem {
+                label: folder.name.clone(),
+                action: ContextMenuAction::MoveToFolder(Some(folder.id)),
+            });
+        }
+
+        items
     }
 
     fn is_database_schema_loaded(&self, item_id: &str, cx: &App) -> bool {
@@ -1067,6 +1193,21 @@ impl Sidebar {
             }
             ContextMenuAction::CloseDatabase => {
                 self.close_database(&item_id, cx);
+            }
+            ContextMenuAction::NewFolder => {
+                self.create_folder_from_context(&item_id, cx);
+            }
+            ContextMenuAction::NewConnection => {
+                self.create_connection_in_folder(&item_id, cx);
+            }
+            ContextMenuAction::RenameFolder => {
+                self.pending_rename_item = Some(item_id.clone());
+            }
+            ContextMenuAction::DeleteFolder => {
+                self.delete_folder_from_context(&item_id, cx);
+            }
+            ContextMenuAction::MoveToFolder(target_folder_id) => {
+                self.move_profile_to_folder(&item_id, target_folder_id, cx);
             }
         }
 
@@ -1247,6 +1388,168 @@ impl Sidebar {
         self.set_expanded(item_id, false, cx);
 
         self.refresh_tree(cx);
+    }
+
+    /// Creates a new folder at the root level.
+    pub fn create_root_folder(&mut self, cx: &mut Context<Self>) {
+        self.app_state.update(cx, |state, cx| {
+            state.create_folder("New Folder", None);
+            cx.emit(AppStateChanged);
+        });
+
+        self.refresh_tree(cx);
+    }
+
+    fn create_folder_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        // Determine parent folder ID from item_id
+        let parent_id = if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") {
+            Uuid::parse_str(folder_id_str).ok()
+        } else {
+            None
+        };
+
+        // Create folder with default name
+        self.app_state.update(cx, |state, cx| {
+            state.create_folder("New Folder", parent_id);
+            cx.emit(AppStateChanged);
+        });
+
+        self.refresh_tree(cx);
+    }
+
+    fn create_connection_in_folder(&mut self, _item_id: &str, cx: &mut Context<Self>) {
+        // TODO: Open connection manager window with folder context
+        // For now, show a toast indicating this feature is pending
+        // The connection manager is opened via the main workspace, not directly from sidebar
+        self.pending_toast = Some(PendingToast {
+            message: "Use the + button in the sidebar header to create a new connection".into(),
+            is_error: false,
+        });
+        cx.notify();
+    }
+
+    fn start_rename(&mut self, item_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Handle folder rename
+        if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        {
+            let current_name = self
+                .app_state
+                .read(cx)
+                .connection_tree
+                .find_by_id(folder_id)
+                .map(|f| f.name.clone())
+                .unwrap_or_default();
+
+            self.editing_id = Some(folder_id);
+            self.editing_is_folder = true;
+            self.rename_input.update(cx, |input, cx| {
+                input.set_value(&current_name, window, cx);
+                input.focus(window, cx);
+            });
+            cx.notify();
+            return;
+        }
+
+        // Handle profile rename
+        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+        {
+            let current_name = self
+                .app_state
+                .read(cx)
+                .profiles
+                .iter()
+                .find(|p| p.id == profile_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+
+            self.editing_id = Some(profile_id);
+            self.editing_is_folder = false;
+            self.rename_input.update(cx, |input, cx| {
+                input.set_value(&current_name, window, cx);
+                input.focus(window, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    fn delete_folder_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        {
+            self.app_state.update(cx, |state, cx| {
+                state.delete_folder(folder_id);
+                cx.emit(AppStateChanged);
+            });
+
+            self.refresh_tree(cx);
+        }
+    }
+
+    fn move_profile_to_folder(
+        &mut self,
+        item_id: &str,
+        target_folder_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+        {
+            self.app_state.update(cx, |state, cx| {
+                // Find the tree node for this profile
+                if let Some(node) = state.connection_tree.find_by_profile(profile_id) {
+                    let node_id = node.id;
+                    state.move_tree_node(node_id, target_folder_id);
+                    cx.emit(AppStateChanged);
+                }
+            });
+
+            self.refresh_tree(cx);
+        }
+    }
+
+    /// Commits the rename operation (folder or profile).
+    pub fn commit_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.editing_id.take() else {
+            return;
+        };
+
+        let new_name = self.rename_input.read(cx).value().to_string();
+
+        if new_name.trim().is_empty() {
+            self.refresh_tree(cx);
+            return;
+        }
+
+        let is_folder = self.editing_is_folder;
+
+        self.app_state.update(cx, |state, cx| {
+            if is_folder {
+                if state.rename_folder(id, &new_name) {
+                    cx.emit(AppStateChanged);
+                }
+            } else {
+                if let Some(profile) = state.profiles.iter_mut().find(|p| p.id == id) {
+                    profile.name = new_name;
+                    state.save_profiles();
+                    cx.emit(AppStateChanged);
+                }
+            }
+        });
+
+        self.refresh_tree(cx);
+    }
+
+    /// Cancels the rename operation.
+    pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
+        self.editing_id = None;
+        cx.notify();
+    }
+
+    /// Returns true if currently renaming an item.
+    pub fn is_renaming(&self) -> bool {
+        self.editing_id.is_some()
     }
 
     fn handle_lazy_database_click(
@@ -1542,90 +1845,130 @@ impl Sidebar {
     }
 
     fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
+        let root_nodes = state.connection_tree.root_nodes();
+        Self::build_tree_nodes_recursive(&root_nodes, state)
+    }
+
+    fn build_tree_nodes_recursive(
+        nodes: &[&ConnectionTreeNode],
+        state: &AppState,
+    ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
-        for profile in &state.profiles {
-            let profile_id = profile.id;
-            let is_connected = state.connections.contains_key(&profile_id);
-            let is_active = state.active_connection_id == Some(profile_id);
-            let is_connecting = state.is_operation_pending(profile_id, None);
+        for node in nodes {
+            match node.kind {
+                ConnectionTreeNodeKind::Folder => {
+                    let children_nodes = state.connection_tree.children_of(node.id);
+                    let children_refs: Vec<&ConnectionTreeNode> =
+                        children_nodes.into_iter().collect();
+                    let children = Self::build_tree_nodes_recursive(&children_refs, state);
 
-            let profile_label = if is_connecting {
-                format!("{} (connecting...)", profile.name)
-            } else {
-                profile.name.clone()
-            };
+                    let folder_item = TreeItem::new(
+                        format!("conn_folder_{}", node.id),
+                        node.name.clone(),
+                    )
+                    .expanded(!node.collapsed)
+                    .children(children);
 
-            let mut profile_item = TreeItem::new(format!("profile_{}", profile_id), profile_label);
-
-            if is_connected
-                && let Some(connected) = state.connections.get(&profile_id)
-                && let Some(ref schema) = connected.schema
-            {
-                let mut profile_children = Vec::new();
-                let strategy = connected.connection.schema_loading_strategy();
-                let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
-
-                if !schema.databases.is_empty() {
-                    for db in &schema.databases {
-                        let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
-                        let is_active_db = connected.active_database.as_deref() == Some(&db.name);
-
-                        let db_children = if uses_lazy_loading {
-                            if let Some(db_schema) = connected.database_schemas.get(&db.name) {
-                                Self::build_db_schema_content(
-                                    profile_id,
-                                    db_schema,
-                                    &connected.table_details,
-                                )
-                            } else if is_pending {
-                                vec![TreeItem::new(
-                                    format!("loading_{}_{}", profile_id, db.name),
-                                    "Loading...".to_string(),
-                                )]
-                            } else {
-                                Vec::new()
-                            }
-                        } else if db.is_current {
-                            Self::build_schema_children(
-                                profile_id,
-                                schema,
-                                &connected.table_details,
-                            )
-                        } else {
-                            Vec::new()
-                        };
-
-                        let db_label = if is_pending {
-                            format!("{} (loading...)", db.name)
-                        } else {
-                            db.name.clone()
-                        };
-
-                        let is_expanded = if uses_lazy_loading {
-                            is_active_db
-                        } else {
-                            db.is_current
-                        };
-
-                        profile_children.push(
-                            TreeItem::new(format!("db_{}_{}", profile_id, db.name), db_label)
-                                .expanded(is_expanded)
-                                .children(db_children),
-                        );
-                    }
-                } else {
-                    profile_children =
-                        Self::build_schema_children(profile_id, schema, &connected.table_details);
+                    items.push(folder_item);
                 }
 
-                profile_item = profile_item.expanded(is_active).children(profile_children);
+                ConnectionTreeNodeKind::ConnectionRef => {
+                    if let Some(profile_id) = node.profile_id {
+                        if let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id) {
+                            let profile_item = Self::build_profile_item(profile, state);
+                            items.push(profile_item);
+                        }
+                    }
+                }
             }
-
-            items.push(profile_item);
         }
 
         items
+    }
+
+    fn build_profile_item(
+        profile: &dbflux_core::ConnectionProfile,
+        state: &AppState,
+    ) -> TreeItem {
+        let profile_id = profile.id;
+        let is_connected = state.connections.contains_key(&profile_id);
+        let is_active = state.active_connection_id == Some(profile_id);
+        let is_connecting = state.is_operation_pending(profile_id, None);
+
+        let profile_label = if is_connecting {
+            format!("{} (connecting...)", profile.name)
+        } else {
+            profile.name.clone()
+        };
+
+        let mut profile_item = TreeItem::new(format!("profile_{}", profile_id), profile_label);
+
+        if is_connected
+            && let Some(connected) = state.connections.get(&profile_id)
+            && let Some(ref schema) = connected.schema
+        {
+            let mut profile_children = Vec::new();
+            let strategy = connected.connection.schema_loading_strategy();
+            let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
+
+            if !schema.databases.is_empty() {
+                for db in &schema.databases {
+                    let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
+                    let is_active_db = connected.active_database.as_deref() == Some(&db.name);
+
+                    let db_children = if uses_lazy_loading {
+                        if let Some(db_schema) = connected.database_schemas.get(&db.name) {
+                            Self::build_db_schema_content(
+                                profile_id,
+                                db_schema,
+                                &connected.table_details,
+                            )
+                        } else if is_pending {
+                            vec![TreeItem::new(
+                                format!("loading_{}_{}", profile_id, db.name),
+                                "Loading...".to_string(),
+                            )]
+                        } else {
+                            Vec::new()
+                        }
+                    } else if db.is_current {
+                        Self::build_schema_children(
+                            profile_id,
+                            schema,
+                            &connected.table_details,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+
+                    let db_label = if is_pending {
+                        format!("{} (loading...)", db.name)
+                    } else {
+                        db.name.clone()
+                    };
+
+                    let is_expanded = if uses_lazy_loading {
+                        is_active_db
+                    } else {
+                        db.is_current
+                    };
+
+                    profile_children.push(
+                        TreeItem::new(format!("db_{}_{}", profile_id, db.name), db_label)
+                            .expanded(is_expanded)
+                            .children(db_children),
+                    );
+                }
+            } else {
+                profile_children =
+                    Self::build_schema_children(profile_id, schema, &connected.table_details);
+            }
+
+            profile_item = profile_item.expanded(is_active).children(profile_children);
+        }
+
+        profile_item
     }
 
     fn count_visible_entries(items: &[TreeItem]) -> usize {
@@ -2134,6 +2477,10 @@ impl Render for Sidebar {
             }
         }
 
+        if let Some(item_id) = self.pending_rename_item.take() {
+            self.start_rename(&item_id, window, cx);
+        }
+
         let theme = cx.theme();
         let app_state = self.app_state.clone();
         let state = self.app_state.read(cx);
@@ -2184,43 +2531,133 @@ impl Render for Sidebar {
                     )
                     .child(
                         div()
-                            .id("add-connection")
-                            .w(Heights::ICON_LG)
-                            .h(Heights::ICON_LG)
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .rounded(Radii::SM)
-                            .text_size(FontSizes::LG)
-                            .text_color(theme.muted_foreground)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                            .on_click(move |_, _, cx| {
-                                let app_state = app_state.clone();
-                                cx.open_window(
-                                    WindowOptions {
-                                        titlebar: Some(TitlebarOptions {
-                                            title: Some("Connection Manager".into()),
-                                            ..Default::default()
-                                        }),
-                                        window_bounds: Some(WindowBounds::Windowed(
-                                            Bounds::centered(None, size(px(600.0), px(550.0)), cx),
-                                        )),
-                                        kind: WindowKind::Floating,
-                                        ..Default::default()
-                                    },
-                                    |window, cx| {
-                                        let manager = cx.new(|cx| {
-                                            ConnectionManagerWindow::new(app_state, window, cx)
+                            .gap(Spacing::XS)
+                            .child({
+                                let sidebar_for_folder = sidebar_entity.clone();
+                                div()
+                                    .id("add-folder")
+                                    .w(Heights::ICON_LG)
+                                    .h(Heights::ICON_LG)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.muted_foreground)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                                    .on_click(move |_, _, cx| {
+                                        sidebar_for_folder.update(cx, |this, cx| {
+                                            this.create_root_folder(cx);
                                         });
-                                        cx.new(|cx| Root::new(manager, window, cx))
-                                    },
-                                )
-                                .ok();
+                                    })
+                                    .child("▢")
                             })
-                            .child("+"),
+                            .child(
+                                div()
+                                    .id("add-connection")
+                                    .w(Heights::ICON_LG)
+                                    .h(Heights::ICON_LG)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::LG)
+                                    .text_color(theme.muted_foreground)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                                    .on_click(move |_, _, cx| {
+                                        let app_state = app_state.clone();
+                                        cx.open_window(
+                                            WindowOptions {
+                                                titlebar: Some(TitlebarOptions {
+                                                    title: Some("Connection Manager".into()),
+                                                    ..Default::default()
+                                                }),
+                                                window_bounds: Some(WindowBounds::Windowed(
+                                                    Bounds::centered(
+                                                        None,
+                                                        size(px(600.0), px(550.0)),
+                                                        cx,
+                                                    ),
+                                                )),
+                                                kind: WindowKind::Floating,
+                                                ..Default::default()
+                                            },
+                                            |window, cx| {
+                                                let manager = cx.new(|cx| {
+                                                    ConnectionManagerWindow::new(
+                                                        app_state, window, cx,
+                                                    )
+                                                });
+                                                cx.new(|cx| Root::new(manager, window, cx))
+                                            },
+                                        )
+                                        .ok();
+                                    })
+                                    .child("+"),
+                            ),
                     ),
             )
+            .when(self.editing_id.is_some(), |el| {
+                let rename_input = self.rename_input.clone();
+                let sidebar_confirm = sidebar_entity.clone();
+                let sidebar_cancel = sidebar_entity.clone();
+
+                el.child(
+                    div()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .bg(theme.sidebar)
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .child(
+                            div().flex_1().child(
+                                Input::new(&rename_input)
+                                    .xsmall()
+                                    .appearance(false)
+                                    .cleanable(false),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .id("rename-confirm")
+                                .px(Spacing::XS)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(color_green)
+                                .hover(|d| d.bg(theme.secondary))
+                                .on_click(move |_, _, cx| {
+                                    sidebar_confirm.update(cx, |this, cx| {
+                                        this.commit_rename(cx);
+                                    });
+                                })
+                                .child("✓"),
+                        )
+                        .child(
+                            div()
+                                .id("rename-cancel")
+                                .px(Spacing::XS)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .hover(|d| d.bg(theme.secondary))
+                                .on_click(move |_, _, cx| {
+                                    sidebar_cancel.update(cx, |this, cx| {
+                                        this.cancel_rename(cx);
+                                    });
+                                })
+                                .child("✕"),
+                        ),
+                )
+            })
             .child(div().flex_1().overflow_hidden().child(tree(
                 &self.tree_state,
                 move |ix, entry, selected, _window, cx| {
@@ -2268,14 +2705,15 @@ impl Render for Sidebar {
                     };
 
                     let theme = cx.theme();
-                    let indent = px(depth as f32 * 16.0);
+                    let indent_per_level = 12.0_f32;
                     let is_folder = entry.is_folder();
                     let is_expanded = entry.is_expanded();
 
                     let needs_chevron = is_folder
                         && matches!(
                             node_kind,
-                            TreeNodeKind::Table
+                            TreeNodeKind::ConnectionFolder
+                                | TreeNodeKind::Table
                                 | TreeNodeKind::View
                                 | TreeNodeKind::Schema
                                 | TreeNodeKind::TablesFolder
@@ -2292,6 +2730,7 @@ impl Render for Sidebar {
                     };
 
                     let (icon, icon_color): (&str, Hsla) = match node_kind {
+                        TreeNodeKind::ConnectionFolder => ("▢", theme.muted_foreground),
                         TreeNodeKind::Profile if is_connected => ("●", color_green),
                         TreeNodeKind::Profile => ("○", theme.muted_foreground),
                         TreeNodeKind::Database => ("⬡", color_orange),
@@ -2308,6 +2747,7 @@ impl Render for Sidebar {
                     };
 
                     let label_color: Hsla = match node_kind {
+                        TreeNodeKind::ConnectionFolder => theme.foreground,
                         TreeNodeKind::Profile => theme.foreground,
                         TreeNodeKind::Database => color_orange,
                         TreeNodeKind::Schema => color_schema,
@@ -2332,14 +2772,30 @@ impl Render for Sidebar {
                     let sidebar_for_chevron = sidebar_entity.clone();
                     let item_id_for_chevron = item_id.clone();
 
+                    let guide_lines: Vec<_> = (0..depth)
+                        .map(|_| {
+                            div()
+                                .w(px(indent_per_level))
+                                .h_full()
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .w(px(1.0))
+                                        .h_full()
+                                        .bg(theme.border),
+                                )
+                        })
+                        .collect();
+
                     let mut list_item = ListItem::new(ix).selected(selected).py(Spacing::XS).child(
                         div()
                             .id(SharedString::from(format!("row-{}", item_id)))
                             .w_full()
                             .flex()
                             .items_center()
-                            .gap(Spacing::SM)
-                            .pl(indent)
+                            .gap(Spacing::XS)
+                            .children(guide_lines)
                             .when(is_table_or_view, |el| {
                                 let sidebar_md = sidebar_for_mousedown.clone();
                                 let id_md = item_id_for_mousedown.clone();
@@ -2444,9 +2900,6 @@ impl Render for Sidebar {
                         });
                     }
 
-                    // Handle expansion for folder items that don't have special click handlers
-                    // (Schema, TablesFolder, ViewsFolder, ColumnsFolder, IndexesFolder)
-                    // This ensures our expansion_overrides stays in sync when users click to expand/collapse
                     let is_other_folder = is_folder
                         && matches!(
                             node_kind,
@@ -2467,7 +2920,10 @@ impl Render for Sidebar {
                         });
                     }
 
-                    if node_kind == TreeNodeKind::Profile {
+                    if matches!(
+                        node_kind,
+                        TreeNodeKind::Profile | TreeNodeKind::ConnectionFolder
+                    ) {
                         let sidebar_for_menu = sidebar_entity.clone();
                         let item_id_for_menu = item_id.clone();
                         let hover_bg = theme.secondary;

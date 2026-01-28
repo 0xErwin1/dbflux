@@ -1,8 +1,8 @@
 use dbflux_core::{
-    CancelToken, Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, DbSchemaInfo,
-    HistoryEntry, HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot,
-    SecretStore, SshTunnelProfile, SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager,
-    TaskSnapshot, create_secret_store,
+    CancelToken, Connection, ConnectionProfile, ConnectionTree, ConnectionTreeNode,
+    ConnectionTreeStore, DbConfig, DbDriver, DbKind, DbSchemaInfo, HistoryEntry, HistoryStore,
+    ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot, SecretStore, SshTunnelProfile,
+    SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -98,6 +98,10 @@ pub struct AppState {
     pub dangerous_query_suppressions: DangerousQuerySuppressions,
 
     pub settings_window: Option<WindowHandle<Root>>,
+
+    /// Hierarchical folder organization for connection profiles.
+    pub connection_tree: ConnectionTree,
+    connection_tree_store: Option<ConnectionTreeStore>,
 }
 
 impl AppState {
@@ -177,6 +181,28 @@ impl AppState {
             }
         };
 
+        let (connection_tree_store, mut connection_tree) = match ConnectionTreeStore::new() {
+            Ok(store) => {
+                let tree = store.load().unwrap_or_else(|e| {
+                    error!("Failed to load connection tree: {:?}", e);
+                    ConnectionTree::new()
+                });
+                info!(
+                    "Loaded connection tree with {} nodes",
+                    tree.nodes.len()
+                );
+                (Some(store), tree)
+            }
+            Err(e) => {
+                error!("Failed to create connection tree store: {:?}", e);
+                (None, ConnectionTree::new())
+            }
+        };
+
+        // Sync tree with profiles to handle orphaned nodes and new profiles
+        let profile_ids: Vec<Uuid> = profiles.iter().map(|p| p.id).collect();
+        connection_tree.sync_with_profiles(&profile_ids);
+
         Self {
             drivers,
             profiles,
@@ -193,6 +219,8 @@ impl AppState {
             pending_saved_query_warning,
             dangerous_query_suppressions: DangerousQuerySuppressions::default(),
             settings_window: None,
+            connection_tree,
+            connection_tree_store,
         }
     }
 
@@ -342,8 +370,17 @@ impl AppState {
     }
 
     pub fn add_profile(&mut self, profile: ConnectionProfile) {
+        let profile_id = profile.id;
         self.profiles.push(profile);
         self.save_profiles();
+
+        // Add to connection tree if not already present
+        if self.connection_tree.find_by_profile(profile_id).is_none() {
+            let sort_index = self.connection_tree.next_sort_index(None);
+            let node = ConnectionTreeNode::new_connection_ref(profile_id, None, sort_index);
+            self.connection_tree.add_node(node);
+            self.save_connection_tree();
+        }
     }
 
     pub fn remove_profile(&mut self, idx: usize) -> Option<ConnectionProfile> {
@@ -352,6 +389,14 @@ impl AppState {
             self.disconnect(removed.id);
             self.delete_password(&removed);
             self.save_profiles();
+
+            // Remove from connection tree
+            if let Some(node) = self.connection_tree.find_by_profile(removed.id) {
+                let node_id = node.id;
+                self.connection_tree.remove_node(node_id);
+                self.save_connection_tree();
+            }
+
             Some(removed)
         } else {
             None
@@ -376,6 +421,88 @@ impl AppState {
         } else {
             info!("Saved {} profiles to disk", self.profiles.len());
         }
+    }
+
+    pub fn save_connection_tree(&self) {
+        let Some(ref store) = self.connection_tree_store else {
+            log::warn!("Cannot save connection tree: store not available");
+            return;
+        };
+
+        if let Err(e) = store.save(&self.connection_tree) {
+            error!("Failed to save connection tree: {:?}", e);
+        } else {
+            info!(
+                "Saved connection tree with {} nodes",
+                self.connection_tree.nodes.len()
+            );
+        }
+    }
+
+    /// Creates a new folder in the connection tree.
+    ///
+    /// Returns the ID of the newly created folder.
+    pub fn create_folder(&mut self, name: impl Into<String>, parent_id: Option<Uuid>) -> Uuid {
+        let sort_index = self.connection_tree.next_sort_index(parent_id);
+        let folder = ConnectionTreeNode::new_folder(name, parent_id, sort_index);
+        let folder_id = folder.id;
+        self.connection_tree.add_node(folder);
+        self.save_connection_tree();
+        folder_id
+    }
+
+    /// Renames a folder in the connection tree.
+    ///
+    /// Returns `true` if the folder was found and renamed.
+    pub fn rename_folder(&mut self, folder_id: Uuid, new_name: impl Into<String>) -> bool {
+        if self.connection_tree.rename_folder(folder_id, new_name) {
+            self.save_connection_tree();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Deletes a folder, moving its children to the folder's parent (or root).
+    ///
+    /// Returns the IDs of children that were moved.
+    pub fn delete_folder(&mut self, folder_id: Uuid) -> Vec<Uuid> {
+        let moved = self
+            .connection_tree
+            .delete_folder_and_reparent_children(folder_id);
+        if !moved.is_empty() || self.connection_tree.find_by_id(folder_id).is_none() {
+            self.save_connection_tree();
+        }
+        moved
+    }
+
+    /// Moves a node (folder or connection) to a new parent.
+    ///
+    /// Returns `true` if the move was successful, `false` if it would create a cycle.
+    pub fn move_tree_node(&mut self, node_id: Uuid, new_parent_id: Option<Uuid>) -> bool {
+        if self.connection_tree.move_node(node_id, new_parent_id) {
+            self.save_connection_tree();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Toggles the collapsed state of a folder.
+    ///
+    /// Returns the new collapsed state, or `None` if the folder wasn't found.
+    pub fn toggle_folder_collapsed(&mut self, folder_id: Uuid) -> Option<bool> {
+        let result = self.connection_tree.toggle_folder_collapsed(folder_id);
+        if result.is_some() {
+            self.save_connection_tree();
+        }
+        result
+    }
+
+    /// Sets the collapsed state of a folder.
+    pub fn set_folder_collapsed(&mut self, folder_id: Uuid, collapsed: bool) {
+        self.connection_tree.set_folder_collapsed(folder_id, collapsed);
+        self.save_connection_tree();
     }
 
     pub fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
