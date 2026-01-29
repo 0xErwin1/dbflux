@@ -10,25 +10,28 @@ on:
         description: 'Release version (e.g., v0.1.0)'
         required: true
         type: string
+      sign:
+        description: 'Sign artifacts (GPG)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runs_on }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            name: linux-amd64
-            use_cross: false
-          - target: aarch64-unknown-linux-gnu
-            name: linux-arm64
-            use_cross: true
+          - name: linux-amd64
+            runs_on: ubuntu-latest
+          - name: linux-arm64
+            runs_on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout repository
@@ -37,7 +40,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          components: rust-src
 
       - name: Install system dependencies
         run: |
@@ -49,60 +52,22 @@ jobs:
             libxkbcommon-dev \
             libxkbcommon-x11-dev
 
-      - name: Install cross-compilation tools
-        if: matrix.use_cross
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross
-          cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0-rust"
-          shared-key: ${{ matrix.target }}
+          shared-key: ${{ matrix.name }}
           cache-targets: true
           cache-on-failure: true
 
       - name: Compute build features
         run: |
           FEATURES="sqlite,postgres,mysql"
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            FEATURES="$FEATURES,vendored-openssl"
-          fi
           echo "FEATURES=$FEATURES" >> $GITHUB_ENV
-
-      - name: Preflight vendored OpenSSL (ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          set -euo pipefail
-          cargo tree -p dbflux --target ${{ matrix.target }} --features "$FEATURES" -e features > cargo-tree-features.txt
-          grep -E "openssl-sys v" cargo-tree-features.txt
-          grep -E "openssl-src v" cargo-tree-features.txt
 
       - name: Build DBFlux
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} --features "$FEATURES"
-          else
-            cargo build --release --target ${{ matrix.target }} --features "$FEATURES"
-          fi
-
-      - name: Locate binary
-        run: |
-          set -euo pipefail
-          BIN="dbflux"
-          if [ -f "target/${{ matrix.target }}/release/$BIN" ]; then
-            echo "BIN_PATH=target/${{ matrix.target }}/release/$BIN" >> $GITHUB_ENV
-          elif [ -f "target/release/$BIN" ]; then
-            echo "BIN_PATH=target/release/$BIN" >> $GITHUB_ENV
-          else
-            echo "Could not find built binary"
-            find target -maxdepth 4 -type f -name dbflux -print
-            exit 1
-          fi
+          cargo build --release --features "$FEATURES"
 
       - name: Create package
         run: |
@@ -112,7 +77,7 @@ jobs:
           mkdir -p pkg/scripts
 
           # Copy binary
-          cp "$BIN_PATH" pkg/dbflux
+          cp target/release/dbflux pkg/dbflux
           chmod +x pkg/dbflux
 
           # Copy resources
@@ -134,17 +99,19 @@ jobs:
         run: sha256sum dbflux-${{ matrix.name }}.tar.gz > dbflux-${{ matrix.name }}.tar.gz.sha256
 
       - name: Import GPG key
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign artifacts
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         run: |
           gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz
           gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz.sha256
 
-      - name: Upload artifacts
+      - name: Upload artifacts (unsigned)
         if: env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -152,6 +119,14 @@ jobs:
           path: |
             dbflux-${{ matrix.name }}.tar.gz
             dbflux-${{ matrix.name }}.tar.gz.sha256
+          retention-days: 90
+
+      - name: Upload artifacts (signatures)
+        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbflux-${{ matrix.name }}-signatures
+          path: |
             dbflux-${{ matrix.name }}.tar.gz.asc
             dbflux-${{ matrix.name }}.tar.gz.sha256.asc
           retention-days: 90
@@ -160,7 +135,14 @@ jobs:
         if: env.ACT == 'true'
         run: |
           mkdir -p /tmp/artifacts/dbflux-${{ matrix.name }}
-          cp dbflux-${{ matrix.name }}.tar.gz* /tmp/artifacts/dbflux-${{ matrix.name }}/
+          cp dbflux-${{ matrix.name }}.tar.gz /tmp/artifacts/dbflux-${{ matrix.name }}/
+          cp dbflux-${{ matrix.name }}.tar.gz.sha256 /tmp/artifacts/dbflux-${{ matrix.name }}/
+          if [ -f dbflux-${{ matrix.name }}.tar.gz.asc ]; then
+            cp dbflux-${{ matrix.name }}.tar.gz.asc /tmp/artifacts/dbflux-${{ matrix.name }}/
+          fi
+          if [ -f dbflux-${{ matrix.name }}.tar.gz.sha256.asc ]; then
+            cp dbflux-${{ matrix.name }}.tar.gz.sha256.asc /tmp/artifacts/dbflux-${{ matrix.name }}/
+          fi
 
   release:
     name: Create Release
@@ -200,6 +182,14 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Ensure gh CLI
+        if: env.ACT != 'true'
+        run: |
+          if ! gh --version; then
+            sudo apt-get update
+            sudo apt-get install -y gh
+          fi
 
       - name: Generate release notes
         id: notes
@@ -252,8 +242,7 @@ jobs:
             echo "Initial release or no previous tag found." >> release_body.md
           fi
 
-      - name: Create release
-        if: env.ACT != 'true'
+      - name: Create release (unsigned)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
@@ -262,8 +251,18 @@ jobs:
           files: |
             artifacts/*/dbflux-*.tar.gz
             artifacts/*/dbflux-*.tar.gz.sha256
-            artifacts/*/dbflux-*.tar.gz.asc
-            artifacts/*/dbflux-*.tar.gz.sha256.asc
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload signatures to release
+        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          files: |
+            artifacts/*/*.asc
           draft: true
           prerelease: false
         env:
