@@ -65,12 +65,28 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
+      - name: Compute build features
+        run: |
+          FEATURES="sqlite,postgres,mysql"
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            FEATURES="$FEATURES,vendored-openssl"
+          fi
+          echo "FEATURES=$FEATURES" >> $GITHUB_ENV
+
+      - name: Preflight vendored OpenSSL (ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          cargo tree -p dbflux --target ${{ matrix.target }} --features "$FEATURES" -e features > cargo-tree-features.txt
+          grep -E "openssl-sys v" cargo-tree-features.txt
+          grep -E "openssl-src v" cargo-tree-features.txt
+
       - name: Build DBFlux
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} --features sqlite,postgres,mysql
+            cross build --release --target ${{ matrix.target }} --features "$FEATURES"
           else
-            cargo build --release --target ${{ matrix.target }} --features sqlite,postgres,mysql
+            cargo build --release --target ${{ matrix.target }} --features "$FEATURES"
           fi
 
       - name: Create package
