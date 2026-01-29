@@ -2,50 +2,67 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [0.2.0] - 2026-01-29
+## [0.2.0] – 2026-01-30
 
 ### Added
 
 #### MySQL Support
-- MySQL/MariaDB driver with full query execution and schema introspection
-- Dual connection architecture (sync for schema, async for queries)
-- Dynamic connection forms that adapt to driver requirements
+
+* MySQL/MariaDB driver with full query execution and schema introspection
+* Dual connection architecture (sync for schema, async for queries)
+* Dynamic connection forms that adapt to driver-specific requirements
 
 #### Sidebar Enhancements
-- Folder organization for connection profiles
-- Drag and drop for connections and folders
-- Multi-selection support (Shift+click, Ctrl+click)
-- Keyboard shortcuts for rename, delete, and new folder
+
+* Folder-based organization for connection profiles
+* Drag and drop support for connections and folders
+* Multi-selection (Shift+click, Ctrl+click)
+* Keyboard shortcuts for rename, delete, and new folder actions
 
 #### Query Safety
-- Confirmation dialogs for dangerous SQL queries (DELETE, DROP, TRUNCATE without WHERE)
-- Driver-delegated SQL generation from context menu (SELECT, INSERT, UPDATE, DELETE)
+
+* Confirmation dialogs for dangerous SQL queries (DELETE, DROP, TRUNCATE without WHERE)
+* Driver-delegated SQL generation from context menu (SELECT, INSERT, UPDATE, DELETE)
 
 #### Results Table
-- Column sorting (click headers to sort ASC/DESC)
-- Custom DataTable component with virtualized rendering
+
+* Column sorting via header clicks (ASC/DESC)
+* Custom DataTable component with virtualized rendering
+
+#### Icons
+
+* Centralized SVG icon system with `AppIcon` enum and compile-time embedding
+* Icons across the editor toolbar (History, Save), Run/Cancel buttons, and tabs
+* Sidebar tree icons (database brands, folders, tables, views, columns, indexes)
+* Icons in context menus, results footer, pagination, and export actions
+* Icons in connection manager (tabs, form headers, buttons)
+* Icons in settings sidebar and About section
+* Icons in toast notifications (success, info, warning, error)
+* Database brand icons for PostgreSQL, MySQL, MariaDB, and SQLite
+* Third-party licenses listed in About (Lucide ISC, Simple Icons CC0)
 
 #### Packaging & Distribution
-- Nix flake with development shell
-- Arch Linux PKGBUILD
-- Linux installer script (`curl | bash` support)
-- GPG-signed release artifacts
-- GitHub Actions release workflow
+
+* Nix flake with development shell
+* Arch Linux PKGBUILD
+* Linux installer script (`curl | bash`)
+* GPG-signed release artifacts
+* GitHub Actions–based release workflow
 
 ### Changed
 
-- Lazy loading for table details in sidebar (improves performance on large schemas)
-- Schema loading deferred until node expansion
-- Active databases now visually highlighted in sidebar
+* Lazy loading of table details in the sidebar (improves performance on large schemas)
+* Schema loading deferred until node expansion
+* Active databases are now visually highlighted in the sidebar
 
 ### Performance
 
-- Eliminated hover-induced re-renders in data table
-- Fixed subscription leaks in table component
+* Eliminated hover-induced re-renders in the data table
+* Fixed subscription leaks in the table component
 
 ### Fixed
 
-- Horizontal auto-scroll when navigating data table with keyboard
+* Horizontal auto-scroll when navigating the data table with the keyboard
 
 ## [0.1.2] - 2025-01-25
 
