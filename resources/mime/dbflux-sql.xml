@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-sql">
+    <comment>SQL Database Query</comment>
+    <glob pattern="*.sql"/>
+    <icon name="dbflux"/>
+  </mime-type>
+  <mime-type type="application/sql">
+    <comment>SQL Database Query</comment>
+    <glob pattern="*.sql"/>
+    <icon name="dbflux"/>
+  </mime-type>
+</mime-info>
