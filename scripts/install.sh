@@ -506,9 +506,7 @@ chmod_safe() {
 # Check for existing installation
 check_existing() {
     if [[ -x "$PREFIX/bin/$APP_NAME" ]]; then
-        local existing_version
-        existing_version=$("$PREFIX/bin/$APP_NAME" --version 2>/dev/null || echo "unknown")
-        warn "DBFlux is already installed at $PREFIX/bin/$APP_NAME ($existing_version)"
+        warn "DBFlux is already installed at $PREFIX/bin/$APP_NAME"
 
         if [[ -t 0 ]]; then
             read -p "Overwrite existing installation? [y/N] " -n 1 -r
