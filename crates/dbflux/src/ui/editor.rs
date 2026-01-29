@@ -1037,7 +1037,7 @@ impl Render for EditorPane {
 
                     el.child(
                         Dialog::new(window, cx)
-                            .title("\u{26A0} Confirm execution")
+                            .title("Confirm execution")
                             .confirm()
                             .on_ok(move |_, window, cx| {
                                 this.update(cx, |editor, cx| {
@@ -1079,7 +1079,19 @@ impl Render for EditorPane {
                                     .flex()
                                     .flex_col()
                                     .gap_3()
-                                    .child(div().text_sm().child(kind.message()))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                svg()
+                                                    .path(AppIcon::TriangleAlert.path())
+                                                    .size_5()
+                                                    .text_color(cx.theme().warning),
+                                            )
+                                            .child(div().text_sm().child(kind.message())),
+                                    )
                                     .child(
                                         div()
                                             .text_sm()

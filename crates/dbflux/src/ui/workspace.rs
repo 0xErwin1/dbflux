@@ -1124,9 +1124,21 @@ impl Render for Workspace {
                                     .gap(Spacing::MD)
                                     .child(
                                         div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.foreground)
-                                            .child(message),
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                svg()
+                                                    .path(AppIcon::TriangleAlert.path())
+                                                    .size_5()
+                                                    .text_color(theme.warning),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(theme.foreground)
+                                                    .child(message),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -1136,6 +1148,9 @@ impl Render for Workspace {
                                             .child(
                                                 div()
                                                     .id("delete-cancel")
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
                                                     .px(Spacing::SM)
                                                     .py(Spacing::XS)
                                                     .rounded(Radii::SM)
@@ -1149,11 +1164,20 @@ impl Render for Workspace {
                                                             this.cancel_modal_delete(cx);
                                                         });
                                                     })
+                                                    .child(
+                                                        svg()
+                                                            .path(AppIcon::X.path())
+                                                            .size_4()
+                                                            .text_color(theme.muted_foreground),
+                                                    )
                                                     .child("Cancel"),
                                             )
                                             .child(
                                                 div()
                                                     .id("delete-confirm")
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
                                                     .px(Spacing::SM)
                                                     .py(Spacing::XS)
                                                     .rounded(Radii::SM)
@@ -1167,6 +1191,12 @@ impl Render for Workspace {
                                                             this.confirm_modal_delete(cx);
                                                         });
                                                     })
+                                                    .child(
+                                                        svg()
+                                                            .path(AppIcon::Delete.path())
+                                                            .size_4()
+                                                            .text_color(theme.background),
+                                                    )
                                                     .child("Delete"),
                                             ),
                                     ),
