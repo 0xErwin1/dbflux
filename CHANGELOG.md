@@ -38,6 +38,7 @@ All notable changes to DBFlux will be documented in this file.
 * Icons in connection manager (tabs, form headers, buttons)
 * Icons in settings sidebar and About section
 * Icons in toast notifications (success, info, warning, error)
+* Icons in confirmation dialogs (delete, dangerous query)
 * Database brand icons for PostgreSQL, MySQL, MariaDB, and SQLite
 * Third-party licenses listed in About (Lucide ISC, Simple Icons CC0)
 
