@@ -8,6 +8,7 @@ Exec=dbflux %F
 Icon=dbflux
 Terminal=false
 StartupNotify=true
+StartupWMClass=dbflux
 Categories=Development;Database;IDE;
 Keywords=database;sql;query;postgres;sqlite;mysql;
 MimeType=text/x-sql;application/sql;

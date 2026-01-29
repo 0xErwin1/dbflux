@@ -3173,6 +3173,7 @@ impl Sidebar {
 
         cx.open_window(
             WindowOptions {
+                app_id: Some("dbflux".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Edit Connection".into()),
                     ..Default::default()
@@ -3288,6 +3289,7 @@ impl Sidebar {
                         let app_state_for_window = app_state.clone();
                         if let Ok(handle) = cx.open_window(
                             WindowOptions {
+                                app_id: Some("dbflux".into()),
                                 titlebar: Some(TitlebarOptions {
                                     title: Some("Settings".into()),
                                     ..Default::default()
@@ -4183,6 +4185,7 @@ impl Render for Sidebar {
                                     let app_state = app_state.clone();
                                     cx.open_window(
                                         WindowOptions {
+                                            app_id: Some("dbflux".into()),
                                             titlebar: Some(TitlebarOptions {
                                                 title: Some("Connection Manager".into()),
                                                 ..Default::default()

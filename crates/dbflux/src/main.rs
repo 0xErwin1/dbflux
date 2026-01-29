@@ -21,6 +21,7 @@ fn main() {
         let window_handle = cx
             .open_window(
                 WindowOptions {
+                    app_id: Some("dbflux".into()),
                     titlebar: Some(TitlebarOptions {
                         title: Some("DBFlux".into()),
                         ..Default::default()

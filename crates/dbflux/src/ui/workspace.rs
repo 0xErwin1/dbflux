@@ -288,6 +288,7 @@ impl Workspace {
                         let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
                         cx.open_window(
                             WindowOptions {
+                                app_id: Some("dbflux".into()),
                                 titlebar: Some(TitlebarOptions {
                                     title: Some("Connection Manager".into()),
                                     ..Default::default()
@@ -355,6 +356,7 @@ impl Workspace {
 
         cx.open_window(
             WindowOptions {
+                app_id: Some("dbflux".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Connection Manager".into()),
                     ..Default::default()
@@ -389,6 +391,7 @@ impl Workspace {
 
         if let Ok(handle) = cx.open_window(
             WindowOptions {
+                app_id: Some("dbflux".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Settings".into()),
                     ..Default::default()
