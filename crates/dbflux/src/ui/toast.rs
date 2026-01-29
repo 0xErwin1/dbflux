@@ -1,5 +1,6 @@
 use gpui::{App, AppContext as _, Context, Entity, Global, Styled, Window, px};
 use gpui_component::notification::{Notification, NotificationList, NotificationType};
+use gpui_component::{Icon, IconName};
 
 pub struct ToastManager {
     notification_list: Entity<NotificationList>,
@@ -30,6 +31,7 @@ impl<T> ToastExt for Context<'_, T> {
         let list = ToastManager::notification_list(self);
         list.update(self, |list, cx| {
             let notification = Notification::new()
+                .icon(Icon::new(IconName::CircleCheck))
                 .title("Success")
                 .message(message.into())
                 .with_type(NotificationType::Success)
@@ -44,6 +46,7 @@ impl<T> ToastExt for Context<'_, T> {
         let list = ToastManager::notification_list(self);
         list.update(self, |list, cx| {
             let notification = Notification::new()
+                .icon(Icon::new(IconName::Info))
                 .title("Info")
                 .message(message.into())
                 .with_type(NotificationType::Info)
@@ -58,6 +61,7 @@ impl<T> ToastExt for Context<'_, T> {
         let list = ToastManager::notification_list(self);
         list.update(self, |list, cx| {
             let notification = Notification::new()
+                .icon(Icon::new(IconName::TriangleAlert))
                 .title("Warning")
                 .message(message.into())
                 .with_type(NotificationType::Warning)
@@ -72,6 +76,7 @@ impl<T> ToastExt for Context<'_, T> {
         let list = ToastManager::notification_list(self);
         list.update(self, |list, cx| {
             let notification = Notification::new()
+                .icon(Icon::new(IconName::CircleX))
                 .title("Error")
                 .message(message.into())
                 .with_type(NotificationType::Error)
