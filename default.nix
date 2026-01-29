@@ -44,6 +44,13 @@ let
     pkgs.vulkan-loader
     pkgs.xorg.libX11
     pkgs.xorg.libxcb
+    pkgs.openssl
+    pkgs.libgit2
+    pkgs.libssh2
+    pkgs.dbus
+    pkgs.zstd
+    pkgs.sqlite
+    pkgs.curl
   ];
 
   # Full source including resources
@@ -170,7 +177,14 @@ in
 
     inherit buildInputs;
 
-    LD_LIBRARY_PATH = runtimeLibraryPath;
+    # Include system GPU driver paths for non-NixOS systems
+    LD_LIBRARY_PATH = pkgs.lib.concatStringsSep ":" [
+      runtimeLibraryPath
+      "/run/opengl-driver/lib"
+      "/usr/lib/x86_64-linux-gnu"
+      "/usr/lib64"
+      "/usr/lib"
+    ];
     ZSTD_SYS_USE_PKG_CONFIG = "1";
 
     shellHook = ''
