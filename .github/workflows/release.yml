@@ -52,6 +52,7 @@ jobs:
       - name: Install cross-compilation tools
         if: matrix.use_cross
         run: |
+          sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             libc6-dev-arm64-cross
@@ -89,6 +90,20 @@ jobs:
             cargo build --release --target ${{ matrix.target }} --features "$FEATURES"
           fi
 
+      - name: Locate binary
+        run: |
+          set -euo pipefail
+          BIN="dbflux"
+          if [ -f "target/${{ matrix.target }}/release/$BIN" ]; then
+            echo "BIN_PATH=target/${{ matrix.target }}/release/$BIN" >> $GITHUB_ENV
+          elif [ -f "target/release/$BIN" ]; then
+            echo "BIN_PATH=target/release/$BIN" >> $GITHUB_ENV
+          else
+            echo "Could not find built binary"
+            find target -maxdepth 4 -type f -name dbflux -print
+            exit 1
+          fi
+
       - name: Create package
         run: |
           mkdir -p pkg/resources/icons
@@ -97,7 +112,7 @@ jobs:
           mkdir -p pkg/scripts
 
           # Copy binary
-          cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
+          cp "$BIN_PATH" pkg/dbflux
           chmod +x pkg/dbflux
 
           # Copy resources
@@ -130,6 +145,7 @@ jobs:
           gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz.sha256
 
       - name: Upload artifacts
+        if: env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dbflux-${{ matrix.name }}
@@ -139,6 +155,12 @@ jobs:
             dbflux-${{ matrix.name }}.tar.gz.asc
             dbflux-${{ matrix.name }}.tar.gz.sha256.asc
           retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p /tmp/artifacts/dbflux-${{ matrix.name }}
+          cp dbflux-${{ matrix.name }}.tar.gz* /tmp/artifacts/dbflux-${{ matrix.name }}/
 
   release:
     name: Create Release
@@ -152,9 +174,17 @@ jobs:
           fetch-depth: 0
 
       - name: Download all artifacts
+        if: env.ACT != 'true'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: (act) Load artifacts locally
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p artifacts
+          cp -r /tmp/artifacts/* artifacts/
+          ls -R artifacts
 
       - name: Get version
         id: version
@@ -173,13 +203,12 @@ jobs:
 
       - name: Generate release notes
         id: notes
-        if: steps.prev_tag.outputs.tag != ''
+        if: env.ACT != 'true' && steps.prev_tag.outputs.tag != ''
         run: |
           gh api \
             repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name=${{ steps.version.outputs.version }} \
             -f previous_tag_name=${{ steps.prev_tag.outputs.tag }} \
-            -f target_commitish=main \
             --jq .body > auto_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
