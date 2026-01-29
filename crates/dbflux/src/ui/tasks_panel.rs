@@ -1,4 +1,5 @@
 use crate::app::{AppState, AppStateChanged};
+use crate::ui::icons::AppIcon;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -171,11 +172,16 @@ impl TasksPanel {
                         .rounded(px(2.0))
                         .cursor_pointer()
                         .text_color(gpui::rgb(0xDC2626))
-                        .hover(|s| s.bg(gpui::rgb(0xDC2626)).text_color(gpui::white()))
+                        .hover(|s| s.bg(gpui::rgb(0xFEE2E2)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.cancel_task(task_id, task_kind, cx);
                         }))
-                        .child("■"),
+                        .child(
+                            svg()
+                                .path(AppIcon::Power.path())
+                                .size_3()
+                                .text_color(gpui::rgb(0xDC2626)),
+                        ),
                 )
             })
     }

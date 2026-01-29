@@ -5,6 +5,7 @@ use crate::app::{AppState, AppStateChanged};
 use crate::ui::editor::dangerous_query::{DangerousQueryKind, detect_dangerous_query};
 use crate::ui::editor::toolbar::{EditorToolbar, ToolbarEvent};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected, QuerySaved};
+use crate::ui::icons::AppIcon;
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{CancelToken, HistoryEntry, QueryRequest, TaskId, TaskKind};
@@ -875,6 +876,16 @@ impl Render for EditorPane {
                                             .cursor_not_allowed()
                                     })
                                     .text_size(FontSizes::SM)
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::Play.path())
+                                            .size_4()
+                                            .text_color(if is_connected && !is_query_running {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                    )
                                     .child("Run"),
                             )
                             .when(is_query_running, |d| {
@@ -899,6 +910,12 @@ impl Render for EditorPane {
                                             this.cancel_query(window, cx);
                                         }))
                                         .text_size(FontSizes::SM)
+                                        .child(
+                                            svg()
+                                                .path(AppIcon::Power.path())
+                                                .size_4()
+                                                .text_color(gpui::rgb(0xDC2626)),
+                                        )
                                         .child("Cancel"),
                                 )
                             }),
@@ -950,7 +967,19 @@ impl Render for EditorPane {
                             .when(is_renaming, |d| {
                                 d.child(div().w(px(100.0)).child(Input::new(&rename_input).small()))
                             })
-                            .when(!is_renaming, |d| d.child(tab_title))
+                            .when(!is_renaming, |d| {
+                                d.child(
+                                    svg()
+                                        .path(AppIcon::Code.path())
+                                        .size_4()
+                                        .text_color(if is_active {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                )
+                                .child(tab_title)
+                            })
                             .when(tab_count > 1 && !is_renaming, |d| {
                                 d.child(
                                     div()

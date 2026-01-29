@@ -1,21 +1,22 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::editor::EditorPane;
+use crate::ui::icons::AppIcon;
 use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, SchemaLoadingStrategy,
+    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, DbKind, SchemaLoadingStrategy,
     SchemaSnapshot, TableInfo, TaskKind, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
+use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{Icon, IconName, Sizable};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -99,6 +100,29 @@ pub enum ContextMenuAction {
     RenameFolder,
     DeleteFolder,
     MoveToFolder(Option<Uuid>),
+}
+
+impl ContextMenuAction {
+    /// Returns the icon for this menu action
+    fn icon(&self) -> Option<AppIcon> {
+        match self {
+            Self::Open => Some(AppIcon::Eye),
+            Self::ViewSchema => Some(AppIcon::Table),
+            Self::GenerateCode(_) => Some(AppIcon::Code),
+            Self::Connect => Some(AppIcon::Plug),
+            Self::Disconnect => Some(AppIcon::Unplug),
+            Self::Edit => Some(AppIcon::Pencil),
+            Self::Delete => Some(AppIcon::Delete),
+            Self::OpenDatabase => Some(AppIcon::Database),
+            Self::CloseDatabase => Some(AppIcon::Database),
+            Self::Submenu(_) => None,
+            Self::NewFolder => Some(AppIcon::Folder),
+            Self::NewConnection => Some(AppIcon::Plug),
+            Self::RenameFolder => Some(AppIcon::Pencil),
+            Self::DeleteFolder => Some(AppIcon::Delete),
+            Self::MoveToFolder(_) => Some(AppIcon::Folder),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -3211,8 +3235,15 @@ impl Sidebar {
             .children(items.iter().enumerate().map(|(idx, item)| {
                 let is_selected = selected_index == Some(idx);
                 let is_submenu = matches!(item.action, ContextMenuAction::Submenu(_));
+                let icon = item.action.icon();
                 let sidebar_for_click = sidebar.clone();
                 let item_id = SharedString::from(format!("{}-item-{}", panel_id, idx));
+
+                let icon_color = if is_selected {
+                    theme.accent_foreground
+                } else {
+                    theme.muted_foreground
+                };
 
                 div()
                     .id(item_id)
@@ -3242,9 +3273,23 @@ impl Sidebar {
                             }
                         })
                     })
-                    .child(item.label.clone())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when_some(icon, |d, icon| {
+                                d.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                            })
+                            .child(item.label.clone()),
+                    )
                     .when(is_submenu, |d| {
-                        d.child(div().text_color(theme.muted_foreground).child("›"))
+                        d.child(
+                            svg()
+                                .path(AppIcon::ChevronRight.path())
+                                .size_4()
+                                .text_color(theme.muted_foreground),
+                        )
                     })
             }))
     }
@@ -3316,8 +3361,9 @@ impl Sidebar {
                         }
                     })
                     .child(
-                        Icon::new(IconName::Settings)
-                            .size(px(14.0))
+                        svg()
+                            .path(AppIcon::Settings.path())
+                            .size_4()
                             .text_color(theme.muted_foreground),
                     )
                     .child("Settings"),
@@ -3350,6 +3396,15 @@ impl Render for Sidebar {
         let state = self.app_state.read(cx);
         let active_id = state.active_connection_id;
         let connections = state.connections.keys().copied().collect::<Vec<_>>();
+
+        // Pre-compute profile_id -> DbKind map for use in the tree closure
+        // (closure requires 'static, so we can't borrow state inside it)
+        let profile_db_kinds: HashMap<Uuid, DbKind> = state
+            .profiles
+            .iter()
+            .map(|p| (p.id, p.config.kind()))
+            .collect();
+
         let active_databases = self.active_databases.clone();
         let sidebar_entity = cx.entity().clone();
         let multi_selection = self.multi_selection.clone();
@@ -3581,27 +3636,63 @@ impl Render for Sidebar {
                                         | TreeNodeKind::Database
                                         | TreeNodeKind::Profile
                                 );
-                            let chevron: Option<&str> = if needs_chevron {
-                                Some(if is_expanded { "▾" } else { "▸" })
+                            let chevron_icon: Option<AppIcon> = if needs_chevron {
+                                Some(if is_expanded {
+                                    AppIcon::ChevronDown
+                                } else {
+                                    AppIcon::ChevronRight
+                                })
                             } else {
                                 None
                             };
 
-                            let (icon, icon_color): (&str, Hsla) = match node_kind {
-                                TreeNodeKind::ConnectionFolder => ("▢", theme.muted_foreground),
-                                TreeNodeKind::Profile if is_connected => ("●", color_green),
-                                TreeNodeKind::Profile => ("○", theme.muted_foreground),
-                                TreeNodeKind::Database => ("⬡", color_orange),
-                                TreeNodeKind::Schema => ("▣", color_schema),
-                                TreeNodeKind::TablesFolder => ("▤", color_teal),
-                                TreeNodeKind::ViewsFolder => ("◫", color_yellow),
-                                TreeNodeKind::Table => ("▦", color_teal),
-                                TreeNodeKind::View => ("◧", color_yellow),
-                                TreeNodeKind::ColumnsFolder => ("◈", color_blue),
-                                TreeNodeKind::IndexesFolder => ("◇", color_purple),
-                                TreeNodeKind::Column => ("•", color_blue),
-                                TreeNodeKind::Index => ("◆", color_purple),
-                                TreeNodeKind::Unknown => ("", theme.muted_foreground),
+                            let (node_icon, unicode_icon, icon_color): (
+                                Option<AppIcon>,
+                                &str,
+                                Hsla,
+                            ) = match node_kind {
+                                TreeNodeKind::ConnectionFolder => {
+                                    (Some(AppIcon::Folder), "", theme.muted_foreground)
+                                }
+                                TreeNodeKind::Profile => {
+                                    let db_kind = item_id
+                                        .strip_prefix("profile_")
+                                        .and_then(|id_str| Uuid::parse_str(id_str).ok())
+                                        .and_then(|id| profile_db_kinds.get(&id).copied());
+
+                                    let icon = db_kind.map(AppIcon::from_db_kind);
+
+                                    let color = if is_connected {
+                                        color_green
+                                    } else {
+                                        theme.muted_foreground
+                                    };
+                                    let unicode = if icon.is_none() {
+                                        if is_connected { "●" } else { "○" }
+                                    } else {
+                                        ""
+                                    };
+                                    (icon, unicode, color)
+                                }
+                                TreeNodeKind::Database => {
+                                    (Some(AppIcon::Database), "", color_orange)
+                                }
+                                TreeNodeKind::Schema => (Some(AppIcon::Layers), "", color_schema),
+                                TreeNodeKind::TablesFolder => {
+                                    (Some(AppIcon::Table), "", color_teal)
+                                }
+                                TreeNodeKind::ViewsFolder => (Some(AppIcon::Eye), "", color_yellow),
+                                TreeNodeKind::Table => (Some(AppIcon::Table), "", color_teal),
+                                TreeNodeKind::View => (Some(AppIcon::Eye), "", color_yellow),
+                                TreeNodeKind::ColumnsFolder => {
+                                    (Some(AppIcon::Columns), "", color_blue)
+                                }
+                                TreeNodeKind::IndexesFolder => {
+                                    (Some(AppIcon::Hash), "", color_purple)
+                                }
+                                TreeNodeKind::Column => (Some(AppIcon::Columns), "", color_blue),
+                                TreeNodeKind::Index => (Some(AppIcon::Hash), "", color_purple),
+                                TreeNodeKind::Unknown => (None, "", theme.muted_foreground),
                             };
 
                             let label_color: Hsla = match node_kind {
@@ -3702,10 +3793,8 @@ impl Render for Sidebar {
                                                 .w(px(12.0))
                                                 .flex()
                                                 .justify_center()
-                                                .text_color(theme.muted_foreground)
-                                                .when_some(chevron, |el, ch| {
-                                                    el.text_size(FontSizes::XS)
-                                                        .cursor_pointer()
+                                                .when_some(chevron_icon, |el, icon| {
+                                                    el.cursor_pointer()
                                                         .on_mouse_down(
                                                             MouseButton::Left,
                                                             |_, _, cx| {
@@ -3724,7 +3813,12 @@ impl Render for Sidebar {
                                                                 },
                                                             );
                                                         })
-                                                        .child(ch)
+                                                        .child(
+                                                            svg()
+                                                                .path(icon.path())
+                                                                .size_3()
+                                                                .text_color(theme.muted_foreground),
+                                                        )
                                                 }),
                                         )
                                         .child(
@@ -3732,9 +3826,22 @@ impl Render for Sidebar {
                                                 .w(Heights::ICON_SM)
                                                 .flex()
                                                 .justify_center()
-                                                .text_size(FontSizes::SM)
-                                                .text_color(icon_color)
-                                                .child(icon),
+                                                .when_some(node_icon, |el, icon| {
+                                                    el.child(
+                                                        svg()
+                                                            .path(icon.path())
+                                                            .size_3p5()
+                                                            .text_color(icon_color),
+                                                    )
+                                                })
+                                                .when(
+                                                    node_icon.is_none() && !unicode_icon.is_empty(),
+                                                    |el| {
+                                                        el.text_size(FontSizes::SM)
+                                                            .text_color(icon_color)
+                                                            .child(unicode_icon)
+                                                    },
+                                                ),
                                         )
                                         .child(
                                             div()
@@ -4165,7 +4272,12 @@ impl Render for Sidebar {
                                         .flex()
                                         .items_center()
                                         .gap(Spacing::SM)
-                                        .child(div().text_color(theme.muted_foreground).child("▢"))
+                                        .child(
+                                            svg()
+                                                .path(AppIcon::Folder.path())
+                                                .size_4()
+                                                .text_color(theme.muted_foreground),
+                                        )
                                         .child("New Folder"),
                                 ),
                         )
@@ -4214,7 +4326,12 @@ impl Render for Sidebar {
                                         .flex()
                                         .items_center()
                                         .gap(Spacing::SM)
-                                        .child(div().text_color(theme.muted_foreground).child("○"))
+                                        .child(
+                                            svg()
+                                                .path(AppIcon::Plug.path())
+                                                .size_4()
+                                                .text_color(theme.muted_foreground),
+                                        )
                                         .child("New Connection"),
                                 ),
                         ),

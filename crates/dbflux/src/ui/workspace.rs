@@ -6,6 +6,7 @@ use crate::ui::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
 use crate::ui::editor::EditorPane;
+use crate::ui::icons::AppIcon;
 use crate::ui::results::{EditState, FocusMode, ResultsPane, ResultsReceived};
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
@@ -511,13 +512,18 @@ impl Workspace {
     fn render_panel_header(
         &self,
         title: &'static str,
+        icon: AppIcon,
         is_expanded: bool,
         is_focused: bool,
         on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme();
-        let chevron = if is_expanded { "▼" } else { "▶" };
+        let chevron = if is_expanded {
+            AppIcon::ChevronDown
+        } else {
+            AppIcon::ChevronRight
+        };
 
         let title_color = if is_focused {
             theme.primary
@@ -554,7 +560,8 @@ impl Workspace {
                     .text_xs()
                     .font_weight(title_weight)
                     .text_color(title_color)
-                    .child(chevron)
+                    .child(svg().path(chevron.path()).size_3().text_color(title_color))
+                    .child(svg().path(icon.path()).size_3().text_color(title_color))
                     .child(title),
             )
     }
@@ -604,6 +611,7 @@ impl Render for Workspace {
 
         let editor_header = self.render_panel_header(
             "Editor",
+            AppIcon::Code,
             editor_expanded,
             editor_focused,
             Self::toggle_editor,
@@ -611,6 +619,7 @@ impl Render for Workspace {
         );
         let results_header = self.render_panel_header(
             "Results",
+            AppIcon::Table,
             results_expanded,
             results_focused,
             Self::toggle_results,
@@ -618,6 +627,7 @@ impl Render for Workspace {
         );
         let tasks_header = self.render_panel_header(
             "Background Tasks",
+            AppIcon::Loader,
             tasks_expanded,
             tasks_focused,
             Self::toggle_tasks_panel,

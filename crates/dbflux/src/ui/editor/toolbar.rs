@@ -1,6 +1,7 @@
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::*;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::ActiveTheme;
 
 #[derive(Clone)]
 pub enum ToolbarEvent {
@@ -18,26 +19,58 @@ impl EditorToolbar {
 
 impl Render for EditorToolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
         div()
             .flex()
             .gap_2()
             .child(
-                Button::new("history-btn")
-                    .ghost()
-                    .small()
-                    .label("History")
+                div()
+                    .id("history-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .h(Heights::BUTTON)
+                    .rounded(Radii::MD)
+                    .cursor_pointer()
+                    .text_color(theme.foreground)
+                    .hover(|s| s.bg(theme.secondary))
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.emit(ToolbarEvent::OpenHistory);
-                    })),
+                    }))
+                    .text_size(FontSizes::SM)
+                    .child(
+                        svg()
+                            .path(AppIcon::History.path())
+                            .size_4()
+                            .text_color(theme.foreground),
+                    )
+                    .child("History"),
             )
             .child(
-                Button::new("save-btn")
-                    .ghost()
-                    .small()
-                    .label("Save")
+                div()
+                    .id("save-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .h(Heights::BUTTON)
+                    .rounded(Radii::MD)
+                    .cursor_pointer()
+                    .text_color(theme.foreground)
+                    .hover(|s| s.bg(theme.secondary))
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.emit(ToolbarEvent::SaveQuery);
-                    })),
+                    }))
+                    .text_size(FontSizes::SM)
+                    .child(
+                        svg()
+                            .path(AppIcon::Save.path())
+                            .size_4()
+                            .text_color(theme.foreground),
+                    )
+                    .child("Save"),
             )
     }
 }

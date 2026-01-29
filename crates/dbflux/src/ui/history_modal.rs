@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::keymap::ContextId;
+use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
@@ -482,12 +483,26 @@ impl HistoryModal {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
+        let recent_color = if self.active_tab == HistoryTab::Recent {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        };
+        let saved_color = if self.active_tab == HistoryTab::Saved {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        };
+
         div()
             .flex()
             .gap(Spacing::XS)
             .child(
                 div()
                     .id("tab-recent")
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .px(Spacing::MD)
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
@@ -500,6 +515,12 @@ impl HistoryModal {
                         this.text_color(theme.muted_foreground)
                             .hover(|d| d.bg(theme.secondary))
                     })
+                    .child(
+                        svg()
+                            .path(AppIcon::Clock.path())
+                            .size_3()
+                            .text_color(recent_color),
+                    )
                     .child("Recent")
                     .on_mouse_down(
                         MouseButton::Left,
@@ -513,6 +534,9 @@ impl HistoryModal {
             .child(
                 div()
                     .id("tab-saved")
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .px(Spacing::MD)
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
@@ -525,6 +549,12 @@ impl HistoryModal {
                         this.text_color(theme.muted_foreground)
                             .hover(|d| d.bg(theme.secondary))
                     })
+                    .child(
+                        svg()
+                            .path(AppIcon::Star.path())
+                            .size_3()
+                            .text_color(saved_color),
+                    )
                     .child("Saved")
                     .on_mouse_down(
                         MouseButton::Left,

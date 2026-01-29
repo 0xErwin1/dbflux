@@ -3,6 +3,7 @@ use crate::ui::components::data_table::{
     DataTable, DataTableEvent, DataTableState, Direction, Edge, SortState as TableSortState,
     TableModel,
 };
+use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, SortDirection,
@@ -1773,7 +1774,12 @@ impl Render for ResultsPane {
                                     this.run_table_query(window, cx);
                                     this.focus_table(window, cx);
                                 }))
-                                .child("↻"),
+                                .child(
+                                    svg()
+                                        .path(AppIcon::RefreshCcw.path())
+                                        .size_4()
+                                        .text_color(theme.muted_foreground),
+                                ),
                         ),
                 )
             })
@@ -1819,21 +1825,39 @@ impl Render for ResultsPane {
                             .gap(Spacing::SM)
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
                                     .text_size(FontSizes::XS)
                                     .text_color(theme.muted_foreground)
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::Rows3.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    )
                                     .child(format!("{} rows", row_count)),
                             )
                             .when_some(sort_info, |d, (col_name, direction, is_server)| {
-                                let arrow = match direction {
-                                    SortDirection::Ascending => "↑",
-                                    SortDirection::Descending => "↓",
+                                let arrow_icon = match direction {
+                                    SortDirection::Ascending => AppIcon::ArrowUp,
+                                    SortDirection::Descending => AppIcon::ArrowDown,
                                 };
                                 let mode = if is_server { "db" } else { "local" };
                                 d.child(
                                     div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .text_size(FontSizes::XS)
                                         .text_color(theme.muted_foreground)
-                                        .child(format!("{} {} ({})", arrow, col_name, mode)),
+                                        .child(
+                                            svg()
+                                                .path(arrow_icon.path())
+                                                .size_3()
+                                                .text_color(theme.muted_foreground),
+                                        )
+                                        .child(format!("{} ({})", col_name, mode)),
                                 )
                             }),
                     )
@@ -1849,6 +1873,9 @@ impl Render for ResultsPane {
                             d.child(
                                 div()
                                     .id("prev-page")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
                                     .px(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .text_size(FontSizes::XS)
@@ -1863,7 +1890,17 @@ impl Render for ResultsPane {
                                     .when(!can_prev, |d| {
                                         d.text_color(theme.muted_foreground).opacity(0.5)
                                     })
-                                    .child("← Prev"),
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronLeft.path())
+                                            .size_3()
+                                            .text_color(if can_prev {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                    )
+                                    .child("Prev"),
                             )
                             .child(
                                 div()
@@ -1878,6 +1915,9 @@ impl Render for ResultsPane {
                             .child(
                                 div()
                                     .id("next-page")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
                                     .px(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .text_size(FontSizes::XS)
@@ -1892,7 +1932,17 @@ impl Render for ResultsPane {
                                     .when(!can_next, |d| {
                                         d.text_color(theme.muted_foreground).opacity(0.5)
                                     })
-                                    .child("Next →"),
+                                    .child("Next")
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronRight.path())
+                                            .size_3()
+                                            .text_color(if can_next {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                    ),
                             )
                         },
                     ))
@@ -1905,6 +1955,9 @@ impl Render for ResultsPane {
                                 d.child(
                                     div()
                                         .id("export-csv")
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .px(Spacing::XS)
                                         .rounded(Radii::SM)
                                         .text_size(FontSizes::XS)
@@ -1916,6 +1969,12 @@ impl Render for ResultsPane {
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.export_results(window, cx);
                                         }))
+                                        .child(
+                                            svg()
+                                                .path(AppIcon::Download.path())
+                                                .size_3()
+                                                .text_color(theme.muted_foreground),
+                                        )
                                         .child("Export CSV"),
                                 )
                             })

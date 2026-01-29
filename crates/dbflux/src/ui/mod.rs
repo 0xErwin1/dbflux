@@ -3,6 +3,7 @@ pub mod components;
 pub mod dropdown;
 pub mod editor;
 pub mod history_modal;
+pub mod icons;
 pub mod results;
 pub mod sidebar;
 pub mod status_bar;

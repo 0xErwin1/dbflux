@@ -311,7 +311,10 @@ impl DataTableState {
         }
 
         let col_left = px(self.column_offsets[col]);
-        let col_right = px(*self.column_offsets.get(col + 1).unwrap_or(&self.column_offsets[col]));
+        let col_right = px(*self
+            .column_offsets
+            .get(col + 1)
+            .unwrap_or(&self.column_offsets[col]));
 
         let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
         if viewport_width <= px(0.0) {

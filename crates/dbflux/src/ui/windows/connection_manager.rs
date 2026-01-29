@@ -1,6 +1,7 @@
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId, KeyChord, KeymapStack};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::icons::AppIcon;
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbKind, FormFieldDef, FormFieldKind, FormTab,
     SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
@@ -2068,19 +2069,32 @@ impl ConnectionManagerWindow {
                                         .child(
                                             div()
                                                 .flex()
-                                                .flex_col()
-                                                .gap_1()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap_3()
                                                 .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child(driver_info.name),
+                                                    svg()
+                                                        .path(AppIcon::from_db_kind(kind).path())
+                                                        .size_8()
+                                                        .text_color(theme.foreground),
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_xs()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(driver_info.description),
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .child(driver_info.name),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(theme.muted_foreground)
+                                                                .child(driver_info.description),
+                                                        ),
                                                 ),
                                         ),
                                 )
@@ -2126,7 +2140,20 @@ impl ConnectionManagerWindow {
                         this.active_tab = ActiveTab::Main;
                         cx.notify();
                     }))
-                    .child(div().text_sm().child("Main")),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(svg().path(AppIcon::Plug.path()).size_4().text_color(
+                                if active_tab == ActiveTab::Main {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(div().text_sm().child("Main")),
+                    ),
             )
             .child(
                 div()
@@ -2152,6 +2179,16 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_1()
+                            .child(
+                                svg()
+                                    .path(AppIcon::FingerprintPattern.path())
+                                    .size_4()
+                                    .text_color(if active_tab == ActiveTab::Ssh {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
                             .child(div().text_sm().child("SSH"))
                             .when(self.ssh_enabled, |d| {
                                 d.child(
@@ -2499,6 +2536,7 @@ impl ConnectionManagerWindow {
                 })
                 .child(
                     Button::new("test-ssh")
+                        .icon(Icon::new(IconName::ExternalLink))
                         .label("Test SSH")
                         .small()
                         .ghost()
@@ -2548,6 +2586,7 @@ impl ConnectionManagerWindow {
                         })
                         .child(
                             Button::new("save-ssh-tunnel")
+                                .icon(Icon::new(IconName::Plus))
                                 .label("Save as tunnel")
                                 .small()
                                 .ghost()
@@ -3137,12 +3176,31 @@ impl ConnectionManagerWindow {
                             }),
                         ))
                     })
-                    .child(
+                    .child({
+                        let brand_icon = self
+                            .selected_driver
+                            .as_ref()
+                            .map(|driver| AppIcon::from_db_kind(driver.kind()));
+
                         div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when_some(brand_icon, |el, icon| {
+                                el.child(
+                                    svg()
+                                        .path(icon.path())
+                                        .size_6()
+                                        .text_color(theme.foreground),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title),
+                            )
+                    })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
                         "Name",
@@ -3234,6 +3292,7 @@ impl ConnectionManagerWindow {
                                     .child(
                                         Button::new("test-connection")
                                             .ghost()
+                                            .icon(Icon::new(IconName::ExternalLink))
                                             .label("Test Connection")
                                             .small()
                                             .disabled(test_status == TestStatus::Testing)
@@ -3253,6 +3312,7 @@ impl ConnectionManagerWindow {
                                     .child(
                                         Button::new("save-connection")
                                             .primary()
+                                            .icon(Icon::new(IconName::Check))
                                             .label("Save")
                                             .small()
                                             .on_click(cx.listener(|this, _, window, cx| {

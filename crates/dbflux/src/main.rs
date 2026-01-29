@@ -1,8 +1,10 @@
 mod app;
+mod assets;
 mod keymap;
 mod ui;
 
 use app::AppState;
+use assets::Assets;
 use gpui::*;
 use gpui_component::Root;
 use ui::command_palette::command_palette_keybindings;
@@ -13,7 +15,7 @@ fn main() {
         .format_timestamp_millis()
         .init();
 
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         ui::theme::init(cx);
         ui::components::data_table::init(cx);
         let app_state = cx.new(|_cx| AppState::new());

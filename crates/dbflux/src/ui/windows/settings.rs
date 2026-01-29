@@ -1,5 +1,6 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::keymap::{ContextId, KeyChord, Modifiers, default_keymap};
+use crate::ui::icons::AppIcon;
 use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
@@ -531,6 +532,7 @@ impl SettingsWindow {
             .child(self.render_sidebar_item(
                 "section-keybindings",
                 "Keybindings",
+                AppIcon::Keyboard,
                 SettingsSection::Keybindings,
                 active,
                 focused && self.sidebar_index_for_section(active) == 0,
@@ -539,6 +541,7 @@ impl SettingsWindow {
             .child(self.render_sidebar_item(
                 "section-ssh-tunnels",
                 "SSH Tunnels",
+                AppIcon::FingerprintPattern,
                 SettingsSection::SshTunnels,
                 active,
                 focused && self.sidebar_index_for_section(active) == 1,
@@ -547,6 +550,7 @@ impl SettingsWindow {
             .child(self.render_sidebar_item(
                 "section-about",
                 "About",
+                AppIcon::Info,
                 SettingsSection::About,
                 active,
                 focused && self.sidebar_index_for_section(active) == 2,
@@ -558,6 +562,7 @@ impl SettingsWindow {
         &self,
         id: &'static str,
         label: &'static str,
+        icon: AppIcon,
         section: SettingsSection,
         active: SettingsSection,
         is_focused: bool,
@@ -588,7 +593,19 @@ impl SettingsWindow {
                 this.focus_area = SettingsFocus::Content;
                 cx.notify();
             }))
-            .child(label)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        svg()
+                            .path(icon.path())
+                            .size_4()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(label),
+            )
     }
 
     fn sidebar_index_for_section(&self, section: SettingsSection) -> usize {
@@ -1415,19 +1432,31 @@ impl SettingsWindow {
                         .child(
                             div()
                                 .flex()
-                                .flex_col()
-                                .gap_1()
+                                .items_center()
+                                .gap_3()
                                 .child(
-                                    div()
-                                        .text_xl()
-                                        .font_weight(FontWeight::BOLD)
-                                        .child("DBFlux"),
+                                    svg()
+                                        .path(AppIcon::DbFlux.path())
+                                        .size(px(48.0))
+                                        .text_color(theme.foreground),
                                 )
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!("{} ({})", VERSION, PROFILE)),
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xl()
+                                                .font_weight(FontWeight::BOLD)
+                                                .child("DBFlux"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.muted_foreground)
+                                                .child(format!("{} ({})", VERSION, PROFILE)),
+                                        ),
                                 ),
                         )
                         .child(
@@ -1478,6 +1507,34 @@ impl SettingsWindow {
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
                                 .child(format!("Licensed under the {} licenses.", license_display)),
+                        )
+                        .child(
+                            div()
+                                .mt_4()
+                                .pt_4()
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Third-Party Licenses"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child("UI icons from Lucide (ISC License)"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Brand icons from Simple Icons (CC0 1.0)"),
+                                ),
                         ),
                 ),
             )
