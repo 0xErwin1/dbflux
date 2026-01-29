@@ -2,6 +2,51 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.2.0] - 2026-01-29
+
+### Added
+
+#### MySQL Support
+- MySQL/MariaDB driver with full query execution and schema introspection
+- Dual connection architecture (sync for schema, async for queries)
+- Dynamic connection forms that adapt to driver requirements
+
+#### Sidebar Enhancements
+- Folder organization for connection profiles
+- Drag and drop for connections and folders
+- Multi-selection support (Shift+click, Ctrl+click)
+- Keyboard shortcuts for rename, delete, and new folder
+
+#### Query Safety
+- Confirmation dialogs for dangerous SQL queries (DELETE, DROP, TRUNCATE without WHERE)
+- Driver-delegated SQL generation from context menu (SELECT, INSERT, UPDATE, DELETE)
+
+#### Results Table
+- Column sorting (click headers to sort ASC/DESC)
+- Custom DataTable component with virtualized rendering
+
+#### Packaging & Distribution
+- Nix flake with development shell
+- Arch Linux PKGBUILD
+- Linux installer script (`curl | bash` support)
+- GPG-signed release artifacts
+- GitHub Actions release workflow
+
+### Changed
+
+- Lazy loading for table details in sidebar (improves performance on large schemas)
+- Schema loading deferred until node expansion
+- Active databases now visually highlighted in sidebar
+
+### Performance
+
+- Eliminated hover-induced re-renders in data table
+- Fixed subscription leaks in table component
+
+### Fixed
+
+- Horizontal auto-scroll when navigating data table with keyboard
+
 ## [0.1.2] - 2025-01-25
 
 ### Fixed

@@ -7,7 +7,7 @@
 ## Tech Stack
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite) (Cargo.toml).
+- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB) (Cargo.toml).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -21,7 +21,11 @@ crates/
     src/app.rs              # Global state, drivers, profiles, history
     src/ui/                 # UI panels, windows, theme
     src/ui/workspace.rs     # Main layout, command dispatch, focus routing
+    src/ui/sidebar.rs       # Connection tree with folders, drag-drop, multi-select
+    src/ui/editor.rs        # SQL editor with dangerous query detection
+    src/ui/editor/dangerous_query.rs  # Query safety analysis
     src/ui/results.rs       # Results table with toolbar focus management
+    src/ui/components/data_table/  # Custom virtualized data table
     src/ui/history_modal.rs # Recent/saved queries modal
     src/keymap/             # Keyboard system
     src/keymap/command.rs   # Command enum with all app actions
@@ -29,13 +33,17 @@ crates/
     src/keymap/focus.rs     # FocusTarget enum for panel routing
   dbflux_core/              # Traits, core types, storage, errors
     src/traits.rs           # DbDriver + Connection traits
+    src/driver_form.rs      # Dynamic form definitions per driver
     src/profile.rs          # Connection/SSH profiles
+    src/connection_tree.rs  # Folder/connection tree model
+    src/connection_tree_store.rs  # Tree persistence (JSON)
     src/store.rs            # Profile and tunnel stores (JSON)
     src/history.rs          # History persistence
     src/saved_query.rs      # Saved queries persistence
     src/task.rs             # Background task tracking
   dbflux_driver_postgres/   # PostgreSQL driver implementation
   dbflux_driver_sqlite/     # SQLite driver implementation
+  dbflux_driver_mysql/      # MySQL/MariaDB driver implementation
   dbflux_ssh/               # SSH tunnel support
   dbflux_export/            # CSV export
 ```
@@ -44,11 +52,16 @@ crates/
 - App entry point: `crates/dbflux/src/main.rs` initializes logging, theme, and main GPUI window.
 - Global app state: `crates/dbflux/src/app.rs` owns drivers, profiles, active connections, history, task manager, and secret store access.
 - Workspace UI shell: `crates/dbflux/src/ui/workspace.rs` wires panes (sidebar/editor/results/tasks), command palette, and focus routing.
-- Core domain API: `crates/dbflux_core/src/traits.rs` defines `DbDriver`, `Connection`, and cancellation contracts.
+- Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays connection tree with folder organization, drag-drop reordering, multi-selection, and schema browser.
+- Connection tree: `crates/dbflux_core/src/connection_tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
+- Core domain API: `crates/dbflux_core/src/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
+- Driver forms: `crates/dbflux_core/src/driver_form.rs` defines dynamic form schemas that drivers provide for connection configuration.
 - Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH profiles and keyring integration.
 - Storage: `crates/dbflux_core/src/store.rs`, `crates/dbflux_core/src/history.rs`, and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
 - History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
-- Drivers: `crates/dbflux_driver_postgres/src/driver.rs` and `crates/dbflux_driver_sqlite/src/driver.rs` implement query execution + schema discovery.
+- Data table: `crates/dbflux/src/ui/components/data_table/` custom virtualized table with sorting, selection, and keyboard navigation.
+- Query safety: `crates/dbflux/src/ui/editor/dangerous_query.rs` detects dangerous queries (DELETE/DROP/TRUNCATE without WHERE) and prompts for confirmation.
+- Drivers: `crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, and `crates/dbflux_driver_mysql/` implement query execution, schema discovery, and SQL generation.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` establishes SSH sessions and runs a local port forwarder.
 - Export: `crates/dbflux_export/src/lib.rs` exposes the CSV exporter interface.
 
@@ -69,6 +82,7 @@ crates/
 
 ## External Integrations
 - PostgreSQL: `tokio-postgres` client with optional TLS and cancellation support (crates/dbflux_driver_postgres/src/driver.rs).
+- MySQL/MariaDB: `mysql` crate with dual connection architecture (sync for schema, async for queries) (crates/dbflux_driver_mysql/src/driver.rs).
 - SQLite: `rusqlite` file-based connections (crates/dbflux_driver_sqlite/src/driver.rs).
 - SSH: `ssh2` sessions with local TCP forwarding (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords and SSH passphrases (crates/dbflux_core/src/secrets.rs).
@@ -84,8 +98,12 @@ crates/
 - Secrets: passwords stored in OS keyring; references derived from profile IDs (crates/dbflux_core/src/secrets.rs).
 
 ## Build & Deploy
-- Build: `cargo build -p dbflux` or `cargo build -p dbflux --release` (AGENTS.md).
-- Run: `cargo run -p dbflux` (AGENTS.md).
+- Build: `cargo build -p dbflux --features sqlite,postgres,mysql` or `--release` (AGENTS.md).
+- Run: `cargo run -p dbflux --features sqlite,postgres,mysql` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
 - Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
+- Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.
+- Arch Linux: `makepkg -si` using scripts/PKGBUILD.
+- Linux installer: `curl -fsSL .../install.sh | bash` downloads and installs release.
+- Releases: GitHub Actions workflow builds Linux amd64/arm64, signs with GPG, publishes to GitHub Releases.
 - Deployment model: desktop GUI app; no server runtime in this repo.

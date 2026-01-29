@@ -12,21 +12,29 @@ crates/
 ├── dbflux/                    # App + UI (GPUI)
 ├── dbflux_core/               # Traits, types, errors (stable API)
 ├── dbflux_driver_postgres/    # PostgreSQL driver
-└── dbflux_driver_sqlite/      # SQLite driver
+├── dbflux_driver_sqlite/      # SQLite driver
+├── dbflux_driver_mysql/       # MySQL/MariaDB driver
+├── dbflux_ssh/                # SSH tunnel support
+└── dbflux_export/             # CSV export
 ```
 
 ## Build & Run Commands
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux                # Debug build
-cargo build -p dbflux --release      # Release build
-cargo run -p dbflux                  # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql    # Run app
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
 cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
+
+# Nix
+nix develop                          # Enter dev shell
+nix build                            # Build package
+nix run                              # Run directly
 ```
 
 ## Rust Guidelines
