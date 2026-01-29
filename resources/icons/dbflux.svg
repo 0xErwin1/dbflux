@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#3B82F6" />
+  
+  <!-- Database cylinder stack -->
+  <ellipse cx="64" cy="32" rx="32" ry="12" fill="#1E40AF" />
+  <path d="M32 32 v40 a32 12 0 0 0 64 0 v-40" fill="#2563EB" />
+  <ellipse cx="64" cy="72" rx="32" ry="12" fill="#1E40AF" />
+  <path d="M32 72 v16 a32 12 0 0 0 64 0 v-16" fill="#2563EB" />
+  <ellipse cx="64" cy="88" rx="32" ry="12" fill="#1E40AF" />
+  
+  <!-- Connection lines/flux -->
+  <path d="M88 48 l12 12 l-12 12" stroke="#60A5FA" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M40 48 l-12 12 l12 12" stroke="#60A5FA" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="50" y1="64" x2="78" y2="64" stroke="#60A5FA" stroke-width="4" stroke-linecap="round"/>
+</svg>

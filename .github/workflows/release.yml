@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            name: linux-amd64
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            name: linux-arm64
+            use_cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libssl-dev \
+            libdbus-1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
+
+      - name: Install cross-compilation tools
+        if: matrix.use_cross
+        run: |
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: ${{ matrix.target }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} --features sqlite,postgres,mysql
+          else
+            cargo build --release --target ${{ matrix.target }} --features sqlite,postgres,mysql
+          fi
+
+      - name: Create package
+        run: |
+          mkdir -p pkg/resources/icons
+          mkdir -p pkg/resources/desktop
+          mkdir -p pkg/resources/mime
+          mkdir -p pkg/scripts
+
+          # Copy binary
+          cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
+          chmod +x pkg/dbflux
+
+          # Copy resources
+          cp resources/icons/dbflux.svg pkg/resources/icons/
+          cp resources/desktop/dbflux.desktop pkg/resources/desktop/
+          cp resources/mime/dbflux-sql.xml pkg/resources/mime/
+
+          # Copy installer scripts
+          cp scripts/install.sh pkg/scripts/
+          cp scripts/uninstall.sh pkg/scripts/
+          chmod +x pkg/scripts/*.sh
+
+      - name: Create tar archive
+        run: |
+          cd pkg
+          tar -czf ../dbflux-${{ matrix.name }}.tar.gz .
+
+      - name: Generate checksum
+        run: sha256sum dbflux-${{ matrix.name }}.tar.gz > dbflux-${{ matrix.name }}.tar.gz.sha256
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign artifacts
+        run: |
+          gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz
+          gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbflux-${{ matrix.name }}
+          path: |
+            dbflux-${{ matrix.name }}.tar.gz
+            dbflux-${{ matrix.name }}.tar.gz.sha256
+            dbflux-${{ matrix.name }}.tar.gz.asc
+            dbflux-${{ matrix.name }}.tar.gz.sha256.asc
+          retention-days: 90
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        if: steps.prev_tag.outputs.tag != ''
+        run: |
+          gh api \
+            repos/${{ github.repository }}/releases/generate-notes \
+            -f tag_name=${{ steps.version.outputs.version }} \
+            -f previous_tag_name=${{ steps.prev_tag.outputs.tag }} \
+            -f target_commitish=main \
+            --jq .body > auto_notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compose release body
+        run: |
+          cat > release_body.md << 'PREFACE'
+          ## Installation
+
+          Download the appropriate archive for your architecture and run the installer:
+
+          ```bash
+          # Download and extract (replace linux-amd64 with linux-arm64 for ARM)
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/dbflux-linux-amd64.tar.gz
+          tar -xzf dbflux-linux-amd64.tar.gz
+
+          # Run installer
+          sudo ./scripts/install.sh
+          ```
+
+          ### Verify checksums
+
+          ```bash
+          sha256sum -c dbflux-linux-amd64.tar.gz.sha256
+          ```
+
+          ### System Requirements
+
+          - Linux x86_64 or ARM64
+          - Vulkan-capable GPU (recommended)
+
+          ---
+
+          PREFACE
+
+          if [ -f auto_notes.md ]; then
+            cat auto_notes.md >> release_body.md
+          else
+            echo "## What's Changed" >> release_body.md
+            echo "" >> release_body.md
+            echo "Initial release or no previous tag found." >> release_body.md
+          fi
+
+      - name: Create release
+        if: env.ACT != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: DBFlux ${{ steps.version.outputs.version }}
+          body_path: release_body.md
+          files: |
+            artifacts/*/dbflux-*.tar.gz
+            artifacts/*/dbflux-*.tar.gz.sha256
+            artifacts/*/dbflux-*.tar.gz.asc
+            artifacts/*/dbflux-*.tar.gz.sha256.asc
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

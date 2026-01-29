@@ -1,3 +1,6 @@
 target/
 .direnv
 thoughts/
+scripts/src
+scripts/pkg
+scripts/dbflux*

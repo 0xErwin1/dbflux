@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DBFlux
+GenericName=Database Client
+Comment=A fast, keyboard-first database client for SQL databases
+Exec=dbflux %F
+Icon=dbflux
+Terminal=false
+StartupNotify=true
+Categories=Development;Database;IDE;
+Keywords=database;sql;query;postgres;sqlite;mysql;
+MimeType=text/x-sql;application/sql;
