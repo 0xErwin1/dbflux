@@ -53,6 +53,8 @@ impl SidebarDock {
     }
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
+        self.finish_resize(cx);
+
         match self.state {
             SidebarState::Expanded => {
                 self.last_expanded_width = self.width;
@@ -70,6 +72,37 @@ impl SidebarDock {
 
     pub fn is_collapsed(&self) -> bool {
         self.state == SidebarState::Collapsed
+    }
+
+    pub fn is_resizing(&self) -> bool {
+        self.is_resizing
+    }
+
+    pub fn finish_resize(&mut self, cx: &mut Context<Self>) {
+        if self.is_resizing {
+            self.is_resizing = false;
+            self.resize_start_x = None;
+            self.resize_start_width = None;
+            cx.notify();
+        }
+    }
+
+    pub fn handle_resize_move(&mut self, position_x: Pixels, cx: &mut Context<Self>) {
+        if !self.is_resizing {
+            return;
+        }
+
+        let Some(start_x) = self.resize_start_x else {
+            return;
+        };
+        let Some(start_width) = self.resize_start_width else {
+            return;
+        };
+
+        let delta = position_x - start_x;
+        let new_width = (start_width + delta).clamp(MIN_WIDTH, MAX_WIDTH);
+        self.width = new_width;
+        cx.notify();
     }
 
     fn current_width(&self) -> Pixels {
