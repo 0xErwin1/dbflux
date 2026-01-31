@@ -1,20 +1,22 @@
 #![allow(dead_code)]
 
+use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
-use crate::keymap::Command;
-use crate::ui::components::data_table::{DataTable, DataTableState, TableModel};
+use crate::keymap::{Command, ContextId};
+use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
+use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
-use crate::ui::tokens::Spacing;
-use dbflux_core::{CancelToken, DbError, QueryRequest, QueryResult};
+use crate::ui::tokens::{Radii, Spacing};
+use dbflux_core::{CancelToken, DbError, HistoryEntry, QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Input, InputState};
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Internal layout of the document.
@@ -49,21 +51,29 @@ pub struct SqlQueryDocument {
     original_content: String,
     saved_query_id: Option<Uuid>,
 
-    // Results (embedded in the document)
+    // Execution
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
-    data_table: Option<Entity<DataTable>>,
-    table_state: Option<Entity<DataTableState>>,
+    data_grid: Option<Entity<DataGridPanel>>,
+    _data_grid_subscription: Option<Subscription>,
+    pending_result: Option<PendingQueryResult>,
 
-    // Layout
+    // History modal
+    history_modal: Entity<HistoryModal>,
+    _history_subscriptions: Vec<Subscription>,
+    pending_set_query: Option<HistoryQuerySelected>,
+
+    // Layout/focus
     layout: SqlQueryLayout,
-
-    // Focus
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
-
-    // Active execution
     active_cancel_token: Option<CancelToken>,
+}
+
+struct PendingQueryResult {
+    exec_id: Uuid,
+    query: String,
+    result: Result<QueryResult, DbError>,
 }
 
 /// Record of a query execution.
@@ -90,6 +100,18 @@ impl SqlQueryDocument {
 
         let connection_id = app_state.read(cx).active_connection_id;
 
+        // Create history modal
+        let history_modal = cx.new(|cx| HistoryModal::new(app_state.clone(), window, cx));
+
+        // Subscribe to history modal events
+        let query_selected_sub = cx.subscribe(
+            &history_modal,
+            |this, _, event: &HistoryQuerySelected, cx| {
+                this.pending_set_query = Some(event.clone());
+                cx.notify();
+            },
+        );
+
         Self {
             id: DocumentId::new(),
             title: "Query 1".to_string(),
@@ -101,9 +123,13 @@ impl SqlQueryDocument {
             saved_query_id: None,
             execution_history: Vec::new(),
             active_execution_index: None,
-            data_table: None,
-            table_state: None,
-            layout: SqlQueryLayout::Split,
+            data_grid: None,
+            _data_grid_subscription: None,
+            pending_result: None,
+            history_modal,
+            _history_subscriptions: vec![query_selected_sub],
+            pending_set_query: None,
+            layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             active_cancel_token: None,
@@ -149,6 +175,19 @@ impl SqlQueryDocument {
 
     pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         self.focus_handle.focus(window);
+    }
+
+    /// Returns the active context for keyboard handling based on internal focus.
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        // Check if history modal is open
+        if self.history_modal.read(cx).is_visible() {
+            return ContextId::HistoryModal;
+        }
+
+        match self.focus_mode {
+            SqlQueryFocus::Editor => ContextId::Editor,
+            SqlQueryFocus::Results => ContextId::Results,
+        }
     }
 
     // === Query Execution ===
@@ -209,7 +248,7 @@ impl SqlQueryDocument {
             .and_then(|c| c.active_database.clone());
 
         // Execute in background
-        let request = QueryRequest::new(query).with_database(active_database);
+        let request = QueryRequest::new(query.clone()).with_database(active_database);
 
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
@@ -221,7 +260,13 @@ impl SqlQueryDocument {
 
             cx.update(|cx| {
                 let _ = this.update(cx, |doc, cx| {
-                    doc.on_query_completed(exec_id, result, cx);
+                    // Store pending result to be processed in render (where we have window)
+                    doc.pending_result = Some(PendingQueryResult {
+                        exec_id,
+                        query,
+                        result,
+                    });
+                    cx.notify();
                 });
             })
             .ok();
@@ -229,31 +274,82 @@ impl SqlQueryDocument {
         .detach();
     }
 
-    fn on_query_completed(
-        &mut self,
-        exec_id: Uuid,
-        result: Result<QueryResult, DbError>,
-        cx: &mut Context<Self>,
-    ) {
+    /// Process pending query selected from history modal (called from render).
+    fn process_pending_set_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(selected) = self.pending_set_query.take() else {
+            return;
+        };
+
+        // Set the query content in the editor
+        self.input_state
+            .update(cx, |state, cx| state.set_value(&selected.sql, window, cx));
+
+        // Update title if a name was provided
+        if let Some(name) = selected.name {
+            self.title = name;
+        }
+
+        // Track the saved query ID if this came from saved queries
+        self.saved_query_id = selected.saved_query_id;
+
+        // Focus back on editor
+        self.focus_mode = SqlQueryFocus::Editor;
+
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// Process pending query result (called from render where we have window access).
+    fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_result.take() else {
+            return;
+        };
+
         self.active_cancel_token = None;
         self.state = DocumentState::Clean;
 
-        let Some(record) = self.execution_history.iter_mut().find(|r| r.id == exec_id) else {
+        let Some(record) = self
+            .execution_history
+            .iter_mut()
+            .find(|r| r.id == pending.exec_id)
+        else {
             return;
         };
 
         record.finished_at = Some(Instant::now());
 
-        match result {
+        match pending.result {
             Ok(qr) => {
-                record.rows_affected = Some(qr.rows.len() as u64);
+                let row_count = qr.rows.len();
+                let execution_time = qr.execution_time;
+                record.rows_affected = Some(row_count as u64);
                 let arc_result = Arc::new(qr);
                 record.result = Some(arc_result.clone());
 
-                // Create/update DataTable
-                self.setup_data_table(arc_result, cx);
+                // Add to global history
+                let (database, connection_name) = self
+                    .connection_id
+                    .and_then(|id| self.app_state.read(cx).connections.get(&id))
+                    .map(|c| (c.active_database.clone(), Some(c.profile.name.clone())))
+                    .unwrap_or((None, None));
 
-                // Switch focus to results
+                let history_entry = HistoryEntry::new(
+                    pending.query.clone(),
+                    database,
+                    connection_name,
+                    execution_time,
+                    Some(row_count),
+                );
+                self.app_state.update(cx, |state, _| {
+                    state.add_history_entry(history_entry);
+                });
+
+                self.setup_data_grid(arc_result, pending.query, window, cx);
+
+                if self.layout == SqlQueryLayout::EditorOnly {
+                    self.layout = SqlQueryLayout::Split;
+                }
+
                 self.focus_mode = SqlQueryFocus::Results;
             }
             Err(e) => {
@@ -265,17 +361,37 @@ impl SqlQueryDocument {
 
         cx.emit(DocumentEvent::ExecutionFinished);
         cx.emit(DocumentEvent::MetaChanged);
-        cx.notify();
     }
 
-    fn setup_data_table(&mut self, result: Arc<QueryResult>, cx: &mut Context<Self>) {
-        let model = Arc::new(TableModel::from(result.as_ref()));
-        let table_state = cx.new(|cx| DataTableState::new(model, cx));
-        let table_id = ElementId::Name(format!("sql-doc-table-{}", self.id.0).into());
-        let data_table = cx.new(|cx| DataTable::new(table_id, table_state.clone(), cx));
+    fn setup_data_grid(
+        &mut self,
+        result: Arc<QueryResult>,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(grid) = &self.data_grid {
+            grid.update(cx, |g, cx| g.set_query_result(result, query, cx));
+            return;
+        }
 
-        self.table_state = Some(table_state);
-        self.data_table = Some(data_table);
+        let app_state = self.app_state.clone();
+        let grid = cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
+
+        let subscription = cx.subscribe(
+            &grid,
+            |_this, _grid, event: &DataGridEvent, cx| match event {
+                DataGridEvent::PromoteResult { result, query } => {
+                    cx.emit(DocumentEvent::PromoteResult {
+                        result: result.clone(),
+                        query: query.clone(),
+                    });
+                }
+            },
+        );
+
+        self.data_grid = Some(grid);
+        self._data_grid_subscription = Some(subscription);
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
@@ -299,12 +415,76 @@ impl SqlQueryDocument {
 
     // === Command Dispatch ===
 
+    /// Route commands to the history modal when it's visible.
+    fn dispatch_to_history_modal(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match cmd {
+            Command::Cancel => {
+                self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                true
+            }
+            Command::SelectNext => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.select_next(cx));
+                true
+            }
+            Command::SelectPrev => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.select_prev(cx));
+                true
+            }
+            Command::Execute => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.execute_selected(window, cx));
+                true
+            }
+            Command::Delete => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.delete_selected(cx));
+                true
+            }
+            Command::ToggleFavorite => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.toggle_favorite_selected(cx));
+                true
+            }
+            Command::Rename => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.start_rename_selected(window, cx));
+                true
+            }
+            Command::FocusSearch => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.focus_search(window, cx));
+                true
+            }
+            Command::SaveQuery => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.save_selected_history(window, cx));
+                true
+            }
+            // Other commands are not handled by the modal
+            _ => false,
+        }
+    }
+
     pub fn dispatch_command(
         &mut self,
         cmd: Command,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // When history modal is open, route commands to it first
+        if self.history_modal.read(cx).is_visible() {
+            if self.dispatch_to_history_modal(cmd, window, cx) {
+                return true;
+            }
+        }
+
         match cmd {
             Command::RunQuery => {
                 self.run_query(window, cx);
@@ -318,6 +498,8 @@ impl SqlQueryDocument {
                     false
                 }
             }
+
+            // Internal focus navigation
             Command::FocusUp => {
                 if self.focus_mode == SqlQueryFocus::Results {
                     self.focus_mode = SqlQueryFocus::Editor;
@@ -328,7 +510,7 @@ impl SqlQueryDocument {
                 }
             }
             Command::FocusDown => {
-                if self.focus_mode == SqlQueryFocus::Editor && self.data_table.is_some() {
+                if self.focus_mode == SqlQueryFocus::Editor && self.data_grid.is_some() {
                     self.focus_mode = SqlQueryFocus::Results;
                     cx.notify();
                     true
@@ -336,6 +518,8 @@ impl SqlQueryDocument {
                     false
                 }
             }
+
+            // Layout toggles
             Command::ToggleEditor => {
                 self.layout = match self.layout {
                     SqlQueryLayout::EditorOnly => SqlQueryLayout::Split,
@@ -344,7 +528,7 @@ impl SqlQueryDocument {
                 cx.notify();
                 true
             }
-            Command::ToggleResults => {
+            Command::ToggleResults | Command::TogglePanel => {
                 self.layout = match self.layout {
                     SqlQueryLayout::ResultsOnly => SqlQueryLayout::Split,
                     _ => SqlQueryLayout::ResultsOnly,
@@ -352,11 +536,243 @@ impl SqlQueryDocument {
                 cx.notify();
                 true
             }
+
+            // Results navigation - forward to DataGridPanel when focused on results
+            Command::SelectNext => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.select_next(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::SelectPrev => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.select_prev(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::SelectFirst => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.select_first(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::SelectLast => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.select_last(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::ColumnLeft => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.column_left(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::ColumnRight => {
+                if self.focus_mode == SqlQueryFocus::Results {
+                    if let Some(grid) = &self.data_grid {
+                        grid.update(cx, |g, cx| g.column_right(cx));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Command::ResultsNextPage => {
+                if let Some(grid) = &self.data_grid {
+                    grid.update(cx, |g, cx| g.go_to_next_page(window, cx));
+                }
+                true
+            }
+            Command::ResultsPrevPage => {
+                if let Some(grid) = &self.data_grid {
+                    grid.update(cx, |g, cx| g.go_to_prev_page(window, cx));
+                }
+                true
+            }
+            Command::ExportResults => {
+                if let Some(grid) = &self.data_grid {
+                    grid.update(cx, |g, cx| g.export_results(window, cx));
+                }
+                true
+            }
+
+            // History modal commands
+            Command::ToggleHistoryDropdown => {
+                let is_open = self.history_modal.read(cx).is_visible();
+                if is_open {
+                    self.history_modal.update(cx, |modal, cx| modal.close(cx));
+                } else {
+                    self.history_modal
+                        .update(cx, |modal, cx| modal.open(window, cx));
+                }
+                true
+            }
+            Command::OpenSavedQueries => {
+                self.history_modal
+                    .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
+                true
+            }
+            Command::SaveQuery => {
+                let sql = self.input_state.read(cx).value().to_string();
+                if sql.trim().is_empty() {
+                    cx.toast_warning("Enter a query to save", window);
+                } else {
+                    self.history_modal
+                        .update(cx, |modal, cx| modal.open_save(sql, window, cx));
+                }
+                true
+            }
+
             _ => false,
         }
     }
 
     // === Render ===
+
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let is_executing = self.state == DocumentState::Executing;
+
+        let (run_icon, run_label, run_enabled) = if is_executing {
+            (AppIcon::X, "Cancel", true)
+        } else {
+            (AppIcon::Play, "Run", true)
+        };
+
+        let btn_bg = theme.secondary;
+        let primary = theme.primary;
+
+        let execution_time = self
+            .active_execution_index
+            .and_then(|i| self.execution_history.get(i))
+            .and_then(|r| {
+                r.finished_at
+                    .map(|finished| finished.duration_since(r.started_at))
+            });
+
+        let has_results = self.data_grid.is_some();
+        let results_visible = self.layout != SqlQueryLayout::EditorOnly;
+
+        div()
+            .id("sql-toolbar")
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .id("run-query-btn")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_xs()
+                    .when(run_enabled, |el| {
+                        el.bg(if is_executing { theme.danger } else { primary })
+                            .text_color(theme.background)
+                            .hover(|d| d.opacity(0.9))
+                    })
+                    .when(!run_enabled, |el| {
+                        el.bg(btn_bg)
+                            .text_color(theme.muted_foreground)
+                            .cursor_not_allowed()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.state == DocumentState::Executing {
+                            this.cancel_query(cx);
+                        } else {
+                            this.run_query(window, cx);
+                        }
+                    }))
+                    .child(
+                        svg()
+                            .path(run_icon.path())
+                            .size_3()
+                            .text_color(if run_enabled {
+                                theme.background
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .child(run_label),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Ctrl+Enter"),
+            )
+            .child(div().flex_1())
+            .when_some(execution_time, |el, duration| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{:.2}s", duration.as_secs_f64())),
+                )
+            })
+            .when(has_results, |el| {
+                let icon_color = if results_visible {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                };
+
+                el.child(
+                    div()
+                        .id("toggle-results-btn")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size_6()
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .hover(|el| el.bg(theme.secondary))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.layout = if results_visible {
+                                SqlQueryLayout::EditorOnly
+                            } else {
+                                SqlQueryLayout::Split
+                            };
+                            cx.notify();
+                        }))
+                        .child(
+                            svg()
+                                .path(AppIcon::Rows3.path())
+                                .size_4()
+                                .text_color(icon_color),
+                        ),
+                )
+            })
+    }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_focused = self.focus_mode == SqlQueryFocus::Editor;
@@ -384,6 +800,14 @@ impl SqlQueryDocument {
         let bg = cx.theme().background;
         let accent = cx.theme().accent;
 
+        let error = self
+            .active_execution_index
+            .and_then(|i| self.execution_history.get(i))
+            .and_then(|r| r.error.clone());
+
+        let has_error = error.is_some();
+        let has_grid = self.data_grid.is_some();
+
         div()
             .size_full()
             .flex()
@@ -392,75 +816,38 @@ impl SqlQueryDocument {
             .when(is_focused, |el| {
                 el.border_2().border_color(accent.opacity(0.3))
             })
-            .child(self.render_results_toolbar(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .when_some(self.data_table.clone(), |el, dt| el.child(dt))
-                    .when(self.data_table.is_none(), |el| {
-                        el.child(self.render_empty_results(cx))
-                    }),
-            )
+            .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
+            .when_some(self.data_grid.clone(), |el, grid| el.child(grid))
+            .when(!has_grid && !has_error, |el| {
+                el.child(self.render_empty_results(cx))
+            })
     }
 
-    fn render_results_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let record = self
-            .active_execution_index
-            .and_then(|i| self.execution_history.get(i));
-
-        let row_count = record
-            .and_then(|r| r.result.as_ref())
-            .map(|r| r.rows.len())
-            .unwrap_or(0);
-
-        let duration = record.and_then(|r| {
-            r.finished_at
-                .map(|end| end.duration_since(r.started_at).as_millis())
-        });
-
-        let error = record.and_then(|r| r.error.clone());
-
-        let border_color = cx.theme().border;
-        let panel_bg = cx.theme().tab_bar;
-        let muted_fg = cx.theme().muted_foreground;
+    fn render_error_state(&self, error: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let error_color = cx.theme().danger;
+        let muted_fg = cx.theme().muted_foreground;
 
         div()
-            .h(px(32.0))
-            .w_full()
+            .size_full()
             .flex()
+            .flex_col()
             .items_center()
-            .justify_between()
-            .px(Spacing::MD)
-            .border_b_1()
-            .border_color(border_color)
-            .bg(panel_bg)
-            // Info left
+            .justify_center()
+            .gap_2()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::MD)
-                    .when(error.is_none(), |el| {
-                        el.child(
-                            div()
-                                .text_sm()
-                                .text_color(muted_fg)
-                                .child(format!("{} rows", row_count)),
-                        )
-                    })
-                    .when_some(duration, |el, ms| {
-                        el.child(
-                            div()
-                                .text_sm()
-                                .text_color(muted_fg)
-                                .child(format!("{}ms", ms)),
-                        )
-                    })
-                    .when_some(error, |el, err| {
-                        el.child(div().text_sm().text_color(error_color).child(err))
-                    }),
+                    .text_color(error_color)
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Query Error"),
+            )
+            .child(
+                div()
+                    .text_color(muted_fg)
+                    .text_sm()
+                    .max_w(px(500.0))
+                    .text_center()
+                    .child(error.to_string()),
             )
     }
 
@@ -482,6 +869,13 @@ impl SqlQueryDocument {
 
 impl Render for SqlQueryDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Process any pending query result (needs window access)
+        self.process_pending_result(window, cx);
+
+        // Process any pending query from history modal selection
+        self.process_pending_set_query(window, cx);
+
+        let toolbar = self.render_toolbar(cx).into_any_element();
         let editor_view = self.render_editor(window, cx).into_any_element();
         let results_view = self.render_results(window, cx).into_any_element();
 
@@ -494,28 +888,35 @@ impl Render for SqlQueryDocument {
             .flex_col()
             .bg(bg)
             .track_focus(&self.focus_handle)
-            .child(match self.layout {
-                SqlQueryLayout::Split => {
-                    v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
-                        .child(
-                            resizable_panel()
-                                .size(px(200.0))
-                                .size_range(px(100.0)..px(1000.0))
-                                .child(editor_view),
-                        )
-                        .child(
-                            resizable_panel()
-                                .size(px(200.0))
-                                .size_range(px(100.0)..px(1000.0))
-                                .child(results_view),
-                        )
-                        .into_any_element()
-                }
+            // Toolbar at top
+            .child(toolbar)
+            // Content area (editor/results split)
+            .child(
+                div().flex_1().overflow_hidden().child(match self.layout {
+                    SqlQueryLayout::Split => {
+                        v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
+                            .child(
+                                resizable_panel()
+                                    .size(px(200.0))
+                                    .size_range(px(100.0)..px(1000.0))
+                                    .child(editor_view),
+                            )
+                            .child(
+                                resizable_panel()
+                                    .size(px(200.0))
+                                    .size_range(px(100.0)..px(1000.0))
+                                    .child(results_view),
+                            )
+                            .into_any_element()
+                    }
 
-                SqlQueryLayout::EditorOnly => editor_view,
+                    SqlQueryLayout::EditorOnly => editor_view,
 
-                SqlQueryLayout::ResultsOnly => results_view,
-            })
+                    SqlQueryLayout::ResultsOnly => results_view,
+                }),
+            )
+            // History modal overlay
+            .child(self.history_modal.clone())
     }
 }
 
