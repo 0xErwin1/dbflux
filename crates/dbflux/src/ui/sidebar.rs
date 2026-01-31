@@ -4,7 +4,8 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, DbKind, SchemaLoadingStrategy,
+    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CustomTypeInfo,
+    CustomTypeKind, DbKind, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, TableInfo, TableRef, TaskKind, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
@@ -36,12 +37,22 @@ enum TreeNodeKind {
     Schema,
     TablesFolder,
     ViewsFolder,
+    TypesFolder,
+    SchemaIndexesFolder,
+    SchemaForeignKeysFolder,
     Table,
     View,
+    CustomType,
     ColumnsFolder,
     IndexesFolder,
+    ForeignKeysFolder,
+    ConstraintsFolder,
     Column,
     Index,
+    ForeignKey,
+    SchemaIndex,
+    SchemaForeignKey,
+    Constraint,
     Unknown,
 }
 
@@ -51,15 +62,26 @@ impl TreeNodeKind {
             _ if id.starts_with("conn_folder_") => Self::ConnectionFolder,
             _ if id.starts_with("profile_") => Self::Profile,
             _ if id.starts_with("db_") => Self::Database,
+            // schema_indexes_ and schema_fks_ must be checked before schema_
+            _ if id.starts_with("schema_indexes_") => Self::SchemaIndexesFolder,
+            _ if id.starts_with("schema_fks_") => Self::SchemaForeignKeysFolder,
             _ if id.starts_with("schema_") => Self::Schema,
             _ if id.starts_with("tables_") => Self::TablesFolder,
             _ if id.starts_with("views_") => Self::ViewsFolder,
+            _ if id.starts_with("types_") => Self::TypesFolder,
             _ if id.starts_with("table_") => Self::Table,
             _ if id.starts_with("view_") => Self::View,
+            _ if id.starts_with("customtype_") => Self::CustomType,
             _ if id.starts_with("columns_") => Self::ColumnsFolder,
             _ if id.starts_with("indexes_") => Self::IndexesFolder,
+            _ if id.starts_with("fks_") => Self::ForeignKeysFolder,
+            _ if id.starts_with("constraints_") => Self::ConstraintsFolder,
             _ if id.starts_with("col_") => Self::Column,
+            _ if id.starts_with("sidx_") => Self::SchemaIndex,
+            _ if id.starts_with("sfk_") => Self::SchemaForeignKey,
             _ if id.starts_with("idx_") => Self::Index,
+            _ if id.starts_with("fk_") => Self::ForeignKey,
+            _ if id.starts_with("constraint_") => Self::Constraint,
             _ => Self::Unknown,
         }
     }
@@ -197,7 +219,7 @@ struct ItemIdParts {
     object_name: String,
 }
 
-/// Action to execute after table details finish loading.
+/// Action to execute after table/type details finish loading.
 #[derive(Clone)]
 enum PendingAction {
     ViewSchema {
@@ -206,6 +228,15 @@ enum PendingAction {
     GenerateCode {
         item_id: String,
         generator_id: String,
+    },
+    ExpandTypesFolder {
+        item_id: String,
+    },
+    ExpandSchemaIndexesFolder {
+        item_id: String,
+    },
+    ExpandSchemaForeignKeysFolder {
+        item_id: String,
     },
 }
 
@@ -510,20 +541,118 @@ impl Sidebar {
             }
         }
 
-        // Sync folder collapsed state with AppState
-        if item_id.starts_with("conn_folder_") {
-            if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-                && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-            {
-                self.app_state.update(cx, |state, _cx| {
-                    state.set_folder_collapsed(folder_id, !expanded);
-                });
+        // When expanding a Data Types folder, check if types need to be loaded
+        if expanded
+            && item_id.starts_with("types_")
+            && let Some((profile_id, database, schema)) =
+                Self::parse_schema_folder_id(item_id, "types_")
+        {
+            let needs_fetch =
+                self.app_state
+                    .read(cx)
+                    .needs_schema_types(profile_id, &database, Some(&schema));
+
+            if needs_fetch {
+                let pending = PendingAction::ExpandTypesFolder {
+                    item_id: item_id.to_string(),
+                };
+                self.spawn_fetch_schema_types(profile_id, &database, Some(&schema), pending, cx);
+                return;
             }
+        }
+
+        // When expanding schema-level Indexes folder, check if indexes need to be loaded
+        if expanded
+            && item_id.starts_with("schema_indexes_")
+            && let Some((profile_id, database, schema)) =
+                Self::parse_schema_folder_id(item_id, "schema_indexes_")
+        {
+            let needs_fetch =
+                self.app_state
+                    .read(cx)
+                    .needs_schema_indexes(profile_id, &database, Some(&schema));
+
+            if needs_fetch {
+                let pending = PendingAction::ExpandSchemaIndexesFolder {
+                    item_id: item_id.to_string(),
+                };
+                self.spawn_fetch_schema_indexes(profile_id, &database, Some(&schema), pending, cx);
+                return;
+            }
+        }
+
+        // When expanding schema-level Foreign Keys folder, check if FKs need to be loaded
+        if expanded
+            && item_id.starts_with("schema_fks_")
+            && let Some((profile_id, database, schema)) =
+                Self::parse_schema_folder_id(item_id, "schema_fks_")
+        {
+            let needs_fetch = self.app_state.read(cx).needs_schema_foreign_keys(
+                profile_id,
+                &database,
+                Some(&schema),
+            );
+
+            if needs_fetch {
+                let pending = PendingAction::ExpandSchemaForeignKeysFolder {
+                    item_id: item_id.to_string(),
+                };
+                self.spawn_fetch_schema_foreign_keys(
+                    profile_id,
+                    &database,
+                    Some(&schema),
+                    pending,
+                    cx,
+                );
+                return;
+            }
+        }
+
+        // Sync folder collapsed state with AppState
+        if item_id.starts_with("conn_folder_")
+            && let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
+            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        {
+            self.app_state.update(cx, |state, _cx| {
+                state.set_folder_collapsed(folder_id, !expanded);
+            });
         }
 
         self.expansion_overrides
             .insert(item_id.to_string(), expanded);
         self.rebuild_tree_with_overrides(cx);
+    }
+
+    /// Parse a schema-level folder ID to extract (profile_id, database, schema).
+    ///
+    /// Format: `{prefix}{uuid}_{database}_{schema}` where prefix is "types_", "schema_indexes_", etc.
+    fn parse_schema_folder_id(item_id: &str, prefix: &str) -> Option<(Uuid, String, String)> {
+        let rest = item_id.strip_prefix(prefix)?;
+
+        // UUID is 36 chars, followed by "_"
+        if rest.len() < 37 {
+            return None;
+        }
+
+        let uuid_str = rest.get(..36)?;
+        let profile_id = Uuid::parse_str(uuid_str).ok()?;
+
+        // After UUID, we have _{database}_{schema}
+        let remainder = rest.get(37..)?.to_string();
+        if remainder.is_empty() {
+            return None;
+        }
+
+        // remainder is "database_schema"
+        if let Some(underscore_pos) = remainder.find('_') {
+            let database = remainder[..underscore_pos].to_string();
+            let schema = remainder[underscore_pos + 1..].to_string();
+            if !database.is_empty() && !schema.is_empty() {
+                return Some((profile_id, database, schema));
+            }
+        }
+
+        None
     }
 
     fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
@@ -777,6 +906,8 @@ impl Sidebar {
             schema: view.schema.clone(),
             columns: None,
             indexes: None,
+            foreign_keys: None,
+            constraints: None,
         };
 
         match conn.connection.generate_code(generator_id, &table_info) {
@@ -1031,7 +1162,202 @@ impl Sidebar {
         .detach();
     }
 
-    /// Called when table details finish loading to execute the stored action.
+    /// Spawn a background task to fetch custom types for a schema.
+    fn spawn_fetch_schema_types(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_fetch_schema_types(profile_id, database, schema)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                if e != "Schema types already cached" {
+                    log::warn!("Cannot fetch schema types: {}", e);
+                }
+                return;
+            }
+        };
+
+        self.pending_action = Some(pending_action);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let db_name = database.to_string();
+        let schema_name = schema.map(String::from);
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| match result {
+                Ok(res) => {
+                    app_state.update(cx, |state, cx| {
+                        state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.complete_pending_action(cx);
+                    });
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to fetch schema types for {}.{:?}: {}",
+                        db_name,
+                        schema_name,
+                        e
+                    );
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pending_action = None;
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Spawn a background task to fetch indexes for a schema.
+    fn spawn_fetch_schema_indexes(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_fetch_schema_indexes(profile_id, database, schema)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                if e != "Schema indexes already cached" {
+                    log::warn!("Cannot fetch schema indexes: {}", e);
+                }
+                return;
+            }
+        };
+
+        self.pending_action = Some(pending_action);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| match result {
+                Ok(res) => {
+                    app_state.update(cx, |state, cx| {
+                        state.set_schema_indexes(
+                            res.profile_id,
+                            res.database,
+                            res.schema,
+                            res.indexes,
+                        );
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.complete_pending_action(cx);
+                    });
+                }
+                Err(e) => {
+                    log::error!("Failed to fetch schema indexes: {}", e);
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pending_action = None;
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Spawn a background task to fetch foreign keys for a schema.
+    fn spawn_fetch_schema_foreign_keys(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                if e != "Schema foreign keys already cached" {
+                    log::warn!("Cannot fetch schema foreign keys: {}", e);
+                }
+                return;
+            }
+        };
+
+        self.pending_action = Some(pending_action);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| match result {
+                Ok(res) => {
+                    app_state.update(cx, |state, cx| {
+                        state.set_schema_foreign_keys(
+                            res.profile_id,
+                            res.database,
+                            res.schema,
+                            res.foreign_keys,
+                        );
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.complete_pending_action(cx);
+                    });
+                }
+                Err(e) => {
+                    log::error!("Failed to fetch schema foreign keys: {}", e);
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pending_action = None;
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Called when table/type details finish loading to execute the stored action.
     fn complete_pending_action(&mut self, cx: &mut Context<Self>) {
         let Some(action) = self.pending_action.take() else {
             return;
@@ -1047,7 +1373,17 @@ impl Sidebar {
             } => {
                 self.generate_code_impl(&item_id, &generator_id, cx);
             }
+            PendingAction::ExpandTypesFolder { item_id }
+            | PendingAction::ExpandSchemaIndexesFolder { item_id }
+            | PendingAction::ExpandSchemaForeignKeysFolder { item_id } => {
+                self.expand_schema_folder(&item_id, cx);
+            }
         }
+    }
+
+    fn expand_schema_folder(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        self.expansion_overrides.insert(item_id.to_string(), true);
+        self.rebuild_tree_with_overrides(cx);
     }
 
     fn view_table_schema(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -1766,12 +2102,10 @@ impl Sidebar {
                 if state.rename_folder(id, &new_name) {
                     cx.emit(AppStateChanged);
                 }
-            } else {
-                if let Some(profile) = state.profiles.iter_mut().find(|p| p.id == id) {
-                    profile.name = new_name;
-                    state.save_profiles();
-                    cx.emit(AppStateChanged);
-                }
+            } else if let Some(profile) = state.profiles.iter_mut().find(|p| p.id == id) {
+                profile.name = new_name;
+                state.save_profiles();
+                cx.emit(AppStateChanged);
             }
         });
 
@@ -2327,10 +2661,10 @@ impl Sidebar {
         let mut nodes_to_move: Vec<(Uuid, i32)> = Vec::new();
 
         for item_id in &self.multi_selection {
-            if let Some(node_id) = self.item_id_to_node_id(item_id, &state.connection_tree) {
-                if let Some(node) = state.connection_tree.find_by_id(node_id) {
-                    nodes_to_move.push((node_id, node.sort_index));
-                }
+            if let Some(node_id) = self.item_id_to_node_id(item_id, &state.connection_tree)
+                && let Some(node) = state.connection_tree.find_by_id(node_id)
+            {
+                nodes_to_move.push((node_id, node.sort_index));
             }
         }
 
@@ -2664,6 +2998,10 @@ impl Sidebar {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
+        // Clean up stale expansion overrides for schema-specific items
+        // These should reset when switching databases/connections
+        self.cleanup_stale_overrides(cx);
+
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
 
@@ -2682,6 +3020,36 @@ impl Sidebar {
             }
         });
         cx.notify();
+    }
+
+    /// Remove expansion overrides for folders whose data hasn't been loaded yet.
+    fn cleanup_stale_overrides(&mut self, cx: &Context<Self>) {
+        let state = self.app_state.read(cx);
+
+        self.expansion_overrides.retain(|item_id, _expanded| {
+            if item_id.starts_with("types_")
+                && let Some((profile_id, database, schema)) =
+                    Self::parse_schema_folder_id(item_id, "types_")
+            {
+                return !state.needs_schema_types(profile_id, &database, Some(&schema));
+            }
+
+            if item_id.starts_with("schema_indexes_")
+                && let Some((profile_id, database, schema)) =
+                    Self::parse_schema_folder_id(item_id, "schema_indexes_")
+            {
+                return !state.needs_schema_indexes(profile_id, &database, Some(&schema));
+            }
+
+            if item_id.starts_with("schema_fks_")
+                && let Some((profile_id, database, schema)) =
+                    Self::parse_schema_folder_id(item_id, "schema_fks_")
+            {
+                return !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema));
+            }
+
+            true
+        });
     }
 
     fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
@@ -2760,11 +3128,11 @@ impl Sidebar {
                 }
 
                 ConnectionTreeNodeKind::ConnectionRef => {
-                    if let Some(profile_id) = node.profile_id {
-                        if let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id) {
-                            let profile_item = Self::build_profile_item(profile, state);
-                            items.push(profile_item);
-                        }
+                    if let Some(profile_id) = node.profile_id
+                        && let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id)
+                    {
+                        let profile_item = Self::build_profile_item(profile, state);
+                        items.push(profile_item);
                     }
                 }
             }
@@ -2804,8 +3172,12 @@ impl Sidebar {
                         if let Some(db_schema) = connected.database_schemas.get(&db.name) {
                             Self::build_db_schema_content(
                                 profile_id,
+                                &db.name,
                                 db_schema,
                                 &connected.table_details,
+                                &connected.schema_types,
+                                &connected.schema_indexes,
+                                &connected.schema_foreign_keys,
                             )
                         } else if is_pending {
                             vec![TreeItem::new(
@@ -2816,7 +3188,15 @@ impl Sidebar {
                             Vec::new()
                         }
                     } else if db.is_current {
-                        Self::build_schema_children(profile_id, schema, &connected.table_details)
+                        Self::build_schema_children(
+                            profile_id,
+                            &db.name,
+                            schema,
+                            &connected.table_details,
+                            &connected.schema_types,
+                            &connected.schema_indexes,
+                            &connected.schema_foreign_keys,
+                        )
                     } else {
                         Vec::new()
                     };
@@ -2840,8 +3220,22 @@ impl Sidebar {
                     );
                 }
             } else {
-                profile_children =
-                    Self::build_schema_children(profile_id, schema, &connected.table_details);
+                // No databases defined - use active_database or first schema as fallback
+                let database_name = connected
+                    .active_database
+                    .as_deref()
+                    .or_else(|| schema.schemas.first().map(|s| s.name.as_str()))
+                    .unwrap_or("default");
+
+                profile_children = Self::build_schema_children(
+                    profile_id,
+                    database_name,
+                    schema,
+                    &connected.table_details,
+                    &connected.schema_types,
+                    &connected.schema_indexes,
+                    &connected.schema_foreign_keys,
+                );
             }
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -2893,14 +3287,25 @@ impl Sidebar {
 
     fn build_schema_children(
         profile_id: Uuid,
+        database_name: &str,
         snapshot: &dbflux_core::SchemaSnapshot,
         table_details: &HashMap<(String, String), TableInfo>,
+        schema_types: &HashMap<String, Vec<CustomTypeInfo>>,
+        schema_indexes: &HashMap<String, Vec<SchemaIndexInfo>>,
+        schema_foreign_keys: &HashMap<String, Vec<SchemaForeignKeyInfo>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
         for db_schema in &snapshot.schemas {
-            let schema_content =
-                Self::build_db_schema_content(profile_id, db_schema, table_details);
+            let schema_content = Self::build_db_schema_content(
+                profile_id,
+                database_name,
+                db_schema,
+                table_details,
+                schema_types,
+                schema_indexes,
+                schema_foreign_keys,
+            );
 
             children.push(
                 TreeItem::new(
@@ -2917,23 +3322,26 @@ impl Sidebar {
 
     fn build_db_schema_content(
         profile_id: Uuid,
+        database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        schema_types: &HashMap<String, Vec<CustomTypeInfo>>,
+        schema_indexes: &HashMap<String, Vec<SchemaIndexInfo>>,
+        schema_foreign_keys: &HashMap<String, Vec<SchemaForeignKeyInfo>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
+        let schema_name = &db_schema.name;
 
         if !db_schema.tables.is_empty() {
             let table_children: Vec<TreeItem> = db_schema
                 .tables
                 .iter()
-                .map(|table| {
-                    Self::build_table_item(profile_id, &db_schema.name, table, table_details)
-                })
+                .map(|table| Self::build_table_item(profile_id, schema_name, table, table_details))
                 .collect();
 
             content.push(
                 TreeItem::new(
-                    format!("tables_{}_{}", profile_id, db_schema.name),
+                    format!("tables_{}_{}", profile_id, schema_name),
                     format!("Tables ({})", db_schema.tables.len()),
                 )
                 .expanded(true)
@@ -2947,7 +3355,7 @@ impl Sidebar {
                 .iter()
                 .map(|view| {
                     TreeItem::new(
-                        format!("view_{}__{}__{}", profile_id, db_schema.name, view.name),
+                        format!("view_{}__{}__{}", profile_id, schema_name, view.name),
                         view.name.clone(),
                     )
                 })
@@ -2955,7 +3363,7 @@ impl Sidebar {
 
             content.push(
                 TreeItem::new(
-                    format!("views_{}_{}", profile_id, db_schema.name),
+                    format!("views_{}_{}", profile_id, schema_name),
                     format!("Views ({})", db_schema.views.len()),
                 )
                 .expanded(true)
@@ -2963,7 +3371,224 @@ impl Sidebar {
             );
         }
 
+        // Custom types (enums, domains, composites) - check cache first, then db_schema
+        let types_cache_key = format!("{}__{}", database_name, schema_name);
+        let cached_types = schema_types.get(&types_cache_key);
+
+        let custom_types: Option<&Vec<CustomTypeInfo>> =
+            cached_types.or(db_schema.custom_types.as_ref());
+
+        // Item ID format: types_{profile_id}_{database}_{schema}
+        let types_item_id = format!("types_{}_{}_{}", profile_id, database_name, schema_name);
+
+        if let Some(types) = custom_types {
+            if !types.is_empty() {
+                let type_children: Vec<TreeItem> = types
+                    .iter()
+                    .map(|t| Self::build_custom_type_item(profile_id, schema_name, t))
+                    .collect();
+
+                content.push(
+                    TreeItem::new(types_item_id, format!("Data Types ({})", types.len()))
+                        .expanded(false)
+                        .children(type_children),
+                );
+            } else {
+                // Types loaded but empty - show folder without count
+                content.push(
+                    TreeItem::new(types_item_id, "Data Types (0)".to_string())
+                        .expanded(false)
+                        .children(vec![]),
+                );
+            }
+        } else {
+            // Placeholder so chevron appears; fetch triggers on expand
+            let placeholder = TreeItem::new(
+                format!(
+                    "types_loading_{}_{}_{}",
+                    profile_id, database_name, schema_name
+                ),
+                "Loading...".to_string(),
+            );
+
+            content.push(
+                TreeItem::new(types_item_id, "Data Types".to_string())
+                    .expanded(false)
+                    .children(vec![placeholder]),
+            );
+        }
+
+        // Schema-level Indexes folder
+        let indexes_cache_key = format!("{}__{}", database_name, schema_name);
+        let cached_indexes = schema_indexes.get(&indexes_cache_key);
+        let indexes_item_id = format!(
+            "schema_indexes_{}_{}_{}",
+            profile_id, database_name, schema_name
+        );
+
+        if let Some(indexes) = cached_indexes {
+            if !indexes.is_empty() {
+                let index_children: Vec<TreeItem> = indexes
+                    .iter()
+                    .map(|idx| {
+                        let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+                        let pk_marker = if idx.is_primary { " PK" } else { "" };
+                        let label = format!(
+                            "{}.{} ({}){}{}",
+                            idx.table_name,
+                            idx.name,
+                            idx.columns.join(", "),
+                            unique_marker,
+                            pk_marker
+                        );
+                        TreeItem::new(
+                            format!("sidx_{}__{}__{}", profile_id, schema_name, idx.name),
+                            label,
+                        )
+                    })
+                    .collect();
+
+                content.push(
+                    TreeItem::new(indexes_item_id, format!("Indexes ({})", indexes.len()))
+                        .expanded(false)
+                        .children(index_children),
+                );
+            } else {
+                content.push(
+                    TreeItem::new(indexes_item_id, "Indexes (0)".to_string())
+                        .expanded(false)
+                        .children(vec![]),
+                );
+            }
+        } else {
+            let placeholder = TreeItem::new(
+                format!(
+                    "schema_indexes_loading_{}_{}_{}",
+                    profile_id, database_name, schema_name
+                ),
+                "Loading...".to_string(),
+            );
+
+            content.push(
+                TreeItem::new(indexes_item_id, "Indexes".to_string())
+                    .expanded(false)
+                    .children(vec![placeholder]),
+            );
+        }
+
+        // Schema-level Foreign Keys folder
+        let fks_cache_key = format!("{}__{}", database_name, schema_name);
+        let cached_fks = schema_foreign_keys.get(&fks_cache_key);
+        let fks_item_id = format!(
+            "schema_fks_{}_{}_{}",
+            profile_id, database_name, schema_name
+        );
+
+        if let Some(fks) = cached_fks {
+            if !fks.is_empty() {
+                let fk_children: Vec<TreeItem> = fks
+                    .iter()
+                    .map(|fk| {
+                        let ref_table = if let Some(ref schema) = fk.referenced_schema {
+                            format!("{}.{}", schema, fk.referenced_table)
+                        } else {
+                            fk.referenced_table.clone()
+                        };
+                        let label = format!(
+                            "{}.{} -> {}",
+                            fk.table_name,
+                            fk.columns.join(", "),
+                            ref_table
+                        );
+                        TreeItem::new(
+                            format!("sfk_{}__{}__{}", profile_id, schema_name, fk.name),
+                            label,
+                        )
+                    })
+                    .collect();
+
+                content.push(
+                    TreeItem::new(fks_item_id, format!("Foreign Keys ({})", fks.len()))
+                        .expanded(false)
+                        .children(fk_children),
+                );
+            } else {
+                content.push(
+                    TreeItem::new(fks_item_id, "Foreign Keys (0)".to_string())
+                        .expanded(false)
+                        .children(vec![]),
+                );
+            }
+        } else {
+            let placeholder = TreeItem::new(
+                format!(
+                    "schema_fks_loading_{}_{}_{}",
+                    profile_id, database_name, schema_name
+                ),
+                "Loading...".to_string(),
+            );
+
+            content.push(
+                TreeItem::new(fks_item_id, "Foreign Keys".to_string())
+                    .expanded(false)
+                    .children(vec![placeholder]),
+            );
+        }
+
         content
+    }
+
+    fn build_custom_type_item(
+        profile_id: Uuid,
+        schema_name: &str,
+        custom_type: &CustomTypeInfo,
+    ) -> TreeItem {
+        let kind_label = match custom_type.kind {
+            CustomTypeKind::Enum => "enum",
+            CustomTypeKind::Domain => "domain",
+            CustomTypeKind::Composite => "composite",
+        };
+
+        let label = format!("{} ({})", custom_type.name, kind_label);
+
+        let mut children = Vec::new();
+
+        // For enums, show the values as children
+        if let Some(ref values) = custom_type.enum_values {
+            children = values
+                .iter()
+                .map(|v| {
+                    TreeItem::new(
+                        format!(
+                            "enumval_{}__{}__{}_{}",
+                            profile_id, schema_name, custom_type.name, v
+                        ),
+                        v.clone(),
+                    )
+                })
+                .collect();
+        }
+
+        // For domains, show the base type as a child
+        if let Some(ref base_type) = custom_type.base_type {
+            children.push(TreeItem::new(
+                format!(
+                    "basetype_{}__{}__{}",
+                    profile_id, schema_name, custom_type.name
+                ),
+                format!("Base: {}", base_type),
+            ));
+        }
+
+        TreeItem::new(
+            format!(
+                "customtype_{}__{}__{}",
+                profile_id, schema_name, custom_type.name
+            ),
+            label,
+        )
+        .expanded(false)
+        .children(children)
     }
 
     fn build_table_item(
@@ -3031,6 +3656,79 @@ impl Sidebar {
                 )
                 .expanded(false)
                 .children(index_children),
+            );
+        }
+
+        // foreign_keys: None = not loaded yet, Some([]) = loaded but empty
+        if let Some(ref fks) = effective_table.foreign_keys
+            && !fks.is_empty()
+        {
+            let fk_children: Vec<TreeItem> = fks
+                .iter()
+                .map(|fk| {
+                    let ref_table = if let Some(ref schema) = fk.referenced_schema {
+                        format!("{}.{}", schema, fk.referenced_table)
+                    } else {
+                        fk.referenced_table.clone()
+                    };
+                    let label = format!(
+                        "{} -> {}.{}",
+                        fk.columns.join(", "),
+                        ref_table,
+                        fk.referenced_columns.join(", ")
+                    );
+                    TreeItem::new(
+                        format!("fk_{}__{}__{}", profile_id, table.name, fk.name),
+                        label,
+                    )
+                })
+                .collect();
+
+            table_sections.push(
+                TreeItem::new(
+                    format!("fks_{}__{}__{}", profile_id, schema_name, table.name),
+                    format!("Foreign Keys ({})", fks.len()),
+                )
+                .expanded(false)
+                .children(fk_children),
+            );
+        }
+
+        // constraints: None = not loaded yet, Some([]) = loaded but empty
+        if let Some(ref constraints) = effective_table.constraints
+            && !constraints.is_empty()
+        {
+            let constraint_children: Vec<TreeItem> = constraints
+                .iter()
+                .map(|c| {
+                    let kind_label = match c.kind {
+                        ConstraintKind::Check => "CHECK",
+                        ConstraintKind::Unique => "UNIQUE",
+                        ConstraintKind::Exclusion => "EXCLUDE",
+                    };
+                    let detail = if c.kind == ConstraintKind::Check {
+                        c.check_clause.as_deref().unwrap_or("")
+                    } else {
+                        &c.columns.join(", ")
+                    };
+                    let label = format!("{} {} ({})", c.name, kind_label, detail);
+                    TreeItem::new(
+                        format!("constraint_{}__{}__{}", profile_id, table.name, c.name),
+                        label,
+                    )
+                })
+                .collect();
+
+            table_sections.push(
+                TreeItem::new(
+                    format!(
+                        "constraints_{}__{}__{}",
+                        profile_id, schema_name, table.name
+                    ),
+                    format!("Constraints ({})", constraints.len()),
+                )
+                .expanded(false)
+                .children(constraint_children),
             );
         }
 
@@ -3617,8 +4315,14 @@ impl Render for Sidebar {
                                         | TreeNodeKind::Schema
                                         | TreeNodeKind::TablesFolder
                                         | TreeNodeKind::ViewsFolder
+                                        | TreeNodeKind::TypesFolder
                                         | TreeNodeKind::ColumnsFolder
                                         | TreeNodeKind::IndexesFolder
+                                        | TreeNodeKind::ForeignKeysFolder
+                                        | TreeNodeKind::ConstraintsFolder
+                                        | TreeNodeKind::SchemaIndexesFolder
+                                        | TreeNodeKind::SchemaForeignKeysFolder
+                                        | TreeNodeKind::CustomType
                                         | TreeNodeKind::Database
                                         | TreeNodeKind::Profile
                                 );
@@ -3668,16 +4372,35 @@ impl Render for Sidebar {
                                     (Some(AppIcon::Table), "", color_teal)
                                 }
                                 TreeNodeKind::ViewsFolder => (Some(AppIcon::Eye), "", color_yellow),
+                                TreeNodeKind::TypesFolder => {
+                                    (Some(AppIcon::Braces), "", color_purple)
+                                }
                                 TreeNodeKind::Table => (Some(AppIcon::Table), "", color_teal),
                                 TreeNodeKind::View => (Some(AppIcon::Eye), "", color_yellow),
+                                TreeNodeKind::CustomType => {
+                                    (Some(AppIcon::Braces), "", color_purple)
+                                }
                                 TreeNodeKind::ColumnsFolder => {
                                     (Some(AppIcon::Columns), "", color_blue)
                                 }
-                                TreeNodeKind::IndexesFolder => {
+                                TreeNodeKind::IndexesFolder | TreeNodeKind::SchemaIndexesFolder => {
                                     (Some(AppIcon::Hash), "", color_purple)
                                 }
+                                TreeNodeKind::ForeignKeysFolder
+                                | TreeNodeKind::SchemaForeignKeysFolder => {
+                                    (Some(AppIcon::KeyRound), "", color_orange)
+                                }
+                                TreeNodeKind::ConstraintsFolder => {
+                                    (Some(AppIcon::Lock), "", color_yellow)
+                                }
                                 TreeNodeKind::Column => (Some(AppIcon::Columns), "", color_blue),
-                                TreeNodeKind::Index => (Some(AppIcon::Hash), "", color_purple),
+                                TreeNodeKind::Index | TreeNodeKind::SchemaIndex => {
+                                    (Some(AppIcon::Hash), "", color_purple)
+                                }
+                                TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+                                    (Some(AppIcon::KeyRound), "", color_orange)
+                                }
+                                TreeNodeKind::Constraint => (Some(AppIcon::Lock), "", color_yellow),
                                 TreeNodeKind::Unknown => (None, "", theme.muted_foreground),
                             };
 
@@ -3688,12 +4411,22 @@ impl Render for Sidebar {
                                 TreeNodeKind::Schema => color_schema,
                                 TreeNodeKind::TablesFolder
                                 | TreeNodeKind::ViewsFolder
+                                | TreeNodeKind::TypesFolder
                                 | TreeNodeKind::ColumnsFolder
-                                | TreeNodeKind::IndexesFolder => color_gray,
+                                | TreeNodeKind::IndexesFolder
+                                | TreeNodeKind::ForeignKeysFolder
+                                | TreeNodeKind::ConstraintsFolder
+                                | TreeNodeKind::SchemaIndexesFolder
+                                | TreeNodeKind::SchemaForeignKeysFolder => color_gray,
                                 TreeNodeKind::Table => color_teal,
                                 TreeNodeKind::View => color_yellow,
+                                TreeNodeKind::CustomType => color_purple,
                                 TreeNodeKind::Column => color_blue,
-                                TreeNodeKind::Index => color_purple,
+                                TreeNodeKind::Index | TreeNodeKind::SchemaIndex => color_purple,
+                                TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+                                    color_orange
+                                }
+                                TreeNodeKind::Constraint => color_yellow,
                                 TreeNodeKind::Unknown => theme.muted_foreground,
                             };
 
@@ -3848,8 +4581,11 @@ impl Render for Sidebar {
                                                         node_kind,
                                                         TreeNodeKind::TablesFolder
                                                             | TreeNodeKind::ViewsFolder
+                                                            | TreeNodeKind::TypesFolder
                                                             | TreeNodeKind::ColumnsFolder
                                                             | TreeNodeKind::IndexesFolder
+                                                            | TreeNodeKind::ForeignKeysFolder
+                                                            | TreeNodeKind::ConstraintsFolder
                                                     ),
                                                     |d| d.font_weight(FontWeight::MEDIUM),
                                                 )
@@ -4087,8 +4823,14 @@ impl Render for Sidebar {
                                     TreeNodeKind::Schema
                                         | TreeNodeKind::TablesFolder
                                         | TreeNodeKind::ViewsFolder
+                                        | TreeNodeKind::TypesFolder
                                         | TreeNodeKind::ColumnsFolder
                                         | TreeNodeKind::IndexesFolder
+                                        | TreeNodeKind::ForeignKeysFolder
+                                        | TreeNodeKind::ConstraintsFolder
+                                        | TreeNodeKind::SchemaIndexesFolder
+                                        | TreeNodeKind::SchemaForeignKeysFolder
+                                        | TreeNodeKind::CustomType
                                 );
                             if is_other_folder {
                                 let item_id_for_folder = item_id.clone();

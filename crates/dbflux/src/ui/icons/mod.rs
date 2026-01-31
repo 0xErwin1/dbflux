@@ -62,6 +62,8 @@ pub enum AppIcon {
     PanelBottomClose,
     PanelBottomOpen,
     FileSpreadsheet,
+    KeyRound,
+    Link2,
 
     // Connection / Network
     Plug,
@@ -139,6 +141,8 @@ impl AppIcon {
             Self::PanelBottomClose => "icons/ui/panel-bottom-close.svg",
             Self::PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
             Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
+            Self::KeyRound => "icons/ui/key-round.svg",
+            Self::Link2 => "icons/ui/link-2.svg",
             Self::Plug => "icons/ui/plug.svg",
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",

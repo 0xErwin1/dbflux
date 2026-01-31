@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{px, rems, App, Context, Entity, Global, Hsla, MouseButton, Window};
+use gpui::{App, Context, Entity, Global, Hsla, MouseButton, Window, px, rems};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
@@ -90,9 +90,7 @@ impl ToastHost {
 
     fn schedule_dismiss(&self, id: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(4))
-                .await;
+            cx.background_executor().timer(Duration::from_secs(4)).await;
 
             cx.update(|cx| {
                 if let Some(entity) = this.upgrade() {

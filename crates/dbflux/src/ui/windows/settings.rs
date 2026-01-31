@@ -558,6 +558,7 @@ impl SettingsWindow {
             ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_sidebar_item(
         &self,
         id: &'static str,

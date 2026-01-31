@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    px, Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
-    UniformListScrollHandle,
+    Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
+    UniformListScrollHandle, px,
 };
 
 use super::clipboard;
