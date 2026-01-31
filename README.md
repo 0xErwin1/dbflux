@@ -110,22 +110,26 @@ gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 
 ### User Interface
 
-- Three-panel workspace (Sidebar, Editor, Results)
-- Resizable and collapsible panels
-- Schema tree browser with tables, views, columns, and indexes
+- Document-based workspace with multiple result tabs (like DBeaver/VS Code)
+- Collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B)
+- Schema tree browser with lazy loading for large databases
+- Schema-level metadata: indexes, foreign keys, constraints, custom types (PostgreSQL)
 - Multi-tab SQL editor with syntax highlighting
-- Virtualized results table with column resizing
+- Virtualized data table with column resizing, horizontal scrolling, and sorting
 - Table browser with WHERE filters, custom LIMIT, and pagination
 - Command palette with fuzzy search
-- Toast notifications and background task panel
+- Custom toast notification system with auto-dismiss
+- Background task panel
 
 ### Keyboard Navigation
 
 - Vim-style navigation (`j`/`k`/`h`/`l`) throughout the app
-- Context-aware keybindings per panel
+- Context-aware keybindings (Document, Sidebar, BackgroundTasks)
+- Document focus with internal editor/results navigation
 - Results toolbar: `f` to focus, `h`/`l` to navigate, `Enter` to edit/execute, `Esc` to exit
-- Panel collapse with `z`
-- Tab cycling between panels
+- Toggle sidebar with `Ctrl+B`
+- Tab switching (MRU order) with `Ctrl+Tab` / `Ctrl+Shift+Tab`
+- History modal: `Ctrl+P` to open
 
 ### Query Management
 
@@ -195,6 +199,12 @@ nix-shell
 dbflux/
 ├── crates/
 │   ├── dbflux/                 # Main application
+│   │   ├── ui/
+│   │   │   ├── document/       # Document system (SqlQuery, DataDocument)
+│   │   │   ├── dock/           # SidebarDock, BottomDock
+│   │   │   ├── components/     # DataTable, icons
+│   │   │   └── ...             # Other UI panels
+│   │   └── keymap/             # Keyboard system
 │   ├── dbflux_core/            # Core types and traits
 │   ├── dbflux_driver_sqlite/   # SQLite driver
 │   ├── dbflux_driver_postgres/ # PostgreSQL driver
