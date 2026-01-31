@@ -335,6 +335,37 @@ impl Connection for SqliteConnection {
         SchemaLoadingStrategy::SingleDatabase
     }
 
+    fn table_details(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        log::info!("[SCHEMA] Fetching details for table: {}", table);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let columns = self.get_columns(&conn, table)?;
+        let indexes = self.get_indexes(&conn, table)?;
+
+        log::info!(
+            "[SCHEMA] Table {}: {} columns, {} indexes",
+            table,
+            columns.len(),
+            indexes.len()
+        );
+
+        Ok(TableInfo {
+            name: table.to_string(),
+            schema: None,
+            columns: Some(columns),
+            indexes: Some(indexes),
+        })
+    }
+
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
         SQLITE_CODE_GENERATORS
     }
@@ -367,17 +398,15 @@ impl SqliteConnection {
             .filter_map(|r| r.ok())
             .collect();
 
-        let mut tables = Vec::new();
-        for name in table_names {
-            let columns = self.get_columns(conn, &name)?;
-            let indexes = self.get_indexes(conn, &name)?;
-            tables.push(TableInfo {
+        let tables = table_names
+            .into_iter()
+            .map(|name| TableInfo {
                 name,
                 schema: None,
-                columns: Some(columns),
-                indexes: Some(indexes),
-            });
-        }
+                columns: None,
+                indexes: None,
+            })
+            .collect();
 
         Ok(tables)
     }
