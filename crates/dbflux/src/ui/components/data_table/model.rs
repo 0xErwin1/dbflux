@@ -33,10 +33,16 @@ pub struct RowData {
     pub cells: Vec<CellValue>,
 }
 
-/// Cell values use Arc<str> for text to avoid cloning large strings.
-/// Bytes only stores length for display.
+/// Cell values with pre-computed display strings.
+/// The display_text is computed once at construction to avoid per-frame allocation.
 #[derive(Debug, Clone)]
-pub enum CellValue {
+pub struct CellValue {
+    pub kind: CellKind,
+    display_text: Arc<str>,
+}
+
+#[derive(Debug, Clone)]
+pub enum CellKind {
     Null,
     Bool(bool),
     Int(i64),
@@ -145,46 +151,78 @@ fn infer_column_kind(type_name: &str) -> ColumnKind {
 impl From<&Value> for CellValue {
     fn from(value: &Value) -> Self {
         match value {
-            Value::Null => CellValue::Null,
-            Value::Bool(b) => CellValue::Bool(*b),
-            Value::Int(i) => CellValue::Int(*i),
-            Value::Float(f) => CellValue::Float(*f),
-            Value::Text(s) => CellValue::Text(s.as_str().into()),
-            Value::Bytes(b) => CellValue::Bytes(b.len()),
+            Value::Null => CellValue::null(),
+            Value::Bool(b) => CellValue::bool(*b),
+            Value::Int(i) => CellValue::int(*i),
+            Value::Float(f) => CellValue::float(*f),
+            Value::Text(s) => CellValue::text(s.as_str()),
+            Value::Bytes(b) => CellValue::bytes(b.len()),
         }
     }
 }
 
-impl CellValue {
-    pub fn display_string(&self) -> String {
-        self.display_string_truncated(200)
-    }
+const MAX_DISPLAY_LEN: usize = 200;
 
-    pub fn display_string_truncated(&self, max_len: usize) -> String {
-        match self {
-            CellValue::Null => "NULL".to_string(),
-            CellValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-            CellValue::Int(i) => i.to_string(),
-            CellValue::Float(f) => {
-                if f.fract() == 0.0 && f.abs() < 1e15 {
-                    format!("{:.1}", f)
-                } else {
-                    f.to_string()
-                }
-            }
-            CellValue::Text(s) => {
-                if s.len() <= max_len {
-                    s.to_string()
-                } else {
-                    let truncated: String = s.chars().take(max_len).collect();
-                    format!("{}...", truncated)
-                }
-            }
-            CellValue::Bytes(len) => format!("<{} bytes>", len),
+impl CellValue {
+    pub fn null() -> Self {
+        Self {
+            kind: CellKind::Null,
+            display_text: "NULL".into(),
         }
     }
 
+    pub fn bool(b: bool) -> Self {
+        Self {
+            kind: CellKind::Bool(b),
+            display_text: if b { "true" } else { "false" }.into(),
+        }
+    }
+
+    pub fn int(i: i64) -> Self {
+        Self {
+            kind: CellKind::Int(i),
+            display_text: i.to_string().into(),
+        }
+    }
+
+    pub fn float(f: f64) -> Self {
+        let display = if f.fract() == 0.0 && f.abs() < 1e15 {
+            format!("{:.1}", f)
+        } else {
+            f.to_string()
+        };
+        Self {
+            kind: CellKind::Float(f),
+            display_text: display.into(),
+        }
+    }
+
+    pub fn text(s: &str) -> Self {
+        let display_text = if s.len() <= MAX_DISPLAY_LEN {
+            Arc::from(s)
+        } else {
+            let truncated: String = s.chars().take(MAX_DISPLAY_LEN).collect();
+            format!("{}...", truncated).into()
+        };
+        Self {
+            kind: CellKind::Text(s.into()),
+            display_text,
+        }
+    }
+
+    pub fn bytes(len: usize) -> Self {
+        Self {
+            kind: CellKind::Bytes(len),
+            display_text: format!("<{} bytes>", len).into(),
+        }
+    }
+
+    /// Returns the pre-computed display text. Cloning Arc<str> is cheap (reference count bump).
+    pub fn display_text(&self) -> Arc<str> {
+        self.display_text.clone()
+    }
+
     pub fn is_null(&self) -> bool {
-        matches!(self, CellValue::Null)
+        matches!(self.kind, CellKind::Null)
     }
 }

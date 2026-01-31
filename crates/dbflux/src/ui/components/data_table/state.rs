@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
-    UniformListScrollHandle, px,
+    px, Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
+    UniformListScrollHandle,
 };
 
 use super::clipboard;
@@ -288,8 +288,8 @@ impl DataTableState {
             handle_offset.max(px(0.0))
         };
 
-        let diff = self.horizontal_offset - clamped_offset;
-        if diff > px(0.5) || diff < px(-0.5) {
+        let diff = (self.horizontal_offset - clamped_offset).abs();
+        if diff > px(1.0) {
             self.horizontal_offset = clamped_offset;
             cx.notify();
             return true;
