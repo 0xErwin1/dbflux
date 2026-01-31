@@ -75,6 +75,23 @@ executor.spawn({
 });
 ```
 
+### Performance Patterns
+
+**Pre-compute expensive operations**: Move string formatting and allocation into constructors rather than during rendering:
+```rust
+// Good: Format once during construction
+CellValue::Text { display: format!("{}", value), ... }
+
+// Bad: Format on every render
+fn render(&self) { format!("{}", self.value) }
+```
+
+**Lazy loading for large datasets**: Drivers should return shallow metadata initially and fetch details on-demand:
+```rust
+fn get_tables(&self) -> Vec<TableInfo> // Names only
+fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
+```
+
 ## GPUI Guidelines
 
 ### Context Types
@@ -220,22 +237,39 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 3. Add feature flag in `crates/dbflux/Cargo.toml`
 4. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 
+### Document System Pattern
+
+Documents follow a consistent pattern for tab-based UI:
+
+1. **Handle**: `DocumentHandle` wraps the entity and provides metadata
+2. **State**: Document struct implements `Render` with internal focus management
+3. **Tabs**: SqlQueryDocument supports multiple result tabs with `TabManager`
+4. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
+
 ## Common Pitfalls
 
 1. Forgetting `cx.notify()` after state changes
 2. Blocking UI thread — use `background_executor().spawn()` for DB ops
 3. Entity updates in render loops — guard with `.take()`
 4. Missing feature gates on driver code
+5. Creating closures per cell in tables — use row-level handlers with hit-testing instead
+6. Canvas re-rendering every frame — cache scroll state and only sync on meaningful changes
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `crates/dbflux/src/app.rs` | AppState, driver registry |
-| `crates/dbflux/src/ui/workspace.rs` | Main 3-pane layout, command dispatch |
-| `crates/dbflux/src/ui/sidebar.rs` | Schema tree |
-| `crates/dbflux/src/ui/editor.rs` | SQL editor |
-| `crates/dbflux/src/ui/results.rs` | Results table, toolbar navigation |
+| `crates/dbflux/src/ui/workspace.rs` | Main layout, command dispatch |
+| `crates/dbflux/src/ui/dock/sidebar_dock.rs` | Collapsible, resizable sidebar |
+| `crates/dbflux/src/ui/sidebar.rs` | Schema tree with lazy loading |
+| `crates/dbflux/src/ui/document/mod.rs` | Document system exports |
+| `crates/dbflux/src/ui/document/sql_query.rs` | SQL query document with multiple result tabs |
+| `crates/dbflux/src/ui/document/tab_manager.rs` | MRU tab ordering |
+| `crates/dbflux/src/ui/toast.rs` | Toast notification system |
+| `crates/dbflux/src/ui/components/data_table/table.rs` | Virtualized data table with phantom scroller |
 | `crates/dbflux/src/keymap/defaults.rs` | Key bindings per context |
 | `crates/dbflux/src/keymap/command.rs` | Command enum and dispatch |
+| `crates/dbflux/src/keymap/focus.rs` | FocusTarget (Document/Sidebar/BackgroundTasks) |
 | `crates/dbflux_core/src/traits.rs` | `DbDriver`, `Connection` traits |
+| `crates/dbflux_core/src/schema.rs` | Schema types with lazy loading support |

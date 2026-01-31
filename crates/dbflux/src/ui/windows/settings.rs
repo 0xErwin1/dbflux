@@ -1499,7 +1499,7 @@ impl SettingsWindow {
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
                                 .child(format!(
-                                    "Copyright © 2025 {} and contributors.",
+                                    "Copyright © 2026 {} and contributors.",
                                     author_name
                                 )),
                         )
