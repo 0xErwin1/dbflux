@@ -1,4 +1,4 @@
-use crate::app::{AppState, AppStateChanged};
+use crate::app::{AppState, AppStateChanged, ConnectedProfile};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
@@ -125,6 +125,30 @@ pub enum ContextMenuAction {
     RenameFolder,
     DeleteFolder,
     MoveToFolder(Option<Uuid>),
+    // Schema object SQL generation
+    GenerateIndexSql(IndexSqlAction),
+    GenerateForeignKeySql(ForeignKeySqlAction),
+    GenerateTypeSql(TypeSqlAction),
+}
+
+#[derive(Clone)]
+pub enum IndexSqlAction {
+    Create,
+    Drop,
+    Reindex,
+}
+
+#[derive(Clone)]
+pub enum ForeignKeySqlAction {
+    AddConstraint,
+    DropConstraint,
+}
+
+#[derive(Clone)]
+pub enum TypeSqlAction {
+    Create,
+    AddEnumValue,
+    Drop,
 }
 
 impl ContextMenuAction {
@@ -146,6 +170,9 @@ impl ContextMenuAction {
             Self::RenameFolder => Some(AppIcon::Pencil),
             Self::DeleteFolder => Some(AppIcon::Delete),
             Self::MoveToFolder(_) => Some(AppIcon::Folder),
+            Self::GenerateIndexSql(_) => Some(AppIcon::Code),
+            Self::GenerateForeignKeySql(_) => Some(AppIcon::Code),
+            Self::GenerateTypeSql(_) => Some(AppIcon::Code),
         }
     }
 }
@@ -986,6 +1013,529 @@ impl Sidebar {
         }
     }
 
+    fn get_current_database(conn: &ConnectedProfile) -> String {
+        conn.active_database
+            .clone()
+            .or_else(|| {
+                conn.schema
+                    .as_ref()
+                    .and_then(|s| s.current_database.clone())
+            })
+            .unwrap_or_else(|| "main".to_string())
+    }
+
+    fn get_db_kind_for_item(&self, item_id: &str, cx: &App) -> Option<DbKind> {
+        let profile_id = Self::extract_profile_id_from_item(item_id)?;
+        let state = self.app_state.read(cx);
+        let conn = state.connections.get(&profile_id)?;
+        Some(conn.connection.kind())
+    }
+
+    fn extract_profile_id_from_item(item_id: &str) -> Option<Uuid> {
+        // Try various prefixes used in item IDs
+        let prefixes = [
+            "idx_",
+            "sidx_",
+            "fk_",
+            "sfk_",
+            "customtype_",
+            "table_",
+            "view_",
+        ];
+
+        for prefix in prefixes {
+            if let Some(rest) = item_id.strip_prefix(prefix)
+                && rest.len() >= 36
+                && let Ok(uuid) = Uuid::parse_str(&rest[..36])
+            {
+                return Some(uuid);
+            }
+        }
+
+        None
+    }
+
+    fn is_enum_type(&self, item_id: &str, cx: &App) -> bool {
+        let Some((profile_id, schema_name, type_name)) = Self::parse_custom_type_id(item_id) else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&profile_id) else {
+            return false;
+        };
+
+        let current_db = Self::get_current_database(conn);
+        let cache_key = format!("{}__{}", current_db, schema_name);
+        if let Some(types) = conn.schema_types.get(&cache_key) {
+            return types
+                .iter()
+                .any(|t| t.name == type_name && t.kind == CustomTypeKind::Enum);
+        }
+
+        false
+    }
+
+    fn parse_custom_type_id(item_id: &str) -> Option<(Uuid, String, String)> {
+        let rest = item_id.strip_prefix("customtype_")?;
+        if rest.len() < 36 {
+            return None;
+        }
+
+        let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
+        let remainder = rest.get(38..)?;
+
+        let mut parts = remainder.splitn(2, "__");
+        let schema_name = parts.next()?.to_string();
+        let type_name = parts.next()?.to_string();
+
+        if type_name.is_empty() {
+            return None;
+        }
+
+        Some((profile_id, schema_name, type_name))
+    }
+
+    fn parse_index_id(item_id: &str) -> Option<(Uuid, String, String, bool)> {
+        // Table-level: idx_{profile_id}__{table_name}__{index_name}
+        if let Some(rest) = item_id.strip_prefix("idx_") {
+            if rest.len() < 36 {
+                return None;
+            }
+
+            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
+            let remainder = rest.get(38..)?;
+
+            let mut parts = remainder.splitn(2, "__");
+            let table_name = parts.next()?.to_string();
+            let index_name = parts.next()?.to_string();
+
+            if index_name.is_empty() {
+                return None;
+            }
+
+            return Some((profile_id, table_name, index_name, false));
+        }
+
+        // Schema-level: sidx_{profile_id}__{schema_name}__{index_name}
+        if let Some(rest) = item_id.strip_prefix("sidx_") {
+            if rest.len() < 36 {
+                return None;
+            }
+
+            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
+            let remainder = rest.get(38..)?;
+
+            let mut parts = remainder.splitn(2, "__");
+            let schema_name = parts.next()?.to_string();
+            let index_name = parts.next()?.to_string();
+
+            if index_name.is_empty() {
+                return None;
+            }
+
+            return Some((profile_id, schema_name, index_name, true));
+        }
+
+        None
+    }
+
+    fn parse_foreign_key_id(item_id: &str) -> Option<(Uuid, String, String, bool)> {
+        // Table-level: fk_{profile_id}__{table_name}__{fk_name}
+        if let Some(rest) = item_id.strip_prefix("fk_") {
+            if rest.len() < 36 {
+                return None;
+            }
+
+            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
+            let remainder = rest.get(38..)?;
+
+            let mut parts = remainder.splitn(2, "__");
+            let table_name = parts.next()?.to_string();
+            let fk_name = parts.next()?.to_string();
+
+            if fk_name.is_empty() {
+                return None;
+            }
+
+            return Some((profile_id, table_name, fk_name, false));
+        }
+
+        // Schema-level: sfk_{profile_id}__{schema_name}__{fk_name}
+        if let Some(rest) = item_id.strip_prefix("sfk_") {
+            if rest.len() < 36 {
+                return None;
+            }
+
+            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
+            let remainder = rest.get(38..)?;
+
+            let mut parts = remainder.splitn(2, "__");
+            let schema_name = parts.next()?.to_string();
+            let fk_name = parts.next()?.to_string();
+
+            if fk_name.is_empty() {
+                return None;
+            }
+
+            return Some((profile_id, schema_name, fk_name, true));
+        }
+
+        None
+    }
+
+    fn generate_index_sql(
+        &mut self,
+        item_id: &str,
+        action: IndexSqlAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((profile_id, context_name, index_name, is_schema_level)) =
+            Self::parse_index_id(item_id)
+        else {
+            log::warn!("Failed to parse index id: {}", item_id);
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&profile_id) else {
+            return;
+        };
+
+        let db_kind = conn.connection.kind();
+        let current_db = Self::get_current_database(conn);
+
+        // Find the index info
+        let index_info = if is_schema_level {
+            let cache_key = format!("{}__{}", current_db, context_name);
+            conn.schema_indexes.get(&cache_key).and_then(|indexes| {
+                indexes
+                    .iter()
+                    .find(|idx| idx.name == index_name)
+                    .map(|idx| (idx.table_name.clone(), idx.columns.clone(), idx.is_unique))
+            })
+        } else {
+            // For table-level, find in table_details
+            let table_name = context_name.clone();
+            conn.table_details
+                .values()
+                .find(|t| t.name == table_name)
+                .and_then(|t| t.indexes.as_ref())
+                .and_then(|indexes| {
+                    indexes
+                        .iter()
+                        .find(|idx| idx.name == index_name)
+                        .map(|idx| (table_name.clone(), idx.columns.clone(), idx.is_unique))
+                })
+        };
+
+        let sql = match action {
+            IndexSqlAction::Create => {
+                if let Some((table_name, columns, is_unique)) = index_info {
+                    let unique = if is_unique { "UNIQUE " } else { "" };
+                    let cols = columns.join(", ");
+
+                    match db_kind {
+                        DbKind::Postgres => format!(
+                            "CREATE {}INDEX {} ON {}.{} ({});",
+                            unique, index_name, context_name, table_name, cols
+                        ),
+                        DbKind::MySQL | DbKind::MariaDB => format!(
+                            "CREATE {}INDEX {} ON {}.{} ({});",
+                            unique, index_name, current_db, table_name, cols
+                        ),
+                        DbKind::SQLite => format!(
+                            "CREATE {}INDEX {} ON {} ({});",
+                            unique, index_name, table_name, cols
+                        ),
+                    }
+                } else {
+                    match db_kind {
+                        DbKind::Postgres => format!(
+                            "CREATE INDEX {} ON schema.table_name (column1, column2);",
+                            index_name
+                        ),
+                        DbKind::MySQL | DbKind::MariaDB => format!(
+                            "CREATE INDEX {} ON database.table_name (column1, column2);",
+                            index_name
+                        ),
+                        DbKind::SQLite => format!(
+                            "CREATE INDEX {} ON table_name (column1, column2);",
+                            index_name
+                        ),
+                    }
+                }
+            }
+
+            IndexSqlAction::Drop => match db_kind {
+                DbKind::Postgres => format!("DROP INDEX {}.{};", context_name, index_name),
+                DbKind::MySQL | DbKind::MariaDB => {
+                    if let Some((table_name, _, _)) = index_info {
+                        format!(
+                            "DROP INDEX {} ON {}.{};",
+                            index_name, current_db, table_name
+                        )
+                    } else {
+                        format!("DROP INDEX {} ON {}.table_name;", index_name, current_db)
+                    }
+                }
+                DbKind::SQLite => format!("DROP INDEX {};", index_name),
+            },
+
+            // REINDEX is filtered to only PostgreSQL and SQLite in build_context_menu_items
+            IndexSqlAction::Reindex => match db_kind {
+                DbKind::Postgres => format!("REINDEX INDEX {}.{};", context_name, index_name),
+                DbKind::SQLite => format!("REINDEX {};", index_name),
+                DbKind::MySQL | DbKind::MariaDB => {
+                    // This branch shouldn't be reached due to menu filtering, but handle gracefully
+                    format!("-- REINDEX not supported; index: {}", index_name)
+                }
+            },
+        };
+
+        cx.emit(SidebarEvent::GenerateSql(sql));
+    }
+
+    fn generate_foreign_key_sql(
+        &mut self,
+        item_id: &str,
+        action: ForeignKeySqlAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((profile_id, context_name, fk_name, is_schema_level)) =
+            Self::parse_foreign_key_id(item_id)
+        else {
+            log::warn!("Failed to parse foreign key id: {}", item_id);
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&profile_id) else {
+            return;
+        };
+
+        let db_kind = conn.connection.kind();
+        let current_db = Self::get_current_database(conn);
+
+        // Find the FK info
+        let fk_info = if is_schema_level {
+            let cache_key = format!("{}__{}", current_db, context_name);
+            conn.schema_foreign_keys.get(&cache_key).and_then(|fks| {
+                fks.iter().find(|fk| fk.name == fk_name).map(|fk| {
+                    (
+                        fk.table_name.clone(),
+                        fk.columns.clone(),
+                        fk.referenced_schema.clone(),
+                        fk.referenced_table.clone(),
+                        fk.referenced_columns.clone(),
+                        fk.on_delete.clone(),
+                        fk.on_update.clone(),
+                    )
+                })
+            })
+        } else {
+            // For table-level, find in table_details
+            let table_name = context_name.clone();
+            conn.table_details
+                .values()
+                .find(|t| t.name == table_name)
+                .and_then(|t| t.foreign_keys.as_ref())
+                .and_then(|fks| {
+                    fks.iter().find(|fk| fk.name == fk_name).map(|fk| {
+                        (
+                            table_name.clone(),
+                            fk.columns.clone(),
+                            fk.referenced_schema.clone(),
+                            fk.referenced_table.clone(),
+                            fk.referenced_columns.clone(),
+                            fk.on_delete.clone(),
+                            fk.on_update.clone(),
+                        )
+                    })
+                })
+        };
+
+        // SQLite is filtered out in build_context_menu_items (doesn't support ALTER TABLE for FKs)
+        let sql = match action {
+            ForeignKeySqlAction::AddConstraint => {
+                if let Some((
+                    table_name,
+                    columns,
+                    ref_schema,
+                    ref_table,
+                    ref_columns,
+                    on_delete,
+                    on_update,
+                )) = fk_info
+                {
+                    let cols = columns.join(", ");
+                    let ref_cols = ref_columns.join(", ");
+
+                    let ref_table_full = if let Some(schema) = ref_schema {
+                        format!("{}.{}", schema, ref_table)
+                    } else {
+                        ref_table
+                    };
+
+                    let on_delete_clause = on_delete
+                        .map(|d| format!(" ON DELETE {}", d))
+                        .unwrap_or_default();
+                    let on_update_clause = on_update
+                        .map(|u| format!(" ON UPDATE {}", u))
+                        .unwrap_or_default();
+
+                    match db_kind {
+                        DbKind::Postgres => format!(
+                            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({}){}{};",
+                            context_name,
+                            table_name,
+                            fk_name,
+                            cols,
+                            ref_table_full,
+                            ref_cols,
+                            on_delete_clause,
+                            on_update_clause
+                        ),
+                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
+                            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({}){}{};",
+                            current_db,
+                            table_name,
+                            fk_name,
+                            cols,
+                            ref_table_full,
+                            ref_cols,
+                            on_delete_clause,
+                            on_update_clause
+                        ),
+                    }
+                } else {
+                    match db_kind {
+                        DbKind::Postgres => format!(
+                            "ALTER TABLE schema.table_name\n    ADD CONSTRAINT {}\n    FOREIGN KEY (column_name)\n    REFERENCES ref_table (ref_column);",
+                            fk_name
+                        ),
+                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
+                            "ALTER TABLE database.table_name\n    ADD CONSTRAINT {}\n    FOREIGN KEY (column_name)\n    REFERENCES ref_table (ref_column);",
+                            fk_name
+                        ),
+                    }
+                }
+            }
+
+            ForeignKeySqlAction::DropConstraint => {
+                if let Some((table_name, ..)) = fk_info {
+                    match db_kind {
+                        DbKind::Postgres => format!(
+                            "ALTER TABLE {}.{} DROP CONSTRAINT {};",
+                            context_name, table_name, fk_name
+                        ),
+                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
+                            "ALTER TABLE {}.{} DROP FOREIGN KEY {};",
+                            current_db, table_name, fk_name
+                        ),
+                    }
+                } else {
+                    match db_kind {
+                        DbKind::Postgres => {
+                            format!("ALTER TABLE schema.table_name DROP CONSTRAINT {};", fk_name)
+                        }
+                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
+                            "ALTER TABLE database.table_name DROP FOREIGN KEY {};",
+                            fk_name
+                        ),
+                    }
+                }
+            }
+        };
+
+        cx.emit(SidebarEvent::GenerateSql(sql));
+    }
+
+    fn generate_type_sql(&mut self, item_id: &str, action: TypeSqlAction, cx: &mut Context<Self>) {
+        let Some((profile_id, schema_name, type_name)) = Self::parse_custom_type_id(item_id) else {
+            log::warn!("Failed to parse custom type id: {}", item_id);
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections.get(&profile_id) else {
+            return;
+        };
+
+        let db_kind = conn.connection.kind();
+        let current_db = Self::get_current_database(conn);
+
+        // Find the type info
+        let cache_key = format!("{}__{}", current_db, schema_name);
+        let type_info = conn
+            .schema_types
+            .get(&cache_key)
+            .and_then(|types| types.iter().find(|t| t.name == type_name));
+
+        // Only PostgreSQL supports custom types (filtered in build_context_menu_items)
+        let sql = match action {
+            TypeSqlAction::Create => {
+                if let Some(type_info) = type_info {
+                    match type_info.kind {
+                        CustomTypeKind::Enum => {
+                            let values = type_info
+                                .enum_values
+                                .as_ref()
+                                .map(|v| {
+                                    v.iter()
+                                        .map(|s| format!("'{}'", s))
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_else(|| "'value1', 'value2'".to_string());
+
+                            format!(
+                                "CREATE TYPE {}.{} AS ENUM ({});",
+                                schema_name, type_name, values
+                            )
+                        }
+                        CustomTypeKind::Domain => {
+                            let base_type = type_info
+                                .base_type
+                                .as_ref()
+                                .cloned()
+                                .unwrap_or_else(|| "text".to_string());
+
+                            format!(
+                                "CREATE DOMAIN {}.{} AS {};",
+                                schema_name, type_name, base_type
+                            )
+                        }
+                        CustomTypeKind::Composite => {
+                            format!(
+                                "CREATE TYPE {}.{} AS (\n    field1 type1,\n    field2 type2\n);",
+                                schema_name, type_name
+                            )
+                        }
+                    }
+                } else {
+                    format!(
+                        "CREATE TYPE {}.{} AS ENUM ('value1', 'value2');",
+                        schema_name, type_name
+                    )
+                }
+            }
+
+            TypeSqlAction::AddEnumValue => {
+                format!(
+                    "ALTER TYPE {}.{} ADD VALUE 'new_value';",
+                    schema_name, type_name
+                )
+            }
+
+            TypeSqlAction::Drop => format!("DROP TYPE {}.{};", schema_name, type_name),
+        };
+
+        let _ = db_kind;
+
+        cx.emit(SidebarEvent::GenerateSql(sql));
+    }
+
     fn find_table_for_item<'a>(
         parts: &ItemIdParts,
         schema: &'a Option<SchemaSnapshot>,
@@ -1553,6 +2103,98 @@ impl Sidebar {
 
                 items
             }
+
+            TreeNodeKind::Index | TreeNodeKind::SchemaIndex => {
+                let db_kind = self.get_db_kind_for_item(item_id, cx);
+
+                let mut submenu = vec![
+                    ContextMenuItem {
+                        label: "CREATE INDEX".into(),
+                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Create),
+                    },
+                    ContextMenuItem {
+                        label: "DROP INDEX".into(),
+                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Drop),
+                    },
+                ];
+
+                // REINDEX is supported by PostgreSQL and SQLite, not MySQL/MariaDB
+                if matches!(db_kind, Some(DbKind::Postgres) | Some(DbKind::SQLite)) {
+                    submenu.push(ContextMenuItem {
+                        label: "REINDEX".into(),
+                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Reindex),
+                    });
+                }
+
+                vec![ContextMenuItem {
+                    label: "Generate SQL".into(),
+                    action: ContextMenuAction::Submenu(submenu),
+                }]
+            }
+
+            TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+                let db_kind = self.get_db_kind_for_item(item_id, cx);
+
+                // SQLite doesn't support ALTER TABLE ADD/DROP CONSTRAINT for FKs
+                if matches!(db_kind, Some(DbKind::SQLite)) {
+                    return vec![];
+                }
+
+                vec![ContextMenuItem {
+                    label: "Generate SQL".into(),
+                    action: ContextMenuAction::Submenu(vec![
+                        ContextMenuItem {
+                            label: "ADD CONSTRAINT".into(),
+                            action: ContextMenuAction::GenerateForeignKeySql(
+                                ForeignKeySqlAction::AddConstraint,
+                            ),
+                        },
+                        ContextMenuItem {
+                            label: "DROP CONSTRAINT".into(),
+                            action: ContextMenuAction::GenerateForeignKeySql(
+                                ForeignKeySqlAction::DropConstraint,
+                            ),
+                        },
+                    ]),
+                }]
+            }
+
+            TreeNodeKind::CustomType => {
+                let db_kind = self.get_db_kind_for_item(item_id, cx);
+
+                // Only PostgreSQL supports custom types
+                if !matches!(db_kind, Some(DbKind::Postgres)) {
+                    return vec![];
+                }
+
+                let mut submenu = vec![
+                    ContextMenuItem {
+                        label: "CREATE TYPE".into(),
+                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
+                    },
+                    ContextMenuItem {
+                        label: "DROP TYPE".into(),
+                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
+                    },
+                ];
+
+                // Check if this is an enum type to show ADD VALUE option
+                if self.is_enum_type(item_id, cx) {
+                    submenu.insert(
+                        1,
+                        ContextMenuItem {
+                            label: "ADD VALUE".into(),
+                            action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
+                        },
+                    );
+                }
+
+                vec![ContextMenuItem {
+                    label: "Generate SQL".into(),
+                    action: ContextMenuAction::Submenu(submenu),
+                }]
+            }
+
             _ => vec![],
         }
     }
@@ -1767,6 +2409,15 @@ impl Sidebar {
             }
             ContextMenuAction::MoveToFolder(target_folder_id) => {
                 self.move_item_to_folder(&item_id, target_folder_id, cx);
+            }
+            ContextMenuAction::GenerateIndexSql(action) => {
+                self.generate_index_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateForeignKeySql(action) => {
+                self.generate_foreign_key_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateTypeSql(action) => {
+                self.generate_type_sql(&item_id, action, cx);
             }
         }
 
@@ -4791,7 +5442,105 @@ impl Render for Sidebar {
                                             } else {
                                                 el
                                             }
-                                        }),
+                                        })
+                                        // Menu button for items that have context menus
+                                        .when(
+                                            matches!(
+                                                node_kind,
+                                                TreeNodeKind::Profile
+                                                    | TreeNodeKind::ConnectionFolder
+                                                    | TreeNodeKind::Table
+                                                    | TreeNodeKind::View
+                                                    | TreeNodeKind::Database
+                                                    | TreeNodeKind::Index
+                                                    | TreeNodeKind::SchemaIndex
+                                                    | TreeNodeKind::ForeignKey
+                                                    | TreeNodeKind::SchemaForeignKey
+                                                    | TreeNodeKind::CustomType
+                                            ),
+                                            |el| {
+                                                let sidebar_for_menu = sidebar_entity.clone();
+                                                let item_id_for_menu = item_id.clone();
+                                                let hover_bg = theme.secondary;
+                                                let has_menu = node_kind != TreeNodeKind::Database
+                                                    || !is_active_database;
+
+                                                el.when(has_menu, |el| {
+                                                    el.child(
+                                                        div()
+                                                            .id(SharedString::from(format!(
+                                                                "menu-btn-{}",
+                                                                item_id_for_menu
+                                                            )))
+                                                            .flex_shrink_0()
+                                                            .ml_auto()
+                                                            .px_1()
+                                                            .rounded(Radii::SM)
+                                                            .cursor_pointer()
+                                                            .hover(move |d| d.bg(hover_bg))
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                |_, _, cx| {
+                                                                    cx.stop_propagation();
+                                                                },
+                                                            )
+                                                            .on_click({
+                                                                let sidebar = sidebar_for_menu.clone();
+                                                                let item_id = item_id_for_menu.clone();
+                                                                move |event, _, cx| {
+                                                                    cx.stop_propagation();
+                                                                    let position = event.position();
+                                                                    sidebar.update(cx, |this, cx| {
+                                                                        cx.emit(
+                                                                            SidebarEvent::RequestFocus,
+                                                                        );
+                                                                        this.open_menu_for_item(
+                                                                            &item_id, position, cx,
+                                                                        );
+                                                                    });
+                                                                }
+                                                            })
+                                                            .child("⋯"),
+                                                    )
+                                                })
+                                            },
+                                        )
+                                        // Right-click context menu
+                                        .when(
+                                            matches!(
+                                                node_kind,
+                                                TreeNodeKind::Profile
+                                                    | TreeNodeKind::ConnectionFolder
+                                                    | TreeNodeKind::Table
+                                                    | TreeNodeKind::View
+                                                    | TreeNodeKind::Database
+                                                    | TreeNodeKind::Index
+                                                    | TreeNodeKind::SchemaIndex
+                                                    | TreeNodeKind::ForeignKey
+                                                    | TreeNodeKind::SchemaForeignKey
+                                                    | TreeNodeKind::CustomType
+                                            ),
+                                            |el| {
+                                                let sidebar_for_ctx = sidebar_entity.clone();
+                                                let item_id_for_ctx = item_id.clone();
+
+                                                el.on_mouse_down(
+                                                    MouseButton::Right,
+                                                    move |event, _, cx| {
+                                                        cx.stop_propagation();
+                                                        let position = event.position;
+                                                        sidebar_for_ctx.update(cx, |this, cx| {
+                                                            cx.emit(SidebarEvent::RequestFocus);
+                                                            this.open_menu_for_item(
+                                                                &item_id_for_ctx,
+                                                                position,
+                                                                cx,
+                                                            );
+                                                        });
+                                                    },
+                                                )
+                                            },
+                                        ),
                                 );
 
                             if node_kind.shows_pointer_cursor() {
@@ -4840,101 +5589,6 @@ impl Render for Sidebar {
                                     sidebar_for_folder.update(cx, |this, cx| {
                                         this.toggle_item_expansion(&item_id_for_folder, cx);
                                     });
-                                });
-                            }
-
-                            if matches!(
-                                node_kind,
-                                TreeNodeKind::Profile | TreeNodeKind::ConnectionFolder
-                            ) {
-                                let sidebar_for_menu = sidebar_entity.clone();
-                                let item_id_for_menu = item_id.clone();
-                                let hover_bg = theme.secondary;
-
-                                list_item = list_item.suffix(move |_window, _cx| {
-                                    let sidebar = sidebar_for_menu.clone();
-                                    let item_id = item_id_for_menu.clone();
-
-                                    div()
-                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                        .px_1()
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .hover(move |d| d.bg(hover_bg))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .on_click(move |event, _, cx| {
-                                            cx.stop_propagation();
-                                            let position = event.position();
-                                            sidebar.update(cx, |this, cx| {
-                                                cx.emit(SidebarEvent::RequestFocus);
-                                                this.open_menu_for_item(&item_id, position, cx);
-                                            });
-                                        })
-                                        .child("⋯")
-                                });
-                            }
-
-                            // Table/View menu
-                            if matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View) {
-                                let item_id_for_menu = item_id.clone();
-                                let sidebar_for_menu = sidebar_entity.clone();
-                                let hover_bg = theme.secondary;
-
-                                list_item = list_item.suffix(move |_window, _cx| {
-                                    let sidebar = sidebar_for_menu.clone();
-                                    let item_id = item_id_for_menu.clone();
-
-                                    div()
-                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                        .px_1()
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .hover(move |d| d.bg(hover_bg))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .on_click(move |event, _, cx| {
-                                            cx.stop_propagation();
-                                            let position = event.position();
-                                            sidebar.update(cx, |this, cx| {
-                                                cx.emit(SidebarEvent::RequestFocus);
-                                                this.open_menu_for_item(&item_id, position, cx);
-                                            });
-                                        })
-                                        .child("⋯")
-                                });
-                            }
-
-                            // Database menu (only show if not current database)
-                            if node_kind == TreeNodeKind::Database && !is_active_database {
-                                let item_id_for_menu = item_id.clone();
-                                let sidebar_for_menu = sidebar_entity.clone();
-                                let hover_bg = theme.secondary;
-
-                                list_item = list_item.suffix(move |_window, _cx| {
-                                    let sidebar = sidebar_for_menu.clone();
-                                    let item_id = item_id_for_menu.clone();
-
-                                    div()
-                                        .id(SharedString::from(format!("menu-btn-{}", item_id)))
-                                        .px_1()
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .hover(move |d| d.bg(hover_bg))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .on_click(move |event, _, cx| {
-                                            cx.stop_propagation();
-                                            let position = event.position();
-                                            sidebar.update(cx, |this, cx| {
-                                                cx.emit(SidebarEvent::RequestFocus);
-                                                this.open_menu_for_item(&item_id, position, cx);
-                                            });
-                                        })
-                                        .child("⋯")
                                 });
                             }
 
