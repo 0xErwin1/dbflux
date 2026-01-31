@@ -13,7 +13,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
-use crate::ui::toast::ToastManager;
+use crate::ui::toast::{ToastGlobal, ToastHost};
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
@@ -21,7 +21,6 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
-use gpui_component::notification::NotificationList;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 
 /// State for collapsible panels (tasks panel).
@@ -50,7 +49,7 @@ pub struct Workspace {
     sidebar_dock: Entity<SidebarDock>,
     status_bar: Entity<StatusBar>,
     tasks_panel: Entity<TasksPanel>,
-    notification_list: Entity<NotificationList>,
+    toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
 
     tab_manager: Entity<TabManager>,
@@ -69,13 +68,15 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        ToastManager::init(window, cx);
+        let toast_host = cx.new(|_cx| ToastHost::new());
+        cx.set_global(ToastGlobal {
+            host: toast_host.clone(),
+        });
 
         let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
         let status_bar = cx.new(|cx| StatusBar::new(app_state.clone(), window, cx));
         let tasks_panel = cx.new(|cx| TasksPanel::new(app_state.clone(), window, cx));
-        let notification_list = ToastManager::notification_list(cx);
 
         let tab_manager = cx.new(|_cx| TabManager::new());
         let tab_bar = cx.new(|cx| TabBar::new(tab_manager.clone(), cx));
@@ -161,7 +162,7 @@ impl Workspace {
             sidebar_dock,
             status_bar,
             tasks_panel,
-            notification_list,
+            toast_host,
             command_palette,
             tab_manager,
             tab_bar,
@@ -729,7 +730,7 @@ impl Render for Workspace {
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
         let tasks_panel = self.tasks_panel.clone();
-        let notification_list = self.notification_list.clone();
+        let toast_host = self.toast_host.clone();
         let command_palette = self.command_palette.clone();
 
         let tab_bar = self.tab_bar.clone();
@@ -1174,7 +1175,15 @@ impl Render for Workspace {
                     .child(status_bar),
             )
             .child(command_palette)
-            .child(notification_list)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(toast_host),
+            )
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
                 let theme = cx.theme();
