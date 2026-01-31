@@ -1,21 +1,32 @@
 #![allow(dead_code)]
 
+use super::data_document::{DataDocument, DataDocumentEvent};
 use super::sql_query::SqlQueryDocument;
-use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState};
-use crate::keymap::Command;
+use super::types::{
+    DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
+};
+use crate::keymap::{Command, ContextId};
+use dbflux_core::QueryResult;
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
+use std::sync::Arc;
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
 /// The `id` is stored inline for quick access without needing `cx`.
 ///
 /// Each variant stores the DocumentId inline plus the Entity<T> for the actual document.
+#[derive(Clone)]
 pub enum DocumentHandle {
+    /// SQL script with editor + embedded results.
     SqlQuery {
         id: DocumentId,
         entity: Entity<SqlQueryDocument>,
     },
+    /// Data grid document (table browser or promoted result).
+    Data {
+        id: DocumentId,
+        entity: Entity<DataDocument>,
+    },
     // Future variants:
-    // TableView { id: DocumentId, entity: Entity<TableViewDocument> },
     // RedisKeyBrowser { id: DocumentId, entity: Entity<RedisKeyBrowserDocument> },
     // RedisKey { id: DocumentId, entity: Entity<RedisKeyDocument> },
     // RedisConsole { id: DocumentId, entity: Entity<RedisConsoleDocument> },
@@ -29,17 +40,25 @@ impl DocumentHandle {
         Self::SqlQuery { id, entity }
     }
 
+    /// Creates a new Data document handle.
+    pub fn data(entity: Entity<DataDocument>, cx: &App) -> Self {
+        let id = entity.read(cx).id();
+        Self::Data { id, entity }
+    }
+
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
             Self::SqlQuery { id, .. } => *id,
+            Self::Data { id, .. } => *id,
         }
     }
 
     /// Document kind (no cx required).
     pub fn kind(&self) -> DocumentKind {
         match self {
-            Self::SqlQuery { .. } => DocumentKind::SqlQuery,
+            Self::SqlQuery { .. } => DocumentKind::Script,
+            Self::Data { .. } => DocumentKind::Data,
         }
     }
 
@@ -50,12 +69,28 @@ impl DocumentHandle {
                 let doc = entity.read(cx);
                 DocumentMetaSnapshot {
                     id: *id,
-                    kind: DocumentKind::SqlQuery,
+                    kind: DocumentKind::Script,
                     title: doc.title(),
                     icon: DocumentIcon::Sql,
                     state: doc.state(),
                     closable: true,
                     connection_id: doc.connection_id(),
+                }
+            }
+            Self::Data { id, entity } => {
+                let doc = entity.read(cx);
+                let icon = match doc.source_kind() {
+                    DataSourceKind::Table => DocumentIcon::Table,
+                    DataSourceKind::QueryResult => DocumentIcon::Table,
+                };
+                DocumentMetaSnapshot {
+                    id: *id,
+                    kind: DocumentKind::Data,
+                    title: doc.title(),
+                    icon,
+                    state: doc.state(),
+                    closable: true,
+                    connection_id: doc.connection_id(cx),
                 }
             }
         }
@@ -75,6 +110,7 @@ impl DocumentHandle {
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
             Self::SqlQuery { entity, .. } => entity.read(cx).can_close(),
+            Self::Data { entity, .. } => entity.read(cx).can_close(),
         }
     }
 
@@ -82,6 +118,7 @@ impl DocumentHandle {
     pub fn render(&self) -> AnyElement {
         match self {
             Self::SqlQuery { entity, .. } => entity.clone().into_any_element(),
+            Self::Data { entity, .. } => entity.clone().into_any_element(),
         }
     }
 
@@ -89,6 +126,9 @@ impl DocumentHandle {
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
             Self::SqlQuery { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
+            }
+            Self::Data { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
         }
@@ -100,10 +140,23 @@ impl DocumentHandle {
             Self::SqlQuery { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
+            Self::Data { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.focus(window, cx));
+            }
+        }
+    }
+
+    /// Returns the active context for keyboard handling.
+    /// Documents determine their context based on internal focus state.
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        match self {
+            Self::SqlQuery { entity, .. } => entity.read(cx).active_context(cx),
+            Self::Data { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
     /// Subscribe to document events (returns Subscription).
+    /// Note: For Data documents, events are converted to DocumentEvent.
     pub fn subscribe<F>(&self, cx: &mut App, callback: F) -> Subscription
     where
         F: Fn(&DocumentEvent, &mut App) + 'static,
@@ -112,6 +165,18 @@ impl DocumentHandle {
             Self::SqlQuery { entity, .. } => {
                 cx.subscribe(entity, move |_entity, event, cx| callback(event, cx))
             }
+            Self::Data { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
+                let doc_event = match event {
+                    DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
+                    DataDocumentEvent::PromoteResult { result, query } => {
+                        DocumentEvent::PromoteResult {
+                            result: result.clone(),
+                            query: query.clone(),
+                        }
+                    }
+                };
+                callback(&doc_event, cx);
+            }),
         }
     }
 }
@@ -125,4 +190,9 @@ pub enum DocumentEvent {
     ExecutionFinished,
     /// The document wants to close itself.
     RequestClose,
+    /// Request to promote a result to a standalone tab.
+    PromoteResult {
+        result: Arc<QueryResult>,
+        query: String,
+    },
 }

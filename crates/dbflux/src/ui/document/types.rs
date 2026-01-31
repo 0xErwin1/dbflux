@@ -21,14 +21,29 @@ impl Default for DocumentId {
 /// Supported document types.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocumentKind {
+    /// SQL script with editor + embedded results.
+    Script,
+    /// Data grid (table browser or promoted result).
+    Data,
+    // Legacy (kept for compatibility during migration)
     SqlQuery,
     TableView,
-    // v0.3.2+ (Redis)
+    // v0.4+ (Redis)
     RedisKeyBrowser,
     RedisKey,
     RedisConsole,
-    // v0.3.3+ (MongoDB)
+    // v0.5+ (MongoDB)
     MongoCollection,
+}
+
+/// Source kind for DataDocument (affects icon and behavior).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DataSourceKind {
+    /// Table browser (server-side pagination).
+    #[default]
+    Table,
+    /// Promoted query result (static data).
+    QueryResult,
 }
 
 /// Document icon (enum for type-safety).

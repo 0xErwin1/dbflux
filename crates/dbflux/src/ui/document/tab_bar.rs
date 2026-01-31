@@ -66,17 +66,16 @@ impl Render for TabBar {
             .bg(tab_bar_bg)
             .border_b_1()
             .border_color(border_color)
-            // Scrollable tabs container
             .child(
                 div()
                     .flex()
-                    .flex_1()
+                    .items_center()
                     .overflow_x_hidden()
                     .gap_px()
-                    .children(tabs),
+                    .children(tabs)
+                    .child(new_tab_btn),
             )
-            // New tab button
-            .child(new_tab_btn)
+            .child(div().flex_1())
     }
 }
 
@@ -155,8 +154,8 @@ impl TabBar {
                 })
             })
             // Icon
-            .child(svg().path(icon_path).size_3().text_color(if is_active {
-                cx.theme().accent
+            .child(svg().path(icon_path).size_4().text_color(if is_active {
+                cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
             }))

@@ -1,13 +1,11 @@
 use crate::app::{AppState, AppStateChanged};
-use crate::ui::editor::EditorPane;
 use crate::ui::icons::AppIcon;
-use crate::ui::results::ResultsPane;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
     CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, DbKind, SchemaLoadingStrategy,
-    SchemaSnapshot, TableInfo, TaskKind, ViewInfo,
+    SchemaSnapshot, TableInfo, TableRef, TaskKind, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -23,6 +21,11 @@ use uuid::Uuid;
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
+    /// Request to open a table in a new DataDocument tab
+    OpenTable {
+        profile_id: Uuid,
+        table: TableRef,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,11 +218,7 @@ enum TableDetailsStatus {
 
 pub struct Sidebar {
     app_state: Entity<AppState>,
-    #[allow(dead_code)]
-    editor: Entity<EditorPane>,
-    results: Entity<ResultsPane>,
     tree_state: Entity<TreeState>,
-    pending_view_table: Option<(Uuid, String)>,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
     visible_entry_count: usize,
@@ -272,13 +271,7 @@ struct DeleteConfirmState {
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
-    pub fn new(
-        app_state: Entity<AppState>,
-        editor: Entity<EditorPane>,
-        results: Entity<ResultsPane>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
         let visible_entry_count = Self::count_visible_entries(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
@@ -305,10 +298,7 @@ impl Sidebar {
 
         Self {
             app_state,
-            editor,
-            results,
             tree_state,
-            pending_view_table: None,
             pending_toast: None,
             connections_focused: false,
             visible_entry_count,
@@ -645,9 +635,11 @@ impl Sidebar {
 
     fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {
         if let Some(parts) = Self::parse_table_or_view_id(item_id) {
-            let qualified_name = format!("{}.{}", parts.schema_name, parts.object_name);
-            self.pending_view_table = Some((parts.profile_id, qualified_name));
-            cx.notify();
+            let table = TableRef::with_schema(&parts.schema_name, &parts.object_name);
+            cx.emit(SidebarEvent::OpenTable {
+                profile_id: parts.profile_id,
+                table,
+            });
         }
     }
 
@@ -3373,12 +3365,6 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some((profile_id, table_name)) = self.pending_view_table.take() {
-            self.results.update(cx, |results, cx| {
-                results.view_table_for_connection(profile_id, &table_name, window, cx);
-            });
-        }
-
         if let Some(toast) = self.pending_toast.take() {
             use crate::ui::toast::ToastExt;
             if toast.is_error {

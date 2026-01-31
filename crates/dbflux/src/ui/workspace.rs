@@ -6,9 +6,11 @@ use crate::ui::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::editor::EditorPane;
+use crate::ui::document::{
+    DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
+    TabManagerEvent,
+};
 use crate::ui::icons::AppIcon;
-use crate::ui::results::{EditState, FocusMode, ResultsPane, ResultsReceived};
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
@@ -23,6 +25,7 @@ use gpui_component::Root;
 use gpui_component::notification::NotificationList;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 
+/// State for collapsible panels (tasks panel).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PanelState {
     Expanded,
@@ -46,15 +49,14 @@ pub struct Workspace {
     app_state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
     sidebar_dock: Entity<SidebarDock>,
-    editor: Entity<EditorPane>,
-    results: Entity<ResultsPane>,
     status_bar: Entity<StatusBar>,
     tasks_panel: Entity<TasksPanel>,
     notification_list: Entity<NotificationList>,
     command_palette: Entity<CommandPalette>,
 
-    editor_state: PanelState,
-    results_state: PanelState,
+    tab_manager: Entity<TabManager>,
+    tab_bar: Entity<TabBar>,
+
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
     pending_sql: Option<String>,
@@ -70,21 +72,14 @@ impl Workspace {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         ToastManager::init(window, cx);
 
-        let results = cx.new(|cx| ResultsPane::new(app_state.clone(), window, cx));
-        let editor = cx.new(|cx| EditorPane::new(app_state.clone(), results.clone(), window, cx));
-        let sidebar = cx.new(|cx| {
-            Sidebar::new(
-                app_state.clone(),
-                editor.clone(),
-                results.clone(),
-                window,
-                cx,
-            )
-        });
+        let sidebar = cx.new(|cx| Sidebar::new(app_state.clone(), window, cx));
         let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
         let status_bar = cx.new(|cx| StatusBar::new(app_state.clone(), window, cx));
         let tasks_panel = cx.new(|cx| TasksPanel::new(app_state.clone(), window, cx));
         let notification_list = ToastManager::notification_list(cx);
+
+        let tab_manager = cx.new(|_cx| TabManager::new());
+        let tab_bar = cx.new(|cx| TabBar::new(tab_manager.clone(), cx));
 
         let command_palette = cx.new(|cx| {
             let mut palette = CommandPalette::new(window, cx);
@@ -94,11 +89,6 @@ impl Workspace {
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
-        })
-        .detach();
-
-        cx.subscribe(&results, |this, _, _: &ResultsReceived, cx| {
-            this.on_results_received(cx);
         })
         .detach();
 
@@ -114,16 +104,23 @@ impl Workspace {
         })
         .detach();
 
-        cx.subscribe(&sidebar, |this, _, event: &SidebarEvent, cx| match event {
-            SidebarEvent::GenerateSql(sql) => {
-                this.pending_sql = Some(sql.clone());
-                cx.notify();
-            }
-            SidebarEvent::RequestFocus => {
-                this.pending_focus = Some(FocusTarget::Sidebar);
-                cx.notify();
-            }
-        })
+        cx.subscribe_in(
+            &sidebar,
+            window,
+            |this, _, event: &SidebarEvent, window, cx| match event {
+                SidebarEvent::GenerateSql(sql) => {
+                    this.pending_sql = Some(sql.clone());
+                    cx.notify();
+                }
+                SidebarEvent::RequestFocus => {
+                    this.pending_focus = Some(FocusTarget::Sidebar);
+                    cx.notify();
+                }
+                SidebarEvent::OpenTable { profile_id, table } => {
+                    this.open_table_document(*profile_id, table.clone(), window, cx);
+                }
+            },
+        )
         .detach();
 
         cx.subscribe(
@@ -133,8 +130,7 @@ impl Workspace {
                     this.open_settings(cx);
                 }
                 SidebarDockEvent::Collapsed => {
-                    // When collapsed, move focus to editor
-                    this.pending_focus = Some(FocusTarget::Editor);
+                    this.pending_focus = Some(FocusTarget::Document);
                     cx.notify();
                 }
                 SidebarDockEvent::Expanded => {
@@ -146,6 +142,29 @@ impl Workspace {
         )
         .detach();
 
+        cx.subscribe_in(
+            &tab_bar,
+            window,
+            |this, _, event: &TabBarEvent, window, cx| match event {
+                TabBarEvent::NewTabRequested => {
+                    this.new_query_tab(window, cx);
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &tab_manager,
+            window,
+            |this, _, event: &TabManagerEvent, window, cx| match event {
+                TabManagerEvent::PromoteResult { result, query } => {
+                    this.promote_result_to_tab(result.clone(), query.clone(), window, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
@@ -153,14 +172,12 @@ impl Workspace {
             app_state,
             sidebar,
             sidebar_dock,
-            editor,
-            results,
             status_bar,
             tasks_panel,
             notification_list,
             command_palette,
-            editor_state: PanelState::Expanded,
-            results_state: PanelState::Expanded,
+            tab_manager,
+            tab_bar,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
@@ -219,24 +236,16 @@ impl Workspace {
         if self.command_palette.read(cx).is_visible() {
             return ContextId::CommandPalette;
         }
-        if self.editor.read(cx).history_modal_open(cx) {
-            // If the modal is in input mode (save/rename), don't use HistoryModal context
-            // so navigation keys pass through to the input
-            if !self.editor.read(cx).history_modal_input_mode(cx) {
-                return ContextId::HistoryModal;
-            }
-        }
-
-        // When editing filter/limit inputs in Results, use TextInput context
-        // to let keyboard input pass through instead of triggering commands
-        if self.focus_target == FocusTarget::Results
-            && self.results.read(cx).edit_state() == EditState::Editing
-        {
-            return ContextId::TextInput;
-        }
 
         if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {
             return ContextId::TextInput;
+        }
+
+        // When focused on document area, delegate context to the active document
+        if self.focus_target == FocusTarget::Document {
+            if let Some(doc) = self.tab_manager.read(cx).active_document() {
+                return doc.active_context(cx);
+            }
         }
 
         self.focus_target.to_context()
@@ -245,7 +254,7 @@ impl Workspace {
     pub fn set_focus(&mut self, target: FocusTarget, _window: &mut Window, cx: &mut Context<Self>) {
         // Don't allow focus on sidebar when it's collapsed
         let target = if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            FocusTarget::Editor
+            FocusTarget::Document
         } else {
             target
         };
@@ -262,85 +271,58 @@ impl Workspace {
 
     fn handle_command(&mut self, command_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match command_id {
-            // Editor
+            // Editor/Document commands - route to active document
             "new_query_tab" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.add_new_tab(window, cx);
-                });
+                self.new_query_tab(window, cx);
             }
             "run_query" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.run_query(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::RunQuery, window, cx);
+                }
             }
             "save_query" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.save_current_query(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::SaveQuery, window, cx);
+                }
             }
             "open_history" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.toggle_history_modal(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleHistoryDropdown, window, cx);
+                }
             }
             "cancel_query" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.cancel_query(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::CancelQuery, window, cx);
+                }
             }
 
             // Tabs
             "close_tab" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.close_current_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.close_active(cx);
                 });
             }
             "next_tab" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.next_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.next_visual_tab(cx);
                 });
             }
             "prev_tab" => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.prev_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.prev_visual_tab(cx);
                 });
             }
 
-            // Results
+            // Results - route to active document
             "export_results" => {
-                self.results.update(cx, |results, cx| {
-                    results.export_results(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ExportResults, window, cx);
+                }
             }
 
             // Connections
             "open_connection_manager" => {
-                let app_state = self.app_state.clone();
-                cx.spawn(async move |_this, cx| {
-                    cx.update(|cx| {
-                        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
-                        cx.open_window(
-                            WindowOptions {
-                                app_id: Some("dbflux".into()),
-                                titlebar: Some(TitlebarOptions {
-                                    title: Some("Connection Manager".into()),
-                                    ..Default::default()
-                                }),
-                                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                                kind: WindowKind::Floating,
-                                ..Default::default()
-                            },
-                            |window, cx| {
-                                let manager = cx
-                                    .new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
-                                cx.new(|cx| Root::new(manager, window, cx))
-                            },
-                        )
-                        .ok();
-                    })
-                    .ok();
-                })
-                .detach();
+                self.open_connection_manager(cx);
             }
             "disconnect" => {
                 self.disconnect_active(window, cx);
@@ -354,10 +336,16 @@ impl Workspace {
                 self.set_focus(FocusTarget::Sidebar, window, cx);
             }
             "focus_editor" => {
-                self.set_focus(FocusTarget::Editor, window, cx);
+                self.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusUp, window, cx);
+                }
             }
             "focus_results" => {
-                self.set_focus(FocusTarget::Results, window, cx);
+                self.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusDown, window, cx);
+                }
             }
             "focus_tasks" => {
                 self.set_focus(FocusTarget::BackgroundTasks, window, cx);
@@ -368,10 +356,16 @@ impl Workspace {
                 self.toggle_sidebar(cx);
             }
             "toggle_editor" => {
-                self.toggle_editor(cx);
+                // Route to active document if it supports layout toggling
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleEditor, window, cx);
+                }
             }
             "toggle_results" => {
-                self.toggle_results(cx);
+                // Route to active document if it supports layout toggling
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleResults, window, cx);
+                }
             }
             "toggle_tasks" => {
                 self.toggle_tasks_panel(cx);
@@ -511,6 +505,140 @@ impl Workspace {
         cx.toast_info("Refreshing schema...", window);
     }
 
+    /// Opens a table in a new DataDocument tab (v0.3).
+    fn open_table_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        table: dbflux_core::TableRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::toast::ToastExt;
+
+        // Check if connection exists
+        if !self
+            .app_state
+            .read(cx)
+            .connections
+            .contains_key(&profile_id)
+        {
+            cx.toast_error("No active connection for this table", window);
+            return;
+        }
+
+        // Create a DataDocument for the table
+        let doc = cx.new(|cx| {
+            DataDocument::new_for_table(
+                profile_id,
+                table.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::data(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
+    }
+
+    /// Creates a new SQL query tab (v0.3).
+    fn new_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Count existing query tabs for naming
+        let query_count = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Script))
+            .count();
+
+        let title = format!("Query {}", query_count + 1);
+
+        let doc = cx
+            .new(|cx| SqlQueryDocument::new(self.app_state.clone(), window, cx).with_title(title));
+        let handle = DocumentHandle::sql_query(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    fn new_query_tab_with_content(
+        &mut self,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Count existing query tabs for naming
+        let query_count = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Script))
+            .count();
+
+        let title = format!("Query {}", query_count + 1);
+
+        let doc = cx.new(|cx| {
+            let mut doc =
+                SqlQueryDocument::new(self.app_state.clone(), window, cx).with_title(title);
+            doc.set_content(&sql, window, cx);
+            doc
+        });
+        let handle = DocumentHandle::sql_query(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Promotes a query result to a standalone DataDocument tab.
+    fn promote_result_to_tab(
+        &mut self,
+        result: std::sync::Arc<dbflux_core::QueryResult>,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Generate a title for the result
+        let result_count = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Data))
+            .count();
+        let title = format!("Result {}", result_count + 1);
+
+        // Create the DataDocument
+        let doc = cx.new(|cx| {
+            DataDocument::new_for_result(
+                result,
+                query,
+                title.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::data(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        log::info!("Promoted query result to tab: {}", title);
+    }
+
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let was_visible = self.command_palette.read(cx).is_visible();
         self.command_palette.update(cx, |palette, cx| {
@@ -524,16 +652,6 @@ impl Workspace {
 
     pub fn toggle_tasks_panel(&mut self, cx: &mut Context<Self>) {
         self.tasks_state.toggle();
-        cx.notify();
-    }
-
-    pub fn toggle_editor(&mut self, cx: &mut Context<Self>) {
-        self.editor_state.toggle();
-        cx.notify();
-    }
-
-    pub fn toggle_results(&mut self, cx: &mut Context<Self>) {
-        self.results_state.toggle();
         cx.notify();
     }
 
@@ -563,13 +681,6 @@ impl Workspace {
             target = target.prev();
         }
         target
-    }
-
-    fn on_results_received(&mut self, cx: &mut Context<Self>) {
-        if !self.results_state.is_expanded() {
-            self.results_state = PanelState::Expanded;
-            cx.notify();
-        }
     }
 
     fn render_panel_header(
@@ -628,6 +739,14 @@ impl Workspace {
                     .child(title),
             )
     }
+
+    /// Renders the active document from TabManager (v0.3).
+    fn render_active_document(&self, cx: &App) -> Option<AnyElement> {
+        self.tab_manager
+            .read(cx)
+            .active_document()
+            .map(|doc| doc.render())
+    }
 }
 
 impl Render for Workspace {
@@ -637,11 +756,9 @@ impl Render for Workspace {
             self.focus_handle.focus(window);
         }
 
+        // Handle SQL generated from sidebar (e.g., SELECT * FROM table)
         if let Some(sql) = self.pending_sql.take() {
-            self.editor.update(cx, |editor, cx| {
-                editor.add_tab_with_content(sql, None, None, window, cx);
-            });
-            self.set_focus(FocusTarget::Editor, window, cx);
+            self.new_query_tab_with_content(sql, window, cx);
         }
 
         if let Some(target) = self.pending_focus.take() {
@@ -653,164 +770,178 @@ impl Render for Workspace {
             self.focus_handle.focus(window);
         }
 
-        let _sidebar = self.sidebar.clone();
         let sidebar_dock = self.sidebar_dock.clone();
-        let editor = self.editor.clone();
-        let results = self.results.clone();
         let status_bar = self.status_bar.clone();
         let tasks_panel = self.tasks_panel.clone();
         let notification_list = self.notification_list.clone();
         let command_palette = self.command_palette.clone();
 
-        let editor_expanded = self.editor_state.is_expanded();
-        let results_expanded = self.results_state.is_expanded();
-        let tasks_expanded = self.tasks_state.is_expanded();
+        let tab_bar = self.tab_bar.clone();
+        let has_tabs = !self.tab_manager.read(cx).is_empty();
+        let active_doc_element = self.render_active_document(cx);
 
-        let editor_focused = self.focus_target == FocusTarget::Editor;
-        let results_focused = self.focus_target == FocusTarget::Results;
+        let tasks_expanded = self.tasks_state.is_expanded();
         let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
 
         let theme = cx.theme();
         let bg_color = theme.background;
-
-        let editor_header = self.render_panel_header(
-            "Editor",
-            AppIcon::Code,
-            editor_expanded,
-            editor_focused,
-            Self::toggle_editor,
-            cx,
-        );
-        let results_header = self.render_panel_header(
-            "Results",
-            AppIcon::Table,
-            results_expanded,
-            results_focused,
-            Self::toggle_results,
-            cx,
-        );
-        let tasks_header = self.render_panel_header(
-            "Background Tasks",
-            AppIcon::Loader,
-            tasks_expanded,
-            tasks_focused,
-            Self::toggle_tasks_panel,
-            cx,
-        );
-
+        let muted_fg = theme.muted_foreground;
         let header_size = px(25.0);
 
-        let right_pane = v_resizable("main-panels")
-            .child(
-                resizable_panel()
-                    .size(if editor_expanded {
-                        px(300.0)
-                    } else {
-                        header_size
-                    })
-                    .size_range(if editor_expanded {
-                        px(100.0)..px(2000.0)
-                    } else {
-                        header_size..header_size
-                    })
-                    .child(
-                        div()
-                            .id("editor-panel")
-                            .flex()
-                            .flex_col()
-                            .size_full()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    if this.focus_target != FocusTarget::Editor {
-                                        this.set_focus(FocusTarget::Editor, window, cx);
-                                    }
-                                }),
-                            )
-                            .child(editor_header)
-                            .when(editor_expanded, |el| {
-                                el.child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .overflow_hidden()
-                                        .child(editor),
-                                )
-                            }),
-                    ),
-            )
-            .child(
-                resizable_panel()
-                    .size(if results_expanded {
-                        px(300.0)
-                    } else {
-                        header_size
-                    })
-                    .size_range(if results_expanded {
-                        px(100.0)..px(2000.0)
-                    } else {
-                        header_size..header_size
-                    })
-                    .child(
-                        div()
-                            .id("results-panel")
-                            .flex()
-                            .flex_col()
-                            .size_full()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    if this.focus_target != FocusTarget::Results {
-                                        this.set_focus(FocusTarget::Results, window, cx);
-                                    }
-                                }),
-                            )
-                            .child(results_header)
-                            .when(results_expanded, |el| {
-                                el.child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .overflow_hidden()
-                                        .child(results),
-                                )
-                            }),
-                    ),
-            )
-            .child(
-                resizable_panel()
-                    .size(if tasks_expanded {
-                        px(150.0)
-                    } else {
-                        header_size
-                    })
-                    .size_range(if tasks_expanded {
-                        px(80.0)..px(2000.0)
-                    } else {
-                        header_size..header_size
-                    })
-                    .child(
-                        div()
-                            .id("tasks-panel")
-                            .flex()
-                            .flex_col()
-                            .size_full()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    if this.focus_target != FocusTarget::BackgroundTasks {
-                                        this.set_focus(FocusTarget::BackgroundTasks, window, cx);
-                                    }
-                                }),
-                            )
-                            .child(tasks_header)
-                            .when(tasks_expanded, |el| {
-                                el.child(div().flex_1().overflow_hidden().child(tasks_panel))
-                            }),
-                    ),
+        let right_pane = if has_tabs {
+            let tasks_header = self.render_panel_header(
+                "Background Tasks",
+                AppIcon::Loader,
+                tasks_expanded,
+                tasks_focused,
+                Self::toggle_tasks_panel,
+                cx,
             );
+
+            v_resizable("main-panels")
+                .child(
+                    resizable_panel()
+                        .size(px(500.0))
+                        .size_range(px(200.0)..px(2000.0))
+                        .child(
+                            div()
+                                .id("document-area")
+                                .flex()
+                                .flex_col()
+                                .size_full()
+                                .child(tab_bar)
+                                .when_some(active_doc_element, |el, doc| {
+                                    el.child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .child(doc),
+                                    )
+                                }),
+                        ),
+                )
+                .child(
+                    resizable_panel()
+                        .size(if tasks_expanded {
+                            px(150.0)
+                        } else {
+                            header_size
+                        })
+                        .size_range(if tasks_expanded {
+                            px(80.0)..px(2000.0)
+                        } else {
+                            header_size..header_size
+                        })
+                        .child(
+                            div()
+                                .id("tasks-panel")
+                                .flex()
+                                .flex_col()
+                                .size_full()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        if this.focus_target != FocusTarget::BackgroundTasks {
+                                            this.set_focus(
+                                                FocusTarget::BackgroundTasks,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                                )
+                                .child(tasks_header)
+                                .when(tasks_expanded, |el| {
+                                    el.child(div().flex_1().overflow_hidden().child(tasks_panel))
+                                }),
+                        ),
+                )
+        } else {
+            // Empty state: welcome message + tasks panel
+            let tasks_header_empty = self.render_panel_header(
+                "Background Tasks",
+                AppIcon::Loader,
+                tasks_expanded,
+                tasks_focused,
+                Self::toggle_tasks_panel,
+                cx,
+            );
+
+            v_resizable("main-panels")
+                .child(
+                    resizable_panel()
+                        .size(px(500.0))
+                        .size_range(px(200.0)..px(2000.0))
+                        .child(
+                            div()
+                                .id("empty-state")
+                                .flex()
+                                .flex_col()
+                                .size_full()
+                                .items_center()
+                                .justify_center()
+                                .gap_4()
+                                .child(
+                                    svg()
+                                        .path(AppIcon::Database.path())
+                                        .size_16()
+                                        .text_color(muted_fg.opacity(0.5)),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(muted_fg)
+                                        .text_sm()
+                                        .child("No documents open"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(muted_fg.opacity(0.7))
+                                        .text_xs()
+                                        .child("Press Ctrl+N to create a new query"),
+                                ),
+                        ),
+                )
+                .child(
+                    resizable_panel()
+                        .size(if tasks_expanded {
+                            px(150.0)
+                        } else {
+                            header_size
+                        })
+                        .size_range(if tasks_expanded {
+                            px(80.0)..px(2000.0)
+                        } else {
+                            header_size..header_size
+                        })
+                        .child(
+                            div()
+                                .id("tasks-panel")
+                                .flex()
+                                .flex_col()
+                                .size_full()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        if this.focus_target != FocusTarget::BackgroundTasks {
+                                            this.set_focus(
+                                                FocusTarget::BackgroundTasks,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                                )
+                                .child(tasks_header_empty)
+                                .when(tasks_expanded, |el| {
+                                    el.child(
+                                        div().flex_1().overflow_hidden().child(tasks_panel.clone()),
+                                    )
+                                }),
+                        ),
+                )
+        };
 
         let focus_handle = self.focus_handle.clone();
 
@@ -843,71 +974,75 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|this, _: &keymap::NewQueryTab, window, cx| {
-                this.editor.update(cx, |editor, cx| {
-                    editor.add_new_tab(window, cx);
-                });
+                this.new_query_tab(window, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &keymap::CloseCurrentTab, _window, cx| {
-                    this.editor.update(cx, |editor, cx| {
-                        editor.close_current_tab(cx);
+                    this.tab_manager.update(cx, |mgr, cx| {
+                        mgr.close_active(cx);
                     });
                 }),
             )
             .on_action(cx.listener(|this, _: &keymap::NextTab, _window, cx| {
-                this.editor.update(cx, |editor, cx| {
-                    editor.next_tab(cx);
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.next_visual_tab(cx);
                 });
             }))
             .on_action(cx.listener(|this, _: &keymap::PrevTab, _window, cx| {
-                this.editor.update(cx, |editor, cx| {
-                    editor.prev_tab(cx);
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.prev_visual_tab(cx);
                 });
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab1, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(1, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(1, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab2, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(2, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(2, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab3, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(3, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(3, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab4, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(4, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(4, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab5, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(5, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(5, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab6, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(6, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(6, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab7, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(7, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(7, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab8, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(8, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(8, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::SwitchToTab9, _window, cx| {
-                this.editor
-                    .update(cx, |editor, cx| editor.switch_to_tab(9, cx));
+                this.tab_manager
+                    .update(cx, |mgr, cx| mgr.switch_to_tab(9, cx));
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusSidebar, window, cx| {
                 this.set_focus(FocusTarget::Sidebar, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusEditor, window, cx| {
-                this.set_focus(FocusTarget::Editor, window, cx);
+                this.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusUp, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusResults, window, cx| {
-                this.set_focus(FocusTarget::Results, window, cx);
+                this.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusDown, window, cx);
+                }
             }))
             .on_action(
                 cx.listener(|this, _: &keymap::FocusBackgroundTasks, window, cx| {
@@ -939,9 +1074,9 @@ impl Render for Workspace {
                 this.dispatch(Command::FocusDown, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::RunQuery, window, cx| {
-                this.editor.update(cx, |editor, cx| {
-                    editor.run_query(window, cx);
-                });
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::RunQuery, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &keymap::Cancel, window, cx| {
                 if this.command_palette.read(cx).is_visible() {
@@ -951,9 +1086,9 @@ impl Render for Workspace {
                 this.focus_handle.focus(window);
             }))
             .on_action(cx.listener(|this, _: &keymap::ExportResults, window, cx| {
-                this.results.update(cx, |results, cx| {
-                    results.export_results(window, cx);
-                });
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ExportResults, window, cx);
+                }
             }))
             .on_action(
                 cx.listener(|this, _: &keymap::OpenConnectionManager, _window, cx| {
@@ -966,11 +1101,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &keymap::RefreshSchema, window, cx| {
                 this.refresh_schema(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &keymap::ToggleEditor, _window, cx| {
-                this.toggle_editor(cx);
+            .on_action(cx.listener(|this, _: &keymap::ToggleEditor, window, cx| {
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleEditor, window, cx);
+                }
             }))
-            .on_action(cx.listener(|this, _: &keymap::ToggleResults, _window, cx| {
-                this.toggle_results(cx);
+            .on_action(cx.listener(|this, _: &keymap::ToggleResults, window, cx| {
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleResults, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleTasks, _window, cx| {
                 this.toggle_tasks_panel(cx);
@@ -1310,25 +1449,19 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::NewQueryTab => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.add_new_tab(window, cx);
-                });
-                self.set_focus(FocusTarget::Editor, window, cx);
-                self.editor.update(cx, |editor, cx| {
-                    editor.focus_input(window, cx);
-                });
+                self.new_query_tab(window, cx);
                 true
             }
             Command::RunQuery => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.run_query(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::RunQuery, window, cx);
+                }
                 true
             }
             Command::ExportResults => {
-                self.results.update(cx, |results, cx| {
-                    results.export_results(window, cx);
-                });
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ExportResults, window, cx);
+                }
                 true
             }
             Command::OpenConnectionManager => {
@@ -1344,11 +1477,17 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::ToggleEditor => {
-                self.toggle_editor(cx);
+                // Route to active document for layout toggle
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleEditor, window, cx);
+                }
                 true
             }
             Command::ToggleResults => {
-                self.toggle_results(cx);
+                // Route to active document for layout toggle
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleResults, window, cx);
+                }
                 true
             }
             Command::ToggleTasks => {
@@ -1367,11 +1506,17 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::FocusEditor => {
-                self.set_focus(FocusTarget::Editor, window, cx);
+                self.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusUp, window, cx);
+                }
                 true
             }
             Command::FocusResults => {
-                self.set_focus(FocusTarget::Results, window, cx);
+                self.set_focus(FocusTarget::Document, window, cx);
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusDown, window, cx);
+                }
                 true
             }
 
@@ -1386,46 +1531,42 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::NextTab => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.next_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.next_visual_tab(cx);
                 });
-                if self.focus_target == FocusTarget::Editor {
-                    self.editor.update(cx, |editor, cx| {
-                        editor.focus_input(window, cx);
-                    });
+                // Focus the newly active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.focus(window, cx);
                 }
                 true
             }
             Command::PrevTab => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.prev_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.prev_visual_tab(cx);
                 });
-                if self.focus_target == FocusTarget::Editor {
-                    self.editor.update(cx, |editor, cx| {
-                        editor.focus_input(window, cx);
-                    });
+                // Focus the newly active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.focus(window, cx);
                 }
                 true
             }
             Command::SwitchToTab(n) => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.switch_to_tab(n, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.switch_to_tab(n, cx);
                 });
-                if self.focus_target == FocusTarget::Editor {
-                    self.editor.update(cx, |editor, cx| {
-                        editor.focus_input(window, cx);
-                    });
+                // Focus the newly active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.focus(window, cx);
                 }
                 true
             }
             Command::CloseCurrentTab => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.close_current_tab(cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.close_active(cx);
                 });
-                if self.focus_target == FocusTarget::Editor {
-                    self.editor.update(cx, |editor, cx| {
-                        editor.focus_input(window, cx);
-                    });
+                // Focus the newly active document if any
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.focus(window, cx);
                 }
                 true
             }
@@ -1458,40 +1599,25 @@ impl CommandDispatcher for Workspace {
                     self.sidebar.update(cx, |s, cx| s.clear_selection(cx));
                     return true;
                 }
-                if self.editor.read(cx).history_modal_open(cx) {
-                    self.editor.update(cx, |editor, cx| {
-                        editor.history_modal.update(cx, |modal, cx| modal.close(cx));
-                        editor.focus_input(window, cx);
-                    });
-                    return true;
-                }
-                // Handle Results toolbar/edit mode cancellation
-                if self.focus_target == FocusTarget::Results {
-                    let (focus_mode, edit_state) = {
-                        let results = self.results.read(cx);
-                        (results.focus_mode(), results.edit_state())
-                    };
 
-                    if edit_state == EditState::Editing {
-                        // Exit edit mode, stay in toolbar navigation
-                        self.results
-                            .update(cx, |r, cx| r.exit_edit_mode(window, cx));
-                        return true;
-                    }
-                    if focus_mode == FocusMode::Toolbar {
-                        // Exit toolbar mode, go back to table
-                        self.results.update(cx, |r, cx| r.focus_table(window, cx));
+                // Route Cancel to active document (handles modals, edit modes, etc.)
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if doc.dispatch_command(Command::Cancel, window, cx) {
                         return true;
                     }
                 }
+
                 // Always focus workspace to blur any input and enable keyboard navigation
                 self.focus_handle.focus(window);
                 true
             }
 
             Command::CancelQuery => {
-                log::debug!("Command {:?} not yet implemented", cmd);
-                false
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::CancelQuery, window, cx);
+                }
+                true
             }
 
             Command::SelectNext => match self.focus_target {
@@ -1504,13 +1630,9 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    let focus_mode = self.results.read(cx).focus_mode();
-                    if focus_mode == FocusMode::Toolbar {
-                        // j in toolbar mode goes back to table
-                        self.results.update(cx, |r, cx| r.focus_table(window, cx));
-                    } else {
-                        self.results.update(cx, |r, cx| r.select_next(cx));
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::SelectNext, window, cx);
                     }
                     true
                 }
@@ -1527,13 +1649,9 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    let focus_mode = self.results.read(cx).focus_mode();
-                    if focus_mode == FocusMode::Toolbar {
-                        // k in toolbar mode does nothing (toolbar is above table)
-                        // Could potentially focus something above, but for now just ignore
-                    } else {
-                        self.results.update(cx, |r, cx| r.select_prev(cx));
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::SelectPrev, window, cx);
                     }
                     true
                 }
@@ -1550,8 +1668,10 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    self.results.update(cx, |r, cx| r.select_first(cx));
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::SelectFirst, window, cx);
+                    }
                     true
                 }
                 _ => false,
@@ -1567,8 +1687,10 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    self.results.update(cx, |r, cx| r.select_last(cx));
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::SelectLast, window, cx);
+                    }
                     true
                 }
                 _ => false,
@@ -1583,19 +1705,11 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Editor => {
-                    self.editor.update(cx, |e, cx| e.focus_input(window, cx));
-                    true
-                }
-                FocusTarget::Results => {
-                    let focus_mode = self.results.read(cx).focus_mode();
-                    if focus_mode == FocusMode::Toolbar {
-                        self.results
-                            .update(cx, |r, cx| r.toolbar_execute(window, cx));
-                        true
-                    } else {
-                        false
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::Execute, window, cx);
                     }
+                    true
                 }
                 _ => false,
             },
@@ -1612,7 +1726,6 @@ impl CommandDispatcher for Workspace {
             Command::ColumnLeft => match self.focus_target {
                 FocusTarget::Sidebar => {
                     if self.sidebar.read(cx).has_context_menu_open() {
-                        // If in submenu, go back to parent; otherwise close menu
                         let went_back = self.sidebar.update(cx, |s, cx| s.context_menu_go_back(cx));
                         if !went_back {
                             self.sidebar.update(cx, |s, cx| s.close_context_menu(cx));
@@ -1622,15 +1735,9 @@ impl CommandDispatcher for Workspace {
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    let focus_mode = self.results.read(cx).focus_mode();
-                    match focus_mode {
-                        FocusMode::Table => {
-                            self.results.update(cx, |r, cx| r.column_left(cx));
-                        }
-                        FocusMode::Toolbar => {
-                            self.results.update(cx, |r, cx| r.toolbar_left(cx));
-                        }
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::ColumnLeft, window, cx);
                     }
                     true
                 }
@@ -1640,22 +1747,15 @@ impl CommandDispatcher for Workspace {
             Command::ColumnRight => match self.focus_target {
                 FocusTarget::Sidebar => {
                     if self.sidebar.read(cx).has_context_menu_open() {
-                        // 'l' can also enter submenus (same as Enter)
                         self.sidebar.update(cx, |s, cx| s.context_menu_execute(cx));
                     } else {
                         self.sidebar.update(cx, |s, cx| s.expand(cx));
                     }
                     true
                 }
-                FocusTarget::Results => {
-                    let focus_mode = self.results.read(cx).focus_mode();
-                    match focus_mode {
-                        FocusMode::Table => {
-                            self.results.update(cx, |r, cx| r.column_right(cx));
-                        }
-                        FocusMode::Toolbar => {
-                            self.results.update(cx, |r, cx| r.toolbar_right(cx));
-                        }
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::ColumnRight, window, cx);
                     }
                     true
                 }
@@ -1663,14 +1763,10 @@ impl CommandDispatcher for Workspace {
             },
 
             Command::TogglePanel => match self.focus_target {
-                FocusTarget::Results => {
-                    self.results_state.toggle();
-                    cx.notify();
-                    true
-                }
-                FocusTarget::Editor => {
-                    self.editor_state.toggle();
-                    cx.notify();
+                FocusTarget::Document => {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::TogglePanel, window, cx);
+                    }
                     true
                 }
                 FocusTarget::BackgroundTasks => {
@@ -1682,27 +1778,24 @@ impl CommandDispatcher for Workspace {
             },
 
             Command::FocusToolbar => {
-                if self.focus_target == FocusTarget::Results {
-                    self.results.update(cx, |r, cx| r.focus_toolbar(cx));
-                    true
-                } else {
-                    false
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::FocusToolbar, window, cx);
                 }
+                true
             }
 
             Command::ToggleFavorite => false,
 
             // Directional focus navigation
-            // Layout:  Sidebar | Editor
-            //                  | Results
+            // Layout:  Sidebar | Document
             //                  | BackgroundTasks
             Command::FocusLeft => {
-                // From main area → Sidebar (only if expanded)
                 if self.is_sidebar_collapsed(cx) {
                     return false;
                 }
                 match self.focus_target {
-                    FocusTarget::Editor | FocusTarget::Results | FocusTarget::BackgroundTasks => {
+                    FocusTarget::Document | FocusTarget::BackgroundTasks => {
                         self.set_focus(FocusTarget::Sidebar, window, cx);
                         true
                     }
@@ -1711,10 +1804,9 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusRight => {
-                // From Sidebar → Editor
                 match self.focus_target {
                     FocusTarget::Sidebar => {
-                        self.set_focus(FocusTarget::Editor, window, cx);
+                        self.set_focus(FocusTarget::Document, window, cx);
                         true
                     }
                     _ => false,
@@ -1722,11 +1814,16 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusDown => {
-                // Editor → Results → BackgroundTasks (wrap to Editor)
+                // First try the active document (for internal editor→results navigation)
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if doc.dispatch_command(Command::FocusDown, window, cx) {
+                        return true;
+                    }
+                }
+                // Workspace-level: Document → BackgroundTasks
                 let next = match self.focus_target {
-                    FocusTarget::Editor => FocusTarget::Results,
-                    FocusTarget::Results => FocusTarget::BackgroundTasks,
-                    FocusTarget::BackgroundTasks => FocusTarget::Editor,
+                    FocusTarget::Document => FocusTarget::BackgroundTasks,
+                    FocusTarget::BackgroundTasks => FocusTarget::Document,
                     _ => return false,
                 };
                 self.set_focus(next, window, cx);
@@ -1734,11 +1831,16 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusUp => {
-                // BackgroundTasks → Results → Editor (wrap to Tasks)
+                // First try the active document (for internal results→editor navigation)
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if doc.dispatch_command(Command::FocusUp, window, cx) {
+                        return true;
+                    }
+                }
+                // Workspace-level: BackgroundTasks → Document
                 let prev = match self.focus_target {
-                    FocusTarget::BackgroundTasks => FocusTarget::Results,
-                    FocusTarget::Results => FocusTarget::Editor,
-                    FocusTarget::Editor => FocusTarget::BackgroundTasks,
+                    FocusTarget::BackgroundTasks => FocusTarget::Document,
+                    FocusTarget::Document => FocusTarget::BackgroundTasks,
                     _ => return false,
                 };
                 self.set_focus(prev, window, cx);
@@ -1746,23 +1848,26 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::ToggleHistoryDropdown => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.toggle_history_modal(window, cx);
-                });
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ToggleHistoryDropdown, window, cx);
+                }
                 true
             }
 
             Command::OpenSavedQueries => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.open_saved_queries(window, cx);
-                });
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::OpenSavedQueries, window, cx);
+                }
                 true
             }
 
             Command::SaveQuery => {
-                self.editor.update(cx, |editor, cx| {
-                    editor.save_current_query(window, cx);
-                });
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::SaveQuery, window, cx);
+                }
                 true
             }
 
@@ -1822,23 +1927,19 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::ResultsNextPage => {
-                if self.focus_target == FocusTarget::Results {
-                    self.results
-                        .update(cx, |r, cx| r.go_to_next_page(window, cx));
-                    true
-                } else {
-                    false
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ResultsNextPage, window, cx);
                 }
+                true
             }
 
             Command::ResultsPrevPage => {
-                if self.focus_target == FocusTarget::Results {
-                    self.results
-                        .update(cx, |r, cx| r.go_to_prev_page(window, cx));
-                    true
-                } else {
-                    false
+                // Route to active document
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::ResultsPrevPage, window, cx);
                 }
+                true
             }
 
             Command::ExtendSelectNext => {

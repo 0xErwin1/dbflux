@@ -4,52 +4,49 @@ use super::ContextId;
 ///
 /// This determines which context-specific keybindings are active and
 /// where navigation commands (like SelectNext) are routed.
+///
+/// Note: The actual context (Editor vs Results) for the Document area
+/// is determined by the active document's internal focus state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FocusTarget {
-    /// SQL editor area (default focus).
+    /// Active document tab area (editor + results combined).
+    /// The document itself determines if editor or results has internal focus.
     #[default]
-    Editor,
+    Document,
 
     /// Schema tree in the sidebar.
     Sidebar,
 
     /// Background tasks panel.
     BackgroundTasks,
-
-    /// Results table area.
-    Results,
 }
 
 impl FocusTarget {
-    /// Converts this focus target to its corresponding context ID.
+    /// Returns the base context for this focus target.
+    /// For Document, the actual context is determined by the document's internal state.
     pub fn to_context(self) -> ContextId {
         match self {
-            FocusTarget::Editor => ContextId::Editor,
+            FocusTarget::Document => ContextId::Editor, // Default, document overrides
             FocusTarget::Sidebar => ContextId::Sidebar,
             FocusTarget::BackgroundTasks => ContextId::BackgroundTasks,
-            FocusTarget::Results => ContextId::Results,
         }
     }
 
     /// Returns the next focus target in the Tab cycle order.
-    /// Order: Editor -> Sidebar -> BackgroundTasks -> Results -> Editor
     pub fn next(&self) -> FocusTarget {
         match self {
-            FocusTarget::Editor => FocusTarget::Sidebar,
+            FocusTarget::Document => FocusTarget::Sidebar,
             FocusTarget::Sidebar => FocusTarget::BackgroundTasks,
-            FocusTarget::BackgroundTasks => FocusTarget::Results,
-            FocusTarget::Results => FocusTarget::Editor,
+            FocusTarget::BackgroundTasks => FocusTarget::Document,
         }
     }
 
     /// Returns the previous focus target in the Tab cycle order.
-    /// Order: Editor -> Results -> BackgroundTasks -> Sidebar -> Editor
     pub fn prev(&self) -> FocusTarget {
         match self {
-            FocusTarget::Editor => FocusTarget::Results,
-            FocusTarget::Results => FocusTarget::BackgroundTasks,
+            FocusTarget::Document => FocusTarget::BackgroundTasks,
             FocusTarget::BackgroundTasks => FocusTarget::Sidebar,
-            FocusTarget::Sidebar => FocusTarget::Editor,
+            FocusTarget::Sidebar => FocusTarget::Document,
         }
     }
 
@@ -57,10 +54,9 @@ impl FocusTarget {
     #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
         match self {
-            FocusTarget::Editor => "Editor",
+            FocusTarget::Document => "Document",
             FocusTarget::Sidebar => "Sidebar",
             FocusTarget::BackgroundTasks => "Background Tasks",
-            FocusTarget::Results => "Results",
         }
     }
 }
@@ -70,10 +66,9 @@ mod tests {
     use super::FocusTarget;
 
     #[test]
-    fn focus_cycle_skips_history() {
-        assert_eq!(FocusTarget::Editor.next(), FocusTarget::Sidebar);
+    fn focus_cycle() {
+        assert_eq!(FocusTarget::Document.next(), FocusTarget::Sidebar);
         assert_eq!(FocusTarget::Sidebar.next(), FocusTarget::BackgroundTasks);
-        assert_eq!(FocusTarget::BackgroundTasks.next(), FocusTarget::Results);
-        assert_eq!(FocusTarget::Results.next(), FocusTarget::Editor);
+        assert_eq!(FocusTarget::BackgroundTasks.next(), FocusTarget::Document);
     }
 }
