@@ -85,6 +85,12 @@ fn global_layer() -> KeymapLayer {
         Command::FocusBackgroundTasks,
     );
 
+    // Toggle sidebar (Ctrl+B)
+    layer.bind(
+        KeyChord::new("b", Modifiers::ctrl()),
+        Command::ToggleSidebar,
+    );
+
     layer
 }
 

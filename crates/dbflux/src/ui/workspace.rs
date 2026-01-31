@@ -5,6 +5,7 @@ use crate::keymap::{
 use crate::ui::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
+use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::editor::EditorPane;
 use crate::ui::icons::AppIcon;
 use crate::ui::results::{EditState, FocusMode, ResultsPane, ResultsReceived};
@@ -20,7 +21,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::notification::NotificationList;
-use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_component::resizable::{resizable_panel, v_resizable};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PanelState {
@@ -44,6 +45,7 @@ impl PanelState {
 pub struct Workspace {
     app_state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
+    sidebar_dock: Entity<SidebarDock>,
     editor: Entity<EditorPane>,
     results: Entity<ResultsPane>,
     status_bar: Entity<StatusBar>,
@@ -79,6 +81,7 @@ impl Workspace {
                 cx,
             )
         });
+        let sidebar_dock = cx.new(|cx| SidebarDock::new(sidebar.clone(), cx));
         let status_bar = cx.new(|cx| StatusBar::new(app_state.clone(), window, cx));
         let tasks_panel = cx.new(|cx| TasksPanel::new(app_state.clone(), window, cx));
         let notification_list = ToastManager::notification_list(cx);
@@ -123,12 +126,33 @@ impl Workspace {
         })
         .detach();
 
+        cx.subscribe(
+            &sidebar_dock,
+            |this, _, event: &SidebarDockEvent, cx| match event {
+                SidebarDockEvent::OpenSettings => {
+                    this.open_settings(cx);
+                }
+                SidebarDockEvent::Collapsed => {
+                    // When collapsed, move focus to editor
+                    this.pending_focus = Some(FocusTarget::Editor);
+                    cx.notify();
+                }
+                SidebarDockEvent::Expanded => {
+                    // When expanded, focus the sidebar
+                    this.pending_focus = Some(FocusTarget::Sidebar);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
         Self {
             app_state,
             sidebar,
+            sidebar_dock,
             editor,
             results,
             status_bar,
@@ -183,6 +207,7 @@ impl Workspace {
             PaletteCommand::new("focus_tasks", "Focus Tasks Panel", "Focus")
                 .with_shortcut("Ctrl+Shift+4"),
             // View
+            PaletteCommand::new("toggle_sidebar", "Toggle Sidebar", "View").with_shortcut("Ctrl+B"),
             PaletteCommand::new("toggle_editor", "Toggle Editor Panel", "View"),
             PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
             PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
@@ -218,6 +243,13 @@ impl Workspace {
     }
 
     pub fn set_focus(&mut self, target: FocusTarget, _window: &mut Window, cx: &mut Context<Self>) {
+        // Don't allow focus on sidebar when it's collapsed
+        let target = if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
+            FocusTarget::Editor
+        } else {
+            target
+        };
+
         log::debug!("Focus changed to: {:?}", target);
         self.focus_target = target;
 
@@ -332,6 +364,9 @@ impl Workspace {
             }
 
             // View
+            "toggle_sidebar" => {
+                self.toggle_sidebar(cx);
+            }
             "toggle_editor" => {
                 self.toggle_editor(cx);
             }
@@ -502,6 +537,34 @@ impl Workspace {
         cx.notify();
     }
 
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_dock.update(cx, |dock, cx| {
+            dock.toggle(cx);
+        });
+    }
+
+    fn is_sidebar_collapsed(&self, cx: &Context<Self>) -> bool {
+        self.sidebar_dock.read(cx).is_collapsed()
+    }
+
+    /// Get next focus target, skipping sidebar if collapsed
+    fn next_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
+        let mut target = self.focus_target.next();
+        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
+            target = target.next();
+        }
+        target
+    }
+
+    /// Get previous focus target, skipping sidebar if collapsed
+    fn prev_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
+        let mut target = self.focus_target.prev();
+        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
+            target = target.prev();
+        }
+        target
+    }
+
     fn on_results_received(&mut self, cx: &mut Context<Self>) {
         if !self.results_state.is_expanded() {
             self.results_state = PanelState::Expanded;
@@ -590,7 +653,8 @@ impl Render for Workspace {
             self.focus_handle.focus(window);
         }
 
-        let sidebar = self.sidebar.clone();
+        let _sidebar = self.sidebar.clone();
+        let sidebar_dock = self.sidebar_dock.clone();
         let editor = self.editor.clone();
         let results = self.results.clone();
         let status_bar = self.status_bar.clone();
@@ -835,13 +899,13 @@ impl Render for Workspace {
             )
             .on_action(
                 cx.listener(|this, _: &keymap::CycleFocusForward, window, cx| {
-                    let next = this.focus_target.next();
+                    let next = this.next_focus_target(cx);
                     this.set_focus(next, window, cx);
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &keymap::CycleFocusBackward, window, cx| {
-                    let prev = this.focus_target.prev();
+                    let prev = this.prev_focus_target(cx);
                     this.set_focus(prev, window, cx);
                 }),
             )
@@ -893,6 +957,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleTasks, _window, cx| {
                 this.toggle_tasks_panel(cx);
+            }))
+            .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _window, cx| {
+                this.toggle_sidebar(cx);
             }))
             // List navigation actions - propagate if not handled so editor can receive keys
             .on_action(cx.listener(|this, _: &keymap::SelectNext, window, cx| {
@@ -969,34 +1036,26 @@ impl Render for Workspace {
                     .flex_col()
                     .size_full()
                     .child(
-                        div().flex().flex_1().overflow_hidden().child(
-                            h_resizable("workspace")
-                                .child(
-                                    resizable_panel()
-                                        .size(px(240.0))
-                                        .size_range(px(150.0)..px(500.0))
-                                        .child(
-                                            div()
-                                                .id("sidebar-panel")
-                                                .size_full()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        if this.focus_target != FocusTarget::Sidebar
-                                                        {
-                                                            this.set_focus(
-                                                                FocusTarget::Sidebar,
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    }),
-                                                )
-                                                .child(sidebar),
-                                        ),
-                                )
-                                .child(resizable_panel().child(right_pane)),
-                        ),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_1()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .id("sidebar-panel")
+                                    .h_full()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            if this.focus_target != FocusTarget::Sidebar {
+                                                this.set_focus(FocusTarget::Sidebar, window, cx);
+                                            }
+                                        }),
+                                    )
+                                    .child(sidebar_dock),
+                            )
+                            .child(div().flex_1().overflow_hidden().child(right_pane)),
                     )
                     .child(status_bar),
             )
@@ -1277,6 +1336,10 @@ impl CommandDispatcher for Workspace {
                 self.toggle_tasks_panel(cx);
                 true
             }
+            Command::ToggleSidebar => {
+                self.toggle_sidebar(cx);
+                true
+            }
             Command::FocusSidebar => {
                 self.set_focus(FocusTarget::Sidebar, window, cx);
                 true
@@ -1291,12 +1354,12 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::CycleFocusForward => {
-                let next = self.focus_target.next();
+                let next = self.next_focus_target(cx);
                 self.set_focus(next, window, cx);
                 true
             }
             Command::CycleFocusBackward => {
-                let prev = self.focus_target.prev();
+                let prev = self.prev_focus_target(cx);
                 self.set_focus(prev, window, cx);
                 true
             }

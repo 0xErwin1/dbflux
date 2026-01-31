@@ -32,6 +32,7 @@ actions!(
         ToggleEditor,
         ToggleResults,
         ToggleTasks,
+        ToggleSidebar,
         // List navigation
         SelectNext,
         SelectPrev,

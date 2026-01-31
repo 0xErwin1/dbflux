@@ -10,9 +10,9 @@ use crate::ui::tokens::Spacing;
 use dbflux_core::{CancelToken, DbError, QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use gpui_component::input::{Input, InputState};
 use gpui_component::resizable::{resizable_panel, v_resizable};
-use gpui_component::ActiveTheme;
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -238,11 +238,7 @@ impl SqlQueryDocument {
         self.active_cancel_token = None;
         self.state = DocumentState::Clean;
 
-        let Some(record) = self
-            .execution_history
-            .iter_mut()
-            .find(|r| r.id == exec_id)
-        else {
+        let Some(record) = self.execution_history.iter_mut().find(|r| r.id == exec_id) else {
             return;
         };
 
@@ -463,12 +459,7 @@ impl SqlQueryDocument {
                         )
                     })
                     .when_some(error, |el, err| {
-                        el.child(
-                            div()
-                                .text_sm()
-                                .text_color(error_color)
-                                .child(err),
-                        )
+                        el.child(div().text_sm().text_color(error_color).child(err))
                     }),
             )
     }
@@ -481,7 +472,11 @@ impl SqlQueryDocument {
             .flex()
             .items_center()
             .justify_center()
-            .child(div().text_color(muted_fg).child("Run a query to see results"))
+            .child(
+                div()
+                    .text_color(muted_fg)
+                    .child("Run a query to see results"),
+            )
     }
 }
 
@@ -500,20 +495,22 @@ impl Render for SqlQueryDocument {
             .bg(bg)
             .track_focus(&self.focus_handle)
             .child(match self.layout {
-                SqlQueryLayout::Split => v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
-                    .child(
-                        resizable_panel()
-                            .size(px(200.0))
-                            .size_range(px(100.0)..px(1000.0))
-                            .child(editor_view),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size(px(200.0))
-                            .size_range(px(100.0)..px(1000.0))
-                            .child(results_view),
-                    )
-                    .into_any_element(),
+                SqlQueryLayout::Split => {
+                    v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
+                        .child(
+                            resizable_panel()
+                                .size(px(200.0))
+                                .size_range(px(100.0)..px(1000.0))
+                                .child(editor_view),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(200.0))
+                                .size_range(px(100.0)..px(1000.0))
+                                .child(results_view),
+                        )
+                        .into_any_element()
+                }
 
                 SqlQueryLayout::EditorOnly => editor_view,
 
