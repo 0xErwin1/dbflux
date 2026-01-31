@@ -1,5 +1,6 @@
 pub mod command_palette;
 pub mod components;
+pub mod dock;
 pub mod document;
 pub mod dropdown;
 pub mod editor;
