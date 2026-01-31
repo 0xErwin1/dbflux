@@ -1,15 +1,15 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
+use gpui::ElementId;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, ParentElement, StatefulInteractiveElement, Styled, Window, actions, canvas,
-    div, px, uniform_list,
+    actions, canvas, div, px, uniform_list, AnyElement, App, ClickEvent, Context, Entity,
+    InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior, ParentElement,
+    StatefulInteractiveElement, Styled, Window,
 };
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::Scrollbar;
+use gpui_component::ActiveTheme;
 
 use super::events::{Direction, Edge};
 use super::model::TableModel;
@@ -468,14 +468,13 @@ fn render_rows(
                     let is_selected = selection.is_selected(coord);
                     let is_active = selection.active == Some(coord);
 
-                    let display_text = cell
-                        .map(|c| c.display_string())
-                        .unwrap_or_else(|| "".to_string());
+                    let display_text: String = cell
+                        .map(|c| c.display_text().to_string())
+                        .unwrap_or_default();
 
                     let is_null = cell.map(|c| c.is_null()).unwrap_or(false);
 
                     let state_for_click = state_entity.clone();
-                    let state_for_shift_click = state_entity.clone();
 
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
@@ -497,9 +496,8 @@ fn render_rows(
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
                         .on_click(move |event: &ClickEvent, _window, cx| {
-                            let shift_held = event.modifiers().shift;
-                            if shift_held {
-                                state_for_shift_click.update(cx, |state, cx| {
+                            if event.modifiers().shift {
+                                state_for_click.update(cx, |state, cx| {
                                     state.extend_selection(coord, cx);
                                 });
                             } else {

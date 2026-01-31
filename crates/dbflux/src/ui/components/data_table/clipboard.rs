@@ -1,15 +1,15 @@
-use super::model::{CellValue, TableModel};
+use super::model::{CellKind, CellValue, TableModel};
 use super::selection::{CellCoord, SelectionState};
 
 /// Format a single cell value for clipboard (TSV compatible).
 pub fn format_cell(cell: &CellValue) -> String {
-    match cell {
-        CellValue::Null => "".to_string(),
-        CellValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-        CellValue::Int(i) => i.to_string(),
-        CellValue::Float(f) => f.to_string(),
-        CellValue::Text(s) => escape_tsv(s),
-        CellValue::Bytes(len) => format!("<{} bytes>", len),
+    match &cell.kind {
+        CellKind::Null => "".to_string(),
+        CellKind::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        CellKind::Int(i) => i.to_string(),
+        CellKind::Float(f) => f.to_string(),
+        CellKind::Text(s) => escape_tsv(s),
+        CellKind::Bytes(len) => format!("<{} bytes>", len),
     }
 }
 
@@ -61,15 +61,14 @@ pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn test_format_cell() {
-        assert_eq!(format_cell(&CellValue::Null), "");
-        assert_eq!(format_cell(&CellValue::Bool(true)), "true");
-        assert_eq!(format_cell(&CellValue::Int(42)), "42");
-        assert_eq!(format_cell(&CellValue::Float(3.14)), "3.14");
-        assert_eq!(format_cell(&CellValue::Text(Arc::from("hello"))), "hello");
+        assert_eq!(format_cell(&CellValue::null()), "");
+        assert_eq!(format_cell(&CellValue::bool(true)), "true");
+        assert_eq!(format_cell(&CellValue::int(42)), "42");
+        assert_eq!(format_cell(&CellValue::float(3.14)), "3.14");
+        assert_eq!(format_cell(&CellValue::text("hello")), "hello");
     }
 
     #[test]
