@@ -6,8 +6,9 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues, IndexInfo,
-    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SQLITE_FORM,
+    ConstraintInfo, ConstraintKind, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle, QueryHandle,
+    QueryRequest, QueryResult, Row, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
@@ -351,12 +352,16 @@ impl Connection for SqliteConnection {
 
         let columns = self.get_columns(&conn, table)?;
         let indexes = self.get_indexes(&conn, table)?;
+        let foreign_keys = self.get_foreign_keys(&conn, table)?;
+        let constraints = self.get_constraints(&conn, table)?;
 
         log::info!(
-            "[SCHEMA] Table {}: {} columns, {} indexes",
+            "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
             table,
             columns.len(),
-            indexes.len()
+            indexes.len(),
+            foreign_keys.len(),
+            constraints.len()
         );
 
         Ok(TableInfo {
@@ -364,9 +369,35 @@ impl Connection for SqliteConnection {
             schema: None,
             columns: Some(columns),
             indexes: Some(indexes),
-            foreign_keys: None,
-            constraints: None,
+            foreign_keys: Some(foreign_keys),
+            constraints: Some(constraints),
         })
+    }
+
+    fn schema_indexes(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        self.get_all_indexes(&conn)
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        self.get_all_foreign_keys(&conn)
     }
 
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
@@ -497,6 +528,268 @@ impl SqliteConnection {
             .collect();
 
         Ok(views)
+    }
+
+    fn get_foreign_keys(
+        &self,
+        conn: &RusqliteConnection,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyInfo>, DbError> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA foreign_key_list('{}')", table))
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
+        let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,              // id
+                    row.get::<_, String>(2)?, // table (referenced)
+                    row.get::<_, String>(3)?, // from (local column)
+                    row.get::<_, String>(4)?, // to (referenced column)
+                    row.get::<_, String>(5)?, // on_update
+                    row.get::<_, String>(6)?, // on_delete
+                ))
+            })
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Group by FK id
+        let mut fk_map: HashMap<i32, ForeignKeyInfo> = HashMap::new();
+        for (id, ref_table, from_col, to_col, on_update, on_delete) in fk_rows {
+            let entry = fk_map.entry(id).or_insert_with(|| ForeignKeyInfo {
+                name: format!("fk_{}", id),
+                columns: Vec::new(),
+                referenced_table: ref_table,
+                referenced_schema: None,
+                referenced_columns: Vec::new(),
+                on_update: if on_update == "NO ACTION" {
+                    None
+                } else {
+                    Some(on_update)
+                },
+                on_delete: if on_delete == "NO ACTION" {
+                    None
+                } else {
+                    Some(on_delete)
+                },
+            });
+            entry.columns.push(from_col);
+            entry.referenced_columns.push(to_col);
+        }
+
+        Ok(fk_map.into_values().collect())
+    }
+
+    fn get_constraints(
+        &self,
+        conn: &RusqliteConnection,
+        table: &str,
+    ) -> Result<Vec<ConstraintInfo>, DbError> {
+        // SQLite doesn't have a direct way to get CHECK constraints via PRAGMA
+        // We need to parse the CREATE TABLE statement
+        let mut stmt = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let sql: Option<String> = stmt.query_row([table], |row| row.get(0)).ok();
+
+        let mut constraints = Vec::new();
+
+        if let Some(create_sql) = sql {
+            // Simple regex-like parsing for CHECK constraints
+            // This is a basic implementation; production code might need a proper parser
+            let upper_sql = create_sql.to_uppercase();
+            if upper_sql.contains("CHECK") {
+                // Extract CHECK constraints (simplified)
+                for (i, part) in create_sql.split("CHECK").skip(1).enumerate() {
+                    if let Some(paren_start) = part.find('(') {
+                        let mut depth = 1;
+                        let mut end = paren_start + 1;
+                        for c in part[paren_start + 1..].chars() {
+                            if c == '(' {
+                                depth += 1;
+                            } else if c == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            end += c.len_utf8();
+                        }
+                        let check_expr = part[paren_start + 1..end].trim().to_string();
+                        constraints.push(ConstraintInfo {
+                            name: format!("check_{}", i),
+                            kind: ConstraintKind::Check,
+                            columns: Vec::new(),
+                            check_clause: Some(check_expr),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Get UNIQUE constraints from indexes
+        let mut idx_stmt = conn
+            .prepare(&format!("PRAGMA index_list('{}')", table))
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let unique_indexes: Vec<(String, String)> = idx_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?, // name
+                    row.get::<_, String>(3)?, // origin (c=CREATE INDEX, u=UNIQUE, pk=PRIMARY KEY)
+                ))
+            })
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .filter_map(|r| r.ok())
+            .filter(|(_, origin)| origin == "u") // Only UNIQUE constraints, not indexes
+            .collect();
+
+        for (index_name, _) in unique_indexes {
+            let mut col_stmt = conn
+                .prepare(&format!("PRAGMA index_info('{}')", index_name))
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+            let columns: Vec<String> = col_stmt
+                .query_map([], |row| row.get(2))
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            constraints.push(ConstraintInfo {
+                name: index_name,
+                kind: ConstraintKind::Unique,
+                columns,
+                check_clause: None,
+            });
+        }
+
+        Ok(constraints)
+    }
+
+    fn get_all_indexes(&self, conn: &RusqliteConnection) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        // Get all tables
+        let mut tables_stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let table_names: Vec<String> = tables_stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut all_indexes = Vec::new();
+
+        for table_name in table_names {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA index_list('{}')", table_name))
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+            let index_list: Vec<(String, bool, String)> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(1)?,   // name
+                        row.get::<_, i32>(2)? == 1, // unique
+                        row.get::<_, String>(3)?,   // origin
+                    ))
+                })
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for (index_name, is_unique, origin) in index_list {
+                let mut col_stmt = conn
+                    .prepare(&format!("PRAGMA index_info('{}')", index_name))
+                    .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+                let columns: Vec<String> = col_stmt
+                    .query_map([], |row| row.get(2))
+                    .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                all_indexes.push(SchemaIndexInfo {
+                    name: index_name,
+                    table_name: table_name.clone(),
+                    columns,
+                    is_unique,
+                    is_primary: origin == "pk",
+                });
+            }
+        }
+
+        Ok(all_indexes)
+    }
+
+    fn get_all_foreign_keys(
+        &self,
+        conn: &RusqliteConnection,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        // Get all tables
+        let mut tables_stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let table_names: Vec<String> = tables_stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut all_fks = Vec::new();
+
+        for table_name in table_names {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA foreign_key_list('{}')", table_name))
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+            let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,              // id
+                        row.get::<_, String>(2)?, // table (referenced)
+                        row.get::<_, String>(3)?, // from (local column)
+                        row.get::<_, String>(4)?, // to (referenced column)
+                        row.get::<_, String>(5)?, // on_update
+                        row.get::<_, String>(6)?, // on_delete
+                    ))
+                })
+                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Group by FK id
+            let mut fk_map: HashMap<i32, SchemaForeignKeyInfo> = HashMap::new();
+            for (id, ref_table, from_col, to_col, on_update, on_delete) in fk_rows {
+                let entry = fk_map.entry(id).or_insert_with(|| SchemaForeignKeyInfo {
+                    name: format!("{}_fk_{}", table_name, id),
+                    table_name: table_name.clone(),
+                    columns: Vec::new(),
+                    referenced_schema: None,
+                    referenced_table: ref_table,
+                    referenced_columns: Vec::new(),
+                    on_update: if on_update == "NO ACTION" {
+                        None
+                    } else {
+                        Some(on_update)
+                    },
+                    on_delete: if on_delete == "NO ACTION" {
+                        None
+                    } else {
+                        Some(on_delete)
+                    },
+                });
+                entry.columns.push(from_col);
+                entry.referenced_columns.push(to_col);
+            }
+
+            all_fks.extend(fk_map.into_values());
+        }
+
+        Ok(all_fks)
     }
 }
 
