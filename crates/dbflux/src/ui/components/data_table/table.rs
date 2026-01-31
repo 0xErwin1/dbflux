@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gpui::prelude::FluentBuilder;
 use gpui::ElementId;
@@ -20,6 +20,22 @@ use super::theme::{
     SORT_INDICATOR_DESC,
 };
 use dbflux_core::SortDirection;
+
+/// Cached scroll state to prevent unnecessary syncs
+#[derive(Clone)]
+struct ScrollSyncState {
+    last_viewport_size: gpui::Size<gpui::Pixels>,
+    last_h_offset: gpui::Pixels,
+}
+
+impl Default for ScrollSyncState {
+    fn default() -> Self {
+        Self {
+            last_viewport_size: gpui::Size::default(),
+            last_h_offset: gpui::px(0.0),
+        }
+    }
+}
 
 actions!(
     data_table,
@@ -76,6 +92,7 @@ pub fn init(cx: &mut App) {
 pub struct DataTable {
     id: ElementId,
     state: Entity<DataTableState>,
+    scroll_sync: Arc<Mutex<ScrollSyncState>>,
 }
 
 impl DataTable {
@@ -89,6 +106,7 @@ impl DataTable {
         Self {
             id: id.into(),
             state,
+            scroll_sync: Arc::new(Mutex::new(ScrollSyncState::default())),
         }
     }
 }
@@ -246,24 +264,39 @@ impl gpui::Render for DataTable {
             .on_action(on_copy)
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
-            .child(
+            .child({
+                let scroll_sync = self.scroll_sync.clone();
                 canvas(
                     move |bounds, _, cx| {
+                        let mut sync = scroll_sync.lock().unwrap();
                         state_entity.update(cx, |state, cx| {
                             let new_size = bounds.size;
-                            if state.viewport_size() != new_size {
-                                state.set_viewport_size(new_size, cx);
+                            let viewport_changed = new_size != sync.last_viewport_size;
+
+                            if viewport_changed {
+                                sync.last_viewport_size = new_size;
+                                if state.viewport_size() != new_size {
+                                    state.set_viewport_size(new_size, cx);
+                                }
                             }
 
-                            // Sync horizontal offset from scroll handle to trigger body re-render
-                            state.sync_horizontal_offset(cx);
+                            // Only sync horizontal offset if viewport changed or offset actually changed
+                            let current_h_offset = state.horizontal_scroll_handle().offset().x;
+                            let h_offset_changed =
+                                (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
+
+                            if viewport_changed || h_offset_changed {
+                                sync.last_h_offset = current_h_offset;
+                                // Sync horizontal offset from scroll handle to trigger body re-render
+                                state.sync_horizontal_offset(cx);
+                            }
                         });
                     },
                     |_, _, _, _| {},
                 )
                 .absolute()
-                .size_full(),
-            )
+                .size_full()
+            })
             // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
             // It's 1px tall and positioned at the bottom, so it never receives wheel events.
             // The mouse is always over the header or body, which don't capture horizontal wheel.
@@ -456,10 +489,18 @@ fn render_rows(
     total_width: f32,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
+    // Pre-calculate cumulative column offsets for hit-testing
+    let mut col_offsets = vec![0.0f32];
+    for width in column_widths {
+        col_offsets.push(col_offsets.last().unwrap_or(&0.0) + width);
+    }
+
     visible_range
         .map(|row_ix| {
             let row_data = model.rows.get(row_ix);
+            let state_for_click = state_entity.clone();
 
+            // Build cells without individual click handlers
             let cells: Vec<_> = (0..model.col_count())
                 .map(|col_ix| {
                     let cell = row_data.and_then(|r| r.cells.get(col_ix));
@@ -467,15 +508,12 @@ fn render_rows(
                     let coord = CellCoord::new(row_ix, col_ix);
                     let is_selected = selection.is_selected(coord);
                     let is_active = selection.active == Some(coord);
-
-                    let display_text: String = cell
+                    let display_text = cell
                         .map(|c| c.display_text().to_string())
                         .unwrap_or_default();
-
                     let is_null = cell.map(|c| c.is_null()).unwrap_or(false);
 
-                    let state_for_click = state_entity.clone();
-
+                    // Simplified cell structure - single div instead of nested
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
                         .flex()
@@ -484,45 +522,29 @@ fn render_rows(
                         .h(ROW_HEIGHT)
                         .w(px(width))
                         .px(CELL_PADDING_X)
-                        .py(CELL_PADDING_Y)
                         .overflow_hidden()
                         .border_r_1()
                         .border_color(theme.border)
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.table_hover))
                         .when(is_selected, |d| {
                             d.bg(theme.table_active)
                                 .border_color(theme.table_active_border)
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
-                        .on_click(move |event: &ClickEvent, _window, cx| {
-                            if event.modifiers().shift {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.extend_selection(coord, cx);
-                                });
-                            } else {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.select_cell(coord, cx);
-                                });
-                            }
+                        .text_sm()
+                        .text_color(if is_null {
+                            theme.muted_foreground
+                        } else {
+                            theme.foreground
                         })
-                        .child(
-                            div()
-                                .text_sm()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_color(if is_null {
-                                    theme.muted_foreground
-                                } else {
-                                    theme.foreground
-                                })
-                                .when(is_null, |d| d.italic())
-                                .child(display_text),
-                        )
+                        .when(is_null, |d| d.italic())
+                        .child(display_text.to_string())
                 })
                 .collect();
 
+            // Row-level click handler with hit-testing
+            let col_offsets_for_click = col_offsets.clone();
+            let col_count_for_click = column_widths.len();
             div()
                 .id(("row", row_ix))
                 .flex()
@@ -533,6 +555,29 @@ fn render_rows(
                 .border_b_1()
                 .border_color(theme.table_row_border)
                 .when(row_ix % 2 == 1, |d| d.bg(theme.table_even))
+                .cursor_pointer()
+                .on_click(move |event: &ClickEvent, _window, cx| {
+                    // Hit-test: find which column was clicked based on X position
+                    let click_x: f32 = event.position().x.into();
+                    let col_ix = col_offsets_for_click
+                        .windows(2)
+                        .enumerate()
+                        .find(|(_, pair)| click_x >= pair[0] && click_x < pair[1])
+                        .map(|(i, _)| i)
+                        .unwrap_or(col_count_for_click.saturating_sub(1));
+
+                    let coord = CellCoord::new(row_ix, col_ix);
+
+                    if event.modifiers().shift {
+                        state_for_click.update(cx, |state, cx| {
+                            state.extend_selection(coord, cx);
+                        });
+                    } else {
+                        state_for_click.update(cx, |state, cx| {
+                            state.select_cell(coord, cx);
+                        });
+                    }
+                })
                 .children(cells)
                 .into_any_element()
         })
