@@ -20,6 +20,7 @@ pub enum AppIcon {
 
     // Actions
     Play,
+    SquarePlay,
     Plus,
     Power,
     Save,
@@ -55,6 +56,11 @@ pub enum AppIcon {
     Layers,
     Keyboard,
     FingerprintPattern,
+    Maximize2,
+    Minimize2,
+    PanelBottomClose,
+    PanelBottomOpen,
+    FileSpreadsheet,
 
     // Connection / Network
     Plug,
@@ -92,6 +98,7 @@ impl AppIcon {
             Self::ChevronRight => "icons/ui/chevron-right.svg",
             Self::ChevronUp => "icons/ui/chevron-up.svg",
             Self::Play => "icons/ui/play.svg",
+            Self::SquarePlay => "icons/ui/square-play.svg",
             Self::Plus => "icons/ui/plus.svg",
             Self::Power => "icons/ui/power.svg",
             Self::Save => "icons/ui/save.svg",
@@ -125,6 +132,11 @@ impl AppIcon {
             Self::Layers => "icons/ui/layers.svg",
             Self::Keyboard => "icons/ui/keyboard.svg",
             Self::FingerprintPattern => "icons/ui/fingerprint-pattern.svg",
+            Self::Maximize2 => "icons/ui/maximize-2.svg",
+            Self::Minimize2 => "icons/ui/minimize-2.svg",
+            Self::PanelBottomClose => "icons/ui/panel-bottom-close.svg",
+            Self::PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
+            Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
             Self::Plug => "icons/ui/plug.svg",
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",

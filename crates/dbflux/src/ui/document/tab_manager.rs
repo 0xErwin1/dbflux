@@ -1,19 +1,10 @@
 #![allow(dead_code)]
 #![allow(unreachable_code)]
 
-use super::handle::{DocumentEvent, DocumentHandle};
+use super::handle::DocumentHandle;
 use super::types::DocumentId;
-use dbflux_core::QueryResult;
 use gpui::{App, Context, EventEmitter, Subscription};
 use std::collections::HashMap;
-use std::sync::Arc;
-
-/// Pending promote request from a document.
-#[derive(Clone)]
-pub struct PendingPromote {
-    pub result: Arc<QueryResult>,
-    pub query: String,
-}
 
 /// Manages open documents (tabs) in the workspace.
 ///
@@ -34,9 +25,6 @@ pub struct TabManager {
 
     /// Subscriptions per document (for cleanup on close).
     subscriptions: HashMap<DocumentId, Subscription>,
-
-    /// Pending promote requests (processed by Workspace).
-    pending_promotes: Vec<PendingPromote>,
 }
 
 impl TabManager {
@@ -46,7 +34,6 @@ impl TabManager {
             active_index: None,
             mru_order: Vec::new(),
             subscriptions: HashMap::new(),
-            pending_promotes: Vec::new(),
         }
     }
 
@@ -55,21 +42,8 @@ impl TabManager {
         let id = doc.id();
 
         // Subscribe to document events
-        let tab_manager = cx.entity().clone();
-        let subscription = doc.subscribe(cx, move |event, cx| {
-            if let DocumentEvent::PromoteResult { result, query } = event {
-                // Store pending promote and notify TabManager
-                tab_manager.update(cx, |mgr, cx| {
-                    mgr.pending_promotes.push(PendingPromote {
-                        result: result.clone(),
-                        query: query.clone(),
-                    });
-                    cx.emit(TabManagerEvent::PromoteResult {
-                        result: result.clone(),
-                        query: query.clone(),
-                    });
-                });
-            }
+        let subscription = doc.subscribe(cx, move |_event, _cx| {
+            // Reserved for future document events
         });
         self.subscriptions.insert(id, subscription);
 
@@ -258,11 +232,6 @@ impl TabManager {
         self.documents.len()
     }
 
-    /// Takes all pending promote requests (for Workspace to process).
-    pub fn take_pending_promotes(&mut self) -> Vec<PendingPromote> {
-        std::mem::take(&mut self.pending_promotes)
-    }
-
     /// Moves a tab from one position to another (for drag & drop).
     #[allow(unused_variables)]
     pub fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
@@ -305,9 +274,4 @@ pub enum TabManagerEvent {
     Closed(DocumentId),
     Activated(DocumentId),
     Reordered,
-    /// A document requested to promote a result to a new tab.
-    PromoteResult {
-        result: Arc<QueryResult>,
-        query: String,
-    },
 }

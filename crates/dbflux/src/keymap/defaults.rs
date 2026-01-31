@@ -53,6 +53,10 @@ fn global_layer() -> KeymapLayer {
 
     // Query execution
     layer.bind(KeyChord::new("enter", Modifiers::ctrl()), Command::RunQuery);
+    layer.bind(
+        KeyChord::new("enter", Modifiers::ctrl_shift()),
+        Command::RunQueryInNewTab,
+    );
 
     // Cancel / close modals
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);

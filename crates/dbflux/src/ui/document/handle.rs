@@ -6,9 +6,7 @@ use super::types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
 };
 use crate::keymap::{Command, ContextId};
-use dbflux_core::QueryResult;
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
-use std::sync::Arc;
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
 /// The `id` is stored inline for quick access without needing `cx`.
@@ -168,12 +166,6 @@ impl DocumentHandle {
             Self::Data { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
                 let doc_event = match event {
                     DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
-                    DataDocumentEvent::PromoteResult { result, query } => {
-                        DocumentEvent::PromoteResult {
-                            result: result.clone(),
-                            query: query.clone(),
-                        }
-                    }
                 };
                 callback(&doc_event, cx);
             }),
@@ -190,9 +182,4 @@ pub enum DocumentEvent {
     ExecutionFinished,
     /// The document wants to close itself.
     RequestClose,
-    /// Request to promote a result to a standalone tab.
-    PromoteResult {
-        result: Arc<QueryResult>,
-        query: String,
-    },
 }

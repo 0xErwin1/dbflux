@@ -21,11 +21,8 @@ pub struct DataDocument {
 /// Events emitted by DataDocument.
 #[derive(Clone, Debug)]
 pub enum DataDocumentEvent {
+    #[allow(dead_code)]
     MetaChanged,
-    PromoteResult {
-        result: Arc<QueryResult>,
-        query: String,
-    },
 }
 
 impl DataDocument {
@@ -41,18 +38,7 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_table(profile_id, table, app_state, window, cx));
 
-        let subscription =
-            cx.subscribe(
-                &data_grid,
-                |this, _grid, event: &DataGridEvent, cx| match event {
-                    DataGridEvent::PromoteResult { result, query } => {
-                        cx.emit(DataDocumentEvent::PromoteResult {
-                            result: result.clone(),
-                            query: query.clone(),
-                        });
-                    }
-                },
-            );
+        let subscription = cx.subscribe(&data_grid, |_this, _grid, _event: &DataGridEvent, _cx| {});
 
         Self {
             id: DocumentId::new(),
@@ -64,7 +50,7 @@ impl DataDocument {
         }
     }
 
-    /// Create a document for a promoted query result.
+    #[allow(dead_code)]
     pub fn new_for_result(
         result: Arc<QueryResult>,
         query: String,
@@ -76,9 +62,7 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
 
-        let subscription = cx.subscribe(&data_grid, |_this, _grid, _event: &DataGridEvent, _cx| {
-            // Promoted results don't need to handle PromoteResult again
-        });
+        let subscription = cx.subscribe(&data_grid, |_this, _grid, _event: &DataGridEvent, _cx| {});
 
         Self {
             id: DocumentId::new(),
@@ -137,75 +121,8 @@ impl DataDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        match cmd {
-            Command::RefreshSchema => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.refresh(window, cx);
-                });
-                true
-            }
-            Command::SelectNext | Command::FocusDown => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.select_next(cx);
-                });
-                true
-            }
-            Command::SelectPrev | Command::FocusUp => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.select_prev(cx);
-                });
-                true
-            }
-            Command::SelectFirst => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.select_first(cx);
-                });
-                true
-            }
-            Command::SelectLast => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.select_last(cx);
-                });
-                true
-            }
-            Command::ColumnLeft | Command::FocusLeft => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.column_left(cx);
-                });
-                true
-            }
-            Command::ColumnRight | Command::FocusRight => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.column_right(cx);
-                });
-                true
-            }
-            Command::ResultsNextPage | Command::PageDown => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.go_to_next_page(window, cx);
-                });
-                true
-            }
-            Command::ResultsPrevPage | Command::PageUp => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.go_to_prev_page(window, cx);
-                });
-                true
-            }
-            Command::FocusToolbar => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.focus_toolbar(cx);
-                });
-                true
-            }
-            Command::ExportResults => {
-                self.data_grid.update(cx, |grid, cx| {
-                    grid.export_results(window, cx);
-                });
-                true
-            }
-            _ => false,
-        }
+        self.data_grid
+            .update(cx, |grid, cx| grid.dispatch_command(cmd, window, cx))
     }
 }
 
