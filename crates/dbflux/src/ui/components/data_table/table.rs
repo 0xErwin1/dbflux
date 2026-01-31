@@ -16,7 +16,7 @@ use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
 use super::theme::{
-    CELL_PADDING_X, CELL_PADDING_Y, HEADER_HEIGHT, ROW_HEIGHT, SCROLLBAR_WIDTH, SORT_INDICATOR_ASC,
+    CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, SCROLLBAR_WIDTH, SORT_INDICATOR_ASC,
     SORT_INDICATOR_DESC,
 };
 use dbflux_core::SortDirection;

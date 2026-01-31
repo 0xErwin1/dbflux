@@ -10,6 +10,7 @@ pub const HEADER_HEIGHT: Pixels = px(32.0);
 pub const CELL_PADDING_X: Pixels = px(8.0);
 
 /// Vertical padding inside cells.
+#[allow(dead_code)]
 pub const CELL_PADDING_Y: Pixels = px(4.0);
 
 /// Minimum width for a column.
