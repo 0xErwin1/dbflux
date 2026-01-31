@@ -6,8 +6,9 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
     SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -689,6 +690,43 @@ impl Connection for PostgresConnection {
         SchemaLoadingStrategy::ConnectionPerDatabase
     }
 
+    fn table_details(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        let schema_name = schema.unwrap_or("public");
+        log::info!(
+            "[SCHEMA] Fetching details for table: {}.{}",
+            schema_name,
+            table
+        );
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        let columns = get_columns(&mut client, schema_name, table)?;
+        let indexes = get_indexes(&mut client, schema_name, table)?;
+
+        log::info!(
+            "[SCHEMA] Table {}.{}: {} columns, {} indexes",
+            schema_name,
+            table,
+            columns.len(),
+            indexes.len()
+        );
+
+        Ok(TableInfo {
+            name: table.to_string(),
+            schema: Some(schema_name.to_string()),
+            columns: Some(columns),
+            indexes: Some(indexes),
+        })
+    }
+
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
         POSTGRES_CODE_GENERATORS
     }
@@ -804,25 +842,15 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
         )
         .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
 
-    let table_names: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
-
-    if table_names.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let columns_map = get_all_columns_for_schema(client, schema)?;
-    let indexes_map = get_all_indexes_for_schema(client, schema)?;
-
-    let tables = table_names
-        .into_iter()
-        .map(|name| {
-            let columns = columns_map.get(&name).cloned().unwrap_or_default();
-            let indexes = indexes_map.get(&name).cloned().unwrap_or_default();
+    let tables = rows
+        .iter()
+        .map(|row| {
+            let name: String = row.get(0);
             TableInfo {
                 name,
                 schema: Some(schema.to_string()),
-                columns: Some(columns),
-                indexes: Some(indexes),
+                columns: None,
+                indexes: None,
             }
         })
         .collect();
@@ -893,6 +921,7 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
         .collect())
 }
 
+#[allow(dead_code)]
 fn get_all_columns_for_schema(
     client: &mut Client,
     schema: &str,
@@ -974,6 +1003,7 @@ fn get_all_columns_for_schema(
     Ok(result)
 }
 
+#[allow(dead_code)]
 fn get_all_indexes_for_schema(
     client: &mut Client,
     schema: &str,
