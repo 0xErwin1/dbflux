@@ -6,9 +6,11 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, MYSQL_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    ConstraintInfo, ConstraintKind, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, MYSQL_FORM,
+    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo,
+    Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -785,13 +787,17 @@ impl Connection for MysqlConnection {
 
         let columns = fetch_columns(&mut conn, database, table)?;
         let indexes = fetch_indexes(&mut conn, database, table)?;
+        let foreign_keys = fetch_foreign_keys(&mut conn, database, table)?;
+        let constraints = fetch_constraints(&mut conn, database, table)?;
 
         log::info!(
-            "[SCHEMA] Table {}.{}: {} columns, {} indexes",
+            "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
             database,
             table,
             columns.len(),
-            indexes.len()
+            indexes.len(),
+            foreign_keys.len(),
+            constraints.len()
         );
 
         Ok(TableInfo {
@@ -799,8 +805,8 @@ impl Connection for MysqlConnection {
             schema: Some(database.to_string()),
             columns: Some(columns),
             indexes: Some(indexes),
-            foreign_keys: None,
-            constraints: None,
+            foreign_keys: Some(foreign_keys),
+            constraints: Some(constraints),
         })
     }
 
@@ -900,6 +906,32 @@ impl Connection for MysqlConnection {
             .lock()
             .ok()
             .and_then(|state| state.current_database.clone())
+    }
+
+    fn schema_indexes(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        fetch_schema_indexes(&mut conn, database)
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        fetch_schema_foreign_keys(&mut conn, database)
     }
 }
 
@@ -1220,4 +1252,233 @@ impl MysqlConnection {
             ))),
         }
     }
+}
+
+fn fetch_foreign_keys(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<Vec<ForeignKeyInfo>, DbError> {
+    let query = format!(
+        r#"
+        SELECT
+            kcu.CONSTRAINT_NAME,
+            kcu.COLUMN_NAME,
+            kcu.REFERENCED_TABLE_SCHEMA,
+            kcu.REFERENCED_TABLE_NAME,
+            kcu.REFERENCED_COLUMN_NAME,
+            rc.DELETE_RULE,
+            rc.UPDATE_RULE
+        FROM information_schema.KEY_COLUMN_USAGE kcu
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+            ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+            AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+        WHERE kcu.TABLE_SCHEMA = '{}'
+            AND kcu.TABLE_NAME = '{}'
+            AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+        "#,
+        database, table
+    );
+
+    let rows: Vec<mysql::Row> = conn
+        .query(&query)
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
+
+    for row in rows {
+        let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
+        let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
+        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
+        let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
+        let on_delete: Option<String> = row.get("DELETE_RULE");
+        let on_update: Option<String> = row.get("UPDATE_RULE");
+
+        let entry = fk_map
+            .entry(constraint_name.clone())
+            .or_insert_with(|| ForeignKeyInfo {
+                name: constraint_name,
+                columns: Vec::new(),
+                referenced_table: ref_table,
+                referenced_schema: ref_schema,
+                referenced_columns: Vec::new(),
+                on_delete,
+                on_update,
+            });
+
+        entry.columns.push(column_name);
+        entry.referenced_columns.push(ref_column);
+    }
+
+    Ok(fk_map.into_values().collect())
+}
+
+fn fetch_constraints(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<Vec<ConstraintInfo>, DbError> {
+    let query = format!(
+        r#"
+        SELECT
+            tc.CONSTRAINT_NAME,
+            tc.CONSTRAINT_TYPE,
+            GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
+            cc.CHECK_CLAUSE
+        FROM information_schema.TABLE_CONSTRAINTS tc
+        LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+            AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+            AND tc.TABLE_NAME = kcu.TABLE_NAME
+        LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
+            ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+            AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
+        WHERE tc.TABLE_SCHEMA = '{}'
+            AND tc.TABLE_NAME = '{}'
+            AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
+        GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
+        ORDER BY tc.CONSTRAINT_NAME
+        "#,
+        database, table
+    );
+
+    let rows: Vec<mysql::Row> = conn
+        .query(&query)
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name: String = row.get("CONSTRAINT_NAME")?;
+            let constraint_type: String = row.get("CONSTRAINT_TYPE")?;
+            let columns_str: Option<String> = row.get("COLUMNS");
+            let check_clause: Option<String> = row.get("CHECK_CLAUSE");
+
+            let kind = match constraint_type.as_str() {
+                "UNIQUE" => ConstraintKind::Unique,
+                "CHECK" => ConstraintKind::Check,
+                _ => return None,
+            };
+
+            let columns = columns_str
+                .map(|s| s.split(',').map(|c| c.trim().to_string()).collect())
+                .unwrap_or_default();
+
+            Some(ConstraintInfo {
+                name,
+                kind,
+                columns,
+                check_clause,
+            })
+        })
+        .collect())
+}
+
+fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaIndexInfo>, DbError> {
+    let query = format!(
+        r#"
+        SELECT
+            s.INDEX_NAME,
+            s.TABLE_NAME,
+            GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX) as COLUMNS,
+            s.NON_UNIQUE
+        FROM information_schema.STATISTICS s
+        WHERE s.TABLE_SCHEMA = '{}'
+        GROUP BY s.INDEX_NAME, s.TABLE_NAME, s.NON_UNIQUE
+        ORDER BY s.TABLE_NAME, s.INDEX_NAME
+        "#,
+        database
+    );
+
+    let rows: Vec<mysql::Row> = conn
+        .query(&query)
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name: String = row.get("INDEX_NAME")?;
+            let table_name: String = row.get("TABLE_NAME")?;
+            let columns_str: String = row.get("COLUMNS")?;
+            let non_unique: i32 = row.get("NON_UNIQUE").unwrap_or(1);
+
+            let columns: Vec<String> = columns_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            let is_unique = non_unique == 0;
+            let is_primary = name == "PRIMARY";
+
+            Some(SchemaIndexInfo {
+                name,
+                table_name,
+                columns,
+                is_unique,
+                is_primary,
+            })
+        })
+        .collect())
+}
+
+fn fetch_schema_foreign_keys(
+    conn: &mut Conn,
+    database: &str,
+) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+    let query = format!(
+        r#"
+        SELECT
+            kcu.CONSTRAINT_NAME,
+            kcu.TABLE_NAME,
+            kcu.COLUMN_NAME,
+            kcu.REFERENCED_TABLE_SCHEMA,
+            kcu.REFERENCED_TABLE_NAME,
+            kcu.REFERENCED_COLUMN_NAME,
+            rc.DELETE_RULE,
+            rc.UPDATE_RULE
+        FROM information_schema.KEY_COLUMN_USAGE kcu
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+            ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+            AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+        WHERE kcu.TABLE_SCHEMA = '{}'
+            AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+        "#,
+        database
+    );
+
+    let rows: Vec<mysql::Row> = conn
+        .query(&query)
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    let mut fk_map: HashMap<(String, String), SchemaForeignKeyInfo> = HashMap::new();
+
+    for row in rows {
+        let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
+        let table_name: String = row.get("TABLE_NAME").unwrap_or_default();
+        let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
+        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
+        let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
+        let on_delete: Option<String> = row.get("DELETE_RULE");
+        let on_update: Option<String> = row.get("UPDATE_RULE");
+
+        let key = (table_name.clone(), constraint_name.clone());
+        let entry = fk_map.entry(key).or_insert_with(|| SchemaForeignKeyInfo {
+            name: constraint_name,
+            table_name,
+            columns: Vec::new(),
+            referenced_schema: ref_schema,
+            referenced_table: ref_table,
+            referenced_columns: Vec::new(),
+            on_delete,
+            on_update,
+        });
+
+        entry.columns.push(column_name);
+        entry.referenced_columns.push(ref_column);
+    }
+
+    Ok(fk_map.into_values().collect())
 }
