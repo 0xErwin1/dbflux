@@ -80,11 +80,7 @@ impl TableModel {
 
 impl From<&QueryResult> for TableModel {
     fn from(result: &QueryResult) -> Self {
-        let columns = result
-            .columns
-            .iter()
-            .map(|col| ColumnSpec::from(col))
-            .collect();
+        let columns = result.columns.iter().map(ColumnSpec::from).collect();
 
         let rows = result
             .rows

@@ -1,7 +1,26 @@
+use bitflags::bitflags;
+
 use crate::{
-    ConnectionProfile, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    QueryHandle, QueryRequest, QueryResult, SchemaSnapshot, TableInfo, ViewInfo,
+    ConnectionProfile, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DriverFormDef,
+    FormValues, QueryHandle, QueryRequest, QueryResult, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, TableInfo, ViewInfo,
 };
+
+bitflags! {
+    /// Schema features supported by a database driver.
+    ///
+    /// The UI uses this to determine which schema objects to display.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SchemaFeatures: u32 {
+        const FOREIGN_KEYS = 1 << 0;
+        const CHECK_CONSTRAINTS = 1 << 1;
+        const UNIQUE_CONSTRAINTS = 1 << 2;
+        const CUSTOM_TYPES = 1 << 3;
+        const TRIGGERS = 1 << 4;
+        const SEQUENCES = 1 << 5;
+        const FUNCTIONS = 1 << 6;
+    }
+}
 
 /// Describes how a database driver handles schema loading for multiple databases.
 ///
@@ -305,6 +324,40 @@ pub trait Connection: Send + Sync {
     /// - `ConnectionPerDatabase`: Prompt to create new connection
     /// - `SingleDatabase`: No database switching needed
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy;
+
+    /// Returns the schema features supported by this connection.
+    ///
+    /// The UI uses this to decide which folders to show (FK, constraints, types, etc.).
+    fn schema_features(&self) -> SchemaFeatures {
+        SchemaFeatures::empty()
+    }
+
+    /// Fetch custom types for a schema (enums, domains, composites).
+    fn schema_types(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<CustomTypeInfo>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch all indexes in a schema.
+    fn schema_indexes(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch all foreign keys in a schema.
+    fn schema_foreign_keys(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        Ok(Vec::new())
+    }
 
     /// Returns available code generators for this connection.
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {

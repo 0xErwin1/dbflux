@@ -424,6 +424,7 @@ impl DataGridPanel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_table_query(
         &mut self,
         profile_id: Uuid,
@@ -589,6 +590,7 @@ impl DataGridPanel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_table_result(
         &mut self,
         profile_id: Uuid,
@@ -694,11 +696,10 @@ impl DataGridPanel {
         if let DataSource::Table {
             table, total_rows, ..
         } = &mut self.source
+            && table.qualified_name() == table_qualified
         {
-            if table.qualified_name() == table_qualified {
-                *total_rows = Some(total);
-                cx.notify();
-            }
+            *total_rows = Some(total);
+            cx.notify();
         }
     }
 
@@ -1562,6 +1563,7 @@ impl Render for DataGridPanel {
 }
 
 impl DataGridPanel {
+    #[allow(clippy::too_many_arguments)]
     fn render_toolbar(
         &self,
         table_name: &str,

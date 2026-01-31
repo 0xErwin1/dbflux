@@ -16,7 +16,7 @@ pub fn format_cell(cell: &CellValue) -> String {
 /// Escape a string for TSV format.
 /// Replaces tabs and newlines with spaces.
 fn escape_tsv(s: &str) -> String {
-    s.replace('\t', " ").replace('\n', " ").replace('\r', "")
+    s.replace(['\t', '\n'], " ").replace('\r', "")
 }
 
 /// Copy a single cell to clipboard format.

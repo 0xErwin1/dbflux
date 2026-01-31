@@ -259,10 +259,10 @@ impl ConnectionTree {
     /// or the node is already at the target parent.
     pub fn move_node(&mut self, node_id: Uuid, new_parent_id: Option<Uuid>) -> bool {
         // Check if already at target parent (no-op)
-        if let Some(node) = self.find_by_id(node_id) {
-            if node.parent_id == new_parent_id {
-                return false;
-            }
+        if let Some(node) = self.find_by_id(node_id)
+            && node.parent_id == new_parent_id
+        {
+            return false;
         }
 
         if self.would_create_cycle(node_id, new_parent_id) {
@@ -362,11 +362,11 @@ impl ConnectionTree {
     ///
     /// Returns `true` if the folder was found and renamed.
     pub fn rename_folder(&mut self, folder_id: Uuid, new_name: impl Into<String>) -> bool {
-        if let Some(node) = self.find_by_id_mut(folder_id) {
-            if node.is_folder() {
-                node.name = new_name.into();
-                return true;
-            }
+        if let Some(node) = self.find_by_id_mut(folder_id)
+            && node.is_folder()
+        {
+            node.name = new_name.into();
+            return true;
         }
         false
     }
@@ -375,21 +375,21 @@ impl ConnectionTree {
     ///
     /// Returns the new collapsed state, or `None` if the folder wasn't found.
     pub fn toggle_folder_collapsed(&mut self, folder_id: Uuid) -> Option<bool> {
-        if let Some(node) = self.find_by_id_mut(folder_id) {
-            if node.is_folder() {
-                node.collapsed = !node.collapsed;
-                return Some(node.collapsed);
-            }
+        if let Some(node) = self.find_by_id_mut(folder_id)
+            && node.is_folder()
+        {
+            node.collapsed = !node.collapsed;
+            return Some(node.collapsed);
         }
         None
     }
 
     /// Sets the collapsed state of a folder.
     pub fn set_folder_collapsed(&mut self, folder_id: Uuid, collapsed: bool) {
-        if let Some(node) = self.find_by_id_mut(folder_id) {
-            if node.is_folder() {
-                node.collapsed = collapsed;
-            }
+        if let Some(node) = self.find_by_id_mut(folder_id)
+            && node.is_folder()
+        {
+            node.collapsed = collapsed;
         }
     }
 
@@ -422,16 +422,16 @@ impl ConnectionTree {
 
         let mut repaired = 0;
         for node in &mut self.nodes {
-            if let Some(parent_id) = node.parent_id {
-                if !valid_folder_ids.contains(&parent_id) {
-                    log::warn!(
-                        "Repairing orphaned node {} (invalid parent {})",
-                        node.id,
-                        parent_id
-                    );
-                    node.parent_id = None;
-                    repaired += 1;
-                }
+            if let Some(parent_id) = node.parent_id
+                && !valid_folder_ids.contains(&parent_id)
+            {
+                log::warn!(
+                    "Repairing orphaned node {} (invalid parent {})",
+                    node.id,
+                    parent_id
+                );
+                node.parent_id = None;
+                repaired += 1;
             }
         }
         repaired

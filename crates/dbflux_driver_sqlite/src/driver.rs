@@ -316,6 +316,7 @@ impl Connection for SqliteConnection {
             name: "main".to_string(),
             tables,
             views,
+            custom_types: None,
         };
 
         Ok(SchemaSnapshot {
@@ -363,6 +364,8 @@ impl Connection for SqliteConnection {
             schema: None,
             columns: Some(columns),
             indexes: Some(indexes),
+            foreign_keys: None,
+            constraints: None,
         })
     }
 
@@ -405,6 +408,8 @@ impl SqliteConnection {
                 schema: None,
                 columns: None,
                 indexes: None,
+                foreign_keys: None,
+                constraints: None,
             })
             .collect();
 

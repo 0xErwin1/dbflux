@@ -1,15 +1,15 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use gpui::prelude::FluentBuilder;
 use gpui::ElementId;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, canvas, div, px, uniform_list, AnyElement, App, ClickEvent, Context, Entity,
-    InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior, ParentElement,
-    StatefulInteractiveElement, Styled, Window,
+    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
+    ListSizingBehavior, ParentElement, StatefulInteractiveElement, Styled, Window, actions, canvas,
+    div, px, uniform_list,
 };
-use gpui_component::scroll::Scrollbar;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::Scrollbar;
 
 use super::events::{Direction, Edge};
 use super::model::TableModel;

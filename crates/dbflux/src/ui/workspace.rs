@@ -232,10 +232,10 @@ impl Workspace {
         }
 
         // When focused on document area, delegate context to the active document
-        if self.focus_target == FocusTarget::Document {
-            if let Some(doc) = self.tab_manager.read(cx).active_document() {
-                return doc.active_context(cx);
-            }
+        if self.focus_target == FocusTarget::Document
+            && let Some(doc) = self.tab_manager.read(cx).active_document()
+        {
+            return doc.active_context(cx);
         }
 
         self.focus_target.to_context()
@@ -1572,10 +1572,10 @@ impl CommandDispatcher for Workspace {
                 }
 
                 // Route Cancel to active document (handles modals, edit modes, etc.)
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
-                    if doc.dispatch_command(Command::Cancel, window, cx) {
-                        return true;
-                    }
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                    && doc.dispatch_command(Command::Cancel, window, cx)
+                {
+                    return true;
                 }
 
                 // Always focus workspace to blur any input and enable keyboard navigation
@@ -1774,22 +1774,20 @@ impl CommandDispatcher for Workspace {
                 }
             }
 
-            Command::FocusRight => {
-                match self.focus_target {
-                    FocusTarget::Sidebar => {
-                        self.set_focus(FocusTarget::Document, window, cx);
-                        true
-                    }
-                    _ => false,
+            Command::FocusRight => match self.focus_target {
+                FocusTarget::Sidebar => {
+                    self.set_focus(FocusTarget::Document, window, cx);
+                    true
                 }
-            }
+                _ => false,
+            },
 
             Command::FocusDown => {
                 // First try the active document (for internal editor→results navigation)
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
-                    if doc.dispatch_command(Command::FocusDown, window, cx) {
-                        return true;
-                    }
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                    && doc.dispatch_command(Command::FocusDown, window, cx)
+                {
+                    return true;
                 }
                 // Workspace-level: Document → BackgroundTasks
                 let next = match self.focus_target {
@@ -1803,10 +1801,10 @@ impl CommandDispatcher for Workspace {
 
             Command::FocusUp => {
                 // First try the active document (for internal results→editor navigation)
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
-                    if doc.dispatch_command(Command::FocusUp, window, cx) {
-                        return true;
-                    }
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                    && doc.dispatch_command(Command::FocusUp, window, cx)
+                {
+                    return true;
                 }
                 // Workspace-level: BackgroundTasks → Document
                 let prev = match self.focus_target {

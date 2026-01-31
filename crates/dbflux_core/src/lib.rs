@@ -28,7 +28,9 @@ pub use profile::{
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
-    ColumnInfo, DatabaseInfo, DbSchemaInfo, IndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, CustomTypeInfo, CustomTypeKind, DatabaseInfo,
+    DbSchemaInfo, ForeignKeyInfo, IndexInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    TableInfo, ViewInfo,
 };
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
@@ -39,7 +41,7 @@ pub use table_browser::{OrderByColumn, Pagination, SortDirection, TableBrowseReq
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, NoopCancelHandle, QueryCancelHandle,
-    SchemaLoadingStrategy,
+    SchemaFeatures, SchemaLoadingStrategy,
 };
 pub use value::Value;
 

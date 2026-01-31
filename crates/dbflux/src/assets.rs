@@ -77,6 +77,9 @@ impl AssetSource for Assets {
                 Some(include_bytes!("../../../resources/icons/ui/columns.svg"))
             }
             "icons/ui/hash.svg" => Some(include_bytes!("../../../resources/icons/ui/hash.svg")),
+            "icons/ui/key-round.svg" => {
+                Some(include_bytes!("../../../resources/icons/ui/key-round.svg"))
+            }
             "icons/ui/lock.svg" => Some(include_bytes!("../../../resources/icons/ui/lock.svg")),
             "icons/ui/code.svg" => Some(include_bytes!("../../../resources/icons/ui/code.svg")),
             "icons/ui/zap.svg" => Some(include_bytes!("../../../resources/icons/ui/zap.svg")),
@@ -143,7 +146,7 @@ impl AssetSource for Assets {
             _ => None,
         };
 
-        Ok(bytes.map(|b| Cow::Borrowed(b)))
+        Ok(bytes.map(Cow::Borrowed))
     }
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {

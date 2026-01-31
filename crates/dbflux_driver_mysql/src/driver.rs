@@ -762,6 +762,7 @@ impl Connection for MysqlConnection {
             name: database.to_string(),
             tables,
             views,
+            custom_types: None,
         })
     }
 
@@ -798,6 +799,8 @@ impl Connection for MysqlConnection {
             schema: Some(database.to_string()),
             columns: Some(columns),
             indexes: Some(indexes),
+            foreign_keys: None,
+            constraints: None,
         })
     }
 
@@ -1000,6 +1003,8 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             schema: Some(database.to_string()),
             columns: None,
             indexes: None,
+            foreign_keys: None,
+            constraints: None,
         })
         .collect())
 }

@@ -1,8 +1,9 @@
 use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, ConnectionTree, ConnectionTreeNode,
-    ConnectionTreeStore, DbConfig, DbDriver, DbKind, DbSchemaInfo, HistoryEntry, HistoryStore,
-    ProfileStore, SavedQuery, SavedQueryStore, SchemaSnapshot, SecretStore, SshTunnelProfile,
-    SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
+    ConnectionTreeStore, CustomTypeInfo, DbConfig, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
+    HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore, TableInfo, TaskId, TaskKind,
+    TaskManager, TaskSnapshot, create_secret_store,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -37,6 +38,12 @@ pub struct ConnectedProfile {
     pub database_schemas: HashMap<String, DbSchemaInfo>,
     #[allow(dead_code)]
     pub table_details: HashMap<(String, String), TableInfo>,
+    /// Lazy-loaded custom types per schema (key: "database__schema" or just "schema").
+    pub schema_types: HashMap<String, Vec<CustomTypeInfo>>,
+    /// Lazy-loaded indexes per schema (key: "database__schema" or just "schema").
+    pub schema_indexes: HashMap<String, Vec<SchemaIndexInfo>>,
+    /// Lazy-loaded foreign keys per schema (key: "database__schema" or just "schema").
+    pub schema_foreign_keys: HashMap<String, Vec<SchemaForeignKeyInfo>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
 }
@@ -56,10 +63,7 @@ pub struct DangerousQuerySuppressions {
 
 impl DangerousQuerySuppressions {
     #[allow(dead_code)]
-    pub fn is_suppressed(
-        &self,
-        kind: crate::ui::dangerous_query::DangerousQueryKind,
-    ) -> bool {
+    pub fn is_suppressed(&self, kind: crate::ui::dangerous_query::DangerousQueryKind) -> bool {
         use crate::ui::dangerous_query::DangerousQueryKind;
         match kind {
             DangerousQueryKind::DeleteNoWhere => self.delete_no_where,
@@ -268,6 +272,9 @@ impl AppState {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                schema_types: HashMap::new(),
+                schema_indexes: HashMap::new(),
+                schema_foreign_keys: HashMap::new(),
                 active_database: None,
             },
         );
@@ -356,6 +363,178 @@ impl AppState {
         self.connections.get(&profile_id).is_some_and(|c| {
             !c.table_details
                 .contains_key(&(database.to_string(), table.to_string()))
+        })
+    }
+
+    /// Returns the cache key for schema types (database__schema or just schema).
+    fn schema_types_key(database: &str, schema: Option<&str>) -> String {
+        match schema {
+            Some(s) => format!("{}__{}", database, s),
+            None => database.to_string(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_schema_types(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Option<&Vec<CustomTypeInfo>> {
+        let key = Self::schema_types_key(database, schema);
+        self.connections
+            .get(&profile_id)
+            .and_then(|c| c.schema_types.get(&key))
+    }
+
+    pub fn set_schema_types(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        types: Vec<CustomTypeInfo>,
+    ) {
+        let key = Self::schema_types_key(&database, schema.as_deref());
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.schema_types.insert(key, types);
+        }
+    }
+
+    pub fn needs_schema_types(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        let key = Self::schema_types_key(database, schema);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.schema_types.contains_key(&key))
+    }
+
+    pub fn prepare_fetch_schema_types(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaTypesParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = Self::schema_types_key(database, schema);
+        if connected.schema_types.contains_key(&key) {
+            return Err("Schema types already cached".to_string());
+        }
+
+        Ok(FetchSchemaTypesParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            connection: connected.connection.clone(),
+        })
+    }
+
+    // Schema-level indexes cache methods
+
+    pub fn set_schema_indexes(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        indexes: Vec<SchemaIndexInfo>,
+    ) {
+        let key = Self::schema_types_key(&database, schema.as_deref());
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.schema_indexes.insert(key, indexes);
+        }
+    }
+
+    pub fn needs_schema_indexes(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        let key = Self::schema_types_key(database, schema);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.schema_indexes.contains_key(&key))
+    }
+
+    pub fn prepare_fetch_schema_indexes(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaIndexesParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = Self::schema_types_key(database, schema);
+        if connected.schema_indexes.contains_key(&key) {
+            return Err("Schema indexes already cached".to_string());
+        }
+
+        Ok(FetchSchemaIndexesParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            connection: connected.connection.clone(),
+        })
+    }
+
+    // Schema-level foreign keys cache methods
+
+    pub fn set_schema_foreign_keys(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        foreign_keys: Vec<SchemaForeignKeyInfo>,
+    ) {
+        let key = Self::schema_types_key(&database, schema.as_deref());
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.schema_foreign_keys.insert(key, foreign_keys);
+        }
+    }
+
+    pub fn needs_schema_foreign_keys(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        let key = Self::schema_types_key(database, schema);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.schema_foreign_keys.contains_key(&key))
+    }
+
+    pub fn prepare_fetch_schema_foreign_keys(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaForeignKeysParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = Self::schema_types_key(database, schema);
+        if connected.schema_foreign_keys.contains_key(&key) {
+            return Err("Schema foreign keys already cached".to_string());
+        }
+
+        Ok(FetchSchemaForeignKeysParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            connection: connected.connection.clone(),
         })
     }
 
@@ -1048,6 +1227,9 @@ impl AppState {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                schema_types: HashMap::new(),
+                schema_indexes: HashMap::new(),
+                schema_foreign_keys: HashMap::new(),
                 active_database: None,
             },
         );
@@ -1167,6 +1349,96 @@ pub struct FetchTableDetailsResult {
     pub database: String,
     pub table: String,
     pub details: TableInfo,
+}
+
+pub struct FetchSchemaTypesParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchSchemaTypesParams {
+    pub fn execute(self) -> Result<FetchSchemaTypesResult, String> {
+        let types = self
+            .connection
+            .schema_types(&self.database, self.schema.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchSchemaTypesResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema: self.schema,
+            types,
+        })
+    }
+}
+
+pub struct FetchSchemaTypesResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub types: Vec<CustomTypeInfo>,
+}
+
+pub struct FetchSchemaIndexesParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchSchemaIndexesParams {
+    pub fn execute(self) -> Result<FetchSchemaIndexesResult, String> {
+        let indexes = self
+            .connection
+            .schema_indexes(&self.database, self.schema.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchSchemaIndexesResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema: self.schema,
+            indexes,
+        })
+    }
+}
+
+pub struct FetchSchemaIndexesResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub indexes: Vec<SchemaIndexInfo>,
+}
+
+pub struct FetchSchemaForeignKeysParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchSchemaForeignKeysParams {
+    pub fn execute(self) -> Result<FetchSchemaForeignKeysResult, String> {
+        let foreign_keys = self
+            .connection
+            .schema_foreign_keys(&self.database, self.schema.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchSchemaForeignKeysResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema: self.schema,
+            foreign_keys,
+        })
+    }
+}
+
+pub struct FetchSchemaForeignKeysResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub foreign_keys: Vec<SchemaForeignKeyInfo>,
 }
 
 pub struct ConnectProfileParams {

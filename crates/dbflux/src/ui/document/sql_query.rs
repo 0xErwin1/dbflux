@@ -388,8 +388,9 @@ impl SqlQueryDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let should_create_new_tab =
-            self.run_in_new_tab || self.result_tabs.is_empty() || self.active_result_index.is_none();
+        let should_create_new_tab = self.run_in_new_tab
+            || self.result_tabs.is_empty()
+            || self.active_result_index.is_none();
 
         self.run_in_new_tab = false;
 
@@ -416,20 +417,20 @@ impl SqlQueryDocument {
         let title = format!("Result {}", self.result_tab_counter);
 
         let app_state = self.app_state.clone();
-        let grid = cx.new(|cx| {
-            DataGridPanel::new_for_result(result, query.clone(), app_state, window, cx)
-        });
+        let grid = cx
+            .new(|cx| DataGridPanel::new_for_result(result, query.clone(), app_state, window, cx));
 
-        let subscription = cx.subscribe(&grid, |this, _grid, event: &DataGridEvent, cx| {
-            match event {
+        let subscription = cx.subscribe(
+            &grid,
+            |this, _grid, event: &DataGridEvent, cx| match event {
                 DataGridEvent::RequestHide => {
                     this.hide_results(cx);
                 }
                 DataGridEvent::RequestToggleMaximize => {
                     this.toggle_maximize_results(cx);
                 }
-            }
-        });
+            },
+        );
 
         let tab = ResultTab {
             id: tab_id,

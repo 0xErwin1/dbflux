@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, FormValues,
-    IndexInfo, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
-    POSTGRES_FORM,
+    ConstraintInfo, ConstraintKind, CustomTypeInfo, CustomTypeKind, DatabaseInfo, DbConfig,
+    DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo,
+    POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
+    SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -710,13 +711,17 @@ impl Connection for PostgresConnection {
 
         let columns = get_columns(&mut client, schema_name, table)?;
         let indexes = get_indexes(&mut client, schema_name, table)?;
+        let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;
+        let constraints = get_constraints(&mut client, schema_name, table)?;
 
         log::info!(
-            "[SCHEMA] Table {}.{}: {} columns, {} indexes",
+            "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
             schema_name,
             table,
             columns.len(),
-            indexes.len()
+            indexes.len(),
+            foreign_keys.len(),
+            constraints.len()
         );
 
         Ok(TableInfo {
@@ -724,7 +729,61 @@ impl Connection for PostgresConnection {
             schema: Some(schema_name.to_string()),
             columns: Some(columns),
             indexes: Some(indexes),
+            foreign_keys: Some(foreign_keys),
+            constraints: Some(constraints),
         })
+    }
+
+    fn schema_features(&self) -> SchemaFeatures {
+        SchemaFeatures::FOREIGN_KEYS
+            | SchemaFeatures::CHECK_CONSTRAINTS
+            | SchemaFeatures::UNIQUE_CONSTRAINTS
+            | SchemaFeatures::CUSTOM_TYPES
+    }
+
+    fn schema_types(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<CustomTypeInfo>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        get_custom_types(&mut client, schema_name)
+    }
+
+    fn schema_indexes(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        get_schema_indexes(&mut client, schema_name)
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+        get_schema_foreign_keys(&mut client, schema_name)
     }
 
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
@@ -822,6 +881,7 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
             name: schema_name,
             tables,
             views,
+            custom_types: None,
         });
     }
 
@@ -851,6 +911,8 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 schema: Some(schema.to_string()),
                 columns: None,
                 indexes: None,
+                foreign_keys: None,
+                constraints: None,
             }
         })
         .collect();
@@ -1082,6 +1144,215 @@ fn get_indexes(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Ind
                 is_unique: row.get(2),
                 is_primary: row.get(3),
             }
+        })
+        .collect())
+}
+
+fn get_foreign_keys(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<ForeignKeyInfo>, DbError> {
+    // Use a simpler query that avoids complex array_agg issues
+    // Query each FK constraint individually with its columns
+    // Cast sql_identifier to text to avoid deserialization issues
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                kcu.constraint_name::text,
+                kcu.column_name::text,
+                ccu.table_schema::text as referenced_schema,
+                ccu.table_name::text as referenced_table,
+                ccu.column_name::text as referenced_column,
+                rc.delete_rule::text,
+                rc.update_rule::text
+            FROM information_schema.key_column_usage kcu
+            JOIN information_schema.table_constraints tc
+                ON kcu.constraint_name = tc.constraint_name
+                AND kcu.table_schema = tc.table_schema
+            JOIN information_schema.constraint_column_usage ccu
+                ON kcu.constraint_name = ccu.constraint_name
+                AND kcu.constraint_schema = ccu.constraint_schema
+            JOIN information_schema.referential_constraints rc
+                ON kcu.constraint_name = rc.constraint_name
+                AND kcu.constraint_schema = rc.constraint_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+                AND kcu.table_schema = $1
+                AND kcu.table_name = $2
+            ORDER BY kcu.constraint_name, kcu.ordinal_position
+            "#,
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    // Group rows by constraint name
+    let mut fk_map: std::collections::HashMap<String, ForeignKeyInfo> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let name: String = row.get(0);
+        let column: String = row.get(1);
+        let referenced_schema: Option<String> = row.get(2);
+        let referenced_table: String = row.get(3);
+        let referenced_column: String = row.get(4);
+        let on_delete: Option<String> = row.get(5);
+        let on_update: Option<String> = row.get(6);
+
+        let entry = fk_map
+            .entry(name.clone())
+            .or_insert_with(|| ForeignKeyInfo {
+                name,
+                columns: Vec::new(),
+                referenced_schema,
+                referenced_table,
+                referenced_columns: Vec::new(),
+                on_delete: on_delete.filter(|s| s != "NO ACTION"),
+                on_update: on_update.filter(|s| s != "NO ACTION"),
+            });
+
+        if !entry.columns.contains(&column) {
+            entry.columns.push(column);
+        }
+        if !entry.referenced_columns.contains(&referenced_column) {
+            entry.referenced_columns.push(referenced_column);
+        }
+    }
+
+    let mut fks: Vec<ForeignKeyInfo> = fk_map.into_values().collect();
+    fks.sort_by(|a, b| a.name.cmp(&b.name));
+
+    log::debug!(
+        "[SCHEMA] get_foreign_keys for {}.{}: {} FKs found",
+        schema,
+        table,
+        fks.len()
+    );
+
+    Ok(fks)
+}
+
+fn get_constraints(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<ConstraintInfo>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                tc.constraint_name,
+                tc.constraint_type,
+                COALESCE(
+                    array_agg(kcu.column_name ORDER BY kcu.ordinal_position)
+                    FILTER (WHERE kcu.column_name IS NOT NULL),
+                    ARRAY[]::text[]
+                ) as columns,
+                cc.check_clause
+            FROM information_schema.table_constraints tc
+            LEFT JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+                AND tc.table_schema = kcu.table_schema
+            LEFT JOIN information_schema.check_constraints cc
+                ON tc.constraint_name = cc.constraint_name
+                AND tc.constraint_schema = cc.constraint_schema
+            WHERE tc.table_schema = $1
+                AND tc.table_name = $2
+                AND tc.constraint_type IN ('CHECK', 'UNIQUE')
+            GROUP BY tc.constraint_name, tc.constraint_type, cc.check_clause
+            ORDER BY tc.constraint_type, tc.constraint_name
+            "#,
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name: String = row.try_get(0).ok()?;
+            let constraint_type: String = row.try_get(1).ok()?;
+            let columns: Vec<String> = row.try_get(2).ok().unwrap_or_default();
+            let check_clause: Option<String> = row.try_get(3).ok().flatten();
+
+            let kind = match constraint_type.as_str() {
+                "CHECK" => ConstraintKind::Check,
+                "UNIQUE" => ConstraintKind::Unique,
+                _ => return None,
+            };
+
+            Some(ConstraintInfo {
+                name,
+                kind,
+                columns,
+                check_clause,
+            })
+        })
+        .collect())
+}
+
+fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeInfo>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                t.typname as name,
+                n.nspname as schema,
+                CASE
+                    WHEN t.typtype = 'e' THEN 'enum'
+                    WHEN t.typtype = 'd' THEN 'domain'
+                    WHEN t.typtype = 'c' THEN 'composite'
+                    ELSE 'other'
+                END as kind,
+                CASE
+                    WHEN t.typtype = 'e' THEN (
+                        SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder)
+                        FROM pg_enum e WHERE e.enumtypid = t.oid
+                    )
+                    ELSE NULL
+                END as enum_values,
+                CASE
+                    WHEN t.typtype = 'd' THEN (
+                        SELECT bt.typname FROM pg_type bt WHERE bt.oid = t.typbasetype
+                    )
+                    ELSE NULL
+                END as base_type
+            FROM pg_type t
+            JOIN pg_namespace n ON t.typnamespace = n.oid
+            WHERE n.nspname = $1
+                AND t.typtype IN ('e', 'd', 'c')
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_class c
+                    WHERE c.reltype = t.oid AND c.relkind = 'r'
+                )
+            ORDER BY t.typtype, t.typname
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name: String = row.get(0);
+            let schema: String = row.get(1);
+            let kind_str: String = row.get(2);
+            let enum_values: Option<Vec<String>> = row.get(3);
+            let base_type: Option<String> = row.get(4);
+
+            let kind = match kind_str.as_str() {
+                "enum" => CustomTypeKind::Enum,
+                "domain" => CustomTypeKind::Domain,
+                "composite" => CustomTypeKind::Composite,
+                _ => return None,
+            };
+
+            Some(CustomTypeInfo {
+                name,
+                schema: Some(schema),
+                kind,
+                enum_values,
+                base_type,
+            })
         })
         .collect())
 }
@@ -1333,4 +1604,123 @@ fn pg_generate_truncate(table: &TableInfo) -> String {
 fn pg_generate_drop_table(table: &TableInfo) -> String {
     let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
     format!("DROP TABLE {};", qualified)
+}
+
+fn get_schema_indexes(client: &mut Client, schema: &str) -> Result<Vec<SchemaIndexInfo>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                i.relname::text as index_name,
+                t.relname::text as table_name,
+                array_agg(a.attname::text ORDER BY array_position(ix.indkey, a.attnum)) as columns,
+                ix.indisunique as is_unique,
+                ix.indisprimary as is_primary
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+            WHERE n.nspname = $1
+                AND t.relkind = 'r'
+            GROUP BY i.relname, t.relname, ix.indisunique, ix.indisprimary
+            ORDER BY t.relname, i.relname
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name: String = row.try_get(0).ok()?;
+            let table_name: String = row.try_get(1).ok()?;
+            let columns: Vec<String> = row.try_get(2).ok()?;
+            let is_unique: bool = row.try_get(3).ok()?;
+            let is_primary: bool = row.try_get(4).ok()?;
+
+            Some(SchemaIndexInfo {
+                name,
+                table_name,
+                columns,
+                is_unique,
+                is_primary,
+            })
+        })
+        .collect())
+}
+
+fn get_schema_foreign_keys(
+    client: &mut Client,
+    schema: &str,
+) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                kcu.constraint_name::text,
+                kcu.table_name::text,
+                kcu.column_name::text,
+                ccu.table_schema::text as referenced_schema,
+                ccu.table_name::text as referenced_table,
+                ccu.column_name::text as referenced_column,
+                rc.delete_rule::text,
+                rc.update_rule::text
+            FROM information_schema.key_column_usage kcu
+            JOIN information_schema.table_constraints tc
+                ON kcu.constraint_name = tc.constraint_name
+                AND kcu.table_schema = tc.table_schema
+            JOIN information_schema.constraint_column_usage ccu
+                ON kcu.constraint_name = ccu.constraint_name
+                AND kcu.constraint_schema = ccu.constraint_schema
+            JOIN information_schema.referential_constraints rc
+                ON kcu.constraint_name = rc.constraint_name
+                AND kcu.constraint_schema = rc.constraint_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+                AND kcu.table_schema = $1
+            ORDER BY kcu.table_name, kcu.constraint_name, kcu.ordinal_position
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+
+    // Group rows by constraint name
+    let mut fk_map: std::collections::HashMap<String, SchemaForeignKeyInfo> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let name: String = row.get(0);
+        let table_name: String = row.get(1);
+        let column: String = row.get(2);
+        let referenced_schema: Option<String> = row.get(3);
+        let referenced_table: String = row.get(4);
+        let referenced_column: String = row.get(5);
+        let on_delete: Option<String> = row.get(6);
+        let on_update: Option<String> = row.get(7);
+
+        let entry = fk_map
+            .entry(name.clone())
+            .or_insert_with(|| SchemaForeignKeyInfo {
+                name,
+                table_name,
+                columns: Vec::new(),
+                referenced_schema,
+                referenced_table,
+                referenced_columns: Vec::new(),
+                on_delete: on_delete.filter(|s| s != "NO ACTION"),
+                on_update: on_update.filter(|s| s != "NO ACTION"),
+            });
+
+        if !entry.columns.contains(&column) {
+            entry.columns.push(column);
+        }
+        if !entry.referenced_columns.contains(&referenced_column) {
+            entry.referenced_columns.push(referenced_column);
+        }
+    }
+
+    let mut fks: Vec<SchemaForeignKeyInfo> = fk_map.into_values().collect();
+    fks.sort_by(|a, b| (&a.table_name, &a.name).cmp(&(&b.table_name, &b.name)));
+
+    Ok(fks)
 }
