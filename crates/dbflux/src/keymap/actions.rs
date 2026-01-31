@@ -24,6 +24,7 @@ actions!(
         CycleFocusForward,
         CycleFocusBackward,
         RunQuery,
+        RunQueryInNewTab,
         Cancel,
         ExportResults,
         OpenConnectionManager,

@@ -13,7 +13,7 @@ pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use handle::{DocumentEvent, DocumentHandle};
 pub use sql_query::SqlQueryDocument;
 pub use tab_bar::{TabBar, TabBarEvent};
-pub use tab_manager::{PendingPromote, TabManager, TabManagerEvent};
+pub use tab_manager::{TabManager, TabManagerEvent};
 pub use types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
 };

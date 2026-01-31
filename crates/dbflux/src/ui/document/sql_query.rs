@@ -8,16 +8,26 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
-use crate::ui::tokens::{Radii, Spacing};
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{CancelToken, DbError, HistoryEntry, QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Input, InputState};
 use gpui_component::resizable::{resizable_panel, v_resizable};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// A single result tab within the SqlQueryDocument.
+struct ResultTab {
+    id: Uuid,
+    title: String,
+    grid: Entity<DataGridPanel>,
+    query: String,
+    subscription: Subscription,
+}
 
 /// Internal layout of the document.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -54,9 +64,13 @@ pub struct SqlQueryDocument {
     // Execution
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
-    data_grid: Option<Entity<DataGridPanel>>,
-    _data_grid_subscription: Option<Subscription>,
     pending_result: Option<PendingQueryResult>,
+
+    // Result tabs
+    result_tabs: Vec<ResultTab>,
+    active_result_index: Option<usize>,
+    result_tab_counter: usize,
+    run_in_new_tab: bool,
 
     // History modal
     history_modal: Entity<HistoryModal>,
@@ -68,6 +82,7 @@ pub struct SqlQueryDocument {
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
     active_cancel_token: Option<CancelToken>,
+    results_maximized: bool,
 }
 
 struct PendingQueryResult {
@@ -123,9 +138,11 @@ impl SqlQueryDocument {
             saved_query_id: None,
             execution_history: Vec::new(),
             active_execution_index: None,
-            data_grid: None,
-            _data_grid_subscription: None,
             pending_result: None,
+            result_tabs: Vec::new(),
+            active_result_index: None,
+            result_tab_counter: 0,
+            run_in_new_tab: false,
             history_modal,
             _history_subscriptions: vec![query_selected_sub],
             pending_set_query: None,
@@ -133,6 +150,7 @@ impl SqlQueryDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             active_cancel_token: None,
+            results_maximized: false,
         }
     }
 
@@ -370,28 +388,59 @@ impl SqlQueryDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(grid) = &self.data_grid {
-            grid.update(cx, |g, cx| g.set_query_result(result, query, cx));
-            return;
+        let should_create_new_tab =
+            self.run_in_new_tab || self.result_tabs.is_empty() || self.active_result_index.is_none();
+
+        self.run_in_new_tab = false;
+
+        if should_create_new_tab {
+            self.create_result_tab(result, query, window, cx);
+        } else if let Some(index) = self.active_result_index
+            && let Some(tab) = self.result_tabs.get_mut(index)
+        {
+            tab.grid
+                .update(cx, |g, cx| g.set_query_result(result, query.clone(), cx));
+            tab.query = query;
         }
+    }
+
+    fn create_result_tab(
+        &mut self,
+        result: Arc<QueryResult>,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_tab_counter += 1;
+        let tab_id = Uuid::new_v4();
+        let title = format!("Result {}", self.result_tab_counter);
 
         let app_state = self.app_state.clone();
-        let grid = cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
+        let grid = cx.new(|cx| {
+            DataGridPanel::new_for_result(result, query.clone(), app_state, window, cx)
+        });
 
-        let subscription = cx.subscribe(
-            &grid,
-            |_this, _grid, event: &DataGridEvent, cx| match event {
-                DataGridEvent::PromoteResult { result, query } => {
-                    cx.emit(DocumentEvent::PromoteResult {
-                        result: result.clone(),
-                        query: query.clone(),
-                    });
+        let subscription = cx.subscribe(&grid, |this, _grid, event: &DataGridEvent, cx| {
+            match event {
+                DataGridEvent::RequestHide => {
+                    this.hide_results(cx);
                 }
-            },
-        );
+                DataGridEvent::RequestToggleMaximize => {
+                    this.toggle_maximize_results(cx);
+                }
+            }
+        });
 
-        self.data_grid = Some(grid);
-        self._data_grid_subscription = Some(subscription);
+        let tab = ResultTab {
+            id: tab_id,
+            title,
+            grid,
+            query,
+            subscription,
+        };
+
+        self.result_tabs.push(tab);
+        self.active_result_index = Some(self.result_tabs.len() - 1);
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
@@ -403,7 +452,70 @@ impl SqlQueryDocument {
         }
     }
 
-    /// Cycle between layouts.
+    pub fn hide_results(&mut self, cx: &mut Context<Self>) {
+        self.layout = SqlQueryLayout::EditorOnly;
+        self.focus_mode = SqlQueryFocus::Editor;
+        self.results_maximized = false;
+        cx.notify();
+    }
+
+    pub fn toggle_maximize_results(&mut self, cx: &mut Context<Self>) {
+        if self.results_maximized {
+            self.layout = SqlQueryLayout::Split;
+            self.results_maximized = false;
+        } else {
+            self.layout = SqlQueryLayout::ResultsOnly;
+            self.results_maximized = true;
+        }
+
+        // Update the active grid's maximized state
+        if let Some(grid) = self.active_result_grid() {
+            grid.update(cx, |g, cx| g.set_maximized(self.results_maximized, cx));
+        }
+
+        cx.notify();
+    }
+
+    pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_in_new_tab = true;
+        self.run_query(window, cx);
+    }
+
+    pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
+        let Some(index) = self.result_tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+
+        self.result_tabs.remove(index);
+
+        if self.result_tabs.is_empty() {
+            self.active_result_index = None;
+            self.layout = SqlQueryLayout::EditorOnly;
+            self.focus_mode = SqlQueryFocus::Editor;
+        } else if let Some(active) = self.active_result_index {
+            if active >= self.result_tabs.len() {
+                self.active_result_index = Some(self.result_tabs.len() - 1);
+            } else if active > index {
+                self.active_result_index = Some(active - 1);
+            }
+        }
+
+        cx.notify();
+    }
+
+    pub fn activate_result_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.result_tabs.len() {
+            self.active_result_index = Some(index);
+            cx.notify();
+        }
+    }
+
+    fn active_result_grid(&self) -> Option<Entity<DataGridPanel>> {
+        self.active_result_index
+            .and_then(|i| self.result_tabs.get(i))
+            .map(|tab| tab.grid.clone())
+    }
+
     pub fn cycle_layout(&mut self, cx: &mut Context<Self>) {
         self.layout = match self.layout {
             SqlQueryLayout::Split => SqlQueryLayout::EditorOnly,
@@ -479,8 +591,26 @@ impl SqlQueryDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         // When history modal is open, route commands to it first
-        if self.history_modal.read(cx).is_visible() {
-            if self.dispatch_to_history_modal(cmd, window, cx) {
+        if self.history_modal.read(cx).is_visible()
+            && self.dispatch_to_history_modal(cmd, window, cx)
+        {
+            return true;
+        }
+
+        // When focused on results, delegate to active DataGridPanel
+        if self.focus_mode == SqlQueryFocus::Results
+            && let Some(grid) = self.active_result_grid()
+        {
+            // Special handling for FocusUp to exit results
+            if cmd == Command::FocusUp {
+                self.focus_mode = SqlQueryFocus::Editor;
+                cx.notify();
+                return true;
+            }
+
+            // Delegate to grid
+            let handled = grid.update(cx, |g, cx| g.dispatch_command(cmd, window, cx));
+            if handled {
                 return true;
             }
         }
@@ -488,6 +618,10 @@ impl SqlQueryDocument {
         match cmd {
             Command::RunQuery => {
                 self.run_query(window, cx);
+                true
+            }
+            Command::RunQueryInNewTab => {
+                self.run_query_in_new_tab(window, cx);
                 true
             }
             Command::Cancel | Command::CancelQuery => {
@@ -499,18 +633,9 @@ impl SqlQueryDocument {
                 }
             }
 
-            // Internal focus navigation
-            Command::FocusUp => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    self.focus_mode = SqlQueryFocus::Editor;
-                    cx.notify();
-                    true
-                } else {
-                    false
-                }
-            }
+            // Focus navigation from editor to results
             Command::FocusDown => {
-                if self.focus_mode == SqlQueryFocus::Editor && self.data_grid.is_some() {
+                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() {
                     self.focus_mode = SqlQueryFocus::Results;
                     cx.notify();
                     true
@@ -534,86 +659,6 @@ impl SqlQueryDocument {
                     _ => SqlQueryLayout::ResultsOnly,
                 };
                 cx.notify();
-                true
-            }
-
-            // Results navigation - forward to DataGridPanel when focused on results
-            Command::SelectNext => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.select_next(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::SelectPrev => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.select_prev(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::SelectFirst => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.select_first(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::SelectLast => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.select_last(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::ColumnLeft => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.column_left(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::ColumnRight => {
-                if self.focus_mode == SqlQueryFocus::Results {
-                    if let Some(grid) = &self.data_grid {
-                        grid.update(cx, |g, cx| g.column_right(cx));
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            Command::ResultsNextPage => {
-                if let Some(grid) = &self.data_grid {
-                    grid.update(cx, |g, cx| g.go_to_next_page(window, cx));
-                }
-                true
-            }
-            Command::ResultsPrevPage => {
-                if let Some(grid) = &self.data_grid {
-                    grid.update(cx, |g, cx| g.go_to_prev_page(window, cx));
-                }
-                true
-            }
-            Command::ExportResults => {
-                if let Some(grid) = &self.data_grid {
-                    grid.update(cx, |g, cx| g.export_results(window, cx));
-                }
                 true
             }
 
@@ -671,9 +716,6 @@ impl SqlQueryDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
-        let has_results = self.data_grid.is_some();
-        let results_visible = self.layout != SqlQueryLayout::EditorOnly;
-
         div()
             .id("sql-toolbar")
             .flex()
@@ -724,6 +766,33 @@ impl SqlQueryDocument {
                     )
                     .child(run_label),
             )
+            .when(!is_executing, |el| {
+                el.child(
+                    div()
+                        .id("run-in-new-tab-btn")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .text_xs()
+                        .bg(btn_bg)
+                        .text_color(theme.foreground)
+                        .hover(|d| d.bg(theme.secondary_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.run_query_in_new_tab(window, cx);
+                        }))
+                        .child(
+                            svg()
+                                .path(AppIcon::SquarePlay.path())
+                                .size_3()
+                                .text_color(theme.foreground),
+                        )
+                        .child("New tab"),
+                )
+            })
             .child(
                 div()
                     .text_xs()
@@ -737,39 +806,6 @@ impl SqlQueryDocument {
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(format!("{:.2}s", duration.as_secs_f64())),
-                )
-            })
-            .when(has_results, |el| {
-                let icon_color = if results_visible {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                };
-
-                el.child(
-                    div()
-                        .id("toggle-results-btn")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size_6()
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .hover(|el| el.bg(theme.secondary))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.layout = if results_visible {
-                                SqlQueryLayout::EditorOnly
-                            } else {
-                                SqlQueryLayout::Split
-                            };
-                            cx.notify();
-                        }))
-                        .child(
-                            svg()
-                                .path(AppIcon::Rows3.path())
-                                .size_4()
-                                .text_color(icon_color),
-                        ),
                 )
             })
     }
@@ -806,7 +842,9 @@ impl SqlQueryDocument {
             .and_then(|r| r.error.clone());
 
         let has_error = error.is_some();
-        let has_grid = self.data_grid.is_some();
+        let active_grid = self.active_result_grid();
+        let has_grid = active_grid.is_some();
+        let has_tabs = !self.result_tabs.is_empty();
 
         div()
             .size_full()
@@ -816,11 +854,194 @@ impl SqlQueryDocument {
             .when(is_focused, |el| {
                 el.border_2().border_color(accent.opacity(0.3))
             })
-            .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-            .when_some(self.data_grid.clone(), |el, grid| el.child(grid))
-            .when(!has_grid && !has_error, |el| {
-                el.child(self.render_empty_results(cx))
-            })
+            .when(has_tabs, |el| el.child(self.render_results_header(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
+                    .when_some(active_grid, |el, grid| el.child(grid))
+                    .when(!has_grid && !has_error, |el| {
+                        el.child(self.render_empty_results(cx))
+                    }),
+            )
+    }
+
+    fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let active_index = self.active_result_index;
+
+        div()
+            .id("results-header")
+            .flex()
+            .items_center()
+            .h(Heights::TAB)
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .overflow_x_hidden()
+                    .flex_1()
+                    .children(self.result_tabs.iter().enumerate().map(|(i, tab)| {
+                        let is_active = active_index == Some(i);
+                        let tab_id = tab.id;
+
+                        div()
+                            .id(ElementId::Name(format!("result-tab-{}", tab.id).into()))
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .text_xs()
+                            .when(is_active, |el| {
+                                el.bg(theme.secondary).text_color(theme.foreground)
+                            })
+                            .when(!is_active, |el| {
+                                el.text_color(theme.muted_foreground)
+                                    .hover(|d| d.bg(theme.secondary.opacity(0.5)))
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.activate_result_tab(i, cx);
+                            }))
+                            .child(tab.title.clone())
+                            .child(
+                                div()
+                                    .id(ElementId::Name(
+                                        format!("close-result-tab-{}", tab.id).into(),
+                                    ))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size_4()
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.danger.opacity(0.2)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_result_tab(tab_id, cx);
+                                    }))
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::X.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    ),
+                            )
+                    })),
+            )
+            .child(div().flex_1())
+            .child(self.render_results_controls(cx))
+    }
+
+    fn render_results_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let is_maximized = self.results_maximized;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .id("toggle-maximize-results")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_6()
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_maximize_results(cx);
+                    }))
+                    .child(
+                        svg()
+                            .path(if is_maximized {
+                                AppIcon::Minimize2.path()
+                            } else {
+                                AppIcon::Maximize2.path()
+                            })
+                            .size_3p5()
+                            .text_color(theme.muted_foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .id("hide-results-panel")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_6()
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.hide_results(cx);
+                    }))
+                    .child(
+                        svg()
+                            .path(AppIcon::PanelBottomClose.path())
+                            .size_3p5()
+                            .text_color(theme.muted_foreground),
+                    ),
+            )
+    }
+
+    fn render_collapsed_results_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let tab_count = self.result_tabs.len();
+
+        div()
+            .id("collapsed-results-bar")
+            .flex()
+            .items_center()
+            .h(Heights::TAB)
+            .px(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "{} result{}",
+                        tab_count,
+                        if tab_count == 1 { "" } else { "s" }
+                    )),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("expand-results-panel")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_6()
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.layout = SqlQueryLayout::Split;
+                        cx.notify();
+                    }))
+                    .child(
+                        svg()
+                            .path(AppIcon::PanelBottomOpen.path())
+                            .size_3p5()
+                            .text_color(theme.muted_foreground),
+                    ),
+            )
     }
 
     fn render_error_state(&self, error: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -880,6 +1101,8 @@ impl Render for SqlQueryDocument {
         let results_view = self.render_results(window, cx).into_any_element();
 
         let bg = cx.theme().background;
+        let has_collapsed_results =
+            self.layout == SqlQueryLayout::EditorOnly && !self.result_tabs.is_empty();
 
         div()
             .id(ElementId::Name(format!("sql-doc-{}", self.id.0).into()))
@@ -915,6 +1138,10 @@ impl Render for SqlQueryDocument {
                     SqlQueryLayout::ResultsOnly => results_view,
                 }),
             )
+            // Collapsed results bar (when in EditorOnly with results)
+            .when(has_collapsed_results, |el| {
+                el.child(self.render_collapsed_results_bar(cx))
+            })
             // History modal overlay
             .child(self.history_modal.clone())
     }

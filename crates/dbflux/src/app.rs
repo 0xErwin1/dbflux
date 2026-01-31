@@ -42,6 +42,8 @@ pub struct ConnectedProfile {
 }
 
 /// Session-based suppressions for dangerous query confirmations.
+/// TODO: Re-integrate with SqlQueryDocument.
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct DangerousQuerySuppressions {
     delete_no_where: bool,
@@ -53,11 +55,12 @@ pub struct DangerousQuerySuppressions {
 }
 
 impl DangerousQuerySuppressions {
+    #[allow(dead_code)]
     pub fn is_suppressed(
         &self,
-        kind: crate::ui::editor::dangerous_query::DangerousQueryKind,
+        kind: crate::ui::dangerous_query::DangerousQueryKind,
     ) -> bool {
-        use crate::ui::editor::dangerous_query::DangerousQueryKind;
+        use crate::ui::dangerous_query::DangerousQueryKind;
         match kind {
             DangerousQueryKind::DeleteNoWhere => self.delete_no_where,
             DangerousQueryKind::UpdateNoWhere => self.update_no_where,
@@ -68,8 +71,9 @@ impl DangerousQuerySuppressions {
         }
     }
 
-    pub fn set_suppressed(&mut self, kind: crate::ui::editor::dangerous_query::DangerousQueryKind) {
-        use crate::ui::editor::dangerous_query::DangerousQueryKind;
+    #[allow(dead_code)]
+    pub fn set_suppressed(&mut self, kind: crate::ui::dangerous_query::DangerousQueryKind) {
+        use crate::ui::dangerous_query::DangerousQueryKind;
         match kind {
             DangerousQueryKind::DeleteNoWhere => self.delete_no_where = true,
             DangerousQueryKind::UpdateNoWhere => self.update_no_where = true,
@@ -94,7 +98,9 @@ pub struct AppState {
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
     history_store: Option<HistoryStore>,
     saved_query_store: Option<SavedQueryStore>,
+    #[allow(dead_code)]
     pending_saved_query_warning: Option<String>,
+    #[allow(dead_code)]
     pub dangerous_query_suppressions: DangerousQuerySuppressions,
 
     pub settings_window: Option<WindowHandle<Root>>,
@@ -722,6 +728,7 @@ impl AppState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn take_saved_query_warning(&mut self) -> Option<String> {
         self.pending_saved_query_warning.take()
     }
@@ -779,6 +786,7 @@ impl AppState {
         false
     }
 
+    #[allow(dead_code)]
     pub fn update_saved_query_sql(&mut self, id: Uuid, sql: &str) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let result = store.update_sql(id, sql);
@@ -790,6 +798,7 @@ impl AppState {
         false
     }
 
+    #[allow(dead_code)]
     pub fn update_saved_query_name(&mut self, id: Uuid, name: &str) -> bool {
         if let Some(ref mut store) = self.saved_query_store {
             let result = store.update_name(id, name);

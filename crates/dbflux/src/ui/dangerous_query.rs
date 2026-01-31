@@ -3,6 +3,10 @@
 //! This module provides heuristic detection of queries that may cause
 //! unintended data loss or structural changes. It is NOT a SQL parser -
 //! it uses simple pattern matching that may have false positives/negatives.
+//!
+//! TODO: Re-integrate with SqlQueryDocument for dangerous query warnings.
+
+#![allow(dead_code)]
 
 /// Categories of dangerous queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

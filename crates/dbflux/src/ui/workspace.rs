@@ -8,7 +8,6 @@ use crate::ui::command_palette::{
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
     DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
-    TabManagerEvent,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
@@ -153,18 +152,6 @@ impl Workspace {
         )
         .detach();
 
-        cx.subscribe_in(
-            &tab_manager,
-            window,
-            |this, _, event: &TabManagerEvent, window, cx| match event {
-                TabManagerEvent::PromoteResult { result, query } => {
-                    this.promote_result_to_tab(result.clone(), query.clone(), window, cx);
-                }
-                _ => {}
-            },
-        )
-        .detach();
-
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
@@ -194,6 +181,8 @@ impl Workspace {
             // Editor
             PaletteCommand::new("new_query_tab", "New Query Tab", "Editor").with_shortcut("Ctrl+N"),
             PaletteCommand::new("run_query", "Run Query", "Editor").with_shortcut("Ctrl+Enter"),
+            PaletteCommand::new("run_query_in_new_tab", "Run Query in New Tab", "Editor")
+                .with_shortcut("Ctrl+Shift+Enter"),
             PaletteCommand::new("save_query", "Save Query", "Editor").with_shortcut("Ctrl+S"),
             PaletteCommand::new("open_history", "Open Query History", "Editor")
                 .with_shortcut("Ctrl+P"),
@@ -278,6 +267,11 @@ impl Workspace {
             "run_query" => {
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(Command::RunQuery, window, cx);
+                }
+            }
+            "run_query_in_new_tab" => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::RunQueryInNewTab, window, cx);
                 }
             }
             "save_query" => {
@@ -599,44 +593,6 @@ impl Workspace {
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
-    }
-
-    /// Promotes a query result to a standalone DataDocument tab.
-    fn promote_result_to_tab(
-        &mut self,
-        result: std::sync::Arc<dbflux_core::QueryResult>,
-        query: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Generate a title for the result
-        let result_count = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Data))
-            .count();
-        let title = format!("Result {}", result_count + 1);
-
-        // Create the DataDocument
-        let doc = cx.new(|cx| {
-            DataDocument::new_for_result(
-                result,
-                query,
-                title.clone(),
-                self.app_state.clone(),
-                window,
-                cx,
-            )
-        });
-        let handle = DocumentHandle::data(doc, cx);
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
-        });
-
-        log::info!("Promoted query result to tab: {}", title);
     }
 
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1455,6 +1411,12 @@ impl CommandDispatcher for Workspace {
             Command::RunQuery => {
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(Command::RunQuery, window, cx);
+                }
+                true
+            }
+            Command::RunQueryInNewTab => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::RunQueryInNewTab, window, cx);
                 }
                 true
             }

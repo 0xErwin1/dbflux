@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::keymap::Command;
 use crate::ui::components::data_table::{
     DataTable, DataTableEvent, DataTableState, Direction, Edge, SortState as TableSortState,
     TableModel,
@@ -35,7 +36,9 @@ pub enum DataSource {
     },
     /// Static query result (in-memory sorting only).
     QueryResult {
+        #[allow(dead_code)]
         result: Arc<QueryResult>,
+        #[allow(dead_code)]
         original_query: String,
     },
 }
@@ -70,11 +73,10 @@ impl DataSource {
 /// Events emitted by DataGridPanel.
 #[derive(Clone, Debug)]
 pub enum DataGridEvent {
-    /// Request to promote this result to a standalone tab.
-    PromoteResult {
-        result: Arc<QueryResult>,
-        query: String,
-    },
+    /// Request to hide the results panel.
+    RequestHide,
+    /// Request to maximize/restore the results panel.
+    RequestToggleMaximize,
 }
 
 /// Internal state for grid loading/ready/error.
@@ -139,6 +141,7 @@ struct LocalSortState {
 struct RunningQuery {
     #[allow(dead_code)]
     task_id: TaskId,
+    #[allow(dead_code)]
     cancel_token: CancelToken,
 }
 
@@ -147,6 +150,7 @@ struct PendingRequery {
     table: TableRef,
     pagination: Pagination,
     order_by: Vec<OrderByColumn>,
+    #[allow(dead_code)]
     filter: Option<String>,
     total_rows: Option<u64>,
 }
@@ -195,6 +199,10 @@ pub struct DataGridPanel {
     toolbar_focus: ToolbarFocus,
     edit_state: EditState,
     switching_input: bool,
+
+    // Panel controls (shown when embedded in SqlQueryDocument)
+    show_panel_controls: bool,
+    is_maximized: bool,
 }
 
 impl DataGridPanel {
@@ -312,7 +320,22 @@ impl DataGridPanel {
             toolbar_focus: ToolbarFocus::default(),
             edit_state: EditState::default(),
             switching_input: false,
+            show_panel_controls: false,
+            is_maximized: false,
         }
+    }
+
+    /// Enable panel control buttons (hide, maximize) for embedded panels.
+    #[allow(dead_code)]
+    pub fn with_panel_controls(mut self) -> Self {
+        self.show_panel_controls = true;
+        self
+    }
+
+    /// Update the maximized state (called by parent).
+    pub fn set_maximized(&mut self, maximized: bool, cx: &mut Context<Self>) {
+        self.is_maximized = maximized;
+        cx.notify();
     }
 
     /// Update the result data (for QueryResult source or after table fetch).
@@ -888,7 +911,7 @@ impl DataGridPanel {
         };
 
         let filter_value = self.filter_input.read(cx).value();
-        let filter = if filter_value.trim().is_empty() {
+        let _filter = if filter_value.trim().is_empty() {
             None
         } else {
             Some(filter_value.to_string())
@@ -922,7 +945,7 @@ impl DataGridPanel {
         };
 
         let filter_value = self.filter_input.read(cx).value();
-        let filter = if filter_value.trim().is_empty() {
+        let _filter = if filter_value.trim().is_empty() {
             None
         } else {
             Some(filter_value.to_string())
@@ -1039,6 +1062,7 @@ impl DataGridPanel {
 
     // === Focus Management ===
 
+    #[allow(dead_code)]
     pub fn focus_mode(&self) -> GridFocusMode {
         self.focus_mode
     }
@@ -1116,6 +1140,87 @@ impl DataGridPanel {
         }
     }
 
+    // === Command Dispatch ===
+
+    pub fn dispatch_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Handle toolbar mode commands
+        if self.focus_mode == GridFocusMode::Toolbar {
+            match cmd {
+                Command::Cancel => {
+                    self.focus_table(window, cx);
+                    return true;
+                }
+                Command::FocusLeft | Command::ColumnLeft => {
+                    self.toolbar_left(cx);
+                    return true;
+                }
+                Command::FocusRight | Command::ColumnRight => {
+                    self.toolbar_right(cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.toolbar_execute(window, cx);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        // Handle table mode commands
+        match cmd {
+            Command::FocusToolbar => {
+                self.focus_toolbar(cx);
+                true
+            }
+            Command::SelectNext | Command::FocusDown => {
+                self.select_next(cx);
+                true
+            }
+            Command::SelectPrev | Command::FocusUp => {
+                self.select_prev(cx);
+                true
+            }
+            Command::SelectFirst => {
+                self.select_first(cx);
+                true
+            }
+            Command::SelectLast => {
+                self.select_last(cx);
+                true
+            }
+            Command::ColumnLeft | Command::FocusLeft => {
+                self.column_left(cx);
+                true
+            }
+            Command::ColumnRight | Command::FocusRight => {
+                self.column_right(cx);
+                true
+            }
+            Command::ResultsNextPage | Command::PageDown => {
+                self.go_to_next_page(window, cx);
+                true
+            }
+            Command::ResultsPrevPage | Command::PageUp => {
+                self.go_to_prev_page(window, cx);
+                true
+            }
+            Command::RefreshSchema => {
+                self.refresh(window, cx);
+                true
+            }
+            Command::ExportResults => {
+                self.export_results(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     // === Export ===
 
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1176,22 +1281,12 @@ impl DataGridPanel {
         .detach();
     }
 
-    // === Promote to Tab ===
+    pub fn request_hide(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestHide);
+    }
 
-    pub fn promote_to_tab(&mut self, cx: &mut Context<Self>) {
-        if self.result.rows.is_empty() {
-            return;
-        }
-
-        let query = match &self.source {
-            DataSource::QueryResult { original_query, .. } => original_query.clone(),
-            DataSource::Table { table, .. } => format!("SELECT * FROM {}", table.qualified_name()),
-        };
-
-        cx.emit(DataGridEvent::PromoteResult {
-            result: Arc::new(self.result.clone()),
-            query,
-        });
+    pub fn request_toggle_maximize(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::RequestToggleMaximize);
     }
 
     // === Helpers ===
@@ -1264,10 +1359,12 @@ impl DataGridPanel {
         }
     }
 
+    #[allow(dead_code)]
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
     }
 
+    #[allow(dead_code)]
     pub fn result(&self) -> &QueryResult {
         &self.result
     }
@@ -1343,6 +1440,9 @@ impl Render for DataGridPanel {
         let is_loading = self.state == GridState::Loading;
         let muted_fg = theme.muted_foreground;
 
+        let show_panel_controls = self.show_panel_controls;
+        let is_maximized = self.is_maximized;
+
         div()
             .track_focus(&focus_handle)
             .flex()
@@ -1361,6 +1461,65 @@ impl Render for DataGridPanel {
                     &theme,
                     cx,
                 ))
+            })
+            // Header bar with panel controls (only when embedded)
+            .when(show_panel_controls && has_data, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .id("toggle-maximize")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(24.0))
+                                .h(px(24.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.request_toggle_maximize(cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path(if is_maximized {
+                                            AppIcon::Minimize2.path()
+                                        } else {
+                                            AppIcon::Maximize2.path()
+                                        })
+                                        .size_4()
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("hide-panel")
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(24.0))
+                                .h(px(24.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.request_hide(cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path(AppIcon::PanelBottomClose.path())
+                                        .size_4()
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        ),
+                )
             })
             // Grid
             .child(
@@ -1739,8 +1898,8 @@ impl DataGridPanel {
                                 }))
                                 .child(
                                     svg()
-                                        .path(AppIcon::Download.path())
-                                        .size_3()
+                                        .path(AppIcon::FileSpreadsheet.path())
+                                        .size_4()
                                         .text_color(theme.muted_foreground),
                                 )
                                 .child("Export CSV"),

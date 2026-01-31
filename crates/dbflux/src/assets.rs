@@ -96,7 +96,25 @@ impl AssetSource for Assets {
                 Some(include_bytes!("../../../resources/icons/ui/arrow-down.svg"))
             }
             "icons/ui/play.svg" => Some(include_bytes!("../../../resources/icons/ui/play.svg")),
+            "icons/ui/square-play.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/square-play.svg"
+            )),
             "icons/ui/save.svg" => Some(include_bytes!("../../../resources/icons/ui/save.svg")),
+            "icons/ui/maximize-2.svg" => {
+                Some(include_bytes!("../../../resources/icons/ui/maximize-2.svg"))
+            }
+            "icons/ui/minimize-2.svg" => {
+                Some(include_bytes!("../../../resources/icons/ui/minimize-2.svg"))
+            }
+            "icons/ui/panel-bottom-close.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/panel-bottom-close.svg"
+            )),
+            "icons/ui/panel-bottom-open.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/panel-bottom-open.svg"
+            )),
+            "icons/ui/file-spreadsheet.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/file-spreadsheet.svg"
+            )),
 
             // App icon
             "icons/dbflux.svg" => Some(include_bytes!("../../../resources/icons/dbflux.svg")),
@@ -177,7 +195,13 @@ impl AssetSource for Assets {
                 "icons/ui/arrow-up.svg".into(),
                 "icons/ui/arrow-down.svg".into(),
                 "icons/ui/play.svg".into(),
+                "icons/ui/square-play.svg".into(),
                 "icons/ui/save.svg".into(),
+                "icons/ui/maximize-2.svg".into(),
+                "icons/ui/minimize-2.svg".into(),
+                "icons/ui/panel-bottom-close.svg".into(),
+                "icons/ui/panel-bottom-open.svg".into(),
+                "icons/ui/file-spreadsheet.svg".into(),
             ]),
             "icons/brand" | "icons/brand/" => Ok(vec![
                 "icons/brand/postgresql.svg".into(),

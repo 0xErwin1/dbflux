@@ -55,6 +55,7 @@ pub enum Command {
 
     // === Editor ===
     RunQuery,
+    RunQueryInNewTab,
     CancelQuery,
     ToggleHistoryDropdown,
     OpenSavedQueries,
@@ -130,6 +131,7 @@ impl Command {
             Command::ToggleFavorite => "Toggle Favorite",
 
             Command::RunQuery => "Run Query",
+            Command::RunQueryInNewTab => "Run Query in New Tab",
             Command::CancelQuery => "Cancel Query",
             Command::ToggleHistoryDropdown => "Toggle History Dropdown",
             Command::OpenSavedQueries => "Open Saved Queries",
@@ -200,6 +202,7 @@ impl Command {
             | Command::ToggleFavorite => "Actions",
 
             Command::RunQuery
+            | Command::RunQueryInNewTab
             | Command::CancelQuery
             | Command::ToggleHistoryDropdown
             | Command::OpenSavedQueries
