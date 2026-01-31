@@ -819,6 +819,23 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .bg(bg_color)
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.sidebar_dock.read(cx).is_resizing() {
+                    this.sidebar_dock.update(cx, |dock, cx| {
+                        dock.handle_resize_move(event.position.x, cx);
+                    });
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.sidebar_dock.read(cx).is_resizing() {
+                        this.sidebar_dock.update(cx, |dock, cx| {
+                            dock.finish_resize(cx);
+                        });
+                    }
+                }),
+            )
             .track_focus(&focus_handle)
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleCommandPalette, window, cx| {
@@ -1048,7 +1065,9 @@ impl Render for Workspace {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, window, cx| {
-                                            if this.focus_target != FocusTarget::Sidebar {
+                                            if !this.is_sidebar_collapsed(cx)
+                                                && this.focus_target != FocusTarget::Sidebar
+                                            {
                                                 this.set_focus(FocusTarget::Sidebar, window, cx);
                                             }
                                         }),
@@ -1341,6 +1360,9 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::FocusSidebar => {
+                if self.is_sidebar_collapsed(cx) {
+                    self.toggle_sidebar(cx);
+                }
                 self.set_focus(FocusTarget::Sidebar, window, cx);
                 true
             }
@@ -1675,7 +1697,10 @@ impl CommandDispatcher for Workspace {
             //                  | Results
             //                  | BackgroundTasks
             Command::FocusLeft => {
-                // From main area → Sidebar (or History if it was focused)
+                // From main area → Sidebar (only if expanded)
+                if self.is_sidebar_collapsed(cx) {
+                    return false;
+                }
                 match self.focus_target {
                     FocusTarget::Editor | FocusTarget::Results | FocusTarget::BackgroundTasks => {
                         self.set_focus(FocusTarget::Sidebar, window, cx);
