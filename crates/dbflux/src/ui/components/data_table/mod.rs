@@ -1,12 +1,12 @@
-mod clipboard;
+pub mod clipboard;
 mod events;
-mod model;
-mod selection;
+pub mod model;
+pub mod selection;
 mod state;
 mod table;
 mod theme;
 
-pub use events::{DataTableEvent, Direction, Edge, SortState};
+pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
 pub use model::TableModel;
 pub use state::DataTableState;
 pub use table::{DataTable, init};

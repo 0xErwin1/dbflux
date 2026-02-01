@@ -67,6 +67,12 @@ pub enum Command {
     ResultsPrevPage,
     FocusToolbar,
     TogglePanel,
+    // Row operations (vim-style)
+    ResultsDeleteRow,
+    ResultsAddRow,
+    ResultsDuplicateRow,
+    ResultsCopyRow,
+    ResultsSetNull,
 
     // === Sidebar ===
     RefreshSchema,
@@ -142,6 +148,11 @@ impl Command {
             Command::ResultsPrevPage => "Results Previous Page",
             Command::FocusToolbar => "Focus Toolbar",
             Command::TogglePanel => "Toggle Panel",
+            Command::ResultsDeleteRow => "Delete Row",
+            Command::ResultsAddRow => "Add Row",
+            Command::ResultsDuplicateRow => "Duplicate Row",
+            Command::ResultsCopyRow => "Copy Row",
+            Command::ResultsSetNull => "Set Cell to NULL",
 
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
@@ -211,7 +222,12 @@ impl Command {
             Command::ExportResults
             | Command::ResultsNextPage
             | Command::ResultsPrevPage
-            | Command::FocusToolbar => "Results",
+            | Command::FocusToolbar
+            | Command::ResultsDeleteRow
+            | Command::ResultsAddRow
+            | Command::ResultsDuplicateRow
+            | Command::ResultsCopyRow
+            | Command::ResultsSetNull => "Results",
 
             Command::RefreshSchema
             | Command::OpenConnectionManager

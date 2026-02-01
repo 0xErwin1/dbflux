@@ -6,10 +6,11 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    ConstraintInfo, ConstraintKind, CrudResult, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle, QueryHandle,
-    QueryRequest, QueryResult, Row, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
+    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
+    SQLITE_FORM,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -418,6 +419,234 @@ impl Connection for SqliteConnection {
             ))),
         }
     }
+
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        if !patch.identity.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot update row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        if !patch.has_changes() {
+            return Err(DbError::QueryFailed("No changes to save".to_string()));
+        }
+
+        let table_name = sqlite_quote_ident(&patch.table);
+
+        let set_clause: Vec<String> = patch
+            .changes
+            .iter()
+            .map(|(col, val)| format!("{} = {}", sqlite_quote_ident(col), value_to_sqlite_literal(val)))
+            .collect();
+
+        let where_clause: Vec<String> = patch
+            .identity
+            .columns
+            .iter()
+            .zip(patch.identity.values.iter())
+            .map(|(col, val)| format!("{} = {}", sqlite_quote_ident(col), value_to_sqlite_literal(val)))
+            .collect();
+
+        let update_sql = format!(
+            "UPDATE {} SET {} WHERE {}",
+            table_name,
+            set_clause.join(", "),
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[UPDATE] Executing: {}", update_sql);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let affected = conn
+            .execute(&update_sql, [])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if affected == 0 {
+            return Ok(CrudResult::empty());
+        }
+
+        // Re-query the updated row using the same WHERE clause
+        let select_sql = format!(
+            "SELECT * FROM {} WHERE {} LIMIT 1",
+            table_name,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[UPDATE] Re-querying: {}", select_sql);
+
+        let mut stmt = conn
+            .prepare(&select_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let column_count = stmt.column_count();
+
+        let mut rows_iter = stmt
+            .query([])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if let Some(row) = rows_iter
+            .next()
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+        {
+            let returning_row: Row = (0..column_count)
+                .map(|i| sqlite_value_to_value(row, i))
+                .collect();
+            Ok(CrudResult::success(returning_row))
+        } else {
+            // Row was updated but not found on re-query (unlikely but possible with triggers)
+            Ok(CrudResult::new(affected as u64, None))
+        }
+    }
+
+    fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        if !insert.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot insert row: no columns specified".to_string(),
+            ));
+        }
+
+        let table_name = sqlite_quote_ident(&insert.table);
+
+        let columns: Vec<String> = insert
+            .columns
+            .iter()
+            .map(|c| sqlite_quote_ident(c))
+            .collect();
+
+        let values: Vec<String> = insert
+            .values
+            .iter()
+            .map(|v| value_to_sqlite_literal(v))
+            .collect();
+
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table_name,
+            columns.join(", "),
+            values.join(", ")
+        );
+
+        log::debug!("[INSERT] Executing: {}", insert_sql);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        conn.execute(&insert_sql, [])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        // Get the last inserted row using rowid
+        let rowid = conn.last_insert_rowid();
+
+        let select_sql = format!("SELECT * FROM {} WHERE rowid = {} LIMIT 1", table_name, rowid);
+
+        log::debug!("[INSERT] Re-querying: {}", select_sql);
+
+        let mut stmt = conn
+            .prepare(&select_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let column_count = stmt.column_count();
+
+        let mut rows_iter = stmt
+            .query([])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if let Some(row) = rows_iter
+            .next()
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+        {
+            let returning_row: Row = (0..column_count)
+                .map(|i| sqlite_value_to_value(row, i))
+                .collect();
+            Ok(CrudResult::success(returning_row))
+        } else {
+            Ok(CrudResult::new(1, None))
+        }
+    }
+
+    fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        if !delete.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        let table_name = sqlite_quote_ident(&delete.table);
+
+        let where_clause: Vec<String> = delete
+            .identity
+            .columns
+            .iter()
+            .zip(delete.identity.values.iter())
+            .map(|(col, val)| {
+                format!(
+                    "{} = {}",
+                    sqlite_quote_ident(col),
+                    value_to_sqlite_literal(val)
+                )
+            })
+            .collect();
+
+        // First fetch the row we're about to delete
+        let select_sql = format!(
+            "SELECT * FROM {} WHERE {} LIMIT 1",
+            table_name,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[DELETE] Fetching row: {}", select_sql);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let returning_row = {
+            let mut stmt = conn
+                .prepare(&select_sql)
+                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+            let column_count = stmt.column_count();
+
+            let mut rows_iter = stmt
+                .query([])
+                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+            rows_iter
+                .next()
+                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+                .map(|row| {
+                    (0..column_count)
+                        .map(|i| sqlite_value_to_value(row, i))
+                        .collect::<Row>()
+                })
+        };
+
+        // Now delete the row
+        let delete_sql = format!(
+            "DELETE FROM {} WHERE {}",
+            table_name,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[DELETE] Executing: {}", delete_sql);
+
+        let affected = conn
+            .execute(&delete_sql, [])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if affected == 0 {
+            return Ok(CrudResult::empty());
+        }
+
+        Ok(CrudResult::new(affected as u64, returning_row))
+    }
 }
 
 impl SqliteConnection {
@@ -809,6 +1038,38 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
 fn sqlite_quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
     format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// Convert a Value to a safe SQLite literal string.
+fn value_to_sqlite_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                // SQLite doesn't have NaN/Infinity, store as NULL
+                "NULL".to_string()
+            } else {
+                f.to_string()
+            }
+        }
+        Value::Decimal(s) => {
+            // SQLite stores decimals as REAL, quote as string literal
+            format!("'{}'", sqlite_escape_string(s))
+        }
+        Value::Text(s) => format!("'{}'", sqlite_escape_string(s)),
+        Value::Json(s) => format!("'{}'", sqlite_escape_string(s)),
+        Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
+        Value::DateTime(dt) => format!("'{}'", dt.to_rfc3339()),
+        Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+        Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
+    }
+}
+
+/// Escape a string for use inside a SQLite single-quoted literal.
+fn sqlite_escape_string(s: &str) -> String {
+    s.replace('\'', "''")
 }
 
 fn sqlite_generate_select_star(table: &TableInfo) -> String {

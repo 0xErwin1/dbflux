@@ -1577,6 +1577,7 @@ version = "0.1.0"
 dependencies = [
  "dbflux_core",
  "dbflux_ssh",
+ "hex",
  "log",
  "mysql",
  "uuid",
@@ -1601,6 +1602,7 @@ name = "dbflux_driver_sqlite"
 version = "0.0.0"
 dependencies = [
  "dbflux_core",
+ "hex",
  "log",
  "rusqlite",
 ]

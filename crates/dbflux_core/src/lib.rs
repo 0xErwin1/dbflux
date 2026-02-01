@@ -17,7 +17,7 @@ mod value;
 
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
-pub use crud::{CrudResult, RowIdentity, RowPatch, RowState};
+pub use crud::{CrudResult, RowDelete, RowIdentity, RowInsert, RowPatch, RowState};
 pub use driver_form::{
     DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MYSQL_FORM,
     POSTGRES_FORM, SQLITE_FORM,

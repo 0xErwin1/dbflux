@@ -1971,6 +1971,19 @@ impl CommandDispatcher for Workspace {
                 log::debug!("Context-specific command {:?} not yet implemented", cmd);
                 false
             }
+
+            // Row operations - handled via GPUI actions in DataTable
+            Command::ResultsDeleteRow
+            | Command::ResultsAddRow
+            | Command::ResultsDuplicateRow
+            | Command::ResultsCopyRow
+            | Command::ResultsSetNull => {
+                log::debug!(
+                    "Row operation {:?} handled via GPUI actions in Results context",
+                    cmd
+                );
+                false
+            }
         }
     }
 }

@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
+hex.workspace = true
 log.workspace = true
 mysql.workspace = true
 uuid.workspace = true

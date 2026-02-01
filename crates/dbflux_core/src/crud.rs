@@ -64,6 +64,74 @@ impl RowPatch {
     }
 }
 
+/// Data for INSERT operation.
+#[derive(Debug, Clone)]
+pub struct RowInsert {
+    /// Table name.
+    pub table: String,
+
+    /// Schema name (PostgreSQL) or None (SQLite/MySQL).
+    pub schema: Option<String>,
+
+    /// Column names for the values being inserted.
+    pub columns: Vec<String>,
+
+    /// Values to insert (same order as `columns`).
+    pub values: Vec<Value>,
+}
+
+impl RowInsert {
+    pub fn new(
+        table: String,
+        schema: Option<String>,
+        columns: Vec<String>,
+        values: Vec<Value>,
+    ) -> Self {
+        debug_assert_eq!(
+            columns.len(),
+            values.len(),
+            "RowInsert: columns and values must have same length"
+        );
+        Self {
+            table,
+            schema,
+            columns,
+            values,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.columns.is_empty() && self.columns.len() == self.values.len()
+    }
+}
+
+/// Data for DELETE operation.
+#[derive(Debug, Clone)]
+pub struct RowDelete {
+    /// Unique identification of the row to delete.
+    pub identity: RowIdentity,
+
+    /// Table name.
+    pub table: String,
+
+    /// Schema name (PostgreSQL) or None (SQLite/MySQL).
+    pub schema: Option<String>,
+}
+
+impl RowDelete {
+    pub fn new(identity: RowIdentity, table: String, schema: Option<String>) -> Self {
+        Self {
+            identity,
+            table,
+            schema,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.identity.is_valid()
+    }
+}
+
 /// State of a row during editing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowState {
@@ -78,6 +146,12 @@ pub enum RowState {
 
     /// Last save operation failed.
     Error(String),
+
+    /// New row pending INSERT (not yet in database).
+    PendingInsert,
+
+    /// Existing row marked for DELETE (will be removed on save).
+    PendingDelete,
 }
 
 impl Default for RowState {
@@ -108,6 +182,22 @@ impl RowState {
             Self::Error(msg) => Some(msg),
             _ => None,
         }
+    }
+
+    pub fn is_pending_insert(&self) -> bool {
+        matches!(self, Self::PendingInsert)
+    }
+
+    pub fn is_pending_delete(&self) -> bool {
+        matches!(self, Self::PendingDelete)
+    }
+
+    /// Check if the row has any pending changes (dirty, insert, or delete).
+    pub fn has_pending_changes(&self) -> bool {
+        matches!(
+            self,
+            Self::Dirty | Self::PendingInsert | Self::PendingDelete
+        )
     }
 }
 
