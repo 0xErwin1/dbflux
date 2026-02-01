@@ -15,6 +15,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(connection_manager_layer());
     stack.add_layer(text_input_layer());
     stack.add_layer(dropdown_layer());
+    stack.add_layer(context_menu_layer());
 
     stack
 });
@@ -317,6 +318,38 @@ fn results_layer() -> KeymapLayer {
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
+
+    // Context menu
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenContextMenu,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenContextMenu,
+    );
+
+    layer
+}
+
+fn context_menu_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ContextMenu);
+
+    // Navigation
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::MenuDown);
+    layer.bind(KeyChord::new("down", Modifiers::none()), Command::MenuDown);
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::MenuUp);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::MenuUp);
+
+    // Select / Enter submenu
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::MenuSelect);
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::MenuSelect);
+    layer.bind(KeyChord::new("right", Modifiers::none()), Command::MenuSelect);
+
+    // Back / Close
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::MenuBack);
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::MenuBack);
+    layer.bind(KeyChord::new("left", Modifiers::none()), Command::MenuBack);
 
     layer
 }

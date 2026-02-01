@@ -11,6 +11,7 @@ use crate::ui::document::{
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
+use crate::ui::sql_preview_modal::SqlPreviewModal;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
 use crate::ui::toast::{ToastGlobal, ToastHost};
@@ -51,6 +52,7 @@ pub struct Workspace {
     tasks_panel: Entity<TasksPanel>,
     toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
+    sql_preview_modal: Entity<SqlPreviewModal>,
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
@@ -87,6 +89,8 @@ impl Workspace {
             palette
         });
 
+        let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(window, cx));
+
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
         })
@@ -118,6 +122,20 @@ impl Workspace {
                 }
                 SidebarEvent::OpenTable { profile_id, table } => {
                     this.open_table_document(*profile_id, table.clone(), window, cx);
+                }
+                SidebarEvent::RequestSqlPreview {
+                    profile_id,
+                    table_info,
+                    generation_type,
+                } => {
+                    use crate::ui::sql_preview_modal::SqlPreviewContext;
+                    let context = SqlPreviewContext::SidebarTable {
+                        profile_id: *profile_id,
+                        table_info: table_info.clone(),
+                    };
+                    this.sql_preview_modal.update(cx, |modal, cx| {
+                        modal.open(context, *generation_type, window, cx);
+                    });
                 }
             },
         )
@@ -153,6 +171,38 @@ impl Workspace {
         )
         .detach();
 
+        cx.subscribe_in(
+            &tab_manager,
+            window,
+            |this, _, event: &crate::ui::document::TabManagerEvent, window, cx| {
+                use crate::ui::document::TabManagerEvent;
+                if let TabManagerEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } = event
+                {
+                    use crate::ui::sql_preview_modal::SqlPreviewContext;
+                    let context = SqlPreviewContext::DataTableRow {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                    };
+                    this.sql_preview_modal.update(cx, |modal, cx| {
+                        modal.open(context, *generation_type, window, cx);
+                    });
+                }
+            },
+        )
+        .detach();
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
@@ -164,6 +214,7 @@ impl Workspace {
             tasks_panel,
             toast_host,
             command_palette,
+            sql_preview_modal,
             tab_manager,
             tab_bar,
             tasks_state: PanelState::Collapsed,
@@ -225,6 +276,10 @@ impl Workspace {
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
         if self.command_palette.read(cx).is_visible() {
             return ContextId::CommandPalette;
+        }
+
+        if self.sql_preview_modal.read(cx).is_visible() {
+            return ContextId::SqlPreviewModal;
         }
 
         if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {
@@ -1137,15 +1192,7 @@ impl Render for Workspace {
                 let chord = KeyChord::from_gpui(&event.keystroke);
                 let context = this.active_context(cx);
 
-                log::debug!(
-                    "Key event: {:?}, context: {:?}, chord: {:?}",
-                    event.keystroke.key,
-                    context,
-                    chord
-                );
-
                 if let Some(cmd) = this.keymap.resolve(context, &chord) {
-                    log::debug!("Resolved command: {:?}", cmd);
                     if this.dispatch(cmd, window, cx) {
                         cx.stop_propagation();
                     }
@@ -1183,6 +1230,7 @@ impl Render for Workspace {
                     .child(status_bar),
             )
             .child(command_palette)
+            .child(self.sql_preview_modal.clone())
             .child(
                 div()
                     .absolute()
@@ -1983,6 +2031,18 @@ impl CommandDispatcher for Workspace {
                     cmd
                 );
                 false
+            }
+
+            // Context menu commands - handled by DataGridPanel
+            Command::OpenContextMenu
+            | Command::MenuUp
+            | Command::MenuDown
+            | Command::MenuSelect
+            | Command::MenuBack => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(cmd, window, cx);
+                }
+                true
             }
         }
     }

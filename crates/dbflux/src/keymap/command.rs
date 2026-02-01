@@ -73,6 +73,12 @@ pub enum Command {
     ResultsDuplicateRow,
     ResultsCopyRow,
     ResultsSetNull,
+    // Context menu
+    OpenContextMenu,
+    MenuUp,
+    MenuDown,
+    MenuSelect,
+    MenuBack,
 
     // === Sidebar ===
     RefreshSchema,
@@ -153,6 +159,11 @@ impl Command {
             Command::ResultsDuplicateRow => "Duplicate Row",
             Command::ResultsCopyRow => "Copy Row",
             Command::ResultsSetNull => "Set Cell to NULL",
+            Command::OpenContextMenu => "Open Context Menu",
+            Command::MenuUp => "Menu Up",
+            Command::MenuDown => "Menu Down",
+            Command::MenuSelect => "Menu Select",
+            Command::MenuBack => "Menu Back",
 
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
@@ -227,7 +238,12 @@ impl Command {
             | Command::ResultsAddRow
             | Command::ResultsDuplicateRow
             | Command::ResultsCopyRow
-            | Command::ResultsSetNull => "Results",
+            | Command::ResultsSetNull
+            | Command::OpenContextMenu
+            | Command::MenuUp
+            | Command::MenuDown
+            | Command::MenuSelect
+            | Command::MenuBack => "Results",
 
             Command::RefreshSchema
             | Command::OpenConnectionManager

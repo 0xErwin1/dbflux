@@ -39,7 +39,7 @@ pub enum SqlQueryLayout {
 }
 
 /// Where focus is within the document.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SqlQueryFocus {
     #[default]
     Editor,
@@ -197,9 +197,19 @@ impl SqlQueryDocument {
 
     /// Returns the active context for keyboard handling based on internal focus.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        // Check if history modal is open
         if self.history_modal.read(cx).is_visible() {
             return ContextId::HistoryModal;
+        }
+
+        // Check if context menu is open in the active result tab
+        if self.focus_mode == SqlQueryFocus::Results {
+            if let Some(index) = self.active_result_index {
+                if let Some(tab) = self.result_tabs.get(index) {
+                    if tab.grid.read(cx).is_context_menu_open() {
+                        return ContextId::ContextMenu;
+                    }
+                }
+            }
         }
 
         match self.focus_mode {
@@ -433,6 +443,25 @@ impl SqlQueryDocument {
                     this.focus_mode = SqlQueryFocus::Results;
                     cx.emit(DocumentEvent::RequestFocus);
                     cx.notify();
+                }
+                DataGridEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } => {
+                    cx.emit(DocumentEvent::RequestSqlPreview {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                        generation_type: *generation_type,
+                    });
                 }
             },
         );

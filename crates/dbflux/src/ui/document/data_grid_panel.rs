@@ -1,8 +1,8 @@
 use crate::app::AppState;
-use crate::keymap::Command;
+use crate::keymap::{Command, ContextId};
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge,
-    SortState as TableSortState, TableModel,
+    SortState as TableSortState, TableModel, HEADER_HEIGHT, ROW_HEIGHT,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
@@ -80,6 +80,16 @@ pub enum DataGridEvent {
     RequestToggleMaximize,
     /// The data grid received focus (user clicked on it).
     Focused,
+    /// Request to show SQL preview modal.
+    RequestSqlPreview {
+        profile_id: Uuid,
+        schema_name: Option<String>,
+        table_name: String,
+        column_names: Vec<String>,
+        row_values: Vec<String>,
+        pk_indices: Vec<usize>,
+        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
 }
 
 /// Internal state for grid loading/ready/error.
@@ -176,6 +186,21 @@ struct TableContextMenu {
     col: usize,
     /// Screen position where the menu should appear.
     position: Point<Pixels>,
+    /// Whether the SQL generation submenu is open.
+    sql_submenu_open: bool,
+    /// Currently selected menu item index (for keyboard navigation).
+    selected_index: usize,
+    /// Selected index within the SQL submenu (0-3).
+    submenu_selected_index: usize,
+}
+
+/// A single item in the context menu.
+struct ContextMenuItem {
+    label: &'static str,
+    action: Option<ContextMenuAction>,
+    icon: Option<AppIcon>,
+    is_separator: bool,
+    is_danger: bool,
 }
 
 /// Kind of SQL statement to generate from row data.
@@ -231,6 +256,7 @@ pub struct DataGridPanel {
 
     // Context menu
     context_menu: Option<TableContextMenu>,
+    context_menu_focus: FocusHandle,
 
     // Panel origin in window coordinates (for context menu positioning)
     panel_origin: Point<Pixels>,
@@ -405,6 +431,7 @@ impl DataGridPanel {
         .detach();
 
         let focus_handle = cx.focus_handle();
+        let context_menu_focus = cx.focus_handle();
 
         Self {
             source,
@@ -432,6 +459,7 @@ impl DataGridPanel {
             show_panel_controls: false,
             is_maximized: false,
             context_menu: None,
+            context_menu_focus,
             panel_origin: Point::default(),
         }
     }
@@ -531,6 +559,9 @@ impl DataGridPanel {
                             row: *row,
                             col: *col,
                             position: *position,
+                            sql_submenu_open: false,
+                            selected_index: 0,
+                            submenu_selected_index: 0,
                         });
                         cx.notify();
                     }
@@ -1459,6 +1490,11 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Handle context menu commands when menu is open
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
+        }
+
         // Handle toolbar mode commands
         if self.focus_mode == GridFocusMode::Toolbar {
             match cmd {
@@ -1526,6 +1562,196 @@ impl DataGridPanel {
             }
             Command::ExportResults => {
                 self.export_results(window, cx);
+                true
+            }
+            Command::OpenContextMenu => {
+                self.open_context_menu_at_selection(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Opens context menu at the current selection.
+    fn open_context_menu_at_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let (row, col, cell_x, horizontal_offset) = {
+            let ts = table_state.read(cx);
+            let Some(active) = ts.selection().active else {
+                return;
+            };
+            let widths = ts.column_widths();
+
+            // Calculate cell x position: sum of column widths up to col
+            let cell_x: f32 = widths.iter().take(active.col).sum();
+
+            (active.row, active.col, cell_x, ts.horizontal_offset())
+        };
+
+        // Calculate position in window coordinates:
+        // x: panel_origin.x + cell_x - horizontal_scroll + some padding
+        // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
+        let toolbar_height = px(36.0); // Approximate toolbar height
+        let position = Point {
+            x: self.panel_origin.x + px(cell_x) - horizontal_offset + px(20.0),
+            y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
+        };
+
+        self.context_menu = Some(TableContextMenu {
+            row,
+            col,
+            position,
+            sql_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+        });
+
+        // Focus the context menu to receive keyboard events
+        self.context_menu_focus.focus(window);
+        cx.notify();
+    }
+
+    /// Returns true if the data grid is editable (has primary key info).
+    fn check_is_editable(&self, cx: &App) -> bool {
+        self.table_state
+            .as_ref()
+            .map(|ts| ts.read(cx).is_editable())
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the context menu is currently open.
+    pub fn is_context_menu_open(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    /// Returns the active context for keyboard handling.
+    pub fn active_context(&self) -> ContextId {
+        if self.context_menu.is_some() {
+            ContextId::ContextMenu
+        } else {
+            ContextId::Results
+        }
+    }
+
+    /// Handles commands when the context menu is open.
+    fn dispatch_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let is_editable = self.check_is_editable(cx);
+
+        // Build the menu items list to know the count
+        // Items: Copy, Paste*, Edit*, sep, SetDefault*, SetNull*, sep, AddRow*, DupRow*, DelRow*, sep, GenSQL
+        // * = requires editable
+        let menu_items: Vec<Option<ContextMenuAction>> = if is_editable {
+            vec![
+                Some(ContextMenuAction::Copy),
+                Some(ContextMenuAction::Paste),
+                Some(ContextMenuAction::Edit),
+                None, // separator
+                Some(ContextMenuAction::SetDefault),
+                Some(ContextMenuAction::SetNull),
+                None, // separator
+                Some(ContextMenuAction::AddRow),
+                Some(ContextMenuAction::DuplicateRow),
+                Some(ContextMenuAction::DeleteRow),
+                None, // separator (before Generate SQL)
+                None, // Generate SQL trigger (special handling)
+            ]
+        } else {
+            vec![
+                Some(ContextMenuAction::Copy),
+                None, // separator (before Generate SQL)
+                None, // Generate SQL trigger
+            ]
+        };
+
+        let item_count = menu_items.len();
+        let submenu_count = 4; // SELECT WHERE, INSERT, UPDATE, DELETE
+
+        match cmd {
+            Command::MenuDown => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.sql_submenu_open {
+                        menu.submenu_selected_index = (menu.submenu_selected_index + 1) % submenu_count;
+                    } else {
+                        menu.selected_index = (menu.selected_index + 1) % item_count;
+                        // Skip separators
+                        while menu.selected_index < item_count && menu_items[menu.selected_index].is_none() && menu.selected_index != item_count - 1 {
+                            menu.selected_index = (menu.selected_index + 1) % item_count;
+                        }
+                    }
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuUp => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.sql_submenu_open {
+                        menu.submenu_selected_index = if menu.submenu_selected_index == 0 {
+                            submenu_count - 1
+                        } else {
+                            menu.submenu_selected_index - 1
+                        };
+                    } else {
+                        menu.selected_index = if menu.selected_index == 0 {
+                            item_count - 1
+                        } else {
+                            menu.selected_index - 1
+                        };
+                        // Skip separators (going backwards)
+                        while menu.selected_index > 0 && menu_items[menu.selected_index].is_none() && menu.selected_index != item_count - 1 {
+                            menu.selected_index = if menu.selected_index == 0 {
+                                item_count - 1
+                            } else {
+                                menu.selected_index - 1
+                            };
+                        }
+                    }
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuSelect => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.sql_submenu_open {
+                        // Execute submenu action
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::GenerateSelectWhere,
+                            1 => ContextMenuAction::GenerateInsert,
+                            2 => ContextMenuAction::GenerateUpdate,
+                            _ => ContextMenuAction::GenerateDelete,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if menu.selected_index == item_count - 1 {
+                        // Last item is Generate SQL - open submenu
+                        menu.sql_submenu_open = true;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if let Some(action) = menu_items.get(menu.selected_index).and_then(|a| *a) {
+                        self.handle_context_menu_action(action, window, cx);
+                    }
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.sql_submenu_open {
+                        // Close submenu
+                        menu.sql_submenu_open = false;
+                        cx.notify();
+                    } else {
+                        // Close menu and restore focus to table
+                        self.context_menu = None;
+                        self.focus_handle.focus(window);
+                        cx.notify();
+                    }
+                }
                 true
             }
             _ => false,
@@ -2535,6 +2761,98 @@ impl DataGridPanel {
             )
     }
 
+    /// Builds the list of visible context menu items based on editability.
+    fn build_context_menu_items(is_editable: bool) -> Vec<ContextMenuItem> {
+        let mut items = vec![
+            ContextMenuItem {
+                label: "Copy",
+                action: Some(ContextMenuAction::Copy),
+                icon: Some(AppIcon::Layers),
+                is_separator: false,
+                is_danger: false,
+            },
+        ];
+
+        if is_editable {
+            items.extend([
+                ContextMenuItem {
+                    label: "Paste",
+                    action: Some(ContextMenuAction::Paste),
+                    icon: Some(AppIcon::Download),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Edit",
+                    action: Some(ContextMenuAction::Edit),
+                    icon: Some(AppIcon::Pencil),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "",
+                    action: None,
+                    icon: None,
+                    is_separator: true,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Set to Default",
+                    action: Some(ContextMenuAction::SetDefault),
+                    icon: Some(AppIcon::RotateCcw),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Set to NULL",
+                    action: Some(ContextMenuAction::SetNull),
+                    icon: Some(AppIcon::X),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "",
+                    action: None,
+                    icon: None,
+                    is_separator: true,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Add Row",
+                    action: Some(ContextMenuAction::AddRow),
+                    icon: Some(AppIcon::Plus),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Duplicate Row",
+                    action: Some(ContextMenuAction::DuplicateRow),
+                    icon: Some(AppIcon::Layers),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "Delete Row",
+                    action: Some(ContextMenuAction::DeleteRow),
+                    icon: Some(AppIcon::Delete),
+                    is_separator: false,
+                    is_danger: true,
+                },
+            ]);
+        }
+
+        items
+    }
+
+    /// Returns the total number of navigable items in the context menu.
+    /// This includes all visible items plus the Generate SQL trigger.
+    #[allow(dead_code)]
+    fn context_menu_item_count(is_editable: bool) -> usize {
+        let base_items = Self::build_context_menu_items(is_editable);
+        // Count non-separator items + 1 for Generate SQL
+        base_items.iter().filter(|i| !i.is_separator).count() + 1
+    }
+
     fn render_context_menu(
         &self,
         menu: &TableContextMenu,
@@ -2548,93 +2866,109 @@ impl DataGridPanel {
         let menu_x = menu.position.x - self.panel_origin.x;
         let menu_y = menu.position.y - self.panel_origin.y;
 
-        // Menu items: (label, action, icon, is_separator, is_danger, requires_editable)
-        let items: Vec<(
-            &'static str,
-            Option<ContextMenuAction>,
-            Option<AppIcon>,
-            bool,
-            bool,
-            bool,
-        )> = vec![
-            ("Copy", Some(ContextMenuAction::Copy), Some(AppIcon::Layers), false, false, false),
-            ("Paste", Some(ContextMenuAction::Paste), Some(AppIcon::Download), false, false, true),
-            ("Edit", Some(ContextMenuAction::Edit), Some(AppIcon::Pencil), false, false, true),
-            ("", None, None, true, false, false), // separator
-            ("Set to Default", Some(ContextMenuAction::SetDefault), None, false, false, true),
-            ("Set to NULL", Some(ContextMenuAction::SetNull), None, false, false, true),
-            ("", None, None, true, false, false), // separator
-            ("Add Row", Some(ContextMenuAction::AddRow), Some(AppIcon::Plus), false, false, true),
-            ("Duplicate Row", Some(ContextMenuAction::DuplicateRow), Some(AppIcon::Layers), false, false, true),
-            ("Delete Row", Some(ContextMenuAction::DeleteRow), Some(AppIcon::Delete), false, true, true),
-        ];
+        // Build visible menu items list for keyboard navigation
+        let visible_items = Self::build_context_menu_items(is_editable);
+        let selected_index = menu.selected_index;
 
-        // Build menu items
-        let mut menu_items: Vec<AnyElement> = items
-            .into_iter()
-            .filter_map(|(label, action, icon, is_sep, is_danger, requires_editable)| {
-                if requires_editable && !is_editable {
-                    return None;
-                }
+        // Build menu items with selection highlighting
+        let mut menu_items: Vec<AnyElement> = Vec::new();
+        let mut visual_index = 0usize;
 
-                if is_sep {
-                    return Some(
-                        div()
-                            .h(px(1.0))
-                            .mx(Spacing::SM)
-                            .my(Spacing::XS)
-                            .bg(theme.border)
-                            .into_any_element(),
-                    );
-                }
-
-                let action = action?;
-
-                Some(
+        for item in &visible_items {
+            if item.is_separator {
+                menu_items.push(
                     div()
-                        .id(SharedString::from(label))
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .mx(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .text_size(FontSizes::SM)
+                        .h(px(1.0))
+                        .mx(Spacing::SM)
+                        .my(Spacing::XS)
+                        .bg(theme.border)
+                        .into_any_element(),
+                );
+                visual_index += 1;
+                continue;
+            }
+
+            let Some(action) = item.action else {
+                visual_index += 1;
+                continue;
+            };
+
+            let is_selected = visual_index == selected_index;
+            let is_danger = item.is_danger;
+            let label = item.label;
+            let icon = item.icon;
+            let current_index = visual_index;
+
+            menu_items.push(
+                div()
+                    .id(SharedString::from(label))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if is_danger {
+                        theme.danger
+                    } else {
+                        theme.foreground
+                    })
+                    .when(is_selected, |d| {
+                        d.bg(if is_danger {
+                            theme.danger.opacity(0.1)
+                        } else {
+                            theme.accent
+                        })
                         .text_color(if is_danger {
                             theme.danger
                         } else {
-                            theme.foreground
+                            theme.accent_foreground
                         })
-                        .hover(|d| {
+                    })
+                    .when(!is_selected, |d| {
+                        d.hover(|d| {
                             d.bg(if is_danger {
                                 theme.danger.opacity(0.1)
                             } else {
                                 theme.secondary
                             })
                         })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.handle_context_menu_action(action, window, cx);
-                        }))
-                        .when_some(icon, |d, icon| {
-                            d.child(
-                                svg()
-                                    .path(icon.path())
-                                    .size_4()
-                                    .text_color(if is_danger {
-                                        theme.danger
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            )
-                        })
-                        .when(icon.is_none(), |d| d.pl(px(20.0)))
-                        .child(label)
-                        .into_any_element(),
-                )
-            })
-            .collect();
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            if menu.selected_index != current_index {
+                                menu.selected_index = current_index;
+                                cx.notify();
+                            }
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.handle_context_menu_action(action, window, cx);
+                    }))
+                    .when_some(icon, |d, icon| {
+                        d.child(
+                            svg()
+                                .path(icon.path())
+                                .size_4()
+                                .text_color(if is_danger {
+                                    theme.danger
+                                } else if is_selected {
+                                    theme.accent_foreground
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                        )
+                    })
+                    .when(icon.is_none(), |d| d.pl(px(20.0)))
+                    .child(label)
+                    .into_any_element(),
+            );
+
+            visual_index += 1;
+        }
 
         // Add separator before "Generate SQL"
         menu_items.push(
@@ -2645,59 +2979,159 @@ impl DataGridPanel {
                 .bg(theme.border)
                 .into_any_element(),
         );
+        visual_index += 1; // Separator takes an index slot
 
-        // "Generate SQL" header label
+        // "Generate SQL" submenu trigger
+        let sql_submenu_open = menu.sql_submenu_open;
+        let submenu_bg = theme.popover;
+        let submenu_border = theme.border;
+        let submenu_fg = theme.foreground;
+        let submenu_hover = theme.secondary;
+        let gen_sql_index = visual_index; // Index for Generate SQL item
+        let gen_sql_selected = selected_index == gen_sql_index;
+        let submenu_selected_index = menu.submenu_selected_index;
+
         menu_items.push(
             div()
+                .id("generate-sql-trigger")
+                .relative()
                 .flex()
                 .items_center()
-                .gap(Spacing::SM)
+                .justify_between()
                 .h(Heights::ROW_COMPACT)
                 .px(Spacing::SM)
                 .mx(Spacing::XS)
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .text_size(FontSizes::SM)
+                .text_color(if gen_sql_selected && !sql_submenu_open {
+                    theme.accent_foreground
+                } else {
+                    submenu_fg
+                })
+                .when(sql_submenu_open, |d| d.bg(submenu_hover))
+                .when(gen_sql_selected && !sql_submenu_open, |d| d.bg(theme.accent))
+                .when(!gen_sql_selected && !sql_submenu_open, |d| d.hover(|d| d.bg(submenu_hover)))
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if let Some(ref mut menu) = this.context_menu {
+                        if menu.selected_index != gen_sql_index && !menu.sql_submenu_open {
+                            menu.selected_index = gen_sql_index;
+                            cx.notify();
+                        }
+                    }
+                }))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(ref mut menu) = this.context_menu {
+                        menu.sql_submenu_open = !menu.sql_submenu_open;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .child(
+                            svg()
+                                .path(AppIcon::Code.path())
+                                .size_4()
+                                .text_color(if gen_sql_selected && !sql_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                }),
+                        )
+                        .child("Generate SQL"),
+                )
                 .child(
                     svg()
-                        .path(AppIcon::Code.path())
-                        .size_3()
-                        .text_color(theme.muted_foreground),
+                        .path(AppIcon::ChevronRight.path())
+                        .size_4()
+                        .text_color(if gen_sql_selected && !sql_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        }),
                 )
-                .child("Generate SQL")
+                // Submenu appears to the right
+                .when(sql_submenu_open, |d: Stateful<Div>| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(172.0)) // menu_width - some padding
+                            .top(px(-4.0))
+                            .w(px(160.0))
+                            .bg(submenu_bg)
+                            .border_1()
+                            .border_color(submenu_border)
+                            .rounded(Radii::MD)
+                            .shadow_lg()
+                            .py(Spacing::XS)
+                            // Capture clicks within submenu bounds (prevents overlay from closing menu)
+                            .occlude()
+                            // Stop click from bubbling to parent "Generate SQL" trigger
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .children(
+                                [
+                                    ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
+                                    ("INSERT", ContextMenuAction::GenerateInsert),
+                                    ("UPDATE", ContextMenuAction::GenerateUpdate),
+                                    ("DELETE", ContextMenuAction::GenerateDelete),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(idx, (label, action))| {
+                                    let is_submenu_selected = idx == submenu_selected_index;
+                                    div()
+                                        .id(SharedString::from(label))
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .h(Heights::ROW_COMPACT)
+                                        .px(Spacing::SM)
+                                        .mx(Spacing::XS)
+                                        .rounded(Radii::SM)
+                                        .cursor_pointer()
+                                        .text_size(FontSizes::SM)
+                                        .text_color(if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        })
+                                        .when(is_submenu_selected, |d| d.bg(theme.accent))
+                                        .when(!is_submenu_selected, |d| d.hover(|d| d.bg(submenu_hover)))
+                                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                            if let Some(ref mut menu) = this.context_menu {
+                                                if menu.submenu_selected_index != idx {
+                                                    menu.submenu_selected_index = idx;
+                                                    cx.notify();
+                                                }
+                                            }
+                                        }))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.handle_context_menu_action(action, window, cx);
+                                        }))
+                                        .child(
+                                            svg()
+                                                .path(AppIcon::Code.path())
+                                                .size_4()
+                                                .text_color(if is_submenu_selected {
+                                                    theme.accent_foreground
+                                                } else {
+                                                    theme.muted_foreground
+                                                }),
+                                        )
+                                        .child(label)
+                                })
+                                .collect::<Vec<_>>(),
+                            ),
+                    )
+                })
                 .into_any_element(),
         );
-
-        // SQL generation items
-        let submenu_fg = theme.foreground;
-        let submenu_hover = theme.secondary;
-
-        for (label, action) in [
-            ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
-            ("INSERT", ContextMenuAction::GenerateInsert),
-            ("UPDATE", ContextMenuAction::GenerateUpdate),
-            ("DELETE", ContextMenuAction::GenerateDelete),
-        ] {
-            menu_items.push(
-                div()
-                    .id(SharedString::from(label))
-                    .flex()
-                    .items_center()
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .pl(px(28.0)) // Indent to align with header
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .text_size(FontSizes::SM)
-                    .text_color(submenu_fg)
-                    .hover(|d| d.bg(submenu_hover))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.handle_context_menu_action(action, window, cx);
-                    }))
-                    .child(label)
-                    .into_any_element(),
-            );
-        }
 
         // Use deferred() to render at window level for correct positioning
         deferred(
@@ -2707,17 +3141,32 @@ impl DataGridPanel {
                 .top_0()
                 .left_0()
                 .size_full()
+                .track_focus(&self.context_menu_focus)
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    use crate::keymap::{default_keymap, KeyChord};
+
+                    let chord = KeyChord::from_gpui(&event.keystroke);
+                    let keymap = default_keymap();
+
+                    if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord) {
+                        if this.dispatch_menu_command(cmd, window, cx) {
+                            cx.stop_propagation();
+                        }
+                    }
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.context_menu = None;
+                        this.focus_handle.focus(window);
                         cx.notify();
                     }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.context_menu = None;
+                        this.focus_handle.focus(window);
                         cx.notify();
                     }),
                 )
@@ -2778,6 +3227,8 @@ impl DataGridPanel {
             }
         }
 
+        // Restore focus to table after action
+        self.focus_handle.focus(window);
         cx.notify();
     }
 
@@ -3138,13 +3589,14 @@ impl DataGridPanel {
         });
     }
 
-    fn handle_generate_sql(&self, visual_row: usize, kind: SqlGenerateKind, cx: &mut Context<Self>) {
+    fn handle_generate_sql(&mut self, visual_row: usize, kind: SqlGenerateKind, cx: &mut Context<Self>) {
         use crate::ui::components::data_table::model::VisualRowSource;
+        use crate::ui::sql_preview_modal::SqlGenerationType;
 
         let (profile_id, table_ref) = match &self.source {
             DataSource::Table {
                 profile_id, table, ..
-            } => (*profile_id, table),
+            } => (*profile_id, table.clone()),
             DataSource::QueryResult { .. } => return,
         };
 
@@ -3164,15 +3616,8 @@ impl DataGridPanel {
         let table_info = connected.table_details.get(&cache_key);
         let columns_info = table_info.and_then(|t| t.columns.as_deref());
 
-        // Build qualified table name
-        let table_name = if let Some(schema) = &table_ref.schema {
-            format!("{}.{}", schema, table_ref.name)
-        } else {
-            table_ref.name.clone()
-        };
-
         // Get column names from result
-        let col_names: Vec<&str> = self.result.columns.iter().map(|c| c.name.as_str()).collect();
+        let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
 
         // Get row values
         let ts = table_state.read(cx);
@@ -3215,70 +3660,24 @@ impl DataGridPanel {
             vec![]
         };
 
-        let sql = match kind {
-            SqlGenerateKind::SelectWhere => {
-                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
-                format!("SELECT * FROM {} WHERE {};", table_name, where_clause)
-            }
-            SqlGenerateKind::Insert => {
-                let cols_str = col_names.join(", ");
-                let vals_str = row_values.join(", ");
-                format!("INSERT INTO {} ({}) VALUES ({});", table_name, cols_str, vals_str)
-            }
-            SqlGenerateKind::Update => {
-                let set_clause: Vec<String> = col_names
-                    .iter()
-                    .zip(row_values.iter())
-                    .map(|(col, val)| format!("{} = {}", col, val))
-                    .collect();
-                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
-                format!(
-                    "UPDATE {} SET {} WHERE {};",
-                    table_name,
-                    set_clause.join(", "),
-                    where_clause
-                )
-            }
-            SqlGenerateKind::Delete => {
-                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
-                format!("DELETE FROM {} WHERE {};", table_name, where_clause)
-            }
+        // Convert SqlGenerateKind to SqlGenerationType
+        let generation_type = match kind {
+            SqlGenerateKind::SelectWhere => SqlGenerationType::SelectWhere,
+            SqlGenerateKind::Insert => SqlGenerationType::Insert,
+            SqlGenerateKind::Update => SqlGenerationType::Update,
+            SqlGenerateKind::Delete => SqlGenerationType::Delete,
         };
 
-        cx.write_to_clipboard(ClipboardItem::new_string(sql));
-    }
-
-    fn build_where_clause(
-        &self,
-        col_names: &[&str],
-        row_values: &[String],
-        pk_indices: &[usize],
-    ) -> String {
-        // Use primary keys if available, otherwise use all columns
-        let indices: Vec<usize> = if pk_indices.is_empty() {
-            (0..col_names.len()).collect()
-        } else {
-            pk_indices.to_vec()
-        };
-
-        let conditions: Vec<String> = indices
-            .iter()
-            .filter_map(|&idx| {
-                let col = col_names.get(idx)?;
-                let val = row_values.get(idx)?;
-                if val == "NULL" {
-                    Some(format!("{} IS NULL", col))
-                } else {
-                    Some(format!("{} = {}", col, val))
-                }
-            })
-            .collect();
-
-        if conditions.is_empty() {
-            "1=1".to_string()
-        } else {
-            conditions.join(" AND ")
-        }
+        // Emit event for SQL preview modal
+        cx.emit(DataGridEvent::RequestSqlPreview {
+            profile_id,
+            schema_name: table_ref.schema.clone(),
+            table_name: table_ref.name.clone(),
+            column_names: col_names,
+            row_values,
+            pk_indices,
+            generation_type,
+        });
     }
 
     fn format_value_for_sql(&self, value: &dbflux_core::Value) -> String {
