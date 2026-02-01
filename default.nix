@@ -74,8 +74,10 @@ let
     mkdir -p $out/share/mime/packages
     mkdir -p $out/share/dbflux
 
-    # Copy desktop file
+    # Copy desktop file and set correct Exec path
     install -Dm644 ${fullSrc}/resources/desktop/dbflux.desktop $out/share/applications/dbflux.desktop
+    substituteInPlace $out/share/applications/dbflux.desktop \
+      --replace '@EXEC_PATH@' "$out/bin/dbflux"
 
     # Copy icon
     install -Dm644 ${fullSrc}/resources/icons/dbflux.svg $out/share/icons/hicolor/scalable/apps/dbflux.svg
