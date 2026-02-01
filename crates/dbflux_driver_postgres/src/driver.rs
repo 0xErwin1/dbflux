@@ -5,11 +5,11 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CustomTypeInfo, CustomTypeKind, DatabaseInfo, DbConfig,
-    DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo,
-    POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
-    SslMode, TableInfo, Value, ViewInfo,
+    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues,
+    IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
+    RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -805,6 +805,63 @@ impl Connection for PostgresConnection {
             ))),
         }
     }
+
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        if !patch.identity.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot update row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        if !patch.has_changes() {
+            return Err(DbError::QueryFailed("No changes to save".to_string()));
+        }
+
+        let qualified_table = pg_qualified_name(patch.schema.as_deref(), &patch.table);
+
+        let set_clause: Vec<String> = patch
+            .changes
+            .iter()
+            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
+            .collect();
+
+        let where_clause: Vec<String> = patch
+            .identity
+            .columns
+            .iter()
+            .zip(patch.identity.values.iter())
+            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
+            .collect();
+
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} RETURNING *",
+            qualified_table,
+            set_clause.join(", "),
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[UPDATE] Executing: {}", sql);
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if rows.is_empty() {
+            return Ok(CrudResult::empty());
+        }
+
+        let row = &rows[0];
+        let returning_row: Row = (0..row.columns().len())
+            .map(|i| postgres_value_to_value(row, i))
+            .collect();
+
+        Ok(CrudResult::success(returning_row))
+    }
 }
 
 fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
@@ -1355,6 +1412,58 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
             })
         })
         .collect())
+}
+
+/// Convert a Value to a safe PostgreSQL literal string.
+///
+/// Uses dollar quoting for strings to avoid SQL injection.
+fn value_to_pg_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.is_nan() {
+                "'NaN'::float8".to_string()
+            } else if f.is_infinite() {
+                if f.is_sign_positive() {
+                    "'Infinity'::float8".to_string()
+                } else {
+                    "'-Infinity'::float8".to_string()
+                }
+            } else {
+                format!("{}::float8", f)
+            }
+        }
+        Value::Decimal(s) => format!("'{}'::numeric", pg_escape_string(s)),
+        Value::Text(s) => pg_quote_string(s),
+        Value::Json(s) => format!("{}::jsonb", pg_quote_string(s)),
+        Value::Bytes(b) => format!("'\\x{}'::bytea", hex::encode(b)),
+        Value::DateTime(dt) => format!("'{}'::timestamptz", dt.to_rfc3339()),
+        Value::Date(d) => format!("'{}'::date", d.format("%Y-%m-%d")),
+        Value::Time(t) => format!("'{}'::time", t.format("%H:%M:%S%.f")),
+    }
+}
+
+/// Escape a string for use inside a PostgreSQL single-quoted literal.
+fn pg_escape_string(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Quote a string as a PostgreSQL literal using dollar quoting.
+fn pg_quote_string(s: &str) -> String {
+    if !s.contains("$$") {
+        return format!("$${}$$", s);
+    }
+
+    for i in 0..100 {
+        let tag = format!("$tag{}$", i);
+        if !s.contains(&tag) {
+            return format!("{}{}{}", tag, s, tag);
+        }
+    }
+
+    format!("'{}'", pg_escape_string(s))
 }
 
 fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {

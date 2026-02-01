@@ -429,6 +429,11 @@ impl SqlQueryDocument {
                 DataGridEvent::RequestToggleMaximize => {
                     this.toggle_maximize_results(cx);
                 }
+                DataGridEvent::Focused => {
+                    this.focus_mode = SqlQueryFocus::Results;
+                    cx.emit(DocumentEvent::RequestFocus);
+                    cx.notify();
+                }
             },
         );
 

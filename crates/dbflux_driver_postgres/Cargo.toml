@@ -12,8 +12,9 @@ license.workspace = true
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
+hex = "0.4"
 log = "0.4"
-postgres = "0.19"
 native-tls = "0.2"
+postgres = "0.19"
 postgres-native-tls = "0.5"
 uuid = { version = "1", features = ["v4"] }

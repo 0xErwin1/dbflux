@@ -8,8 +8,9 @@ use gpui::{
     ListSizingBehavior, ParentElement, StatefulInteractiveElement, Styled, Window, actions, canvas,
     div, px, uniform_list,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::Scrollbar;
+use gpui_component::{ActiveTheme, Sizable};
 
 use super::events::{Direction, Edge};
 use super::model::TableModel;
@@ -59,10 +60,14 @@ actions!(
         SelectAll,
         ClearSelection,
         Copy,
+        StartEdit,
+        ConfirmEdit,
+        CancelEdit,
     ]
 );
 
-const CONTEXT: &str = "DataTable";
+/// Key context for DataTable - matches ContextId::Results.as_gpui_context()
+const CONTEXT: &str = "Results";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -85,6 +90,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        // Edit mode
+        KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
+        KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
     ]);
 }
 
@@ -212,7 +220,13 @@ impl gpui::Render for DataTable {
         };
         let s = self.state.clone();
         let on_clear_selection = move |_: &ClearSelection, _: &mut Window, cx: &mut App| {
-            s.update(cx, |state, cx| state.clear_selection(cx));
+            s.update(cx, |state, cx| {
+                if state.is_editing() {
+                    state.stop_editing(false, cx);
+                } else {
+                    state.clear_selection(cx);
+                }
+            });
         };
         let s = self.state.clone();
         let on_copy = move |_: &Copy, _: &mut Window, cx: &mut App| {
@@ -220,6 +234,36 @@ impl gpui::Render for DataTable {
             if let Some(text) = text {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+        };
+
+        let s = self.state.clone();
+        let on_start_edit = move |_: &StartEdit, window: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if state.is_editing() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    state.start_editing(coord, window, cx);
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_confirm_edit = move |_: &ConfirmEdit, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if state.is_editing() {
+                    state.stop_editing(true, cx);
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_cancel_edit = move |_: &CancelEdit, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if state.is_editing() {
+                    state.stop_editing(false, cx);
+                }
+            });
         };
 
         // Main layout: vertical flex with header and scrollable body.
@@ -261,6 +305,9 @@ impl gpui::Render for DataTable {
             .on_action(on_select_bottom)
             .on_action(on_select_all)
             .on_action(on_clear_selection)
+            .on_action(on_start_edit)
+            .on_action(on_confirm_edit)
+            .on_action(on_cancel_edit)
             .on_action(on_copy)
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
@@ -459,12 +506,18 @@ impl DataTable {
                         // Read state INSIDE closure - only when actually rendering
                         let state = state_entity.read(cx);
 
+                        // Get editing state
+                        let editing_cell = state.editing_cell();
+                        let cell_input = state.cell_input().cloned();
+
                         render_rows(
                             &state_entity,
                             visible_range,
                             &model,
                             state.column_widths(),
                             state.selection(),
+                            editing_cell,
+                            cell_input.as_ref(),
                             total_width,
                             theme,
                         )
@@ -486,34 +539,50 @@ fn render_rows(
     model: &TableModel,
     column_widths: &[f32],
     selection: &SelectionState,
+    editing_cell: Option<CellCoord>,
+    cell_input: Option<&Entity<InputState>>,
     total_width: f32,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
-    // Pre-calculate cumulative column offsets for hit-testing
-    let mut col_offsets = vec![0.0f32];
-    for width in column_widths {
-        col_offsets.push(col_offsets.last().unwrap_or(&0.0) + width);
-    }
-
     visible_range
         .map(|row_ix| {
             let row_data = model.rows.get(row_ix);
-            let state_for_click = state_entity.clone();
 
-            // Build cells without individual click handlers
-            let cells: Vec<_> = (0..model.col_count())
+            let cells: Vec<AnyElement> = (0..model.col_count())
                 .map(|col_ix| {
                     let cell = row_data.and_then(|r| r.cells.get(col_ix));
                     let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
                     let coord = CellCoord::new(row_ix, col_ix);
                     let is_selected = selection.is_selected(coord);
                     let is_active = selection.active == Some(coord);
+                    let is_editing = editing_cell == Some(coord);
+
+                    if is_editing {
+                        if let Some(input_state) = cell_input {
+                            return div()
+                                .id(("cell", row_ix * 10000 + col_ix))
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .h(ROW_HEIGHT)
+                                .w(px(width))
+                                .overflow_hidden()
+                                .border_r_1()
+                                .border_1()
+                                .border_color(theme.ring)
+                                .bg(theme.background)
+                                .child(Input::new(input_state).small())
+                                .into_any_element();
+                        }
+                    }
+
                     let display_text = cell
                         .map(|c| c.display_text().to_string())
                         .unwrap_or_default();
                     let is_null = cell.map(|c| c.is_null()).unwrap_or(false);
 
-                    // Simplified cell structure - single div instead of nested
+                    let state_for_click = state_entity.clone();
+
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
                         .flex()
@@ -538,13 +607,33 @@ fn render_rows(
                             theme.foreground
                         })
                         .when(is_null, |d| d.italic())
+                        .on_click(move |event: &ClickEvent, window, cx| {
+                            state_for_click.update(cx, |state, cx| {
+                                state.focus(window, cx);
+                            });
+
+                            if event.click_count() == 2 {
+                                state_for_click.update(cx, |state, cx| {
+                                    state.start_editing(coord, window, cx);
+                                });
+                                return;
+                            }
+
+                            if event.modifiers().shift {
+                                state_for_click.update(cx, |state, cx| {
+                                    state.extend_selection(coord, cx);
+                                });
+                            } else {
+                                state_for_click.update(cx, |state, cx| {
+                                    state.select_cell(coord, cx);
+                                });
+                            }
+                        })
                         .child(display_text.to_string())
+                        .into_any_element()
                 })
                 .collect();
 
-            // Row-level click handler with hit-testing
-            let col_offsets_for_click = col_offsets.clone();
-            let col_count_for_click = column_widths.len();
             div()
                 .id(("row", row_ix))
                 .flex()
@@ -555,29 +644,6 @@ fn render_rows(
                 .border_b_1()
                 .border_color(theme.table_row_border)
                 .when(row_ix % 2 == 1, |d| d.bg(theme.table_even))
-                .cursor_pointer()
-                .on_click(move |event: &ClickEvent, _window, cx| {
-                    // Hit-test: find which column was clicked based on X position
-                    let click_x: f32 = event.position().x.into();
-                    let col_ix = col_offsets_for_click
-                        .windows(2)
-                        .enumerate()
-                        .find(|(_, pair)| click_x >= pair[0] && click_x < pair[1])
-                        .map(|(i, _)| i)
-                        .unwrap_or(col_count_for_click.saturating_sub(1));
-
-                    let coord = CellCoord::new(row_ix, col_ix);
-
-                    if event.modifiers().shift {
-                        state_for_click.update(cx, |state, cx| {
-                            state.extend_selection(coord, cx);
-                        });
-                    } else {
-                        state_for_click.update(cx, |state, cx| {
-                            state.select_cell(coord, cx);
-                        });
-                    }
-                })
                 .children(cells)
                 .into_any_element()
         })

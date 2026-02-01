@@ -1,9 +1,9 @@
 use bitflags::bitflags;
 
 use crate::{
-    ConnectionProfile, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DriverFormDef,
-    FormValues, QueryHandle, QueryRequest, QueryResult, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, TableInfo, ViewInfo,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
+    DriverFormDef, FormValues, QueryHandle, QueryRequest, QueryResult, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -371,5 +371,15 @@ pub trait Connection: Send + Sync {
             "Code generator '{}' not supported",
             generator_id
         )))
+    }
+
+    /// Update a single row and return the updated row data.
+    ///
+    /// Uses `RETURNING *` on PostgreSQL for efficiency.
+    /// Falls back to UPDATE + SELECT on MySQL/SQLite.
+    fn update_row(&self, _patch: &RowPatch) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Row updates not supported by this driver".to_string(),
+        ))
     }
 }

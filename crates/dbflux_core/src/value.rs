@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -13,6 +14,16 @@ pub enum Value {
     Float(f64),
     Text(String),
     Bytes(Vec<u8>),
+    /// JSON/JSONB stored as string for exact round-trip preservation.
+    Json(String),
+    /// Decimal stored as string to preserve exact precision.
+    Decimal(String),
+    /// Timestamp with timezone.
+    DateTime(DateTime<Utc>),
+    /// Date without time component.
+    Date(NaiveDate),
+    /// Time without date component.
+    Time(NaiveTime),
 }
 
 impl Value {
@@ -30,7 +41,7 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
-            Value::Text(s) => {
+            Value::Text(s) | Value::Json(s) | Value::Decimal(s) => {
                 if s.len() <= max_len {
                     s.clone()
                 } else {
@@ -39,6 +50,9 @@ impl Value {
                 }
             }
             Value::Bytes(b) => format!("<{} bytes>", b.len()),
+            Value::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            Value::Date(d) => d.format("%Y-%m-%d").to_string(),
+            Value::Time(t) => t.format("%H:%M:%S").to_string(),
         }
     }
 }
@@ -55,9 +69,14 @@ impl Value {
             Value::Bool(_) => 0,
             Value::Int(_) => 1,
             Value::Float(_) => 2,
-            Value::Text(_) => 3,
-            Value::Bytes(_) => 4,
-            Value::Null => 5,
+            Value::Decimal(_) => 3,
+            Value::Text(_) => 4,
+            Value::Json(_) => 5,
+            Value::DateTime(_) => 6,
+            Value::Date(_) => 7,
+            Value::Time(_) => 8,
+            Value::Bytes(_) => 9,
+            Value::Null => 10,
         }
     }
 }
@@ -84,6 +103,11 @@ impl Ord for Value {
             (Float(a), Float(b)) => a.total_cmp(b),
             (Text(a), Text(b)) => a.cmp(b),
             (Bytes(a), Bytes(b)) => a.cmp(b),
+            (Json(a), Json(b)) => a.cmp(b),
+            (Decimal(a), Decimal(b)) => a.cmp(b),
+            (DateTime(a), DateTime(b)) => a.cmp(b),
+            (Date(a), Date(b)) => a.cmp(b),
+            (Time(a), Time(b)) => a.cmp(b),
 
             // Cross-type numeric promotion
             (Int(a), Float(b)) => (*a as f64).total_cmp(b),

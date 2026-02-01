@@ -56,4 +56,7 @@ pub enum DataTableEvent {
     /// Selection changed.
     #[allow(dead_code)]
     SelectionChanged(SelectionState),
+
+    /// Table received focus (clicked or otherwise activated).
+    Focused,
 }

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use gpui::{
-    Context, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle, Size,
-    UniformListScrollHandle, px,
+    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
+    Size, UniformListScrollHandle, Window, px,
 };
+use gpui_component::input::{InputEvent, InputState};
 
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
-use super::model::TableModel;
+use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, SCROLLBAR_WIDTH};
 
@@ -43,6 +44,22 @@ pub struct DataTableState {
     /// Cached horizontal scroll offset for header and body positioning.
     /// Updated when scroll handle offset changes to trigger re-renders.
     horizontal_offset: Pixels,
+
+    // --- Edit Mode ---
+    /// Cell currently being edited (inline editor is open).
+    editing_cell: Option<CellCoord>,
+
+    /// Input state for the inline cell editor.
+    cell_input: Option<Entity<InputState>>,
+
+    /// Buffer for tracking local edits before committing.
+    edit_buffer: EditBuffer,
+
+    /// Column indices that form the primary key (for row identification).
+    pk_columns: Vec<usize>,
+
+    /// Whether this table is editable (requires PK for row identification).
+    is_editable: bool,
 }
 
 impl DataTableState {
@@ -62,6 +79,11 @@ impl DataTableState {
             vertical_scroll_handle: UniformListScrollHandle::new(),
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
+            editing_cell: None,
+            cell_input: None,
+            edit_buffer: EditBuffer::new(),
+            pk_columns: Vec::new(),
+            is_editable: false,
         }
     }
 
@@ -255,6 +277,12 @@ impl DataTableState {
         &self.focus_handle
     }
 
+    /// Focus the table for keyboard navigation and emit Focused event.
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window);
+        cx.emit(DataTableEvent::Focused);
+    }
+
     // --- Scroll Handles ---
 
     pub fn vertical_scroll_handle(&self) -> &UniformListScrollHandle {
@@ -345,6 +373,150 @@ impl DataTableState {
     pub fn scroll_to_cell(&self, row: usize, col: usize) {
         self.scroll_to_row(row);
         self.scroll_to_column(col);
+    }
+
+    // --- Edit Mode ---
+
+    /// Check if the table is editable (has primary key columns).
+    pub fn is_editable(&self) -> bool {
+        self.is_editable
+    }
+
+    /// Set the primary key column indices and update editability.
+    pub fn set_pk_columns(&mut self, pk_columns: Vec<usize>) {
+        self.is_editable = !pk_columns.is_empty();
+        self.pk_columns = pk_columns;
+    }
+
+    /// Get the primary key column indices.
+    pub fn pk_columns(&self) -> &[usize] {
+        &self.pk_columns
+    }
+
+    /// Check if a cell is currently being edited.
+    pub fn is_editing(&self) -> bool {
+        self.editing_cell.is_some()
+    }
+
+    /// Get the currently editing cell, if any.
+    pub fn editing_cell(&self) -> Option<CellCoord> {
+        self.editing_cell
+    }
+
+    /// Start editing a cell. Returns false if the table is not editable.
+    pub fn start_editing(
+        &mut self,
+        coord: CellCoord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_editable {
+            return false;
+        }
+
+        let initial_value = self
+            .model
+            .cell(coord.row, coord.col)
+            .map(|c| {
+                if c.is_null() {
+                    String::new()
+                } else {
+                    c.display_text().to_string()
+                }
+            })
+            .unwrap_or_default();
+
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial_value, window, cx);
+            state
+        });
+
+        input.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+
+        cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
+            InputEvent::PressEnter { .. } => this.stop_editing(true, cx),
+            InputEvent::Blur => this.stop_editing(false, cx),
+            _ => {}
+        })
+        .detach();
+
+        self.editing_cell = Some(coord);
+        self.cell_input = Some(input);
+        self.scroll_to_cell(coord.row, coord.col);
+        cx.notify();
+        true
+    }
+
+    /// Get the cell input state if currently editing.
+    pub fn cell_input(&self) -> Option<&Entity<InputState>> {
+        self.cell_input.as_ref()
+    }
+
+    /// Stop editing and optionally apply the change.
+    pub fn stop_editing(&mut self, apply: bool, cx: &mut Context<Self>) {
+        let coord = match self.editing_cell.take() {
+            Some(c) => c,
+            None => return,
+        };
+
+        if apply {
+            if let Some(input) = self.cell_input.take() {
+                let value_str = input.read(cx).value().to_string();
+
+                let original = self
+                    .model
+                    .cell(coord.row, coord.col)
+                    .map(|c| c.display_text().to_string())
+                    .unwrap_or_default();
+
+                if value_str != original {
+                    let cell_value = super::model::CellValue::text(&value_str);
+                    self.edit_buffer.set_cell(coord.row, coord.col, cell_value);
+                }
+            }
+        } else {
+            self.cell_input = None;
+        }
+
+        cx.notify();
+    }
+
+    /// Cancel editing without applying changes.
+    pub fn cancel_editing(&mut self, cx: &mut Context<Self>) {
+        if self.editing_cell.is_some() {
+            self.editing_cell = None;
+            cx.notify();
+        }
+    }
+
+    /// Get the edit buffer.
+    pub fn edit_buffer(&self) -> &EditBuffer {
+        &self.edit_buffer
+    }
+
+    /// Get mutable access to the edit buffer.
+    pub fn edit_buffer_mut(&mut self) -> &mut EditBuffer {
+        &mut self.edit_buffer
+    }
+
+    /// Check if there are any pending changes.
+    pub fn has_pending_changes(&self) -> bool {
+        self.edit_buffer.has_changes()
+    }
+
+    /// Revert all changes for a specific row.
+    pub fn revert_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.edit_buffer.clear_row(row);
+        cx.notify();
+    }
+
+    /// Revert all pending changes.
+    pub fn revert_all(&mut self, cx: &mut Context<Self>) {
+        self.edit_buffer.clear_all();
+        cx.notify();
     }
 }
 

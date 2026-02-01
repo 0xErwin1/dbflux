@@ -23,6 +23,8 @@ pub struct DataDocument {
 pub enum DataDocumentEvent {
     #[allow(dead_code)]
     MetaChanged,
+    /// The document area was clicked and wants focus.
+    RequestFocus,
 }
 
 impl DataDocument {
@@ -38,7 +40,11 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_table(profile_id, table, app_state, window, cx));
 
-        let subscription = cx.subscribe(&data_grid, |_this, _grid, _event: &DataGridEvent, _cx| {});
+        let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
+            if let DataGridEvent::Focused = event {
+                cx.emit(DataDocumentEvent::RequestFocus);
+            }
+        });
 
         Self {
             id: DocumentId::new(),
@@ -62,7 +68,11 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
 
-        let subscription = cx.subscribe(&data_grid, |_this, _grid, _event: &DataGridEvent, _cx| {});
+        let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
+            if let DataGridEvent::Focused = event {
+                cx.emit(DataDocumentEvent::RequestFocus);
+            }
+        });
 
         Self {
             id: DocumentId::new(),
