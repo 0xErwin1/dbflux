@@ -51,8 +51,11 @@ fn value_to_csv_field(value: &Value) -> String {
                 f.to_string()
             }
         }
-        Value::Text(s) => s.clone(),
+        Value::Text(s) | Value::Json(s) | Value::Decimal(s) => s.clone(),
         Value::Bytes(b) => format!("\\x{}", hex::encode(b)),
+        Value::DateTime(dt) => dt.to_rfc3339(),
+        Value::Date(d) => d.format("%Y-%m-%d").to_string(),
+        Value::Time(t) => t.format("%H:%M:%S%.f").to_string(),
     }
 }
 

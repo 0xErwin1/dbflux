@@ -274,4 +274,6 @@ pub enum TabManagerEvent {
     Closed(DocumentId),
     Activated(DocumentId),
     Reordered,
+    /// A document requested focus (user clicked on it).
+    DocumentRequestedFocus,
 }

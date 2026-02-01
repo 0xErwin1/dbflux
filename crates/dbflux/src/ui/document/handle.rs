@@ -166,6 +166,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
                 let doc_event = match event {
                     DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
+                    DataDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
                 };
                 callback(&doc_event, cx);
             }),
@@ -182,4 +183,6 @@ pub enum DocumentEvent {
     ExecutionFinished,
     /// The document wants to close itself.
     RequestClose,
+    /// The document area was clicked and wants focus.
+    RequestFocus,
 }

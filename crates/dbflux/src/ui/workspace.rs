@@ -766,6 +766,14 @@ impl Render for Workspace {
                                 .flex()
                                 .flex_col()
                                 .size_full()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        if this.focus_target != FocusTarget::Document {
+                                            this.set_focus(FocusTarget::Document, window, cx);
+                                        }
+                                    }),
+                                )
                                 .child(tab_bar)
                                 .when_some(active_doc_element, |el, doc| {
                                     el.child(

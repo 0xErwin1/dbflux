@@ -77,6 +77,8 @@ pub enum DataGridEvent {
     RequestHide,
     /// Request to maximize/restore the results panel.
     RequestToggleMaximize,
+    /// The data grid received focus (user clicked on it).
+    Focused,
 }
 
 /// Internal state for grid loading/ready/error.
@@ -375,8 +377,8 @@ impl DataGridPanel {
 
         let subscription =
             cx.subscribe(&table_state, |this, _state, event: &DataTableEvent, cx| {
-                if let DataTableEvent::SortChanged(sort) = event {
-                    match sort {
+                match event {
+                    DataTableEvent::SortChanged(sort) => match sort {
                         Some(sort_state) => {
                             this.handle_sort_request(
                                 sort_state.column_ix,
@@ -387,7 +389,11 @@ impl DataGridPanel {
                         None => {
                             this.handle_sort_clear(cx);
                         }
+                    },
+                    DataTableEvent::Focused => {
+                        cx.emit(DataGridEvent::Focused);
                     }
+                    DataTableEvent::SelectionChanged(_) => {}
                 }
             });
 
