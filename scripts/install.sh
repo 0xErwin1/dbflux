@@ -456,8 +456,15 @@ install_files() {
     # Desktop entry
     if [[ -f "$src_dir/resources/desktop/dbflux.desktop" ]]; then
         mkdir_safe "$PREFIX/share/applications"
-        cp_safe "$src_dir/resources/desktop/dbflux.desktop" "$PREFIX/share/applications/dbflux.desktop"
-        chmod_safe "$PREFIX/share/applications/dbflux.desktop" 644
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "[DRY-RUN] cp $src_dir/resources/desktop/dbflux.desktop $PREFIX/share/applications/dbflux.desktop"
+            echo "[DRY-RUN] sed -i 's|@EXEC_PATH@|$PREFIX/bin/dbflux|g' $PREFIX/share/applications/dbflux.desktop"
+        else
+            cp "$src_dir/resources/desktop/dbflux.desktop" "$PREFIX/share/applications/dbflux.desktop"
+            # Replace @EXEC_PATH@ with the actual binary path
+            sed -i "s|@EXEC_PATH@|$PREFIX/bin/dbflux|g" "$PREFIX/share/applications/dbflux.desktop"
+            chmod 644 "$PREFIX/share/applications/dbflux.desktop"
+        fi
     fi
 
     # Icon

@@ -62,6 +62,8 @@ package() {
 
     # Install desktop file
     install -Dm644 "resources/desktop/dbflux.desktop" "${pkgdir}/usr/share/applications/dbflux.desktop"
+    # Replace placeholder with actual binary path
+    sed -i "s|@EXEC_PATH@|/usr/bin/dbflux|g" "${pkgdir}/usr/share/applications/dbflux.desktop"
 
     # Install icon
     install -Dm644 "resources/icons/dbflux.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/dbflux.svg"
