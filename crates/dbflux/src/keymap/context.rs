@@ -36,6 +36,12 @@ pub enum ContextId {
 
     /// A dropdown menu is open and receiving keyboard navigation.
     Dropdown,
+
+    /// SQL preview modal is open (captures all input).
+    SqlPreviewModal,
+
+    /// Context menu is open and receiving keyboard navigation.
+    ContextMenu,
 }
 
 impl ContextId {
@@ -51,6 +57,8 @@ impl ContextId {
             ContextId::HistoryModal => None,
             ContextId::TextInput => None,
             ContextId::Dropdown => None,
+            ContextId::SqlPreviewModal => None,
+            ContextId::ContextMenu => None,
             ContextId::Sidebar => Some(ContextId::Global),
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
@@ -68,6 +76,8 @@ impl ContextId {
                 | ContextId::HistoryModal
                 | ContextId::TextInput
                 | ContextId::Dropdown
+                | ContextId::SqlPreviewModal
+                | ContextId::ContextMenu
         )
     }
 
@@ -85,6 +95,8 @@ impl ContextId {
             ContextId::HistoryModal => "History",
             ContextId::TextInput => "Text Input",
             ContextId::Dropdown => "Dropdown",
+            ContextId::SqlPreviewModal => "SQL Preview",
+            ContextId::ContextMenu => "Context Menu",
         }
     }
 
@@ -101,6 +113,8 @@ impl ContextId {
             ContextId::HistoryModal,
             ContextId::TextInput,
             ContextId::Dropdown,
+            ContextId::SqlPreviewModal,
+            ContextId::ContextMenu,
         ]
     }
 
@@ -117,6 +131,8 @@ impl ContextId {
             ContextId::HistoryModal => "HistoryModal",
             ContextId::TextInput => "TextInput",
             ContextId::Dropdown => "Dropdown",
+            ContextId::SqlPreviewModal => "SqlPreviewModal",
+            ContextId::ContextMenu => "ContextMenu",
         }
     }
 }

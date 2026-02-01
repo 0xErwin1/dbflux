@@ -27,6 +27,12 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         table: TableRef,
     },
+    /// Request to show SQL preview modal
+    RequestSqlPreview {
+        profile_id: Uuid,
+        table_info: TableInfo,
+        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -951,6 +957,8 @@ impl Sidebar {
     }
 
     fn generate_code_impl(&mut self, item_id: &str, generator_id: &str, cx: &mut Context<Self>) {
+        use crate::ui::sql_preview_modal::SqlGenerationType;
+
         let Some(parts) = Self::parse_table_or_view_id(item_id) else {
             return;
         };
@@ -960,9 +968,23 @@ impl Sidebar {
             return;
         };
 
+        // Try to convert to SqlGenerationType for preview modal
+        let generation_type = SqlGenerationType::from_generator_id(generator_id);
+
         // First check the table_details cache (populated by ensure_table_details)
         let cache_key = (parts.schema_name.clone(), parts.object_name.clone());
         if let Some(table) = conn.table_details.get(&cache_key) {
+            // For supported types, use the SQL preview modal
+            if let Some(gen_type) = generation_type {
+                cx.emit(SidebarEvent::RequestSqlPreview {
+                    profile_id: parts.profile_id,
+                    table_info: table.clone(),
+                    generation_type: gen_type,
+                });
+                return;
+            }
+
+            // For unsupported types (CREATE TABLE, DROP, TRUNCATE), use driver generation
             match conn.connection.generate_code(generator_id, table) {
                 Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
                 Err(e) => {
@@ -1000,6 +1022,17 @@ impl Sidebar {
             return;
         };
 
+        // For supported types, use the SQL preview modal
+        if let Some(gen_type) = generation_type {
+            cx.emit(SidebarEvent::RequestSqlPreview {
+                profile_id: parts.profile_id,
+                table_info: table.clone(),
+                generation_type: gen_type,
+            });
+            return;
+        }
+
+        // For unsupported types, use driver generation
         match conn.connection.generate_code(generator_id, table) {
             Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
             Err(e) => {

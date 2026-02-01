@@ -149,7 +149,7 @@ impl DocumentHandle {
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
             Self::SqlQuery { entity, .. } => entity.read(cx).active_context(cx),
-            Self::Data { entity, .. } => entity.read(cx).active_context(),
+            Self::Data { entity, .. } => entity.read(cx).active_context(cx),
         }
     }
 
@@ -167,6 +167,23 @@ impl DocumentHandle {
                 let doc_event = match event {
                     DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
                     DataDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
+                    DataDocumentEvent::RequestSqlPreview {
+                        profile_id,
+                        schema_name,
+                        table_name,
+                        column_names,
+                        row_values,
+                        pk_indices,
+                        generation_type,
+                    } => DocumentEvent::RequestSqlPreview {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                        generation_type: *generation_type,
+                    },
                 };
                 callback(&doc_event, cx);
             }),
@@ -185,4 +202,14 @@ pub enum DocumentEvent {
     RequestClose,
     /// The document area was clicked and wants focus.
     RequestFocus,
+    /// Request to show SQL preview modal (from DataGridPanel).
+    RequestSqlPreview {
+        profile_id: uuid::Uuid,
+        schema_name: Option<String>,
+        table_name: String,
+        column_names: Vec<String>,
+        row_values: Vec<String>,
+        pk_indices: Vec<usize>,
+        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
 }

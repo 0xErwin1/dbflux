@@ -25,6 +25,16 @@ pub enum DataDocumentEvent {
     MetaChanged,
     /// The document area was clicked and wants focus.
     RequestFocus,
+    /// Request to show SQL preview modal.
+    RequestSqlPreview {
+        profile_id: Uuid,
+        schema_name: Option<String>,
+        table_name: String,
+        column_names: Vec<String>,
+        row_values: Vec<String>,
+        pk_indices: Vec<usize>,
+        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
 }
 
 impl DataDocument {
@@ -41,8 +51,30 @@ impl DataDocument {
             cx.new(|cx| DataGridPanel::new_for_table(profile_id, table, app_state, window, cx));
 
         let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
-            if let DataGridEvent::Focused = event {
-                cx.emit(DataDocumentEvent::RequestFocus);
+            match event {
+                DataGridEvent::Focused => {
+                    cx.emit(DataDocumentEvent::RequestFocus);
+                }
+                DataGridEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } => {
+                    cx.emit(DataDocumentEvent::RequestSqlPreview {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                        generation_type: *generation_type,
+                    });
+                }
+                _ => {}
             }
         });
 
@@ -69,8 +101,30 @@ impl DataDocument {
             cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
 
         let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
-            if let DataGridEvent::Focused = event {
-                cx.emit(DataDocumentEvent::RequestFocus);
+            match event {
+                DataGridEvent::Focused => {
+                    cx.emit(DataDocumentEvent::RequestFocus);
+                }
+                DataGridEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } => {
+                    cx.emit(DataDocumentEvent::RequestSqlPreview {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                        generation_type: *generation_type,
+                    });
+                }
+                _ => {}
             }
         });
 
@@ -118,9 +172,8 @@ impl DataDocument {
     }
 
     /// Returns the active context for keyboard handling.
-    /// DataDocument is always in Results context since it's a pure data grid.
-    pub fn active_context(&self) -> ContextId {
-        ContextId::Results
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        self.data_grid.read(cx).active_context()
     }
 
     // === Command Dispatch ===

@@ -42,8 +42,34 @@ impl TabManager {
         let id = doc.id();
 
         // Subscribe to document events
-        let subscription = doc.subscribe(cx, move |_event, _cx| {
-            // Reserved for future document events
+        // Capture the TabManager entity to emit events from within the callback
+        let tab_manager = cx.entity().clone();
+        let subscription = doc.subscribe(cx, move |event, cx| {
+            use super::handle::DocumentEvent;
+            match event {
+                DocumentEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } => {
+                    tab_manager.update(cx, |_, cx| {
+                        cx.emit(TabManagerEvent::RequestSqlPreview {
+                            profile_id: *profile_id,
+                            schema_name: schema_name.clone(),
+                            table_name: table_name.clone(),
+                            column_names: column_names.clone(),
+                            row_values: row_values.clone(),
+                            pk_indices: pk_indices.clone(),
+                            generation_type: *generation_type,
+                        });
+                    });
+                }
+                _ => {}
+            }
         });
         self.subscriptions.insert(id, subscription);
 
@@ -276,4 +302,14 @@ pub enum TabManagerEvent {
     Reordered,
     /// A document requested focus (user clicked on it).
     DocumentRequestedFocus,
+    /// A document requested SQL preview modal.
+    RequestSqlPreview {
+        profile_id: uuid::Uuid,
+        schema_name: Option<String>,
+        table_name: String,
+        column_names: Vec<String>,
+        row_values: Vec<String>,
+        pk_indices: Vec<usize>,
+        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
 }

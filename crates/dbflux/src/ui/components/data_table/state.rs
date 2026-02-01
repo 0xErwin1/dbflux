@@ -231,7 +231,13 @@ impl DataTableState {
             return;
         }
 
-        let current = self.selection.active.unwrap_or(CellCoord::new(0, 0));
+        // No selection yet - select first cell
+        let Some(current) = self.selection.active else {
+            self.select_cell(CellCoord::new(0, 0), cx);
+            self.scroll_to_cell(0, 0);
+            return;
+        };
+
         let new_coord = match direction {
             Direction::Up => CellCoord::new(current.row.saturating_sub(1), current.col),
             Direction::Down => CellCoord::new((current.row + 1).min(row_count - 1), current.col),
