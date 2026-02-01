@@ -37,6 +37,7 @@ crates/
     src/ui/editor.rs        # SQL editor with dangerous query detection
     src/ui/dangerous_query.rs  # Query safety analysis (moved from editor/)
     src/ui/toast.rs         # Custom toast notification system
+    src/ui/cell_editor_modal.rs  # Modal editor for JSON/long text cells
     src/ui/components/data_table/  # Custom virtualized data table
       table.rs              # Main table component with phantom scroller
       state.rs              # Table state management
@@ -77,6 +78,7 @@ crates/
   - `SqlQueryDocument` provides SQL editing with multiple result tabs (Ctrl+Enter to run, Ctrl+Shift+Enter for new tab)
   - `DataDocument` enables standalone data browsing independent of queries
   - `TabManager` tracks MRU (Most Recently Used) order for tab switching
+  - Duplicate prevention: opening an already-open table focuses the existing tab instead of creating a new one
 - Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays connection tree with folder organization, drag-drop reordering, multi-selection, and schema browser with lazy loading.
 - Sidebar dock: `crates/dbflux/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection_tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
@@ -85,10 +87,11 @@ crates/
 - Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH profiles and keyring integration.
 - Storage: `crates/dbflux_core/src/store.rs`, `crates/dbflux_core/src/history.rs`, and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
 - History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
-- Data table: `crates/dbflux/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, and keyboard navigation.
+- Data table: `crates/dbflux/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
+- Cell editor modal: `crates/dbflux/src/ui/cell_editor_modal.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Toast system: `crates/dbflux/src/ui/toast.rs` custom implementation replacing gpui-component NotificationList, with auto-dismiss (4s) for success/info/warning toasts.
 - Query safety: `crates/dbflux/src/ui/dangerous_query.rs` detects dangerous queries (DELETE/DROP/TRUNCATE without WHERE) and prompts for confirmation.
-- Drivers: `crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, and `crates/dbflux_driver_mysql/` implement query execution, schema discovery, SQL generation, and lazy loading.
+- Drivers: `crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, and `crates/dbflux_driver_mysql/` implement query execution, schema discovery, SQL generation, lazy loading, and detailed error formatting (PostgreSQL extracts detail, hint, column, table, constraint from db errors).
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` establishes SSH sessions and runs a local port forwarder.
 - Export: `crates/dbflux_export/src/lib.rs` exposes the CSV exporter interface.
 - Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets.

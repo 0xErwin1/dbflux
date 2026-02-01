@@ -92,6 +92,8 @@ fn get_tables(&self) -> Vec<TableInfo> // Names only
 fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 ```
 
+**Driver error formatting**: Each driver has a `format_*_query_error` function that extracts detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. Use these instead of raw `format!("{:?}", e)`.
+
 ## GPUI Guidelines
 
 ### Context Types
@@ -153,13 +155,17 @@ impl Render for MyComponent {
 
 ### Entity Updates in Render
 
-Use `pending_*` fields with `.take()` to safely update other entities:
+Use `pending_*` fields with `.take()` to safely update other entities or open modals:
 ```rust
 fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     if let Some(data) = self.pending_data.take() {
         self.other_entity.update(cx, |other, cx| {
             other.apply(data, window, cx);
         });
+    }
+    // For modals: defer open until render
+    if let Some(modal) = self.pending_modal_open.take() {
+        self.modal.update(cx, |m, cx| m.open(modal.value, window, cx));
     }
     // render UI...
 }
@@ -245,6 +251,7 @@ Documents follow a consistent pattern for tab-based UI:
 2. **State**: Document struct implements `Render` with internal focus management
 3. **Tabs**: SqlQueryDocument supports multiple result tabs with `TabManager`
 4. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
+5. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
 
 ## Common Pitfalls
 
@@ -267,7 +274,8 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/document/sql_query.rs` | SQL query document with multiple result tabs |
 | `crates/dbflux/src/ui/document/tab_manager.rs` | MRU tab ordering |
 | `crates/dbflux/src/ui/toast.rs` | Toast notification system |
-| `crates/dbflux/src/ui/components/data_table/table.rs` | Virtualized data table with phantom scroller |
+| `crates/dbflux/src/ui/cell_editor_modal.rs` | Modal editor for JSON/long text |
+| `crates/dbflux/src/ui/components/data_table/table.rs` | Virtualized data table with column resize |
 | `crates/dbflux/src/keymap/defaults.rs` | Key bindings per context |
 | `crates/dbflux/src/keymap/command.rs` | Command enum and dispatch |
 | `crates/dbflux/src/keymap/focus.rs` | FocusTarget (Document/Sidebar/BackgroundTasks) |
