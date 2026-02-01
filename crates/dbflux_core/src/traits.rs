@@ -2,8 +2,8 @@ use bitflags::bitflags;
 
 use crate::{
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DriverFormDef, FormValues, QueryHandle, QueryRequest, QueryResult, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
+    DriverFormDef, FormValues, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert,
+    RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -380,6 +380,26 @@ pub trait Connection: Send + Sync {
     fn update_row(&self, _patch: &RowPatch) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Row updates not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Insert a new row and return the inserted row data.
+    ///
+    /// Uses `RETURNING *` on PostgreSQL for efficiency.
+    /// Falls back to INSERT + SELECT on MySQL/SQLite.
+    fn insert_row(&self, _insert: &RowInsert) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Row inserts not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Delete a row and return the deleted row data.
+    ///
+    /// Uses `RETURNING *` on PostgreSQL for efficiency.
+    /// Falls back to SELECT + DELETE on MySQL/SQLite.
+    fn delete_row(&self, _delete: &RowDelete) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Row deletes not supported by this driver".to_string(),
         ))
     }
 }

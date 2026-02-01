@@ -1,19 +1,20 @@
 use crate::app::AppState;
 use crate::keymap::Command;
 use crate::ui::components::data_table::{
-    DataTable, DataTableEvent, DataTableState, Direction, Edge, SortState as TableSortState,
-    TableModel,
+    ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge,
+    SortState as TableSortState, TableModel,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, SortDirection,
-    TableBrowseRequest, TableRef, TaskId, TaskKind,
+    CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, RowDelete,
+    RowIdentity, RowInsert, RowPatch, RowState, SortDirection, TableBrowseRequest, TableRef,
+    TaskId, TaskKind, Value,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
-use gpui::{Subscription, *};
+use gpui::{deferred, Subscription, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
@@ -167,6 +168,25 @@ struct PendingToast {
     is_error: bool,
 }
 
+/// Context menu state for right-click operations.
+struct TableContextMenu {
+    /// Row index of the clicked cell.
+    row: usize,
+    /// Column index of the clicked cell.
+    col: usize,
+    /// Screen position where the menu should appear.
+    position: Point<Pixels>,
+}
+
+/// Kind of SQL statement to generate from row data.
+#[derive(Debug, Clone, Copy)]
+enum SqlGenerateKind {
+    SelectWhere,
+    Insert,
+    Update,
+    Delete,
+}
+
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
 pub struct DataGridPanel {
@@ -187,6 +207,9 @@ pub struct DataGridPanel {
     local_sort_state: Option<LocalSortState>,
     original_row_order: Option<Vec<usize>>,
 
+    // Primary key columns for row editing
+    pk_columns: Vec<String>,
+
     // Async state
     state: GridState,
     running_query: Option<RunningQuery>,
@@ -205,6 +228,12 @@ pub struct DataGridPanel {
     // Panel controls (shown when embedded in SqlQueryDocument)
     show_panel_controls: bool,
     is_maximized: bool,
+
+    // Context menu
+    context_menu: Option<TableContextMenu>,
+
+    // Panel origin in window coordinates (for context menu positioning)
+    panel_origin: Point<Pixels>,
 }
 
 impl DataGridPanel {
@@ -217,6 +246,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let order_by = Self::get_primary_key_columns(&app_state, profile_id, &table, cx);
+        let pk_columns: Vec<String> = order_by.iter().map(|c| c.name.clone()).collect();
         let pagination = Pagination::default();
 
         let source = DataSource::Table {
@@ -227,9 +257,83 @@ impl DataGridPanel {
             total_rows: None,
         };
 
-        let mut panel = Self::new_internal(source, app_state, window, cx);
+        let mut panel = Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
         panel.refresh(window, cx);
+
+        // If pk_columns is empty, fetch table details to get PK info
+        if pk_columns.is_empty() {
+            panel.fetch_table_details_for_pk(profile_id, &table, cx);
+        }
+
         panel
+    }
+
+    /// Fetch table details to get PK columns if not already cached.
+    fn fetch_table_details_for_pk(
+        &mut self,
+        profile_id: Uuid,
+        table: &TableRef,
+        cx: &mut Context<Self>,
+    ) {
+        let database = {
+            let state = self.app_state.read(cx);
+            state
+                .connections
+                .get(&profile_id)
+                .and_then(|c| c.active_database.clone())
+                .unwrap_or_else(|| "default".to_string())
+        };
+
+        let params = match self.app_state.read(cx).prepare_fetch_table_details(
+            profile_id,
+            &database,
+            &table.name,
+        ) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        let entity = cx.entity().clone();
+        let app_state = self.app_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                params.execute()
+            }).await;
+
+            cx.update(|cx| {
+                let Ok(fetch_result) = result else { return };
+
+                // Store in cache
+                app_state.update(cx, |state, _| {
+                    state.set_table_details(
+                        fetch_result.profile_id,
+                        fetch_result.database,
+                        fetch_result.table,
+                        fetch_result.details.clone(),
+                    );
+                });
+
+                // Extract PK columns and update panel
+                let pk_names: Vec<String> = fetch_result
+                    .details
+                    .columns
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|c| c.is_primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
+
+                if !pk_names.is_empty() {
+                    entity.update(cx, |panel, cx| {
+                        panel.pk_columns = pk_names;
+                        panel.pending_rebuild = true;
+                        cx.notify();
+                    });
+                }
+            }).ok();
+        }).detach();
     }
 
     /// Create a new panel for displaying a query result (in-memory sorting).
@@ -245,7 +349,8 @@ impl DataGridPanel {
             original_query,
         };
 
-        let mut panel = Self::new_internal(source, app_state, window, cx);
+        // Query results are not editable (no PK info)
+        let mut panel = Self::new_internal(source, app_state, Vec::new(), window, cx);
         panel.set_result((*result).clone(), cx);
         panel
     }
@@ -253,6 +358,7 @@ impl DataGridPanel {
     fn new_internal(
         source: DataSource,
         app_state: Entity<AppState>,
+        pk_columns: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -311,6 +417,7 @@ impl DataGridPanel {
             limit_input,
             local_sort_state: None,
             original_row_order: None,
+            pk_columns,
             state: GridState::Ready,
             running_query: None,
             pending_requery: None,
@@ -324,6 +431,8 @@ impl DataGridPanel {
             switching_input: false,
             show_panel_controls: false,
             is_maximized: false,
+            context_menu: None,
+            panel_origin: Point::default(),
         }
     }
 
@@ -365,12 +474,32 @@ impl DataGridPanel {
     }
 
     fn rebuild_table(&mut self, initial_sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        // Find PK column indices in result columns
+        let pk_indices: Vec<usize> = self
+            .pk_columns
+            .iter()
+            .filter_map(|pk_name| {
+                self.result
+                    .columns
+                    .iter()
+                    .position(|c| c.name == *pk_name)
+            })
+            .collect();
+
+        log::debug!(
+            "[EDIT] rebuild_table: pk_columns={:?}, pk_indices={:?}, result_columns={:?}",
+            self.pk_columns,
+            pk_indices,
+            self.result.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
             if let Some(sort) = initial_sort {
                 state.set_sort_without_emit(sort);
             }
+            state.set_pk_columns(pk_indices.clone());
             state
         });
         let data_table = cx.new(|cx| DataTable::new("data-grid-table", table_state.clone(), cx));
@@ -394,6 +523,33 @@ impl DataGridPanel {
                         cx.emit(DataGridEvent::Focused);
                     }
                     DataTableEvent::SelectionChanged(_) => {}
+                    DataTableEvent::SaveRowRequested(row_idx) => {
+                        this.handle_save_row(*row_idx, cx);
+                    }
+                    DataTableEvent::ContextMenuRequested { row, col, position } => {
+                        this.context_menu = Some(TableContextMenu {
+                            row: *row,
+                            col: *col,
+                            position: *position,
+                        });
+                        cx.notify();
+                    }
+                    // Keyboard-triggered row operations
+                    DataTableEvent::DeleteRowRequested(row) => {
+                        this.handle_delete_row(*row, cx);
+                    }
+                    DataTableEvent::AddRowRequested(row) => {
+                        this.handle_add_row(*row, cx);
+                    }
+                    DataTableEvent::DuplicateRowRequested(row) => {
+                        this.handle_duplicate_row(*row, cx);
+                    }
+                    DataTableEvent::SetNullRequested { row, col } => {
+                        this.handle_set_null(*row, *col, cx);
+                    }
+                    DataTableEvent::CopyRowRequested(row) => {
+                        this.handle_copy_row(*row, cx);
+                    }
                 }
             });
 
@@ -707,6 +863,154 @@ impl DataGridPanel {
             *total_rows = Some(total);
             cx.notify();
         }
+    }
+
+    // === Row Editing ===
+
+    fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+
+        if !state.is_editable() {
+            return;
+        }
+
+        let changes = state.edit_buffer().row_changes(row_idx);
+        if changes.is_empty() {
+            return;
+        }
+
+        let (profile_id, table_ref) = match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table.clone()),
+            DataSource::QueryResult { .. } => return,
+        };
+
+        // Build PK identity from original row values
+        let pk_indices = state.pk_columns();
+        let model = state.model();
+
+        let mut pk_columns = Vec::with_capacity(pk_indices.len());
+        let mut pk_values = Vec::with_capacity(pk_indices.len());
+
+        for &col_idx in pk_indices {
+            if let Some(col_spec) = model.columns.get(col_idx) {
+                pk_columns.push(col_spec.title.to_string());
+            }
+            if let Some(cell) = model.cell(row_idx, col_idx) {
+                pk_values.push(cell.to_value());
+            }
+        }
+
+        if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
+            log::error!("[SAVE] Failed to build row identity");
+            return;
+        }
+
+        let identity = RowIdentity::new(pk_columns, pk_values);
+
+        // Build column changes
+        let change_values: Vec<(String, Value)> = changes
+            .iter()
+            .filter_map(|&(col_idx, cell_value)| {
+                model.columns.get(col_idx).map(|col| {
+                    (col.title.to_string(), cell_value.to_value())
+                })
+            })
+            .collect();
+
+        let patch = RowPatch::new(
+            identity,
+            table_ref.name.clone(),
+            table_ref.schema.clone(),
+            change_values,
+        );
+
+        // Set row state to Saving
+        let table_state_for_update = table_state.clone();
+        table_state_for_update.update(cx, |state, cx| {
+            state.edit_buffer_mut().set_row_state(row_idx, RowState::Saving);
+            cx.notify();
+        });
+
+        // Execute update asynchronously
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            // Get connection
+            let conn = cx.update(|cx| {
+                app_state.read(cx).connections.get(&profile_id).map(|c| c.connection.clone())
+            }).ok().flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[SAVE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        if let Some(table_state) = &panel.table_state {
+                            table_state.update(cx, |state, cx| {
+                                state.edit_buffer_mut().set_row_state(
+                                    row_idx,
+                                    RowState::Error("No connection".to_string()),
+                                );
+                                cx.notify();
+                            });
+                        }
+                    });
+                }).ok();
+                return;
+            };
+
+            // Execute on background
+            let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> =
+                cx.background_executor().spawn(async move {
+                    conn.update_row(&patch)
+                }).await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    let Some(table_state) = &panel.table_state else {
+                        return;
+                    };
+
+                    match result {
+                        Ok(crud_result) => {
+                            table_state.update(cx, |state, cx| {
+                                // Apply returning row if available (server-computed values)
+                                if let Some(returning_row) = crud_result.returning_row {
+                                    state.apply_returning_row(row_idx, &returning_row);
+                                }
+                                state.edit_buffer_mut().clear_row(row_idx);
+                                cx.notify();
+                            });
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Row saved".to_string(),
+                                is_error: false,
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("[SAVE] Failed to save row {}: {}", row_idx, e);
+                            table_state.update(cx, |state, cx| {
+                                state.edit_buffer_mut().set_row_state(
+                                    row_idx,
+                                    RowState::Error(e.to_string()),
+                                );
+                                cx.notify();
+                            });
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Save failed: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            }).ok();
+        }).detach();
     }
 
     // === Sorting ===
@@ -1309,16 +1613,27 @@ impl DataGridPanel {
             return Vec::new();
         };
 
-        // Check database_schemas first (for MySQL/MariaDB lazy loading)
+        let database = connected.active_database.as_deref().unwrap_or("default");
+
+        // Check table_details cache first (populated when table is expanded)
+        let cache_key = (database.to_string(), table.name.clone());
+        if let Some(table_info) = connected.table_details.get(&cache_key) {
+            let columns = table_info.columns.as_deref().unwrap_or(&[]);
+            return columns
+                .iter()
+                .filter(|c| c.is_primary_key)
+                .map(|c| OrderByColumn::asc(&c.name))
+                .collect();
+        }
+
+        // Check database_schemas (MySQL/MariaDB lazy loading)
         if let Some(schema_name) = &table.schema
             && let Some(db_schema) = connected.database_schemas.get(schema_name)
         {
             for t in &db_schema.tables {
                 if t.name == table.name {
-                    return t
-                        .columns
-                        .as_deref()
-                        .unwrap_or(&[])
+                    let columns = t.columns.as_deref().unwrap_or(&[]);
+                    return columns
                         .iter()
                         .filter(|c| c.is_primary_key)
                         .map(|c| OrderByColumn::asc(&c.name))
@@ -1327,7 +1642,7 @@ impl DataGridPanel {
             }
         }
 
-        // Fall back to schema.schemas (for PostgreSQL/SQLite)
+        // Fall back to schema.schemas (PostgreSQL/SQLite)
         let Some(schema) = &connected.schema else {
             return Vec::new();
         };
@@ -1336,10 +1651,8 @@ impl DataGridPanel {
             if table.schema.as_deref() == Some(&db_schema.name) || table.schema.is_none() {
                 for t in &db_schema.tables {
                     if t.name == table.name {
-                        return t
-                            .columns
-                            .as_deref()
-                            .unwrap_or(&[])
+                        let columns = t.columns.as_deref().unwrap_or(&[]);
+                        return columns
                             .iter()
                             .filter(|c| c.is_primary_key)
                             .map(|c| OrderByColumn::asc(&c.name))
@@ -1450,11 +1763,55 @@ impl Render for DataGridPanel {
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
 
+        // Get edit state from table
+        let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
+            .table_state
+            .as_ref()
+            .map(|ts| {
+                let state = ts.read(cx);
+                let buffer = state.edit_buffer();
+
+                // Count all pending operations: edits, inserts, deletes
+                let edit_count = buffer.dirty_row_count();
+                let insert_count = buffer.pending_insert_rows().len();
+                let delete_count = buffer.pending_delete_rows().len();
+                let total_count = edit_count + insert_count + delete_count;
+
+                (
+                    state.is_editable(),
+                    total_count > 0,
+                    total_count,
+                    buffer.can_undo(),
+                    buffer.can_redo(),
+                )
+            })
+            .unwrap_or((false, false, 0, false, false));
+
+        // Show PK warning only for table views without PK
+        let show_pk_warning = is_table_view && has_data && !is_editable;
+
+        // Always show edit toolbar for editable tables
+        let show_edit_toolbar = is_table_view && has_data && is_editable;
+
         div()
             .track_focus(&focus_handle)
             .flex()
             .flex_col()
             .size_full()
+            // Track panel origin for context menu positioning
+            .child({
+                let this_entity = cx.entity().clone();
+                canvas(
+                    move |bounds, _, cx| {
+                        this_entity.update(cx, |this, _cx| {
+                            this.panel_origin = bounds.origin;
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
             // Toolbar (only for Table source)
             .when(is_table_view, |d| {
                 let table_name = table_name.clone().unwrap_or_default();
@@ -1468,6 +1825,36 @@ impl Render for DataGridPanel {
                     &theme,
                     cx,
                 ))
+            })
+            // PK warning banner (when table has no PK)
+            .when(show_pk_warning, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .bg(theme.warning.opacity(0.15))
+                        .border_b_1()
+                        .border_color(theme.warning.opacity(0.3))
+                        .child(
+                            svg()
+                                .path(AppIcon::TriangleAlert.path())
+                                .size_4()
+                                .text_color(theme.warning),
+                        )
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.warning)
+                                .child("This table has no primary key - editing is disabled"),
+                        ),
+                )
+            })
+            // Edit toolbar (always visible for editable tables)
+            .when(show_edit_toolbar, |d| {
+                d.child(self.render_edit_toolbar(dirty_count, has_pending_changes, can_undo, can_redo, &theme, cx))
             })
             // Header bar with panel controls (only when embedded)
             .when(show_panel_controls && has_data, |d| {
@@ -1565,6 +1952,10 @@ impl Render for DataGridPanel {
                 &theme,
                 cx,
             ))
+            // Context menu overlay
+            .when_some(self.context_menu.as_ref(), |d, menu| {
+                d.child(self.render_context_menu(menu, is_editable, &theme, cx))
+            })
     }
 }
 
@@ -1727,6 +2118,226 @@ impl DataGridPanel {
                             .path(AppIcon::RefreshCcw.path())
                             .size_4()
                             .text_color(theme.muted_foreground),
+                    ),
+            )
+    }
+
+    fn render_edit_toolbar(
+        &self,
+        dirty_count: usize,
+        has_changes: bool,
+        can_undo: bool,
+        can_redo: bool,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(44.0))
+            .px(Spacing::MD)
+            .border_b_1()
+            .border_color(theme.border)
+            // Left: status text
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(if has_changes {
+                        theme.warning
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(if has_changes {
+                        format!(
+                            "{} unsaved change{}",
+                            dirty_count,
+                            if dirty_count == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        "No unsaved changes".to_string()
+                    }),
+            )
+            // Right: buttons
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    // Undo button
+                    .child(
+                        div()
+                            .id("undo-btn")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(28.0))
+                            .rounded(Radii::MD)
+                            .border_1()
+                            .when(can_undo, |d| {
+                                d.border_color(theme.border)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(table_state) = &this.table_state {
+                                            table_state.update(cx, |state, cx| {
+                                                if state.is_editing() {
+                                                    state.stop_editing(false, cx);
+                                                }
+                                                if state.edit_buffer_mut().undo() {
+                                                    let visual_count =
+                                                        state.edit_buffer().compute_visual_order().len();
+                                                    if let Some(active) = state.selection().active {
+                                                        if active.row >= visual_count {
+                                                            state.clear_selection(cx);
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }
+                                        window.focus(&this.focus_handle);
+                                    }))
+                            })
+                            .when(!can_undo, |d| {
+                                d.border_color(theme.border)
+                                    .text_color(theme.muted_foreground)
+                            })
+                            .child(
+                                svg()
+                                    .path(AppIcon::Undo.path())
+                                    .size_4()
+                                    .text_color(if can_undo {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                            ),
+                    )
+                    // Redo button
+                    .child(
+                        div()
+                            .id("redo-btn")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(28.0))
+                            .rounded(Radii::MD)
+                            .border_1()
+                            .when(can_redo, |d| {
+                                d.border_color(theme.border)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(table_state) = &this.table_state {
+                                            table_state.update(cx, |state, cx| {
+                                                if state.is_editing() {
+                                                    state.stop_editing(false, cx);
+                                                }
+                                                if state.edit_buffer_mut().redo() {
+                                                    let visual_count =
+                                                        state.edit_buffer().compute_visual_order().len();
+                                                    if let Some(active) = state.selection().active {
+                                                        if active.row >= visual_count {
+                                                            state.clear_selection(cx);
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }
+                                        window.focus(&this.focus_handle);
+                                    }))
+                            })
+                            .when(!can_redo, |d| {
+                                d.border_color(theme.border)
+                            })
+                            .child(
+                                svg()
+                                    .path(AppIcon::Redo.path())
+                                    .size_4()
+                                    .text_color(if can_redo {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                            ),
+                    )
+                    // Save button
+                    .child(
+                        div()
+                            .id("save-btn")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(Spacing::MD)
+                            .h(px(28.0))
+                            .rounded(Radii::MD)
+                            .text_size(FontSizes::SM)
+                            .border_1()
+                            .when(has_changes, |d| {
+                                d.border_color(theme.primary)
+                                    .bg(theme.primary)
+                                    .text_color(theme.primary_foreground)
+                                    .cursor_pointer()
+                                    .hover(|d| d.opacity(0.9))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(table_state) = &this.table_state {
+                                            table_state.update(cx, |state, cx| {
+                                                state.request_save_row(cx);
+                                            });
+                                        }
+                                        // Refocus table after button click
+                                        window.focus(&this.focus_handle);
+                                    }))
+                            })
+                            .when(!has_changes, |d| {
+                                d.border_color(theme.border)
+                                    .text_color(theme.muted_foreground)
+                            })
+                            .child("Save")
+                            .child(
+                                div()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(if has_changes {
+                                        theme.primary_foreground.opacity(0.7)
+                                    } else {
+                                        theme.muted_foreground.opacity(0.5)
+                                    })
+                                    .child("Ctrl+↵"),
+                            ),
+                    )
+                    // Revert button
+                    .child(
+                        div()
+                            .id("revert-btn")
+                            .flex()
+                            .items_center()
+                            .px(Spacing::MD)
+                            .h(px(28.0))
+                            .rounded(Radii::MD)
+                            .text_size(FontSizes::SM)
+                            .border_1()
+                            .when(has_changes, |d| {
+                                d.border_color(theme.border)
+                                    .text_color(theme.foreground)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(table_state) = &this.table_state {
+                                            table_state.update(cx, |state, cx| {
+                                                state.revert_all(cx);
+                                            });
+                                        }
+                                        // Refocus table after button click
+                                        window.focus(&this.focus_handle);
+                                    }))
+                            })
+                            .when(!has_changes, |d| {
+                                d.border_color(theme.border)
+                                    .text_color(theme.muted_foreground)
+                            })
+                            .child("Revert"),
                     ),
             )
     }
@@ -1922,5 +2533,852 @@ impl DataGridPanel {
                             .child(exec_time.to_string())
                     }),
             )
+    }
+
+    fn render_context_menu(
+        &self,
+        menu: &TableContextMenu,
+        is_editable: bool,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let menu_width = px(180.0);
+
+        // Convert window coordinates to panel-relative coordinates
+        let menu_x = menu.position.x - self.panel_origin.x;
+        let menu_y = menu.position.y - self.panel_origin.y;
+
+        // Menu items: (label, action, icon, is_separator, is_danger, requires_editable)
+        let items: Vec<(
+            &'static str,
+            Option<ContextMenuAction>,
+            Option<AppIcon>,
+            bool,
+            bool,
+            bool,
+        )> = vec![
+            ("Copy", Some(ContextMenuAction::Copy), Some(AppIcon::Layers), false, false, false),
+            ("Paste", Some(ContextMenuAction::Paste), Some(AppIcon::Download), false, false, true),
+            ("Edit", Some(ContextMenuAction::Edit), Some(AppIcon::Pencil), false, false, true),
+            ("", None, None, true, false, false), // separator
+            ("Set to Default", Some(ContextMenuAction::SetDefault), None, false, false, true),
+            ("Set to NULL", Some(ContextMenuAction::SetNull), None, false, false, true),
+            ("", None, None, true, false, false), // separator
+            ("Add Row", Some(ContextMenuAction::AddRow), Some(AppIcon::Plus), false, false, true),
+            ("Duplicate Row", Some(ContextMenuAction::DuplicateRow), Some(AppIcon::Layers), false, false, true),
+            ("Delete Row", Some(ContextMenuAction::DeleteRow), Some(AppIcon::Delete), false, true, true),
+        ];
+
+        // Build menu items
+        let mut menu_items: Vec<AnyElement> = items
+            .into_iter()
+            .filter_map(|(label, action, icon, is_sep, is_danger, requires_editable)| {
+                if requires_editable && !is_editable {
+                    return None;
+                }
+
+                if is_sep {
+                    return Some(
+                        div()
+                            .h(px(1.0))
+                            .mx(Spacing::SM)
+                            .my(Spacing::XS)
+                            .bg(theme.border)
+                            .into_any_element(),
+                    );
+                }
+
+                let action = action?;
+
+                Some(
+                    div()
+                        .id(SharedString::from(label))
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .mx(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .text_size(FontSizes::SM)
+                        .text_color(if is_danger {
+                            theme.danger
+                        } else {
+                            theme.foreground
+                        })
+                        .hover(|d| {
+                            d.bg(if is_danger {
+                                theme.danger.opacity(0.1)
+                            } else {
+                                theme.secondary
+                            })
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.handle_context_menu_action(action, window, cx);
+                        }))
+                        .when_some(icon, |d, icon| {
+                            d.child(
+                                svg()
+                                    .path(icon.path())
+                                    .size_4()
+                                    .text_color(if is_danger {
+                                        theme.danger
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
+                        })
+                        .when(icon.is_none(), |d| d.pl(px(20.0)))
+                        .child(label)
+                        .into_any_element(),
+                )
+            })
+            .collect();
+
+        // Add separator before "Generate SQL"
+        menu_items.push(
+            div()
+                .h(px(1.0))
+                .mx(Spacing::SM)
+                .my(Spacing::XS)
+                .bg(theme.border)
+                .into_any_element(),
+        );
+
+        // "Generate SQL" header label
+        menu_items.push(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(Heights::ROW_COMPACT)
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child(
+                    svg()
+                        .path(AppIcon::Code.path())
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                )
+                .child("Generate SQL")
+                .into_any_element(),
+        );
+
+        // SQL generation items
+        let submenu_fg = theme.foreground;
+        let submenu_hover = theme.secondary;
+
+        for (label, action) in [
+            ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
+            ("INSERT", ContextMenuAction::GenerateInsert),
+            ("UPDATE", ContextMenuAction::GenerateUpdate),
+            ("DELETE", ContextMenuAction::GenerateDelete),
+        ] {
+            menu_items.push(
+                div()
+                    .id(SharedString::from(label))
+                    .flex()
+                    .items_center()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .pl(px(28.0)) // Indent to align with header
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(submenu_fg)
+                    .hover(|d| d.bg(submenu_hover))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.handle_context_menu_action(action, window, cx);
+                    }))
+                    .child(label)
+                    .into_any_element(),
+            );
+        }
+
+        // Use deferred() to render at window level for correct positioning
+        deferred(
+            div()
+                .id("context-menu-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.context_menu = None;
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, _, _, cx| {
+                        this.context_menu = None;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .id("context-menu")
+                        .absolute()
+                        .left(menu_x)
+                        .top(menu_y)
+                        .w(menu_width)
+                        .bg(theme.popover)
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded(Radii::MD)
+                        .shadow_lg()
+                        .py(Spacing::XS)
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .children(menu_items),
+                ),
+        )
+        .with_priority(1)
+    }
+
+    fn handle_context_menu_action(
+        &mut self,
+        action: ContextMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let menu = match self.context_menu.take() {
+            Some(m) => m,
+            None => return,
+        };
+
+        match action {
+            ContextMenuAction::Copy => self.handle_copy(window, cx),
+            ContextMenuAction::Paste => self.handle_paste(window, cx),
+            ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
+            ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
+            ContextMenuAction::AddRow => self.handle_add_row(menu.row, cx),
+            ContextMenuAction::DuplicateRow => self.handle_duplicate_row(menu.row, cx),
+            ContextMenuAction::DeleteRow => self.handle_delete_row(menu.row, cx),
+            ContextMenuAction::GenerateSelectWhere => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::SelectWhere, cx)
+            }
+            ContextMenuAction::GenerateInsert => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Insert, cx)
+            }
+            ContextMenuAction::GenerateUpdate => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Update, cx)
+            }
+            ContextMenuAction::GenerateDelete => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Delete, cx)
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(table_state) = &self.table_state {
+            let text = table_state.read(cx).copy_selection();
+            if let Some(text) = text {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+        }
+    }
+
+    /// Copy entire row as TSV (tab-separated values).
+    fn handle_copy_row(&self, row: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        // Get row data based on visual row source
+        let row_values: Vec<String> = match visual_order.get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result
+                    .rows
+                    .get(base_idx)
+                    .map(|r| {
+                        r.iter()
+                            .map(|val| crate::ui::components::data_table::clipboard::format_cell(
+                                &crate::ui::components::data_table::model::CellValue::from(val),
+                            ))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .map(|cells| {
+                        cells
+                            .iter()
+                            .map(crate::ui::components::data_table::clipboard::format_cell)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            None => return,
+        };
+
+        if !row_values.is_empty() {
+            let text = row_values.join("\t");
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn handle_paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let clipboard_text = cx.read_from_clipboard().and_then(|item| item.text().map(|s| s.to_string()));
+
+        let Some(text) = clipboard_text else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            if let Some(coord) = state.selection().active {
+                let cell_value = crate::ui::components::data_table::model::CellValue::text(&text);
+                state.edit_buffer_mut().set_cell(coord.row, coord.col, cell_value);
+                cx.notify();
+            }
+        });
+    }
+
+    fn handle_edit(
+        &mut self,
+        row: usize,
+        col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(table_state) = &self.table_state {
+            table_state.update(cx, |state, cx| {
+                let coord = crate::ui::components::data_table::selection::CellCoord::new(row, col);
+                state.start_editing(coord, window, cx);
+            });
+        }
+    }
+
+    fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        // Get column default value from table details
+        let default_value = self.get_column_default(col, cx);
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+
+            let cell_value = if let Some(default) = default_value {
+                crate::ui::components::data_table::model::CellValue::text(&default)
+            } else {
+                crate::ui::components::data_table::model::CellValue::null()
+            };
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+            let cell_value = crate::ui::components::data_table::model::CellValue::null();
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    fn handle_add_row(&mut self, after_visual_row: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        if !matches!(self.source, DataSource::Table { .. }) {
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        // Determine the base row index to insert after
+        let insert_after_base = {
+            let state = table_state.read(cx);
+            let buffer = state.edit_buffer();
+            let visual_order = buffer.compute_visual_order();
+
+            match visual_order.get(after_visual_row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    // Insert after this base row
+                    base_idx
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    // Insert after the same base row as this pending insert
+                    buffer
+                        .pending_inserts()
+                        .get(insert_idx)
+                        .and_then(|pi| pi.insert_after)
+                        .unwrap_or(self.result.rows.len().saturating_sub(1))
+                }
+                None => self.result.rows.len().saturating_sub(1),
+            }
+        };
+
+        // Get column defaults from table metadata
+        let column_defaults = self.get_all_column_defaults(cx);
+
+        // Create a new row with default values or NULL
+        let new_row: Vec<crate::ui::components::data_table::model::CellValue> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                    // Column has a default expression (e.g., nextval(), now())
+                    crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                } else {
+                    crate::ui::components::data_table::model::CellValue::null()
+                }
+            })
+            .collect();
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(self.result.rows.len());
+            buffer.add_pending_insert_after(insert_after_base, new_row);
+            cx.notify();
+        });
+    }
+
+    fn handle_duplicate_row(&mut self, visual_row: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        if !matches!(self.source, DataSource::Table { .. }) {
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        // Find PK column indices to use default values
+        let pk_indices: std::collections::HashSet<usize> = self
+            .pk_columns
+            .iter()
+            .filter_map(|pk_name| {
+                self.result
+                    .columns
+                    .iter()
+                    .position(|c| c.name == *pk_name)
+            })
+            .collect();
+
+        // Get column defaults for PK columns
+        let column_defaults = self.get_all_column_defaults(cx);
+
+        // Get source row data and determine insert position
+        let base_row_count = self.result.rows.len();
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let (source_values, insert_after_base): (
+            Vec<crate::ui::components::data_table::model::CellValue>,
+            usize,
+        ) = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                // Copying from base model row - insert after this row
+                let values = self
+                    .result
+                    .rows
+                    .get(base_idx)
+                    .map(|r| {
+                        r.iter()
+                            .enumerate()
+                            .map(|(idx, val)| {
+                                // Use default for PK columns, copy value for others
+                                if pk_indices.contains(&idx) {
+                                    if let Some(default_expr) =
+                                        column_defaults.get(idx).and_then(|d| d.as_ref())
+                                    {
+                                        crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                    } else {
+                                        crate::ui::components::data_table::model::CellValue::null()
+                                    }
+                                } else {
+                                    crate::ui::components::data_table::model::CellValue::from(val)
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (values, base_idx)
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                // Copying from pending insert - insert after same base row
+                let insert_after = buffer
+                    .pending_inserts()
+                    .get(insert_idx)
+                    .and_then(|pi| pi.insert_after)
+                    .unwrap_or(base_row_count.saturating_sub(1));
+
+                let values = buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .map(|insert_data| {
+                        insert_data
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, val)| {
+                                if pk_indices.contains(&idx) {
+                                    if let Some(default_expr) =
+                                        column_defaults.get(idx).and_then(|d| d.as_ref())
+                                    {
+                                        crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                    } else {
+                                        crate::ui::components::data_table::model::CellValue::null()
+                                    }
+                                } else {
+                                    val.clone()
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (values, insert_after)
+            }
+            None => return,
+        };
+
+        if source_values.is_empty() {
+            return;
+        }
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(base_row_count);
+            buffer.add_pending_insert_after(insert_after_base, source_values);
+            cx.notify();
+        });
+    }
+
+    fn handle_delete_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        if !matches!(self.source, DataSource::Table { .. }) {
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let base_row_count = self.result.rows.len();
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(base_row_count);
+
+            // Use visual ordering to determine the actual row type
+            let visual_order = buffer.compute_visual_order();
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.mark_for_delete(base_idx);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.remove_pending_insert_by_idx(insert_idx);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    fn handle_generate_sql(&self, visual_row: usize, kind: SqlGenerateKind, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let (profile_id, table_ref) = match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        // Get column info including primary keys
+        let state = self.app_state.read(cx);
+        let connected = match state.connections.get(&profile_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = connected.table_details.get(&cache_key);
+        let columns_info = table_info.and_then(|t| t.columns.as_deref());
+
+        // Build qualified table name
+        let table_name = if let Some(schema) = &table_ref.schema {
+            format!("{}.{}", schema, table_ref.name)
+        } else {
+            table_ref.name.clone()
+        };
+
+        // Get column names from result
+        let col_names: Vec<&str> = self.result.columns.iter().map(|c| c.name.as_str()).collect();
+
+        // Get row values
+        let ts = table_state.read(cx);
+        let buffer = ts.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let row_values: Vec<String> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result
+                    .rows
+                    .get(base_idx)
+                    .map(|r| r.iter().map(|v| self.format_value_for_sql(v)).collect())
+                    .unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .map(|cells| cells.iter().map(|c| self.format_cell_for_sql(c)).collect())
+                    .unwrap_or_default()
+            }
+            None => return,
+        };
+
+        if row_values.is_empty() || col_names.len() != row_values.len() {
+            return;
+        }
+
+        // Find primary key columns
+        let pk_indices: Vec<usize> = if let Some(cols) = columns_info {
+            col_names
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, name)| {
+                    cols.iter()
+                        .find(|c| c.name == *name && c.is_primary_key)
+                        .map(|_| idx)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let sql = match kind {
+            SqlGenerateKind::SelectWhere => {
+                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
+                format!("SELECT * FROM {} WHERE {};", table_name, where_clause)
+            }
+            SqlGenerateKind::Insert => {
+                let cols_str = col_names.join(", ");
+                let vals_str = row_values.join(", ");
+                format!("INSERT INTO {} ({}) VALUES ({});", table_name, cols_str, vals_str)
+            }
+            SqlGenerateKind::Update => {
+                let set_clause: Vec<String> = col_names
+                    .iter()
+                    .zip(row_values.iter())
+                    .map(|(col, val)| format!("{} = {}", col, val))
+                    .collect();
+                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
+                format!(
+                    "UPDATE {} SET {} WHERE {};",
+                    table_name,
+                    set_clause.join(", "),
+                    where_clause
+                )
+            }
+            SqlGenerateKind::Delete => {
+                let where_clause = self.build_where_clause(&col_names, &row_values, &pk_indices);
+                format!("DELETE FROM {} WHERE {};", table_name, where_clause)
+            }
+        };
+
+        cx.write_to_clipboard(ClipboardItem::new_string(sql));
+    }
+
+    fn build_where_clause(
+        &self,
+        col_names: &[&str],
+        row_values: &[String],
+        pk_indices: &[usize],
+    ) -> String {
+        // Use primary keys if available, otherwise use all columns
+        let indices: Vec<usize> = if pk_indices.is_empty() {
+            (0..col_names.len()).collect()
+        } else {
+            pk_indices.to_vec()
+        };
+
+        let conditions: Vec<String> = indices
+            .iter()
+            .filter_map(|&idx| {
+                let col = col_names.get(idx)?;
+                let val = row_values.get(idx)?;
+                if val == "NULL" {
+                    Some(format!("{} IS NULL", col))
+                } else {
+                    Some(format!("{} = {}", col, val))
+                }
+            })
+            .collect();
+
+        if conditions.is_empty() {
+            "1=1".to_string()
+        } else {
+            conditions.join(" AND ")
+        }
+    }
+
+    fn format_value_for_sql(&self, value: &dbflux_core::Value) -> String {
+        use dbflux_core::Value;
+
+        match value {
+            Value::Null => "NULL".to_string(),
+            Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Text(s) => format!("'{}'", s.replace('\'', "''")),
+            Value::Bytes(_) => "'<binary>'".to_string(),
+            Value::Json(s) => format!("'{}'", s.replace('\'', "''")),
+            Value::Decimal(s) => s.clone(),
+            Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S%.f%z")),
+            Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+            Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
+        }
+    }
+
+    fn format_cell_for_sql(
+        &self,
+        cell: &crate::ui::components::data_table::model::CellValue,
+    ) -> String {
+        use crate::ui::components::data_table::model::CellKind;
+
+        match &cell.kind {
+            CellKind::Null => "NULL".to_string(),
+            CellKind::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            CellKind::Int(i) => i.to_string(),
+            CellKind::Float(f) => f.to_string(),
+            CellKind::Text(s) => format!("'{}'", s.replace('\'', "''")),
+            CellKind::Bytes(_) => "'<binary>'".to_string(),
+            CellKind::AutoGenerated(expr) => format!("DEFAULT /* {} */", expr),
+        }
+    }
+
+    fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
+        let (profile_id, table_ref) = match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            DataSource::QueryResult { .. } => return None,
+        };
+
+        let col_name = self.result.columns.get(col)?.name.clone();
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections.get(&profile_id)?;
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = connected.table_details.get(&cache_key)?;
+        let columns = table_info.columns.as_deref()?;
+
+        columns
+            .iter()
+            .find(|c| c.name == col_name)
+            .and_then(|c| c.default_value.clone())
+    }
+
+    /// Get default values for all columns.
+    /// Returns a Vec with Some(default_expr) or None for each column.
+    fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
+        let (profile_id, table_ref) = match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            DataSource::QueryResult { .. } => {
+                return vec![None; self.result.columns.len()];
+            }
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections.get(&profile_id) {
+            Some(c) => c,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        let columns = match table_info.columns.as_deref() {
+            Some(c) => c,
+            None => return vec![None; self.result.columns.len()],
+        };
+
+        // Map result columns to their defaults
+        self.result
+            .columns
+            .iter()
+            .map(|col| {
+                columns
+                    .iter()
+                    .find(|c| c.name == col.name)
+                    .and_then(|c| c.default_value.clone())
+            })
+            .collect()
     }
 }

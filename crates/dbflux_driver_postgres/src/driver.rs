@@ -8,8 +8,8 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues,
     IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -841,6 +841,99 @@ impl Connection for PostgresConnection {
         );
 
         log::debug!("[UPDATE] Executing: {}", sql);
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if rows.is_empty() {
+            return Ok(CrudResult::empty());
+        }
+
+        let row = &rows[0];
+        let returning_row: Row = (0..row.columns().len())
+            .map(|i| postgres_value_to_value(row, i))
+            .collect();
+
+        Ok(CrudResult::success(returning_row))
+    }
+
+    fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        if !insert.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot insert row: no columns specified".to_string(),
+            ));
+        }
+
+        let qualified_table = pg_qualified_name(insert.schema.as_deref(), &insert.table);
+
+        let columns: Vec<String> = insert.columns.iter().map(|c| pg_quote_ident(c)).collect();
+
+        let values: Vec<String> = insert
+            .values
+            .iter()
+            .map(|v| value_to_pg_literal(v))
+            .collect();
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
+            qualified_table,
+            columns.join(", "),
+            values.join(", ")
+        );
+
+        log::debug!("[INSERT] Executing: {}", sql);
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if rows.is_empty() {
+            return Ok(CrudResult::empty());
+        }
+
+        let row = &rows[0];
+        let returning_row: Row = (0..row.columns().len())
+            .map(|i| postgres_value_to_value(row, i))
+            .collect();
+
+        Ok(CrudResult::success(returning_row))
+    }
+
+    fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        if !delete.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        let qualified_table = pg_qualified_name(delete.schema.as_deref(), &delete.table);
+
+        let where_clause: Vec<String> = delete
+            .identity
+            .columns
+            .iter()
+            .zip(delete.identity.values.iter())
+            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
+            .collect();
+
+        let sql = format!(
+            "DELETE FROM {} WHERE {} RETURNING *",
+            qualified_table,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[DELETE] Executing: {}", sql);
 
         let mut client = self
             .client

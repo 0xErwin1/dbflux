@@ -5,14 +5,14 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, ParentElement, StatefulInteractiveElement, Styled, Window, actions, canvas,
-    div, px, uniform_list,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
+    Styled, Window, actions, canvas, div, px, uniform_list,
 };
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
-use super::events::{Direction, Edge};
+use super::events::{DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
@@ -60,9 +60,19 @@ actions!(
         SelectAll,
         ClearSelection,
         Copy,
+        CopyRow,
         StartEdit,
         ConfirmEdit,
         CancelEdit,
+        SaveRow,
+        // Row operations (vim-style)
+        DeleteRow,
+        AddRow,
+        DuplicateRow,
+        SetNull,
+        // Undo/Redo
+        Undo,
+        Redo,
     ]
 );
 
@@ -71,10 +81,15 @@ const CONTEXT: &str = "Results";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        // Navigation
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
         KeyBinding::new("down", MoveDown, Some(CONTEXT)),
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
         KeyBinding::new("right", MoveRight, Some(CONTEXT)),
+        KeyBinding::new("k", MoveUp, Some(CONTEXT)),
+        KeyBinding::new("j", MoveDown, Some(CONTEXT)),
+        KeyBinding::new("h", MoveLeft, Some(CONTEXT)),
+        KeyBinding::new("l", MoveRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
         KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
@@ -89,10 +104,25 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-end", SelectToBottom, Some(CONTEXT)),
         KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
+        // Copy
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        KeyBinding::new("y y", Copy, Some(CONTEXT)),
+        KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT)),
         // Edit mode
         KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
         KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
+        KeyBinding::new("ctrl-enter", SaveRow, Some(CONTEXT)),
+        // Row operations (vim-style)
+        KeyBinding::new("d d", DeleteRow, Some(CONTEXT)),
+        KeyBinding::new("delete", DeleteRow, Some(CONTEXT)),
+        KeyBinding::new("a a", AddRow, Some(CONTEXT)),
+        KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT)),
+        KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT)),
+        // Undo/Redo (vim-style + standard)
+        KeyBinding::new("u", Undo, Some(CONTEXT)),
+        KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
+        KeyBinding::new("ctrl-r", Redo, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
     ]);
 }
 
@@ -266,6 +296,117 @@ impl gpui::Render for DataTable {
             });
         };
 
+        let s = self.state.clone();
+        let on_save_row = move |_: &SaveRow, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                state.request_save_row(cx);
+            });
+        };
+
+        // Row operations (vim-style)
+        let s = self.state.clone();
+        let on_delete_row = move |_: &DeleteRow, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if !state.is_editable() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    cx.emit(DataTableEvent::DeleteRowRequested(coord.row));
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_add_row = move |_: &AddRow, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if !state.is_editable() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    cx.emit(DataTableEvent::AddRowRequested(coord.row));
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_duplicate_row = move |_: &DuplicateRow, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if !state.is_editable() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    cx.emit(DataTableEvent::DuplicateRowRequested(coord.row));
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_set_null = move |_: &SetNull, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if !state.is_editable() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    cx.emit(DataTableEvent::SetNullRequested {
+                        row: coord.row,
+                        col: coord.col,
+                    });
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_copy_row = move |_: &CopyRow, _: &mut Window, cx: &mut App| {
+            let row = s.read(cx).selection().active.map(|c| c.row);
+            if let Some(row) = row {
+                s.update(cx, |_state, cx| {
+                    cx.emit(DataTableEvent::CopyRowRequested(row));
+                });
+            }
+        };
+
+        let s = self.state.clone();
+        let on_undo = move |_: &Undo, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                // Stop editing before undo to avoid stale visual index references
+                if state.is_editing() {
+                    state.stop_editing(false, cx);
+                }
+
+                if state.edit_buffer_mut().undo() {
+                    // Validate selection after undo - indices may have shifted
+                    let visual_count = state.edit_buffer().compute_visual_order().len();
+                    if let Some(active) = state.selection().active {
+                        if active.row >= visual_count {
+                            state.clear_selection(cx);
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_redo = move |_: &Redo, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                // Stop editing before redo to avoid stale visual index references
+                if state.is_editing() {
+                    state.stop_editing(false, cx);
+                }
+
+                if state.edit_buffer_mut().redo() {
+                    // Validate selection after redo - indices may have shifted
+                    let visual_count = state.edit_buffer().compute_visual_order().len();
+                    if let Some(active) = state.selection().active {
+                        if active.row >= visual_count {
+                            state.clear_selection(cx);
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        };
+
         // Main layout: vertical flex with header and scrollable body.
         // Both header and body share the same horizontal scroll handle.
         let inner_table = div()
@@ -308,7 +449,17 @@ impl gpui::Render for DataTable {
             .on_action(on_start_edit)
             .on_action(on_confirm_edit)
             .on_action(on_cancel_edit)
+            .on_action(on_save_row)
             .on_action(on_copy)
+            .on_action(on_copy_row)
+            // Row operations (vim-style)
+            .on_action(on_delete_row)
+            .on_action(on_add_row)
+            .on_action(on_duplicate_row)
+            .on_action(on_set_null)
+            // Undo/Redo
+            .on_action(on_undo)
+            .on_action(on_redo)
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
             .child({
@@ -506,9 +657,9 @@ impl DataTable {
                         // Read state INSIDE closure - only when actually rendering
                         let state = state_entity.read(cx);
 
-                        // Get editing state
                         let editing_cell = state.editing_cell();
                         let cell_input = state.cell_input().cloned();
+                        let edit_buffer = state.edit_buffer();
 
                         render_rows(
                             &state_entity,
@@ -518,6 +669,7 @@ impl DataTable {
                             state.selection(),
                             editing_cell,
                             cell_input.as_ref(),
+                            edit_buffer,
                             total_width,
                             theme,
                         )
@@ -541,16 +693,67 @@ fn render_rows(
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
+    edit_buffer: &super::model::EditBuffer,
     total_width: f32,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
+    use super::model::VisualRowSource;
+
+    // Compute visual ordering once for this render pass
+    let visual_order = edit_buffer.compute_visual_order();
+
     visible_range
-        .map(|row_ix| {
-            let row_data = model.rows.get(row_ix);
+        .map(|visual_ix| {
+            // Map visual index to actual data source
+            let source = visual_order.get(visual_ix).copied();
+
+            // Get row data and state based on source type
+            let (row_data, pending_insert_data, row_state, data_row_ix) = match source {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    let row = model.rows.get(base_idx);
+                    let state = edit_buffer.row_state(base_idx);
+                    (row, None, state.clone(), base_idx)
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    let data = edit_buffer.get_pending_insert_by_idx(insert_idx);
+                    (None, data, dbflux_core::RowState::PendingInsert, visual_ix)
+                }
+                None => {
+                    // Should not happen, but handle gracefully
+                    (None, None, dbflux_core::RowState::Clean, visual_ix)
+                }
+            };
+
+            let is_pending_insert_row = matches!(source, Some(VisualRowSource::Insert(_)));
+
+            // Use visual_ix for selection/display, but data_row_ix for edit buffer access
+            let row_ix = visual_ix;
+
+            // Row background based on state
+            // - Dirty: cell-level only (no row bg)
+            // - Saving: warning background
+            // - Error: danger background
+            // - PendingInsert: green-ish to indicate new row
+            // - PendingDelete: red-ish with visual indication of deletion
+            let row_bg = match row_state {
+                dbflux_core::RowState::Dirty => None, // Cell-level only
+                dbflux_core::RowState::Saving => Some(theme.warning.opacity(0.1)),
+                dbflux_core::RowState::Error(_) => Some(theme.danger.opacity(0.15)),
+                dbflux_core::RowState::Clean => None,
+                dbflux_core::RowState::PendingInsert => Some(theme.success.opacity(0.15)),
+                dbflux_core::RowState::PendingDelete => Some(theme.danger.opacity(0.1)),
+            };
+
+            let is_pending_delete = row_state.is_pending_delete();
 
             let cells: Vec<AnyElement> = (0..model.col_count())
                 .map(|col_ix| {
-                    let cell = row_data.and_then(|r| r.cells.get(col_ix));
+                    // Get cell either from model or from pending insert
+                    let cell = if let Some(insert_data) = pending_insert_data {
+                        insert_data.get(col_ix)
+                    } else {
+                        row_data.and_then(|r| r.cells.get(col_ix))
+                    };
                     let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
                     let coord = CellCoord::new(row_ix, col_ix);
                     let is_selected = selection.is_selected(coord);
@@ -576,12 +779,25 @@ fn render_rows(
                         }
                     }
 
-                    let display_text = cell
-                        .map(|c| c.display_text().to_string())
-                        .unwrap_or_default();
-                    let is_null = cell.map(|c| c.is_null()).unwrap_or(false);
+                    // For edit buffer access, use the data row index (model index for base rows)
+                    let is_cell_dirty = if is_pending_insert_row {
+                        false // Pending inserts don't have cell-level dirty tracking
+                    } else {
+                        edit_buffer.is_cell_dirty(data_row_ix, col_ix)
+                    };
+                    let null_value = super::model::CellValue::null();
+                    let base_value = cell.unwrap_or(&null_value);
+                    let display_value = if is_pending_insert_row {
+                        base_value // For pending inserts, just use the cell value directly
+                    } else {
+                        edit_buffer.get_cell(data_row_ix, col_ix, base_value)
+                    };
+                    let display_text = display_value.display_text().to_string();
+                    let is_null = display_value.is_null();
+                    let is_auto_generated = display_value.is_auto_generated();
 
                     let state_for_click = state_entity.clone();
+                    let state_for_context = state_entity.clone();
 
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
@@ -595,18 +811,27 @@ fn render_rows(
                         .border_r_1()
                         .border_color(theme.border)
                         .cursor_pointer()
+                        // Highlight individual dirty cells (like DBeaver)
+                        .when(is_cell_dirty, |d| {
+                            d.bg(theme.warning.opacity(0.2))
+                                .border_l_2()
+                                .border_color(theme.warning)
+                        })
                         .when(is_selected, |d| {
                             d.bg(theme.table_active)
                                 .border_color(theme.table_active_border)
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
                         .text_sm()
-                        .text_color(if is_null {
+                        .text_color(if is_pending_delete {
+                            theme.muted_foreground
+                        } else if is_null || is_auto_generated {
                             theme.muted_foreground
                         } else {
                             theme.foreground
                         })
-                        .when(is_null, |d| d.italic())
+                        .when(is_null || is_auto_generated, |d| d.italic())
+                        .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
                                 state.focus(window, cx);
@@ -629,6 +854,20 @@ fn render_rows(
                                 });
                             }
                         })
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            move |event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                state_for_context.update(cx, |state, cx| {
+                                    state.select_cell(coord, cx);
+                                    cx.emit(DataTableEvent::ContextMenuRequested {
+                                        row: coord.row,
+                                        col: coord.col,
+                                        position: event.position,
+                                    });
+                                });
+                            },
+                        )
                         .child(display_text.to_string())
                         .into_any_element()
                 })
@@ -643,7 +882,10 @@ fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                .when(row_ix % 2 == 1, |d| d.bg(theme.table_even))
+                // Row state background (dirty=yellow, error=red)
+                .when_some(row_bg, |d, bg| d.bg(bg))
+                // Alternating row colors only when clean
+                .when(row_bg.is_none() && row_ix % 2 == 1, |d| d.bg(theme.table_even))
                 .children(cells)
                 .into_any_element()
         })

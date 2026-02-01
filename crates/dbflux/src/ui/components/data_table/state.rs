@@ -65,8 +65,12 @@ pub struct DataTableState {
 impl DataTableState {
     pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
         let col_count = model.col_count();
+        let row_count = model.row_count();
         let column_widths = vec![DEFAULT_COLUMN_WIDTH; col_count];
         let column_offsets = Self::calculate_offsets(&column_widths);
+
+        let mut edit_buffer = EditBuffer::new();
+        edit_buffer.set_base_row_count(row_count);
 
         Self {
             model,
@@ -81,7 +85,7 @@ impl DataTableState {
             horizontal_offset: px(0.0),
             editing_cell: None,
             cell_input: None,
-            edit_buffer: EditBuffer::new(),
+            edit_buffer,
             pk_columns: Vec::new(),
             is_editable: false,
         }
@@ -108,6 +112,13 @@ impl DataTableState {
     }
 
     pub fn row_count(&self) -> usize {
+        // Include pending inserts in the row count
+        self.model.row_count() + self.edit_buffer.pending_insert_rows().len()
+    }
+
+    /// Get the base row count (excluding pending inserts).
+    #[allow(dead_code)]
+    pub fn base_row_count(&self) -> usize {
         self.model.row_count()
     }
 
@@ -404,27 +415,55 @@ impl DataTableState {
     }
 
     /// Start editing a cell. Returns false if the table is not editable.
+    /// Note: `coord` uses visual row indices (accounting for pending inserts).
     pub fn start_editing(
         &mut self,
         coord: CellCoord,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        use super::model::VisualRowSource;
+
         if !self.is_editable {
             return false;
         }
 
-        let initial_value = self
-            .model
-            .cell(coord.row, coord.col)
-            .map(|c| {
-                if c.is_null() {
+        // Translate visual row to source (base or pending insert)
+        let visual_order = self.edit_buffer.compute_visual_order();
+        let null_cell = super::model::CellValue::null();
+
+        let initial_value = match visual_order.get(coord.row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                // Base row - check EditBuffer first, fall back to model
+                let base_cell = self.model.cell(base_idx, coord.col);
+                let base = base_cell.unwrap_or(&null_cell);
+                let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
+
+                if cell.is_null() {
                     String::new()
                 } else {
-                    c.display_text().to_string()
+                    cell.display_text().to_string()
                 }
-            })
-            .unwrap_or_default();
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                // Pending insert - get from pending_inserts
+                if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
+                    if coord.col < insert_data.len() {
+                        let cell = &insert_data[coord.col];
+                        if cell.is_null() {
+                            String::new()
+                        } else {
+                            cell.display_text().to_string()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            None => return false,
+        };
 
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -456,7 +495,10 @@ impl DataTableState {
     }
 
     /// Stop editing and optionally apply the change.
+    /// Note: The stored `editing_cell` uses visual row indices.
     pub fn stop_editing(&mut self, apply: bool, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
         let coord = match self.editing_cell.take() {
             Some(c) => c,
             None => return,
@@ -466,15 +508,28 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                let original = self
-                    .model
-                    .cell(coord.row, coord.col)
-                    .map(|c| c.display_text().to_string())
-                    .unwrap_or_default();
+                // Translate visual row to source
+                let visual_order = self.edit_buffer.compute_visual_order();
 
-                if value_str != original {
-                    let cell_value = super::model::CellValue::text(&value_str);
-                    self.edit_buffer.set_cell(coord.row, coord.col, cell_value);
+                match visual_order.get(coord.row).copied() {
+                    Some(VisualRowSource::Base(base_idx)) => {
+                        let original = self
+                            .model
+                            .cell(base_idx, coord.col)
+                            .map(|c| c.display_text().to_string())
+                            .unwrap_or_default();
+
+                        if value_str != original {
+                            let cell_value = super::model::CellValue::text(&value_str);
+                            self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
+                        }
+                    }
+                    Some(VisualRowSource::Insert(insert_idx)) => {
+                        // Apply to pending insert (with undo support)
+                        let cell_value = super::model::CellValue::text(&value_str);
+                        self.edit_buffer.set_insert_cell(insert_idx, coord.col, cell_value);
+                    }
+                    None => {}
                 }
             }
         } else {
@@ -485,6 +540,7 @@ impl DataTableState {
     }
 
     /// Cancel editing without applying changes.
+    #[allow(dead_code)]
     pub fn cancel_editing(&mut self, cx: &mut Context<Self>) {
         if self.editing_cell.is_some() {
             self.editing_cell = None;
@@ -503,11 +559,50 @@ impl DataTableState {
     }
 
     /// Check if there are any pending changes.
+    #[allow(dead_code)]
     pub fn has_pending_changes(&self) -> bool {
         self.edit_buffer.has_changes()
     }
 
+    /// Request saving the current row's changes.
+    /// Emits SaveRowRequested if the row has pending changes.
+    /// If no row is selected, saves the first dirty row.
+    /// Note: Selection uses visual row indices.
+    pub fn request_save_row(&mut self, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
+        // Try active selection first (visual index)
+        let base_row = if let Some(coord) = self.selection.active {
+            let visual_order = self.edit_buffer.compute_visual_order();
+            match visual_order.get(coord.row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    if self.edit_buffer.row_state(base_idx).is_dirty() {
+                        Some(base_idx)
+                    } else {
+                        None
+                    }
+                }
+                Some(VisualRowSource::Insert(_)) => {
+                    // Pending inserts are always "dirty" - need INSERT operation
+                    // TODO: Handle pending insert saving separately
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        // Fall back to first dirty row (base indices)
+        let row = base_row.or_else(|| self.edit_buffer.dirty_rows().into_iter().next());
+
+        if let Some(row_idx) = row {
+            cx.emit(DataTableEvent::SaveRowRequested(row_idx));
+        }
+    }
+
     /// Revert all changes for a specific row.
+    #[allow(dead_code)]
     pub fn revert_row(&mut self, row: usize, cx: &mut Context<Self>) {
         self.edit_buffer.clear_row(row);
         cx.notify();
@@ -517,6 +612,13 @@ impl DataTableState {
     pub fn revert_all(&mut self, cx: &mut Context<Self>) {
         self.edit_buffer.clear_all();
         cx.notify();
+    }
+
+    /// Update a row with values returned from the database (e.g., after RETURNING clause).
+    ///
+    /// This applies server-side computed values (defaults, triggers) to the model.
+    pub fn apply_returning_row(&mut self, row_idx: usize, values: &[dbflux_core::Value]) {
+        self.model = Arc::new(self.model.with_row_updated(row_idx, values));
     }
 }
 

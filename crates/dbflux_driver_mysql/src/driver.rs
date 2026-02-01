@@ -6,11 +6,11 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, MYSQL_FORM,
-    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo,
-    Value, ViewInfo,
+    ConstraintInfo, ConstraintKind, CrudResult, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle,
+    QueryHandle, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
+    SslMode, TableInfo, Value, ViewInfo, MYSQL_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -933,6 +933,280 @@ impl Connection for MysqlConnection {
 
         fetch_schema_foreign_keys(&mut conn, database)
     }
+
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        if !patch.identity.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot update row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        if !patch.has_changes() {
+            return Err(DbError::QueryFailed("No changes to save".to_string()));
+        }
+
+        // MySQL uses schema as database name
+        let qualified_table = patch
+            .schema
+            .as_ref()
+            .map(|db| format!("`{}`.`{}`", db, patch.table))
+            .unwrap_or_else(|| format!("`{}`", patch.table));
+
+        let set_clause: Vec<String> = patch
+            .changes
+            .iter()
+            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
+            .collect();
+
+        let where_clause: Vec<String> = patch
+            .identity
+            .columns
+            .iter()
+            .zip(patch.identity.values.iter())
+            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
+            .collect();
+
+        let update_sql = format!(
+            "UPDATE {} SET {} WHERE {} LIMIT 1",
+            qualified_table,
+            set_clause.join(", "),
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[UPDATE] Executing: {}", update_sql);
+
+        let mut state = self
+            .query_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        // Switch database if needed
+        if let Some(ref db) = patch.schema {
+            if state.current_database.as_ref() != Some(db) {
+                log::debug!("[USE] Switching to database: {}", db);
+                state
+                    .conn
+                    .query_drop(format!("USE `{}`", db))
+                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                state.current_database = Some(db.clone());
+            }
+        }
+
+        state
+            .conn
+            .query_drop(&update_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let affected = state.conn.affected_rows();
+
+        if affected == 0 {
+            return Ok(CrudResult::empty());
+        }
+
+        // Re-query the updated row using the same WHERE clause
+        let select_sql = format!(
+            "SELECT * FROM {} WHERE {} LIMIT 1",
+            qualified_table,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[UPDATE] Re-querying: {}", select_sql);
+
+        let rows: Vec<mysql::Row> = state
+            .conn
+            .query(&select_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if let Some(row) = rows.first() {
+            let row_cols = row.columns_ref();
+            let returning_row: Row = (0..row_cols.len())
+                .map(|i| mysql_value_to_value(row, i, &row_cols[i]))
+                .collect();
+            Ok(CrudResult::success(returning_row))
+        } else {
+            Ok(CrudResult::new(affected, None))
+        }
+    }
+
+    fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        if !insert.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot insert row: no columns specified".to_string(),
+            ));
+        }
+
+        // MySQL uses schema as database name
+        let qualified_table = insert
+            .schema
+            .as_ref()
+            .map(|db| format!("`{}`.`{}`", db, insert.table))
+            .unwrap_or_else(|| format!("`{}`", insert.table));
+
+        let columns: Vec<String> = insert.columns.iter().map(|c| format!("`{}`", c)).collect();
+
+        let values: Vec<String> = insert
+            .values
+            .iter()
+            .map(|v| value_to_mysql_literal(v))
+            .collect();
+
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            qualified_table,
+            columns.join(", "),
+            values.join(", ")
+        );
+
+        log::debug!("[INSERT] Executing: {}", insert_sql);
+
+        let mut state = self
+            .query_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        // Switch database if needed
+        if let Some(ref db) = insert.schema {
+            if state.current_database.as_ref() != Some(db) {
+                log::debug!("[USE] Switching to database: {}", db);
+                state
+                    .conn
+                    .query_drop(format!("USE `{}`", db))
+                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                state.current_database = Some(db.clone());
+            }
+        }
+
+        state
+            .conn
+            .query_drop(&insert_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let last_id = state.conn.last_insert_id();
+
+        // Try to re-query the inserted row using LAST_INSERT_ID() if we have an auto_increment
+        let select_sql = if last_id > 0 {
+            // Assume first column might be the auto_increment PK
+            format!(
+                "SELECT * FROM {} WHERE {} = {} LIMIT 1",
+                qualified_table,
+                columns.first().map(|c| c.as_str()).unwrap_or("id"),
+                last_id
+            )
+        } else {
+            // Without auto_increment, re-query using the inserted values
+            let where_clause: Vec<String> = insert
+                .columns
+                .iter()
+                .zip(insert.values.iter())
+                .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
+                .collect();
+            format!(
+                "SELECT * FROM {} WHERE {} LIMIT 1",
+                qualified_table,
+                where_clause.join(" AND ")
+            )
+        };
+
+        log::debug!("[INSERT] Re-querying: {}", select_sql);
+
+        let rows: Vec<mysql::Row> = state
+            .conn
+            .query(&select_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        if let Some(row) = rows.first() {
+            let row_cols = row.columns_ref();
+            let returning_row: Row = (0..row_cols.len())
+                .map(|i| mysql_value_to_value(row, i, &row_cols[i]))
+                .collect();
+            Ok(CrudResult::success(returning_row))
+        } else {
+            Ok(CrudResult::new(1, None))
+        }
+    }
+
+    fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        if !delete.is_valid() {
+            return Err(DbError::QueryFailed(
+                "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+            ));
+        }
+
+        // MySQL uses schema as database name
+        let qualified_table = delete
+            .schema
+            .as_ref()
+            .map(|db| format!("`{}`.`{}`", db, delete.table))
+            .unwrap_or_else(|| format!("`{}`", delete.table));
+
+        let where_clause: Vec<String> = delete
+            .identity
+            .columns
+            .iter()
+            .zip(delete.identity.values.iter())
+            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
+            .collect();
+
+        // First fetch the row we're about to delete
+        let select_sql = format!(
+            "SELECT * FROM {} WHERE {} LIMIT 1",
+            qualified_table,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[DELETE] Fetching row: {}", select_sql);
+
+        let mut state = self
+            .query_conn
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        // Switch database if needed
+        if let Some(ref db) = delete.schema {
+            if state.current_database.as_ref() != Some(db) {
+                log::debug!("[USE] Switching to database: {}", db);
+                state
+                    .conn
+                    .query_drop(format!("USE `{}`", db))
+                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                state.current_database = Some(db.clone());
+            }
+        }
+
+        let rows: Vec<mysql::Row> = state
+            .conn
+            .query(&select_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let returning_row = rows.first().map(|row| {
+            let row_cols = row.columns_ref();
+            (0..row_cols.len())
+                .map(|i| mysql_value_to_value(row, i, &row_cols[i]))
+                .collect::<Row>()
+        });
+
+        // Now delete the row
+        let delete_sql = format!(
+            "DELETE FROM {} WHERE {} LIMIT 1",
+            qualified_table,
+            where_clause.join(" AND ")
+        );
+
+        log::debug!("[DELETE] Executing: {}", delete_sql);
+
+        state
+            .conn
+            .query_drop(&delete_sql)
+            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+
+        let affected = state.conn.affected_rows();
+
+        if affected == 0 {
+            return Ok(CrudResult::empty());
+        }
+
+        Ok(CrudResult::new(affected, returning_row))
+    }
 }
 
 fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Value {
@@ -1010,6 +1284,40 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         .and_then(|r| r.ok())
         .map(|opt| opt.map(Value::Text).unwrap_or(Value::Null))
         .unwrap_or(Value::Null)
+}
+
+/// Convert a Value to a safe MySQL literal string.
+fn value_to_mysql_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                // MySQL doesn't have NaN/Infinity, store as NULL
+                "NULL".to_string()
+            } else {
+                f.to_string()
+            }
+        }
+        Value::Decimal(s) => format!("'{}'", mysql_escape_string(s)),
+        Value::Text(s) => format!("'{}'", mysql_escape_string(s)),
+        Value::Json(s) => format!("'{}'", mysql_escape_string(s)),
+        Value::Bytes(b) => format!("X'{}'", hex::encode(b)),
+        Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
+        Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+        Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
+    }
+}
+
+/// Escape a string for use inside a MySQL single-quoted literal.
+fn mysql_escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('"', "\\\"")
+        .replace('\0', "\\0")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
