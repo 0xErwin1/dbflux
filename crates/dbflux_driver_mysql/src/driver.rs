@@ -266,7 +266,7 @@ impl MysqlDriver {
         // Get connection ID from query connection for KILL QUERY support
         let query_connection_id: u64 = query_conn
             .query_first("SELECT CONNECTION_ID()")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_mysql_query_error(&e))?
             .unwrap_or(0);
 
         log::info!(
@@ -389,7 +389,7 @@ impl MysqlDriver {
         // Get connection ID for KILL QUERY support
         let query_connection_id: u64 = query_conn
             .query_first("SELECT CONNECTION_ID()")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_mysql_query_error(&e))?
             .unwrap_or(0);
 
         log::info!(
@@ -447,6 +447,12 @@ fn format_mysql_error(e: &mysql::Error, host: &str, port: u16) -> DbError {
     } else {
         DbError::ConnectionFailed(msg)
     }
+}
+
+fn format_mysql_query_error(e: &mysql::Error) -> DbError {
+    let message = e.to_string();
+    log::error!("MySQL query failed: {}", message);
+    DbError::QueryFailed(message)
 }
 
 /// State for the query connection, bundled in a single mutex to avoid deadlocks.
@@ -579,10 +585,10 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         conn.query_drop("SELECT 1")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))
+            .map_err(|e| format_mysql_query_error(&e))
     }
 
     fn close(&mut self) -> Result<(), DbError> {
@@ -705,7 +711,7 @@ impl Connection for MysqlConnection {
                 if self.cancelled.load(Ordering::SeqCst) {
                     return Err(DbError::Cancelled);
                 }
-                Err(DbError::QueryFailed(format!("{:?}", e)))
+                Err(format_mysql_query_error(&e))
             }
         }
     }
@@ -750,7 +756,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         // Fetch tables (shallow - without columns/indexes)
         let tables = fetch_tables_shallow(&mut conn, database)?;
@@ -783,7 +789,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let columns = fetch_columns(&mut conn, database, table)?;
         let indexes = fetch_indexes(&mut conn, database, table)?;
@@ -829,11 +835,11 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let databases: Vec<String> = conn
             .query("SHOW DATABASES")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         Ok(databases
             .into_iter()
@@ -916,7 +922,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         fetch_schema_indexes(&mut conn, database)
     }
@@ -929,7 +935,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         fetch_schema_foreign_keys(&mut conn, database)
     }
@@ -995,7 +1001,7 @@ impl Connection for MysqlConnection {
         state
             .conn
             .query_drop(&update_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         let affected = state.conn.affected_rows();
 
@@ -1015,7 +1021,7 @@ impl Connection for MysqlConnection {
         let rows: Vec<mysql::Row> = state
             .conn
             .query(&select_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         if let Some(row) = rows.first() {
             let row_cols = row.columns_ref();
@@ -1079,7 +1085,7 @@ impl Connection for MysqlConnection {
         state
             .conn
             .query_drop(&insert_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         let last_id = state.conn.last_insert_id();
 
@@ -1112,7 +1118,7 @@ impl Connection for MysqlConnection {
         let rows: Vec<mysql::Row> = state
             .conn
             .query(&select_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         if let Some(row) = rows.first() {
             let row_cols = row.columns_ref();
@@ -1176,7 +1182,7 @@ impl Connection for MysqlConnection {
         let rows: Vec<mysql::Row> = state
             .conn
             .query(&select_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         let returning_row = rows.first().map(|row| {
             let row_cols = row.columns_ref();
@@ -1197,7 +1203,7 @@ impl Connection for MysqlConnection {
         state
             .conn
             .query_drop(&delete_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         let affected = state.conn.affected_rows();
 
@@ -1334,7 +1340,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
 
     let table_names: Vec<String> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(table_names
         .into_iter()
@@ -1363,7 +1369,7 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 
     let view_names: Vec<String> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(view_names
         .into_iter()
@@ -1393,7 +1399,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 
     let rows: Vec<(String, String, String, Option<String>, String)> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
         .into_iter()
@@ -1412,7 +1418,7 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut indexes_map: std::collections::HashMap<String, IndexInfo> =
         std::collections::HashMap::new();
@@ -1543,14 +1549,14 @@ impl MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let schema_prefix = get_schema_prefix(table);
         let query = format!("SHOW CREATE TABLE {}`{}`", schema_prefix, table.name);
 
         let result: Option<(String, String)> = conn
             .query_first(&query)
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_mysql_query_error(&e))?;
 
         match result {
             Some((_, create_statement)) => Ok(format!("{};\n", create_statement)),
@@ -1591,7 +1597,7 @@ fn fetch_foreign_keys(
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
 
@@ -1654,7 +1660,7 @@ fn fetch_constraints(
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
         .into_iter()
@@ -1702,7 +1708,7 @@ fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaInd
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
         .into_iter()
@@ -1758,7 +1764,7 @@ fn fetch_schema_foreign_keys(
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut fk_map: HashMap<(String, String), SchemaForeignKeyInfo> = HashMap::new();
 

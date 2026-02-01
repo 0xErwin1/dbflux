@@ -190,9 +190,9 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
         conn.execute_batch("SELECT 1")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))
+            .map_err(|e| format_sqlite_query_error(&e))
     }
 
     fn close(&mut self) -> Result<(), DbError> {
@@ -206,7 +206,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let stmt_result = conn.prepare(&req.sql);
 
@@ -217,7 +217,7 @@ impl Connection for SqliteConnection {
                     log::info!("[QUERY] SQLite query was interrupted");
                     return Err(DbError::Cancelled);
                 }
-                return Err(DbError::QueryFailed(format!("{:?}", e)));
+                return Err(format_sqlite_query_error(&e));
             }
         };
 
@@ -242,7 +242,7 @@ impl Connection for SqliteConnection {
                     log::info!("[QUERY] SQLite query was interrupted");
                     return Err(DbError::Cancelled);
                 }
-                return Err(DbError::QueryFailed(format!("{:?}", e)));
+                return Err(format_sqlite_query_error(&e));
             }
         };
 
@@ -270,7 +270,7 @@ impl Connection for SqliteConnection {
                         log::info!("[QUERY] SQLite query was interrupted during iteration");
                         return Err(DbError::Cancelled);
                     }
-                    return Err(DbError::QueryFailed(format!("{:?}", e)));
+                    return Err(format_sqlite_query_error(&e));
                 }
             }
         }
@@ -309,7 +309,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let tables = self.get_tables(&conn)?;
         let views = self.get_views(&conn)?;
@@ -349,7 +349,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let columns = self.get_columns(&conn, table)?;
         let indexes = self.get_indexes(&conn, table)?;
@@ -383,7 +383,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         self.get_all_indexes(&conn)
     }
@@ -396,7 +396,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         self.get_all_foreign_keys(&conn)
     }
@@ -463,7 +463,7 @@ impl Connection for SqliteConnection {
 
         let affected = conn
             .execute(&update_sql, [])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         if affected == 0 {
             return Ok(CrudResult::empty());
@@ -480,17 +480,17 @@ impl Connection for SqliteConnection {
 
         let mut stmt = conn
             .prepare(&select_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let column_count = stmt.column_count();
 
         let mut rows_iter = stmt
             .query([])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         if let Some(row) = rows_iter
             .next()
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
         {
             let returning_row: Row = (0..column_count)
                 .map(|i| sqlite_value_to_value(row, i))
@@ -538,7 +538,7 @@ impl Connection for SqliteConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         conn.execute(&insert_sql, [])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         // Get the last inserted row using rowid
         let rowid = conn.last_insert_rowid();
@@ -549,17 +549,17 @@ impl Connection for SqliteConnection {
 
         let mut stmt = conn
             .prepare(&select_sql)
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let column_count = stmt.column_count();
 
         let mut rows_iter = stmt
             .query([])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         if let Some(row) = rows_iter
             .next()
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
         {
             let returning_row: Row = (0..column_count)
                 .map(|i| sqlite_value_to_value(row, i))
@@ -610,17 +610,17 @@ impl Connection for SqliteConnection {
         let returning_row = {
             let mut stmt = conn
                 .prepare(&select_sql)
-                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             let column_count = stmt.column_count();
 
             let mut rows_iter = stmt
                 .query([])
-                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             rows_iter
                 .next()
-                .map_err(|e| DbError::QueryFailed(format!("{}", e)))?
+                .map_err(|e| format_sqlite_query_error(&e))?
                 .map(|row| {
                     (0..column_count)
                         .map(|i| sqlite_value_to_value(row, i))
@@ -639,7 +639,7 @@ impl Connection for SqliteConnection {
 
         let affected = conn
             .execute(&delete_sql, [])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         if affected == 0 {
             return Ok(CrudResult::empty());
@@ -653,11 +653,11 @@ impl SqliteConnection {
     fn get_tables(&self, conn: &RusqliteConnection) -> Result<Vec<TableInfo>, DbError> {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let table_names: Vec<String> = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -683,7 +683,7 @@ impl SqliteConnection {
     ) -> Result<Vec<ColumnInfo>, DbError> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA table_info('{}')", table))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let columns = stmt
             .query_map([], |row| {
@@ -695,7 +695,7 @@ impl SqliteConnection {
                     default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
                 })
             })
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -709,11 +709,11 @@ impl SqliteConnection {
     ) -> Result<Vec<IndexInfo>, DbError> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA index_list('{}')", table))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let index_list: Vec<(String, bool)> = stmt
             .query_map([], |row| Ok((row.get(1)?, row.get::<_, i32>(2)? == 1)))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -721,11 +721,11 @@ impl SqliteConnection {
         for (index_name, is_unique) in index_list {
             let mut col_stmt = conn
                 .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             let columns: Vec<String> = col_stmt
                 .query_map([], |row| row.get(2))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .map_err(|e| format_sqlite_query_error(&e))?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -743,7 +743,7 @@ impl SqliteConnection {
     fn get_views(&self, conn: &RusqliteConnection) -> Result<Vec<ViewInfo>, DbError> {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let views = stmt
             .query_map([], |row| {
@@ -752,7 +752,7 @@ impl SqliteConnection {
                     schema: None,
                 })
             })
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -766,7 +766,7 @@ impl SqliteConnection {
     ) -> Result<Vec<ForeignKeyInfo>, DbError> {
         let mut stmt = conn
             .prepare(&format!("PRAGMA foreign_key_list('{}')", table))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
         let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
@@ -780,7 +780,7 @@ impl SqliteConnection {
                     row.get::<_, String>(6)?, // on_delete
                 ))
             })
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -820,7 +820,7 @@ impl SqliteConnection {
         // We need to parse the CREATE TABLE statement
         let mut stmt = conn
             .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let sql: Option<String> = stmt.query_row([table], |row| row.get(0)).ok();
 
@@ -862,7 +862,7 @@ impl SqliteConnection {
         // Get UNIQUE constraints from indexes
         let mut idx_stmt = conn
             .prepare(&format!("PRAGMA index_list('{}')", table))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let unique_indexes: Vec<(String, String)> = idx_stmt
             .query_map([], |row| {
@@ -871,7 +871,7 @@ impl SqliteConnection {
                     row.get::<_, String>(3)?, // origin (c=CREATE INDEX, u=UNIQUE, pk=PRIMARY KEY)
                 ))
             })
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .filter(|(_, origin)| origin == "u") // Only UNIQUE constraints, not indexes
             .collect();
@@ -879,11 +879,11 @@ impl SqliteConnection {
         for (index_name, _) in unique_indexes {
             let mut col_stmt = conn
                 .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             let columns: Vec<String> = col_stmt
                 .query_map([], |row| row.get(2))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .map_err(|e| format_sqlite_query_error(&e))?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -902,11 +902,11 @@ impl SqliteConnection {
         // Get all tables
         let mut tables_stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -915,7 +915,7 @@ impl SqliteConnection {
         for table_name in table_names {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA index_list('{}')", table_name))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             let index_list: Vec<(String, bool, String)> = stmt
                 .query_map([], |row| {
@@ -925,18 +925,18 @@ impl SqliteConnection {
                         row.get::<_, String>(3)?,   // origin
                     ))
                 })
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .map_err(|e| format_sqlite_query_error(&e))?
                 .filter_map(|r| r.ok())
                 .collect();
 
             for (index_name, is_unique, origin) in index_list {
                 let mut col_stmt = conn
                     .prepare(&format!("PRAGMA index_info('{}')", index_name))
-                    .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+                    .map_err(|e| format_sqlite_query_error(&e))?;
 
                 let columns: Vec<String> = col_stmt
                     .query_map([], |row| row.get(2))
-                    .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                    .map_err(|e| format_sqlite_query_error(&e))?
                     .filter_map(|r| r.ok())
                     .collect();
 
@@ -960,11 +960,11 @@ impl SqliteConnection {
         // Get all tables
         let mut tables_stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_sqlite_query_error(&e))?;
 
         let table_names: Vec<String> = tables_stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+            .map_err(|e| format_sqlite_query_error(&e))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -973,7 +973,7 @@ impl SqliteConnection {
         for table_name in table_names {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA foreign_key_list('{}')", table_name))
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+                .map_err(|e| format_sqlite_query_error(&e))?;
 
             let fk_rows: Vec<(i32, String, String, String, String, String)> = stmt
                 .query_map([], |row| {
@@ -986,7 +986,7 @@ impl SqliteConnection {
                         row.get::<_, String>(6)?, // on_delete
                     ))
                 })
-                .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?
+                .map_err(|e| format_sqlite_query_error(&e))?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -1033,6 +1033,12 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
         Ok(ValueRef::Blob(b)) => Value::Bytes(b.to_vec()),
         Err(_) => Value::Null,
     }
+}
+
+fn format_sqlite_query_error(e: &rusqlite::Error) -> DbError {
+    let message = e.to_string();
+    log::error!("SQLite query failed: {}", message);
+    DbError::QueryFailed(message)
 }
 
 fn sqlite_quote_ident(ident: &str) -> String {

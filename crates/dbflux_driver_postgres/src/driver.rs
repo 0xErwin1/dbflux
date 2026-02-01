@@ -417,10 +417,10 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
         client
             .simple_query("SELECT 1")
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| format_pg_query_error(&e))?;
         Ok(())
     }
 
@@ -478,7 +478,7 @@ impl Connection for PostgresConnection {
                 log::info!("[QUERY] Query {} was cancelled", query_id);
                 DbError::Cancelled
             } else {
-                DbError::QueryFailed(format!("{:?}", e))
+                format_pg_query_error(&e)
             }
         })?;
 
@@ -609,7 +609,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         if let Err(e) = client.simple_query("ROLLBACK") {
             log::warn!(
@@ -631,7 +631,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let phase_start = Instant::now();
         let databases = get_databases(&mut client)?;
@@ -678,7 +678,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         get_databases(&mut client)
     }
@@ -707,7 +707,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         let columns = get_columns(&mut client, schema_name, table)?;
         let indexes = get_indexes(&mut client, schema_name, table)?;
@@ -751,7 +751,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         get_custom_types(&mut client, schema_name)
     }
@@ -766,7 +766,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         get_schema_indexes(&mut client, schema_name)
     }
@@ -781,7 +781,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         get_schema_foreign_keys(&mut client, schema_name)
     }
@@ -847,9 +847,7 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client
-            .query(&sql, &[])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());
@@ -894,9 +892,7 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client
-            .query(&sql, &[])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());
@@ -940,9 +936,7 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client
-            .query(&sql, &[])
-            .map_err(|e| DbError::QueryFailed(format!("{}", e)))?;
+        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());
@@ -970,7 +964,7 @@ fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
             "#,
             &[],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -985,7 +979,7 @@ fn get_databases(client: &mut Client) -> Result<Vec<DatabaseInfo>, DbError> {
 fn get_current_database(client: &mut Client) -> Result<Option<String>, DbError> {
     let rows = client
         .query("SELECT current_database()", &[])
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows.first().map(|row| row.get(0)))
 }
@@ -1002,7 +996,7 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
             "#,
             &[],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     log::info!(
         "[SCHEMA] Found {} schemas in {:.2}ms",
@@ -1050,7 +1044,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     let tables = rows
         .iter()
@@ -1081,7 +1075,7 @@ fn get_views_for_schema(client: &mut Client, schema: &str) -> Result<Vec<ViewInf
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1119,7 +1113,7 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1196,7 +1190,7 @@ fn get_all_columns_for_schema(
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     let mut result: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
 
@@ -1241,7 +1235,7 @@ fn get_all_indexes_for_schema(
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     let mut result: HashMap<String, Vec<IndexInfo>> = HashMap::new();
 
@@ -1282,7 +1276,7 @@ fn get_indexes(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Ind
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1334,7 +1328,7 @@ fn get_foreign_keys(
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     // Group rows by constraint name
     let mut fk_map: std::collections::HashMap<String, ForeignKeyInfo> =
@@ -1414,7 +1408,7 @@ fn get_constraints(
             "#,
             &[&schema, &table],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1478,7 +1472,7 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1636,6 +1630,37 @@ fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
 
     log::error!("PostgreSQL connection failed: {}", message);
     DbError::ConnectionFailed(message)
+}
+
+fn format_pg_query_error(e: &postgres::Error) -> DbError {
+    if let Some(db_err) = e.as_db_error() {
+        let mut parts = Vec::new();
+        parts.push(db_err.message().to_string());
+
+        if let Some(detail) = db_err.detail() {
+            parts.push(format!("Detail: {}", detail));
+        }
+        if let Some(hint) = db_err.hint() {
+            parts.push(format!("Hint: {}", hint));
+        }
+        if let Some(column) = db_err.column() {
+            parts.push(format!("Column: {}", column));
+        }
+        if let Some(table) = db_err.table() {
+            parts.push(format!("Table: {}", table));
+        }
+        if let Some(constraint) = db_err.constraint() {
+            parts.push(format!("Constraint: {}", constraint));
+        }
+
+        let message = parts.join(". ");
+        log::error!("PostgreSQL query failed: {}", message);
+        DbError::QueryFailed(message)
+    } else {
+        let message = e.to_string();
+        log::error!("PostgreSQL query failed: {}", message);
+        DbError::QueryFailed(message)
+    }
 }
 
 fn pg_quote_ident(ident: &str) -> String {
@@ -1830,7 +1855,7 @@ fn get_schema_indexes(client: &mut Client, schema: &str) -> Result<Vec<SchemaInd
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     Ok(rows
         .iter()
@@ -1884,7 +1909,7 @@ fn get_schema_foreign_keys(
             "#,
             &[&schema],
         )
-        .map_err(|e| DbError::QueryFailed(format!("{:?}", e)))?;
+        .map_err(|e| format_pg_query_error(&e))?;
 
     // Group rows by constraint name
     let mut fk_map: std::collections::HashMap<String, SchemaForeignKeyInfo> =

@@ -556,6 +556,7 @@ impl Workspace {
     }
 
     /// Opens a table in a new DataDocument tab (v0.3).
+    /// If the table is already open, focuses the existing tab instead.
     fn open_table_document(
         &mut self,
         profile_id: uuid::Uuid,
@@ -573,6 +574,23 @@ impl Workspace {
             .contains_key(&profile_id)
         {
             cx.toast_error("No active connection for this table", window);
+            return;
+        }
+
+        // Check if table is already open - if so, focus that tab
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| doc.is_table(&table, cx))
+            .map(|doc| doc.id());
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            log::info!("Focused existing table document: {:?}.{:?}", table.schema, table.name);
             return;
         }
 

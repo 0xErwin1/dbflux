@@ -21,6 +21,7 @@ dbflux_ssh.workspace = true
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
+serde_json.workspace = true
 dirs.workspace = true
 rfd.workspace = true
 fuzzy-matcher.workspace = true

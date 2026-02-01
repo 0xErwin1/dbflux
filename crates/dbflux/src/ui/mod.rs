@@ -1,3 +1,4 @@
+pub mod cell_editor_modal;
 pub mod command_palette;
 pub mod components;
 pub mod dangerous_query;

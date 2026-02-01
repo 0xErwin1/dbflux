@@ -57,6 +57,8 @@ pub enum ContextMenuAction {
     Paste,
     /// Start inline editing of the selected cell.
     Edit,
+    /// Open modal editor for the selected cell.
+    EditInModal,
     /// Set the cell to its column's default value.
     SetDefault,
     /// Set the cell to NULL.
@@ -116,4 +118,12 @@ pub enum DataTableEvent {
 
     /// Request to copy the entire row as CSV (YY).
     CopyRowRequested(usize),
+
+    /// Request to open modal editor for JSON/long text.
+    ModalEditRequested {
+        row: usize,
+        col: usize,
+        value: String,
+        is_json: bool,
+    },
 }
