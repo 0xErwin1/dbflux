@@ -1553,6 +1553,7 @@ dependencies = [
  "gpui-component",
  "log",
  "rfd",
+ "serde_json",
  "uuid",
 ]
 

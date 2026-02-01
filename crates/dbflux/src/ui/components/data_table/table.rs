@@ -126,11 +126,28 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-/// DataTable component for rendering tabular data with virtualization.
+#[derive(Clone)]
+struct ResizeDragState {
+    col: Option<usize>,
+    start_x: gpui::Pixels,
+    original_width: f32,
+}
+
+impl Default for ResizeDragState {
+    fn default() -> Self {
+        Self {
+            col: None,
+            start_x: gpui::px(0.0),
+            original_width: 0.0,
+        }
+    }
+}
+
 pub struct DataTable {
     id: ElementId,
     state: Entity<DataTableState>,
     scroll_sync: Arc<Mutex<ScrollSyncState>>,
+    resize_drag: Arc<Mutex<ResizeDragState>>,
 }
 
 impl DataTable {
@@ -143,6 +160,7 @@ impl DataTable {
 
         Self {
             id: id.into(),
+            resize_drag: Arc::new(Mutex::new(ResizeDragState::default())),
             state,
             scroll_sync: Arc::new(Mutex::new(ScrollSyncState::default())),
         }
@@ -547,6 +565,7 @@ impl DataTable {
         let column_widths = state.column_widths();
         let h_offset = state.horizontal_offset();
         let state_entity = self.state.clone();
+        let resize_drag = self.resize_drag.clone();
 
         let header_cells: Vec<_> = model
             .columns
@@ -565,9 +584,14 @@ impl DataTable {
                 };
 
                 let state_for_click = state_entity.clone();
+                let state_for_resize = state_entity.clone();
+                let resize_drag_for_down = resize_drag.clone();
+                let resize_drag_for_move = resize_drag.clone();
+                let resize_drag_for_up = resize_drag.clone();
 
                 div()
                     .id(("header-col", col_ix))
+                    .relative()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
@@ -609,6 +633,59 @@ impl DataTable {
                                 theme.muted_foreground
                             })
                             .child(sort_indicator),
+                    )
+                    // Resize handle
+                    .child(
+                        div()
+                            .id(("resize-handle", col_ix))
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(6.0))
+                            .cursor_col_resize()
+                            .hover(|s| s.bg(theme.primary.opacity(0.3)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
+                                        drag.col = Some(col_ix);
+                                        drag.start_x = event.position.x;
+                                        drag.original_width = width;
+                                    }
+                                },
+                            )
+                            .on_mouse_move(move |event, _window, cx| {
+                                let (col, new_width) = {
+                                    let drag = resize_drag_for_move.lock().ok();
+                                    if let Some(drag) = drag {
+                                        if let Some(col) = drag.col {
+                                            let delta = event.position.x - drag.start_x;
+                                            let delta_f32: f32 = delta.into();
+                                            let new_width = drag.original_width + delta_f32;
+                                            (Some(col), new_width.max(40.0))
+                                        } else {
+                                            (None, 0.0)
+                                        }
+                                    } else {
+                                        (None, 0.0)
+                                    }
+                                };
+                                if let Some(col) = col {
+                                    state_for_resize.update(cx, |state, cx| {
+                                        state.set_column_width(col, new_width, cx);
+                                    });
+                                }
+                            })
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                move |_event, _window, _cx| {
+                                    if let Ok(mut drag) = resize_drag_for_up.lock() {
+                                        drag.col = None;
+                                    }
+                                },
+                            ),
                     )
             })
             .collect();
@@ -792,7 +869,7 @@ fn render_rows(
                     } else {
                         edit_buffer.get_cell(data_row_ix, col_ix, base_value)
                     };
-                    let display_text = display_value.display_text().to_string();
+                    let display_text = display_value.display_text();
                     let is_null = display_value.is_null();
                     let is_auto_generated = display_value.is_auto_generated();
 

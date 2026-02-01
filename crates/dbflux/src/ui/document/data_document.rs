@@ -171,6 +171,11 @@ impl DataDocument {
         }
     }
 
+    /// Returns the table reference if this is a table document.
+    pub fn table_ref(&self, cx: &App) -> Option<TableRef> {
+        self.data_grid.read(cx).source().table_ref().cloned()
+    }
+
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         self.data_grid.read(cx).active_context()

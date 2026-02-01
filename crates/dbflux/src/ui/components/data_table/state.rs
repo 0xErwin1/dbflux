@@ -132,6 +132,15 @@ impl DataTableState {
         &self.column_widths
     }
 
+    pub fn set_column_width(&mut self, col: usize, width: f32, cx: &mut Context<Self>) {
+        if col < self.column_widths.len() {
+            let min_width = super::theme::MIN_COLUMN_WIDTH;
+            self.column_widths[col] = width.max(min_width);
+            self.column_offsets = Self::calculate_offsets(&self.column_widths);
+            cx.notify();
+        }
+    }
+
     pub fn total_content_width(&self) -> f32 {
         *self.column_offsets.last().unwrap_or(&0.0)
     }
@@ -428,48 +437,58 @@ impl DataTableState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use super::model::VisualRowSource;
+        use super::model::{ColumnKind, VisualRowSource};
 
         if !self.is_editable {
             return false;
         }
 
+        let column_kind = self
+            .model
+            .columns
+            .get(coord.col)
+            .map(|c| c.kind)
+            .unwrap_or(ColumnKind::Unknown);
+
         // Translate visual row to source (base or pending insert)
         let visual_order = self.edit_buffer.compute_visual_order();
         let null_cell = super::model::CellValue::null();
 
-        let initial_value = match visual_order.get(coord.row).copied() {
+        let (initial_value, needs_modal) = match visual_order.get(coord.row).copied() {
             Some(VisualRowSource::Base(base_idx)) => {
                 // Base row - check EditBuffer first, fall back to model
                 let base_cell = self.model.cell(base_idx, coord.col);
                 let base = base_cell.unwrap_or(&null_cell);
                 let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
 
-                if cell.is_null() {
-                    String::new()
-                } else {
-                    cell.display_text().to_string()
-                }
+                (cell.edit_text(), cell.needs_modal_editor())
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
                 // Pending insert - get from pending_inserts
                 if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
                     if coord.col < insert_data.len() {
                         let cell = &insert_data[coord.col];
-                        if cell.is_null() {
-                            String::new()
-                        } else {
-                            cell.display_text().to_string()
-                        }
+                        (cell.edit_text(), cell.needs_modal_editor())
                     } else {
-                        String::new()
+                        (String::new(), false)
                     }
                 } else {
-                    String::new()
+                    (String::new(), false)
                 }
             }
             None => return false,
         };
+
+        let is_json = column_kind == ColumnKind::Json;
+        if is_json || needs_modal {
+            cx.emit(DataTableEvent::ModalEditRequested {
+                row: coord.row,
+                col: coord.col,
+                value: initial_value,
+                is_json,
+            });
+            return true;
+        }
 
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);

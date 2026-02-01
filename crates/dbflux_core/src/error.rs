@@ -11,7 +11,7 @@ pub enum DbError {
     ConnectionFailed(String),
 
     /// Query execution failed (syntax error, constraint violation, etc.).
-    #[error("Query failed: {0}")]
+    #[error("{0}")]
     QueryFailed(String),
 
     /// Query exceeded the configured timeout.

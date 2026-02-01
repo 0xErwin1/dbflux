@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
+use crate::ui::cell_editor_modal::{CellEditorModal, CellEditorSaveEvent};
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge,
     SortState as TableSortState, TableModel, HEADER_HEIGHT, ROW_HEIGHT,
@@ -178,6 +179,13 @@ struct PendingToast {
     is_error: bool,
 }
 
+struct PendingModalOpen {
+    row: usize,
+    col: usize,
+    value: String,
+    is_json: bool,
+}
+
 /// Context menu state for right-click operations.
 struct TableContextMenu {
     /// Row index of the clicked cell.
@@ -257,6 +265,10 @@ pub struct DataGridPanel {
     // Context menu
     context_menu: Option<TableContextMenu>,
     context_menu_focus: FocusHandle,
+
+    // Modal editor for JSON/long text
+    cell_editor: Entity<CellEditorModal>,
+    pending_modal_open: Option<PendingModalOpen>,
 
     // Panel origin in window coordinates (for context menu positioning)
     panel_origin: Point<Pixels>,
@@ -433,6 +445,17 @@ impl DataGridPanel {
         let focus_handle = cx.focus_handle();
         let context_menu_focus = cx.focus_handle();
 
+        let cell_editor = cx.new(|cx| CellEditorModal::new(window, cx));
+
+        cx.subscribe_in(
+            &cell_editor,
+            window,
+            |this, _, event: &CellEditorSaveEvent, window, cx| {
+                this.handle_cell_editor_save(event.row, event.col, &event.value, window, cx);
+            },
+        )
+        .detach();
+
         Self {
             source,
             app_state,
@@ -460,6 +483,8 @@ impl DataGridPanel {
             is_maximized: false,
             context_menu: None,
             context_menu_focus,
+            cell_editor,
+            pending_modal_open: None,
             panel_origin: Point::default(),
         }
     }
@@ -580,6 +605,20 @@ impl DataGridPanel {
                     }
                     DataTableEvent::CopyRowRequested(row) => {
                         this.handle_copy_row(*row, cx);
+                    }
+                    DataTableEvent::ModalEditRequested {
+                        row,
+                        col,
+                        value,
+                        is_json,
+                    } => {
+                        this.pending_modal_open = Some(PendingModalOpen {
+                            row: *row,
+                            col: *col,
+                            value: value.clone(),
+                            is_json: *is_json,
+                        });
+                        cx.notify();
                     }
                 }
             });
@@ -1646,13 +1685,14 @@ impl DataGridPanel {
         let is_editable = self.check_is_editable(cx);
 
         // Build the menu items list to know the count
-        // Items: Copy, Paste*, Edit*, sep, SetDefault*, SetNull*, sep, AddRow*, DupRow*, DelRow*, sep, GenSQL
+        // Items: Copy, Paste*, Edit*, EditModal*, sep, SetDefault*, SetNull*, sep, AddRow*, DupRow*, DelRow*, sep, GenSQL
         // * = requires editable
         let menu_items: Vec<Option<ContextMenuAction>> = if is_editable {
             vec![
                 Some(ContextMenuAction::Copy),
                 Some(ContextMenuAction::Paste),
                 Some(ContextMenuAction::Edit),
+                Some(ContextMenuAction::EditInModal),
                 None, // separator
                 Some(ContextMenuAction::SetDefault),
                 Some(ContextMenuAction::SetNull),
@@ -1957,6 +1997,12 @@ impl Render for DataGridPanel {
             self.rebuild_table(sort, cx);
         }
 
+        if let Some(modal) = self.pending_modal_open.take() {
+            self.cell_editor.update(cx, |editor, cx| {
+                editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
+            });
+        }
+
         // Clone theme colors to avoid borrow conflicts with cx
         let theme = cx.theme().clone();
 
@@ -2181,6 +2227,10 @@ impl Render for DataGridPanel {
             // Context menu overlay
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, is_editable, &theme, cx))
+            })
+            // Cell editor modal overlay
+            .when(self.cell_editor.read(cx).is_visible(), |d| {
+                d.child(self.cell_editor.clone())
             })
     }
 }
@@ -2790,6 +2840,13 @@ impl DataGridPanel {
                     is_danger: false,
                 },
                 ContextMenuItem {
+                    label: "Edit in Modal",
+                    action: Some(ContextMenuAction::EditInModal),
+                    icon: Some(AppIcon::Maximize2),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
                     label: "",
                     action: None,
                     icon: None,
@@ -3208,6 +3265,9 @@ impl DataGridPanel {
             ContextMenuAction::Copy => self.handle_copy(window, cx),
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::EditInModal => {
+                self.handle_edit_in_modal(menu.row, menu.col, cx);
+            }
             ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
             ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
             ContextMenuAction::AddRow => self.handle_add_row(menu.row, cx),
@@ -3323,6 +3383,59 @@ impl DataGridPanel {
         }
     }
 
+    fn handle_edit_in_modal(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use crate::ui::components::data_table::model::{ColumnKind, VisualRowSource};
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        if !state.is_editable() {
+            return;
+        }
+
+        let is_json = state
+            .model()
+            .columns
+            .get(col)
+            .map(|c| c.kind == ColumnKind::Json)
+            .unwrap_or(false);
+
+        let visual_order = state.edit_buffer().compute_visual_order();
+        let null_cell = crate::ui::components::data_table::model::CellValue::null();
+
+        let value = match visual_order.get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let base_cell = state.model().cell(base_idx, col);
+                let base = base_cell.unwrap_or(&null_cell);
+                let cell = state.edit_buffer().get_cell(base_idx, col, base);
+                cell.edit_text()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                if let Some(insert_data) = state.edit_buffer().get_pending_insert_by_idx(insert_idx)
+                {
+                    if col < insert_data.len() {
+                        insert_data[col].edit_text()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            None => return,
+        };
+
+        self.pending_modal_open = Some(PendingModalOpen {
+            row,
+            col,
+            value,
+            is_json,
+        });
+        cx.notify();
+    }
+
     fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use crate::ui::components::data_table::model::VisualRowSource;
 
@@ -3381,6 +3494,41 @@ impl DataGridPanel {
 
             cx.notify();
         });
+    }
+
+    fn handle_cell_editor_save(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+            let cell_value = crate::ui::components::data_table::model::CellValue::text(value);
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+
+        self.focus_table(window, cx);
     }
 
     fn handle_add_row(&mut self, after_visual_row: usize, cx: &mut Context<Self>) {
