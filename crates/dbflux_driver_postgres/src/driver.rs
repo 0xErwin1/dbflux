@@ -847,7 +847,9 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());
@@ -892,7 +894,9 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());
@@ -936,7 +940,9 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let rows = client.query(&sql, &[]).map_err(|e| format_pg_query_error(&e))?;
+        let rows = client
+            .query(&sql, &[])
+            .map_err(|e| format_pg_query_error(&e))?;
 
         if rows.is_empty() {
             return Ok(CrudResult::empty());

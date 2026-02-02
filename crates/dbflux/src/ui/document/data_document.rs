@@ -50,33 +50,35 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_table(profile_id, table, app_state, window, cx));
 
-        let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
-            match event {
-                DataGridEvent::Focused => {
-                    cx.emit(DataDocumentEvent::RequestFocus);
-                }
-                DataGridEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
-                    generation_type,
-                } => {
-                    cx.emit(DataDocumentEvent::RequestSqlPreview {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
-                        generation_type: *generation_type,
-                    });
-                }
-                _ => {}
-            }
-        });
+        let subscription =
+            cx.subscribe(
+                &data_grid,
+                |_this, _grid, event: &DataGridEvent, cx| match event {
+                    DataGridEvent::Focused => {
+                        cx.emit(DataDocumentEvent::RequestFocus);
+                    }
+                    DataGridEvent::RequestSqlPreview {
+                        profile_id,
+                        schema_name,
+                        table_name,
+                        column_names,
+                        row_values,
+                        pk_indices,
+                        generation_type,
+                    } => {
+                        cx.emit(DataDocumentEvent::RequestSqlPreview {
+                            profile_id: *profile_id,
+                            schema_name: schema_name.clone(),
+                            table_name: table_name.clone(),
+                            column_names: column_names.clone(),
+                            row_values: row_values.clone(),
+                            pk_indices: pk_indices.clone(),
+                            generation_type: *generation_type,
+                        });
+                    }
+                    _ => {}
+                },
+            );
 
         Self {
             id: DocumentId::new(),
@@ -100,33 +102,35 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
 
-        let subscription = cx.subscribe(&data_grid, |_this, _grid, event: &DataGridEvent, cx| {
-            match event {
-                DataGridEvent::Focused => {
-                    cx.emit(DataDocumentEvent::RequestFocus);
-                }
-                DataGridEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
-                    generation_type,
-                } => {
-                    cx.emit(DataDocumentEvent::RequestSqlPreview {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
-                        generation_type: *generation_type,
-                    });
-                }
-                _ => {}
-            }
-        });
+        let subscription =
+            cx.subscribe(
+                &data_grid,
+                |_this, _grid, event: &DataGridEvent, cx| match event {
+                    DataGridEvent::Focused => {
+                        cx.emit(DataDocumentEvent::RequestFocus);
+                    }
+                    DataGridEvent::RequestSqlPreview {
+                        profile_id,
+                        schema_name,
+                        table_name,
+                        column_names,
+                        row_values,
+                        pk_indices,
+                        generation_type,
+                    } => {
+                        cx.emit(DataDocumentEvent::RequestSqlPreview {
+                            profile_id: *profile_id,
+                            schema_name: schema_name.clone(),
+                            table_name: table_name.clone(),
+                            column_names: column_names.clone(),
+                            row_values: row_values.clone(),
+                            pk_indices: pk_indices.clone(),
+                            generation_type: *generation_type,
+                        });
+                    }
+                    _ => {}
+                },
+            );
 
         Self {
             id: DocumentId::new(),

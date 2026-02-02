@@ -342,12 +342,21 @@ fn context_menu_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("up", Modifiers::none()), Command::MenuUp);
 
     // Select / Enter submenu
-    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::MenuSelect);
+    layer.bind(
+        KeyChord::new("enter", Modifiers::none()),
+        Command::MenuSelect,
+    );
     layer.bind(KeyChord::new("l", Modifiers::none()), Command::MenuSelect);
-    layer.bind(KeyChord::new("right", Modifiers::none()), Command::MenuSelect);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::MenuSelect,
+    );
 
     // Back / Close
-    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::MenuBack);
+    layer.bind(
+        KeyChord::new("escape", Modifiers::none()),
+        Command::MenuBack,
+    );
     layer.bind(KeyChord::new("h", Modifiers::none()), Command::MenuBack);
     layer.bind(KeyChord::new("left", Modifiers::none()), Command::MenuBack);
 
