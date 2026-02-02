@@ -173,6 +173,7 @@ impl gpui::Render for DataTable {
         let theme = cx.theme();
 
         let row_count = state.row_count();
+        let col_count = state.col_count();
 
         let vertical_scroll_handle = state.vertical_scroll_handle().clone();
         let horizontal_scroll_handle = state.horizontal_scroll_handle().clone();
@@ -340,9 +341,8 @@ impl gpui::Render for DataTable {
                 if !state.is_editable() {
                     return;
                 }
-                if let Some(coord) = state.selection().active {
-                    cx.emit(DataTableEvent::AddRowRequested(coord.row));
-                }
+                let row = state.selection().active.map(|c| c.row).unwrap_or(0);
+                cx.emit(DataTableEvent::AddRowRequested(row));
             });
         };
 
@@ -427,13 +427,38 @@ impl gpui::Render for DataTable {
 
         // Main layout: vertical flex with header and scrollable body.
         // Both header and body share the same horizontal scroll handle.
+        let state_for_empty_context = self.state.clone();
+        let focus_for_empty = focus_handle.clone();
+
         let inner_table = div()
             .id("table-inner")
             .flex()
             .flex_col()
             .size_full()
             .child(header)
-            .when(row_count > 0, |this| this.child(body));
+            .when(row_count > 0, |this| this.child(body))
+            .when(row_count == 0 && col_count > 0, |this| {
+                this.child(
+                    div()
+                        .id("table-empty-body")
+                        .flex_1()
+                        .size_full()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            cx.stop_propagation();
+                            window.focus(&focus_for_empty);
+                        })
+                        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                            cx.stop_propagation();
+                            state_for_empty_context.update(cx, |_, cx| {
+                                cx.emit(DataTableEvent::ContextMenuRequested {
+                                    row: 0,
+                                    col: 0,
+                                    position: event.position,
+                                });
+                            });
+                        }),
+                )
+            });
 
         div()
             .id(self.id.clone())
