@@ -8,9 +8,9 @@ use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle, QueryHandle,
-    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
-    SQLITE_FORM,
+    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value,
+    ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -436,7 +436,13 @@ impl Connection for SqliteConnection {
         let set_clause: Vec<String> = patch
             .changes
             .iter()
-            .map(|(col, val)| format!("{} = {}", sqlite_quote_ident(col), value_to_sqlite_literal(val)))
+            .map(|(col, val)| {
+                format!(
+                    "{} = {}",
+                    sqlite_quote_ident(col),
+                    value_to_sqlite_literal(val)
+                )
+            })
             .collect();
 
         let where_clause: Vec<String> = patch
@@ -444,7 +450,13 @@ impl Connection for SqliteConnection {
             .columns
             .iter()
             .zip(patch.identity.values.iter())
-            .map(|(col, val)| format!("{} = {}", sqlite_quote_ident(col), value_to_sqlite_literal(val)))
+            .map(|(col, val)| {
+                format!(
+                    "{} = {}",
+                    sqlite_quote_ident(col),
+                    value_to_sqlite_literal(val)
+                )
+            })
             .collect();
 
         let update_sql = format!(
@@ -484,9 +496,7 @@ impl Connection for SqliteConnection {
 
         let column_count = stmt.column_count();
 
-        let mut rows_iter = stmt
-            .query([])
-            .map_err(|e| format_sqlite_query_error(&e))?;
+        let mut rows_iter = stmt.query([]).map_err(|e| format_sqlite_query_error(&e))?;
 
         if let Some(row) = rows_iter
             .next()
@@ -543,7 +553,10 @@ impl Connection for SqliteConnection {
         // Get the last inserted row using rowid
         let rowid = conn.last_insert_rowid();
 
-        let select_sql = format!("SELECT * FROM {} WHERE rowid = {} LIMIT 1", table_name, rowid);
+        let select_sql = format!(
+            "SELECT * FROM {} WHERE rowid = {} LIMIT 1",
+            table_name, rowid
+        );
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
 
@@ -553,9 +566,7 @@ impl Connection for SqliteConnection {
 
         let column_count = stmt.column_count();
 
-        let mut rows_iter = stmt
-            .query([])
-            .map_err(|e| format_sqlite_query_error(&e))?;
+        let mut rows_iter = stmt.query([]).map_err(|e| format_sqlite_query_error(&e))?;
 
         if let Some(row) = rows_iter
             .next()
@@ -614,9 +625,7 @@ impl Connection for SqliteConnection {
 
             let column_count = stmt.column_count();
 
-            let mut rows_iter = stmt
-                .query([])
-                .map_err(|e| format_sqlite_query_error(&e))?;
+            let mut rows_iter = stmt.query([]).map_err(|e| format_sqlite_query_error(&e))?;
 
             rows_iter
                 .next()

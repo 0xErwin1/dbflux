@@ -552,7 +552,8 @@ impl DataTableState {
                     Some(VisualRowSource::Insert(insert_idx)) => {
                         // Apply to pending insert (with undo support)
                         let cell_value = super::model::CellValue::text(&value_str);
-                        self.edit_buffer.set_insert_cell(insert_idx, coord.col, cell_value);
+                        self.edit_buffer
+                            .set_insert_cell(insert_idx, coord.col, cell_value);
                     }
                     None => {}
                 }

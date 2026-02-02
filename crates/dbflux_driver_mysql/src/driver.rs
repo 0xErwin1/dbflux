@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle,
-    QueryHandle, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
+    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, MYSQL_FORM,
+    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
-    SslMode, TableInfo, Value, ViewInfo, MYSQL_FORM,
+    SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;

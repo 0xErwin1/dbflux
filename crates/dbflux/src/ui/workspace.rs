@@ -590,7 +590,11 @@ impl Workspace {
             self.tab_manager.update(cx, |mgr, cx| {
                 mgr.activate(id, cx);
             });
-            log::info!("Focused existing table document: {:?}.{:?}", table.schema, table.name);
+            log::info!(
+                "Focused existing table document: {:?}.{:?}",
+                table.schema,
+                table.name
+            );
             return;
         }
 

@@ -3,10 +3,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::TableInfo;
 use gpui::*;
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Input, InputState};
 use uuid::Uuid;
 
 /// Type of SQL statement to generate.
@@ -172,15 +172,13 @@ impl SqlPreviewModal {
                 row_values,
                 pk_indices,
                 ..
-            } => {
-                self.generate_from_row_data(
-                    schema_name.as_deref(),
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
-                )
-            }
+            } => self.generate_from_row_data(
+                schema_name.as_deref(),
+                table_name,
+                column_names,
+                row_values,
+                pk_indices,
+            ),
             SqlPreviewContext::SidebarTable { table_info, .. } => {
                 self.generate_from_table_info(table_info)
             }
@@ -201,7 +199,11 @@ impl SqlPreviewModal {
         pk_indices: &[usize],
     ) -> String {
         let table_ref = self.build_table_reference(schema_name, table_name);
-        let separator = if self.settings.compact_sql { " " } else { "\n    " };
+        let separator = if self.settings.compact_sql {
+            " "
+        } else {
+            "\n    "
+        };
         let newline = if self.settings.compact_sql { " " } else { "\n" };
 
         match self.generation_type {
@@ -210,10 +212,7 @@ impl SqlPreviewModal {
                 if self.settings.compact_sql {
                     format!("SELECT * FROM {} WHERE {};", table_ref, where_clause)
                 } else {
-                    format!(
-                        "SELECT *\nFROM {}\nWHERE {};",
-                        table_ref, where_clause
-                    )
+                    format!("SELECT *\nFROM {}\nWHERE {};", table_ref, where_clause)
                 }
             }
 
@@ -221,7 +220,10 @@ impl SqlPreviewModal {
                 let cols_str = column_names.join(", ");
                 let vals_str = row_values.join(", ");
                 if self.settings.compact_sql {
-                    format!("INSERT INTO {} ({}) VALUES ({});", table_ref, cols_str, vals_str)
+                    format!(
+                        "INSERT INTO {} ({}) VALUES ({});",
+                        table_ref, cols_str, vals_str
+                    )
                 } else {
                     format!(
                         "INSERT INTO {} ({}){}VALUES ({});",
@@ -257,20 +259,14 @@ impl SqlPreviewModal {
                 if self.settings.compact_sql {
                     format!("DELETE FROM {} WHERE {};", table_ref, where_clause)
                 } else {
-                    format!(
-                        "DELETE FROM {}\nWHERE {};",
-                        table_ref, where_clause
-                    )
+                    format!("DELETE FROM {}\nWHERE {};", table_ref, where_clause)
                 }
             }
         }
     }
 
     fn generate_from_table_info(&self, table_info: &TableInfo) -> String {
-        let table_ref = self.build_table_reference(
-            table_info.schema.as_deref(),
-            &table_info.name,
-        );
+        let table_ref = self.build_table_reference(table_info.schema.as_deref(), &table_info.name);
 
         let columns: Vec<&str> = table_info
             .columns
@@ -289,7 +285,11 @@ impl SqlPreviewModal {
             })
             .unwrap_or_default();
 
-        let separator = if self.settings.compact_sql { " " } else { "\n    " };
+        let separator = if self.settings.compact_sql {
+            " "
+        } else {
+            "\n    "
+        };
         let newline = if self.settings.compact_sql { " " } else { "\n" };
 
         match self.generation_type {
@@ -303,7 +303,11 @@ impl SqlPreviewModal {
                 };
 
                 let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() { vec!["id"] } else { vec![columns[0]] }
+                    if columns.is_empty() {
+                        vec!["id"]
+                    } else {
+                        vec![columns[0]]
+                    }
                 } else {
                     pk_columns.clone()
                 };
@@ -315,7 +319,10 @@ impl SqlPreviewModal {
                     .join(" AND ");
 
                 if self.settings.compact_sql {
-                    format!("SELECT {} FROM {} WHERE {};", cols_str, table_ref, where_clause)
+                    format!(
+                        "SELECT {} FROM {} WHERE {};",
+                        cols_str, table_ref, where_clause
+                    )
                 } else {
                     format!(
                         "SELECT {}{}\nFROM {}\nWHERE {};",
@@ -338,7 +345,10 @@ impl SqlPreviewModal {
                 };
 
                 if self.settings.compact_sql {
-                    format!("INSERT INTO {} ({}) VALUES ({});", table_ref, cols_str, vals_str)
+                    format!(
+                        "INSERT INTO {} ({}) VALUES ({});",
+                        table_ref, cols_str, vals_str
+                    )
                 } else {
                     format!(
                         "INSERT INTO {} ({}){}VALUES ({});",
@@ -356,7 +366,11 @@ impl SqlPreviewModal {
                 let set_clause = set_parts.join(&format!(",{}", separator));
 
                 let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() { vec!["id"] } else { vec![columns[0]] }
+                    if columns.is_empty() {
+                        vec!["id"]
+                    } else {
+                        vec![columns[0]]
+                    }
                 } else {
                     pk_columns.clone()
                 };
@@ -382,7 +396,11 @@ impl SqlPreviewModal {
 
             SqlGenerationType::Delete => {
                 let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() { vec!["id"] } else { vec![columns[0]] }
+                    if columns.is_empty() {
+                        vec!["id"]
+                    } else {
+                        vec![columns[0]]
+                    }
                 } else {
                     pk_columns
                 };
@@ -396,10 +414,7 @@ impl SqlPreviewModal {
                 if self.settings.compact_sql {
                     format!("DELETE FROM {} WHERE {};", table_ref, where_clause)
                 } else {
-                    format!(
-                        "DELETE FROM {}\nWHERE {};",
-                        table_ref, where_clause
-                    )
+                    format!("DELETE FROM {}\nWHERE {};", table_ref, where_clause)
                 }
             }
         }
@@ -578,11 +593,7 @@ impl Render for SqlPreviewModal {
                             .min_h(px(200.0))
                             .max_h(px(300.0))
                             .overflow_hidden()
-                            .child(
-                                Input::new(&sql_display)
-                                    .w_full()
-                                    .h_full(),
-                            ),
+                            .child(Input::new(&sql_display).w_full().h_full()),
                     )
                     // Options
                     .child(

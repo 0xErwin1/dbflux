@@ -678,14 +678,11 @@ impl DataTable {
                                     });
                                 }
                             })
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                move |_event, _window, _cx| {
-                                    if let Ok(mut drag) = resize_drag_for_up.lock() {
-                                        drag.col = None;
-                                    }
-                                },
-                            ),
+                            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
+                                if let Ok(mut drag) = resize_drag_for_up.lock() {
+                                    drag.col = None;
+                                }
+                            }),
                     )
             })
             .collect();
@@ -962,7 +959,9 @@ fn render_rows(
                 // Row state background (dirty=yellow, error=red)
                 .when_some(row_bg, |d, bg| d.bg(bg))
                 // Alternating row colors only when clean
-                .when(row_bg.is_none() && row_ix % 2 == 1, |d| d.bg(theme.table_even))
+                .when(row_bg.is_none() && row_ix % 2 == 1, |d| {
+                    d.bg(theme.table_even)
+                })
                 .children(cells)
                 .into_any_element()
         })

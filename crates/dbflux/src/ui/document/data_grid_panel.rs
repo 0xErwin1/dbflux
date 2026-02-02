@@ -2,8 +2,8 @@ use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
 use crate::ui::cell_editor_modal::{CellEditorModal, CellEditorSaveEvent};
 use crate::ui::components::data_table::{
-    ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge,
-    SortState as TableSortState, TableModel, HEADER_HEIGHT, ROW_HEIGHT,
+    ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge, HEADER_HEIGHT,
+    ROW_HEIGHT, SortState as TableSortState, TableModel,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
@@ -15,7 +15,7 @@ use dbflux_core::{
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
-use gpui::{deferred, Subscription, *};
+use gpui::{Subscription, deferred, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
@@ -295,7 +295,8 @@ impl DataGridPanel {
             total_rows: None,
         };
 
-        let mut panel = Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        let mut panel =
+            Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
         panel.refresh(window, cx);
 
         // If pk_columns is empty, fetch table details to get PK info
@@ -335,9 +336,10 @@ impl DataGridPanel {
         let app_state = self.app_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let result = cx.background_executor().spawn(async move {
-                params.execute()
-            }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { params.execute() })
+                .await;
 
             cx.update(|cx| {
                 let Ok(fetch_result) = result else { return };
@@ -370,8 +372,10 @@ impl DataGridPanel {
                         cx.notify();
                     });
                 }
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Create a new panel for displaying a query result (in-memory sorting).
@@ -531,19 +535,18 @@ impl DataGridPanel {
         let pk_indices: Vec<usize> = self
             .pk_columns
             .iter()
-            .filter_map(|pk_name| {
-                self.result
-                    .columns
-                    .iter()
-                    .position(|c| c.name == *pk_name)
-            })
+            .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
             .collect();
 
         log::debug!(
             "[EDIT] rebuild_table: pk_columns={:?}, pk_indices={:?}, result_columns={:?}",
             self.pk_columns,
             pk_indices,
-            self.result.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+            self.result
+                .columns
+                .iter()
+                .map(|c| &c.name)
+                .collect::<Vec<_>>()
         );
 
         let table_model = Arc::new(TableModel::from(&self.result));
@@ -987,9 +990,10 @@ impl DataGridPanel {
         let change_values: Vec<(String, Value)> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
-                model.columns.get(col_idx).map(|col| {
-                    (col.title.to_string(), cell_value.to_value())
-                })
+                model
+                    .columns
+                    .get(col_idx)
+                    .map(|col| (col.title.to_string(), cell_value.to_value()))
             })
             .collect();
 
@@ -1003,7 +1007,9 @@ impl DataGridPanel {
         // Set row state to Saving
         let table_state_for_update = table_state.clone();
         table_state_for_update.update(cx, |state, cx| {
-            state.edit_buffer_mut().set_row_state(row_idx, RowState::Saving);
+            state
+                .edit_buffer_mut()
+                .set_row_state(row_idx, RowState::Saving);
             cx.notify();
         });
 
@@ -1013,9 +1019,16 @@ impl DataGridPanel {
 
         cx.spawn(async move |_this, cx| {
             // Get connection
-            let conn = cx.update(|cx| {
-                app_state.read(cx).connections.get(&profile_id).map(|c| c.connection.clone())
-            }).ok().flatten();
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -1031,15 +1044,16 @@ impl DataGridPanel {
                             });
                         }
                     });
-                }).ok();
+                })
+                .ok();
                 return;
             };
 
             // Execute on background
-            let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> =
-                cx.background_executor().spawn(async move {
-                    conn.update_row(&patch)
-                }).await;
+            let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
+                .background_executor()
+                .spawn(async move { conn.update_row(&patch) })
+                .await;
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
@@ -1065,10 +1079,9 @@ impl DataGridPanel {
                         Err(e) => {
                             log::error!("[SAVE] Failed to save row {}: {}", row_idx, e);
                             table_state.update(cx, |state, cx| {
-                                state.edit_buffer_mut().set_row_state(
-                                    row_idx,
-                                    RowState::Error(e.to_string()),
-                                );
+                                state
+                                    .edit_buffer_mut()
+                                    .set_row_state(row_idx, RowState::Error(e.to_string()));
                                 cx.notify();
                             });
                             panel.pending_toast = Some(PendingToast {
@@ -1079,8 +1092,10 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // === Sorting ===
@@ -1718,11 +1733,15 @@ impl DataGridPanel {
             Command::MenuDown => {
                 if let Some(ref mut menu) = self.context_menu {
                     if menu.sql_submenu_open {
-                        menu.submenu_selected_index = (menu.submenu_selected_index + 1) % submenu_count;
+                        menu.submenu_selected_index =
+                            (menu.submenu_selected_index + 1) % submenu_count;
                     } else {
                         menu.selected_index = (menu.selected_index + 1) % item_count;
                         // Skip separators
-                        while menu.selected_index < item_count && menu_items[menu.selected_index].is_none() && menu.selected_index != item_count - 1 {
+                        while menu.selected_index < item_count
+                            && menu_items[menu.selected_index].is_none()
+                            && menu.selected_index != item_count - 1
+                        {
                             menu.selected_index = (menu.selected_index + 1) % item_count;
                         }
                     }
@@ -1745,7 +1764,10 @@ impl DataGridPanel {
                             menu.selected_index - 1
                         };
                         // Skip separators (going backwards)
-                        while menu.selected_index > 0 && menu_items[menu.selected_index].is_none() && menu.selected_index != item_count - 1 {
+                        while menu.selected_index > 0
+                            && menu_items[menu.selected_index].is_none()
+                            && menu.selected_index != item_count - 1
+                        {
                             menu.selected_index = if menu.selected_index == 0 {
                                 item_count - 1
                             } else {
@@ -1773,7 +1795,9 @@ impl DataGridPanel {
                         menu.sql_submenu_open = true;
                         menu.submenu_selected_index = 0;
                         cx.notify();
-                    } else if let Some(action) = menu_items.get(menu.selected_index).and_then(|a| *a) {
+                    } else if let Some(action) =
+                        menu_items.get(menu.selected_index).and_then(|a| *a)
+                    {
                         self.handle_context_menu_action(action, window, cx);
                     }
                 }
@@ -2126,7 +2150,14 @@ impl Render for DataGridPanel {
             })
             // Edit toolbar (always visible for editable tables)
             .when(show_edit_toolbar, |d| {
-                d.child(self.render_edit_toolbar(dirty_count, has_pending_changes, can_undo, can_redo, &theme, cx))
+                d.child(self.render_edit_toolbar(
+                    dirty_count,
+                    has_pending_changes,
+                    can_undo,
+                    can_redo,
+                    &theme,
+                    cx,
+                ))
             })
             // Header bar with panel controls (only when embedded)
             .when(show_panel_controls && has_data, |d| {
@@ -2461,8 +2492,10 @@ impl DataGridPanel {
                                                     state.stop_editing(false, cx);
                                                 }
                                                 if state.edit_buffer_mut().undo() {
-                                                    let visual_count =
-                                                        state.edit_buffer().compute_visual_order().len();
+                                                    let visual_count = state
+                                                        .edit_buffer()
+                                                        .compute_visual_order()
+                                                        .len();
                                                     if let Some(active) = state.selection().active {
                                                         if active.row >= visual_count {
                                                             state.clear_selection(cx);
@@ -2479,16 +2512,13 @@ impl DataGridPanel {
                                 d.border_color(theme.border)
                                     .text_color(theme.muted_foreground)
                             })
-                            .child(
-                                svg()
-                                    .path(AppIcon::Undo.path())
-                                    .size_4()
-                                    .text_color(if can_undo {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                            ),
+                            .child(svg().path(AppIcon::Undo.path()).size_4().text_color(
+                                if can_undo {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                     // Redo button
                     .child(
@@ -2511,8 +2541,10 @@ impl DataGridPanel {
                                                     state.stop_editing(false, cx);
                                                 }
                                                 if state.edit_buffer_mut().redo() {
-                                                    let visual_count =
-                                                        state.edit_buffer().compute_visual_order().len();
+                                                    let visual_count = state
+                                                        .edit_buffer()
+                                                        .compute_visual_order()
+                                                        .len();
                                                     if let Some(active) = state.selection().active {
                                                         if active.row >= visual_count {
                                                             state.clear_selection(cx);
@@ -2525,19 +2557,14 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!can_redo, |d| {
-                                d.border_color(theme.border)
-                            })
-                            .child(
-                                svg()
-                                    .path(AppIcon::Redo.path())
-                                    .size_4()
-                                    .text_color(if can_redo {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                            ),
+                            .when(!can_redo, |d| d.border_color(theme.border))
+                            .child(svg().path(AppIcon::Redo.path()).size_4().text_color(
+                                if can_redo {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                     // Save button
                     .child(
@@ -2813,15 +2840,13 @@ impl DataGridPanel {
 
     /// Builds the list of visible context menu items based on editability.
     fn build_context_menu_items(is_editable: bool) -> Vec<ContextMenuItem> {
-        let mut items = vec![
-            ContextMenuItem {
-                label: "Copy",
-                action: Some(ContextMenuAction::Copy),
-                icon: Some(AppIcon::Layers),
-                is_separator: false,
-                is_danger: false,
-            },
-        ];
+        let mut items = vec![ContextMenuItem {
+            label: "Copy",
+            action: Some(ContextMenuAction::Copy),
+            icon: Some(AppIcon::Layers),
+            is_separator: false,
+            is_danger: false,
+        }];
 
         if is_editable {
             items.extend([
@@ -3006,18 +3031,13 @@ impl DataGridPanel {
                         this.handle_context_menu_action(action, window, cx);
                     }))
                     .when_some(icon, |d, icon| {
-                        d.child(
-                            svg()
-                                .path(icon.path())
-                                .size_4()
-                                .text_color(if is_danger {
-                                    theme.danger
-                                } else if is_selected {
-                                    theme.accent_foreground
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                        )
+                        d.child(svg().path(icon.path()).size_4().text_color(if is_danger {
+                            theme.danger
+                        } else if is_selected {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        }))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
                     .child(label)
@@ -3067,8 +3087,12 @@ impl DataGridPanel {
                     submenu_fg
                 })
                 .when(sql_submenu_open, |d| d.bg(submenu_hover))
-                .when(gen_sql_selected && !sql_submenu_open, |d| d.bg(theme.accent))
-                .when(!gen_sql_selected && !sql_submenu_open, |d| d.hover(|d| d.bg(submenu_hover)))
+                .when(gen_sql_selected && !sql_submenu_open, |d| {
+                    d.bg(theme.accent)
+                })
+                .when(!gen_sql_selected && !sql_submenu_open, |d| {
+                    d.hover(|d| d.bg(submenu_hover))
+                })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
                     if let Some(ref mut menu) = this.context_menu {
                         if menu.selected_index != gen_sql_index && !menu.sql_submenu_open {
@@ -3089,16 +3113,13 @@ impl DataGridPanel {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::Code.path())
-                                .size_4()
-                                .text_color(if gen_sql_selected && !sql_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                }),
-                        )
+                        .child(svg().path(AppIcon::Code.path()).size_4().text_color(
+                            if gen_sql_selected && !sql_submenu_open {
+                                theme.accent_foreground
+                            } else {
+                                submenu_fg
+                            },
+                        ))
                         .child("Generate SQL"),
                 )
                 .child(
@@ -3159,7 +3180,9 @@ impl DataGridPanel {
                                             submenu_fg
                                         })
                                         .when(is_submenu_selected, |d| d.bg(theme.accent))
-                                        .when(!is_submenu_selected, |d| d.hover(|d| d.bg(submenu_hover)))
+                                        .when(!is_submenu_selected, |d| {
+                                            d.hover(|d| d.bg(submenu_hover))
+                                        })
                                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
                                             if let Some(ref mut menu) = this.context_menu {
                                                 if menu.submenu_selected_index != idx {
@@ -3172,14 +3195,13 @@ impl DataGridPanel {
                                             this.handle_context_menu_action(action, window, cx);
                                         }))
                                         .child(
-                                            svg()
-                                                .path(AppIcon::Code.path())
-                                                .size_4()
-                                                .text_color(if is_submenu_selected {
+                                            svg().path(AppIcon::Code.path()).size_4().text_color(
+                                                if is_submenu_selected {
                                                     theme.accent_foreground
                                                 } else {
                                                     theme.muted_foreground
-                                                }),
+                                                },
+                                            ),
                                         )
                                         .child(label)
                                 })
@@ -3200,7 +3222,7 @@ impl DataGridPanel {
                 .size_full()
                 .track_focus(&self.context_menu_focus)
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    use crate::keymap::{default_keymap, KeyChord};
+                    use crate::keymap::{KeyChord, default_keymap};
 
                     let chord = KeyChord::from_gpui(&event.keystroke);
                     let keymap = default_keymap();
@@ -3315,30 +3337,29 @@ impl DataGridPanel {
 
         // Get row data based on visual row source
         let row_values: Vec<String> = match visual_order.get(row).copied() {
-            Some(VisualRowSource::Base(base_idx)) => {
-                self.result
-                    .rows
-                    .get(base_idx)
-                    .map(|r| {
-                        r.iter()
-                            .map(|val| crate::ui::components::data_table::clipboard::format_cell(
+            Some(VisualRowSource::Base(base_idx)) => self
+                .result
+                .rows
+                .get(base_idx)
+                .map(|r| {
+                    r.iter()
+                        .map(|val| {
+                            crate::ui::components::data_table::clipboard::format_cell(
                                 &crate::ui::components::data_table::model::CellValue::from(val),
-                            ))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
-            Some(VisualRowSource::Insert(insert_idx)) => {
-                buffer
-                    .get_pending_insert_by_idx(insert_idx)
-                    .map(|cells| {
-                        cells
-                            .iter()
-                            .map(crate::ui::components::data_table::clipboard::format_cell)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(crate::ui::components::data_table::clipboard::format_cell)
+                        .collect()
+                })
+                .unwrap_or_default(),
             None => return,
         };
 
@@ -3353,7 +3374,9 @@ impl DataGridPanel {
             return;
         };
 
-        let clipboard_text = cx.read_from_clipboard().and_then(|item| item.text().map(|s| s.to_string()));
+        let clipboard_text = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text().map(|s| s.to_string()));
 
         let Some(text) = clipboard_text else {
             return;
@@ -3362,19 +3385,15 @@ impl DataGridPanel {
         table_state.update(cx, |state, cx| {
             if let Some(coord) = state.selection().active {
                 let cell_value = crate::ui::components::data_table::model::CellValue::text(&text);
-                state.edit_buffer_mut().set_cell(coord.row, coord.col, cell_value);
+                state
+                    .edit_buffer_mut()
+                    .set_cell(coord.row, coord.col, cell_value);
                 cx.notify();
             }
         });
     }
 
-    fn handle_edit(
-        &mut self,
-        row: usize,
-        col: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn handle_edit(&mut self, row: usize, col: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(table_state) = &self.table_state {
             table_state.update(cx, |state, cx| {
                 let coord = crate::ui::components::data_table::selection::CellCoord::new(row, col);
@@ -3577,7 +3596,9 @@ impl DataGridPanel {
             .map(|(idx, _)| {
                 if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
                     // Column has a default expression (e.g., nextval(), now())
-                    crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                    crate::ui::components::data_table::model::CellValue::auto_generated(
+                        default_expr,
+                    )
                 } else {
                     crate::ui::components::data_table::model::CellValue::null()
                 }
@@ -3607,12 +3628,7 @@ impl DataGridPanel {
         let pk_indices: std::collections::HashSet<usize> = self
             .pk_columns
             .iter()
-            .filter_map(|pk_name| {
-                self.result
-                    .columns
-                    .iter()
-                    .position(|c| c.name == *pk_name)
-            })
+            .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
             .collect();
 
         // Get column defaults for PK columns
@@ -3737,7 +3753,12 @@ impl DataGridPanel {
         });
     }
 
-    fn handle_generate_sql(&mut self, visual_row: usize, kind: SqlGenerateKind, cx: &mut Context<Self>) {
+    fn handle_generate_sql(
+        &mut self,
+        visual_row: usize,
+        kind: SqlGenerateKind,
+        cx: &mut Context<Self>,
+    ) {
         use crate::ui::components::data_table::model::VisualRowSource;
         use crate::ui::sql_preview_modal::SqlGenerationType;
 
@@ -3773,19 +3794,16 @@ impl DataGridPanel {
         let visual_order = buffer.compute_visual_order();
 
         let row_values: Vec<String> = match visual_order.get(visual_row).copied() {
-            Some(VisualRowSource::Base(base_idx)) => {
-                self.result
-                    .rows
-                    .get(base_idx)
-                    .map(|r| r.iter().map(|v| self.format_value_for_sql(v)).collect())
-                    .unwrap_or_default()
-            }
-            Some(VisualRowSource::Insert(insert_idx)) => {
-                buffer
-                    .get_pending_insert_by_idx(insert_idx)
-                    .map(|cells| cells.iter().map(|c| self.format_cell_for_sql(c)).collect())
-                    .unwrap_or_default()
-            }
+            Some(VisualRowSource::Base(base_idx)) => self
+                .result
+                .rows
+                .get(base_idx)
+                .map(|r| r.iter().map(|v| self.format_value_for_sql(v)).collect())
+                .unwrap_or_default(),
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.format_cell_for_sql(c)).collect())
+                .unwrap_or_default(),
             None => return,
         };
 

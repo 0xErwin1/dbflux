@@ -63,9 +63,7 @@ impl DocumentHandle {
     /// Checks if this is a table document matching the given table.
     pub fn is_table(&self, table: &dbflux_core::TableRef, cx: &App) -> bool {
         match self {
-            Self::Data { entity, .. } => {
-                entity.read(cx).table_ref(cx).as_ref() == Some(table)
-            }
+            Self::Data { entity, .. } => entity.read(cx).table_ref(cx).as_ref() == Some(table),
             _ => false,
         }
     }

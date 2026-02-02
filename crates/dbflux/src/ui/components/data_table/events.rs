@@ -103,7 +103,6 @@ pub enum DataTableEvent {
     },
 
     // === Keyboard-triggered row operations ===
-
     /// Request to delete the current row (dd or Delete key).
     DeleteRowRequested(usize),
 

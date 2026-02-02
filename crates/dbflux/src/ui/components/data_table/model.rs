@@ -452,10 +452,7 @@ impl EditBuffer {
 
     /// Get the number of dirty rows.
     pub fn dirty_row_count(&self) -> usize {
-        self.row_states
-            .values()
-            .filter(|s| s.is_dirty())
-            .count()
+        self.row_states.values().filter(|s| s.is_dirty()).count()
     }
 
     /// Get the state of a row.
@@ -527,7 +524,11 @@ impl EditBuffer {
 
     /// Add a pending insert row after a specific base row.
     /// Returns the index in pending_inserts.
-    pub fn add_pending_insert_after(&mut self, after_row: usize, row_data: Vec<CellValue>) -> usize {
+    pub fn add_pending_insert_after(
+        &mut self,
+        after_row: usize,
+        row_data: Vec<CellValue>,
+    ) -> usize {
         let idx = self.pending_inserts.len();
 
         self.push_undo(EditAction::AddInsert {
@@ -556,8 +557,13 @@ impl EditBuffer {
 
     /// Get mutable pending insert data by its index in pending_inserts array.
     #[allow(dead_code)]
-    pub fn get_pending_insert_mut_by_idx(&mut self, insert_idx: usize) -> Option<&mut Vec<CellValue>> {
-        self.pending_inserts.get_mut(insert_idx).map(|pi| &mut pi.data)
+    pub fn get_pending_insert_mut_by_idx(
+        &mut self,
+        insert_idx: usize,
+    ) -> Option<&mut Vec<CellValue>> {
+        self.pending_inserts
+            .get_mut(insert_idx)
+            .map(|pi| &mut pi.data)
     }
 
     /// Compute the visual row ordering that interleaves pending inserts.
@@ -575,7 +581,9 @@ impl EditBuffer {
             .map(|(idx, pi)| {
                 // insert_after = Some(n) means insert after base row n
                 // insert_after = None means insert at the end
-                let pos = pi.insert_after.unwrap_or(self.base_row_count.saturating_sub(1));
+                let pos = pi
+                    .insert_after
+                    .unwrap_or(self.base_row_count.saturating_sub(1));
                 (pos, idx)
             })
             .collect();
