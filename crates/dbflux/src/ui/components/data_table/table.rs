@@ -394,10 +394,10 @@ impl gpui::Render for DataTable {
                 if state.edit_buffer_mut().undo() {
                     // Validate selection after undo - indices may have shifted
                     let visual_count = state.edit_buffer().compute_visual_order().len();
-                    if let Some(active) = state.selection().active {
-                        if active.row >= visual_count {
-                            state.clear_selection(cx);
-                        }
+                    if let Some(active) = state.selection().active
+                        && active.row >= visual_count
+                    {
+                        state.clear_selection(cx);
                     }
                     cx.notify();
                 }
@@ -415,10 +415,10 @@ impl gpui::Render for DataTable {
                 if state.edit_buffer_mut().redo() {
                     // Validate selection after redo - indices may have shifted
                     let visual_count = state.edit_buffer().compute_visual_order().len();
-                    if let Some(active) = state.selection().active {
-                        if active.row >= visual_count {
-                            state.clear_selection(cx);
-                        }
+                    if let Some(active) = state.selection().active
+                        && active.row >= visual_count
+                    {
+                        state.clear_selection(cx);
                     }
                     cx.notify();
                 }
@@ -834,23 +834,21 @@ fn render_rows(
                     let is_active = selection.active == Some(coord);
                     let is_editing = editing_cell == Some(coord);
 
-                    if is_editing {
-                        if let Some(input_state) = cell_input {
-                            return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .h(ROW_HEIGHT)
-                                .w(px(width))
-                                .overflow_hidden()
-                                .border_r_1()
-                                .border_1()
-                                .border_color(theme.ring)
-                                .bg(theme.background)
-                                .child(Input::new(input_state).small())
-                                .into_any_element();
-                        }
+                    if is_editing && let Some(input_state) = cell_input {
+                        return div()
+                            .id(("cell", row_ix * 10000 + col_ix))
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .h(ROW_HEIGHT)
+                            .w(px(width))
+                            .overflow_hidden()
+                            .border_r_1()
+                            .border_1()
+                            .border_color(theme.ring)
+                            .bg(theme.background)
+                            .child(Input::new(input_state).small())
+                            .into_any_element();
                     }
 
                     // For edit buffer access, use the data row index (model index for base rows)
@@ -897,9 +895,7 @@ fn render_rows(
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
                         .text_sm()
-                        .text_color(if is_pending_delete {
-                            theme.muted_foreground
-                        } else if is_null || is_auto_generated {
+                        .text_color(if is_pending_delete || is_null || is_auto_generated {
                             theme.muted_foreground
                         } else {
                             theme.foreground

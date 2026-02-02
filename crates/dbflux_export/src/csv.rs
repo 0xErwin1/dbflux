@@ -56,6 +56,9 @@ fn value_to_csv_field(value: &Value) -> String {
         Value::DateTime(dt) => dt.to_rfc3339(),
         Value::Date(d) => d.format("%Y-%m-%d").to_string(),
         Value::Time(t) => t.format("%H:%M:%S%.f").to_string(),
+        Value::ObjectId(id) => id.clone(),
+        Value::Array(arr) => serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string()),
+        Value::Document(doc) => serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string()),
     }
 }
 

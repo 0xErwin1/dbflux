@@ -1,3 +1,3 @@
 pub mod driver;
 
-pub use driver::MysqlDriver;
+pub use driver::{MARIADB_METADATA, MYSQL_METADATA, MysqlDriver};

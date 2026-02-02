@@ -6,13 +6,42 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, QueryCancelHandle, QueryHandle,
-    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value,
-    ViewInfo,
+    ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, ForeignKeyInfo,
+    FormValues, Icon, IndexInfo, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+
+/// SQLite driver metadata.
+pub static METADATA: DriverMetadata = DriverMetadata {
+    id: "sqlite",
+    display_name: "SQLite",
+    description: "Embedded file-based database",
+    category: DatabaseCategory::Relational,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::VIEWS.bits()
+            | DriverCapabilities::INDEXES.bits()
+            | DriverCapabilities::FOREIGN_KEYS.bits()
+            | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+            | DriverCapabilities::TRIGGERS.bits()
+            | DriverCapabilities::INSERT.bits()
+            | DriverCapabilities::UPDATE.bits()
+            | DriverCapabilities::DELETE.bits()
+            | DriverCapabilities::PAGINATION.bits()
+            | DriverCapabilities::SORTING.bits()
+            | DriverCapabilities::FILTERING.bits()
+            | DriverCapabilities::EXPORT_CSV.bits()
+            | DriverCapabilities::EXPORT_JSON.bits()
+            | DriverCapabilities::QUERY_CANCELLATION.bits(),
+    ),
+    default_port: None,
+    uri_scheme: "sqlite",
+    icon: Icon::Sqlite,
+};
 
 pub struct SqliteDriver;
 
@@ -33,12 +62,8 @@ impl DbDriver for SqliteDriver {
         DbKind::SQLite
     }
 
-    fn description(&self) -> &'static str {
-        "File-based embedded database"
-    }
-
-    fn requires_password(&self) -> bool {
-        false
+    fn metadata(&self) -> &'static DriverMetadata {
+        &METADATA
     }
 
     fn connect_with_secrets(
@@ -186,6 +211,10 @@ const SQLITE_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
 ];
 
 impl Connection for SqliteConnection {
+    fn metadata(&self) -> &'static DriverMetadata {
+        &METADATA
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         let conn = self
             .conn
@@ -447,9 +476,9 @@ impl Connection for SqliteConnection {
 
         let where_clause: Vec<String> = patch
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(patch.identity.values.iter())
+            .zip(patch.identity.values().iter())
             .map(|(col, val)| {
                 format!(
                     "{} = {}",
@@ -527,11 +556,7 @@ impl Connection for SqliteConnection {
             .map(|c| sqlite_quote_ident(c))
             .collect();
 
-        let values: Vec<String> = insert
-            .values
-            .iter()
-            .map(|v| value_to_sqlite_literal(v))
-            .collect();
+        let values: Vec<String> = insert.values.iter().map(value_to_sqlite_literal).collect();
 
         let insert_sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -592,9 +617,9 @@ impl Connection for SqliteConnection {
 
         let where_clause: Vec<String> = delete
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(delete.identity.values.iter())
+            .zip(delete.identity.values().iter())
             .map(|(col, val)| {
                 format!(
                     "{} = {}",
@@ -1079,6 +1104,15 @@ fn value_to_sqlite_literal(value: &Value) -> String {
         Value::DateTime(dt) => format!("'{}'", dt.to_rfc3339()),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
+        Value::ObjectId(id) => format!("'{}'", sqlite_escape_string(id)),
+        Value::Array(arr) => {
+            let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
+            format!("'{}'", sqlite_escape_string(&json))
+        }
+        Value::Document(doc) => {
+            let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
+            format!("'{}'", sqlite_escape_string(&json))
+        }
     }
 }
 

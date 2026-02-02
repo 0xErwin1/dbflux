@@ -1581,6 +1581,7 @@ dependencies = [
  "hex",
  "log",
  "mysql",
+ "serde_json",
  "uuid",
 ]
 
@@ -1595,6 +1596,7 @@ dependencies = [
  "native-tls",
  "postgres",
  "postgres-native-tls",
+ "serde_json",
  "uuid",
 ]
 
@@ -1606,6 +1608,7 @@ dependencies = [
  "hex",
  "log",
  "rusqlite",
+ "serde_json",
 ]
 
 [[package]]
@@ -1615,6 +1618,7 @@ dependencies = [
  "csv",
  "dbflux_core",
  "hex",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

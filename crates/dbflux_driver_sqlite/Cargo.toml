@@ -13,3 +13,4 @@ dbflux_core = { path = "../dbflux_core" }
 hex.workspace = true
 log = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"

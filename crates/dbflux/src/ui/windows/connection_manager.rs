@@ -450,6 +450,7 @@ enum SshAuthSelection {
 #[derive(Clone)]
 struct DriverInfo {
     kind: DbKind,
+    icon: dbflux_core::Icon,
     name: String,
     description: String,
 }
@@ -518,6 +519,7 @@ impl ConnectionManagerWindow {
             .values()
             .map(|driver| DriverInfo {
                 kind: driver.kind(),
+                icon: driver.metadata().icon,
                 name: driver.display_name().to_string(),
                 description: driver.description().to_string(),
             })
@@ -2053,6 +2055,7 @@ impl ConnectionManagerWindow {
                         )
                         .children(drivers.into_iter().enumerate().map(|(idx, driver_info)| {
                             let kind = driver_info.kind;
+                            let icon = driver_info.icon;
                             let is_focused = idx == focused_idx;
 
                             div()
@@ -2074,7 +2077,7 @@ impl ConnectionManagerWindow {
                                                 .gap_3()
                                                 .child(
                                                     svg()
-                                                        .path(AppIcon::from_db_kind(kind).path())
+                                                        .path(AppIcon::from_icon(icon).path())
                                                         .size_8()
                                                         .text_color(theme.foreground),
                                                 )
@@ -3180,7 +3183,7 @@ impl ConnectionManagerWindow {
                         let brand_icon = self
                             .selected_driver
                             .as_ref()
-                            .map(|driver| AppIcon::from_db_kind(driver.kind()));
+                            .map(|driver| AppIcon::from_icon(driver.metadata().icon));
 
                         div()
                             .flex()

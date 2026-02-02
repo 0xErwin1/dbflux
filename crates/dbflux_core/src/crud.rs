@@ -1,32 +1,82 @@
 use crate::{Row, Value};
 
-/// Unique identification of a row for WHERE clause in UPDATE/DELETE operations.
+/// Unique identification of a record for UPDATE/DELETE operations.
 ///
-/// Uses primary key columns and their values to construct a stable WHERE clause.
-/// If a table has no PK, the table is considered read-only for editing purposes.
+/// Different database types use different identification methods:
+/// - SQL: composite primary key (one or more columns)
+/// - Document DBs: ObjectId or similar unique identifier
+/// - Key-Value: the key itself
 #[derive(Debug, Clone)]
-pub struct RowIdentity {
-    /// Names of the primary key columns.
-    pub columns: Vec<String>,
+pub enum RecordIdentity {
+    /// SQL-style composite primary key.
+    /// Uses column names and values to construct a WHERE clause.
+    Composite {
+        columns: Vec<String>,
+        values: Vec<Value>,
+    },
 
-    /// Values of the primary key columns (same order as `columns`).
-    pub values: Vec<Value>,
+    /// MongoDB-style ObjectId.
+    /// Uses the `_id` field for identification.
+    ObjectId(String),
+
+    /// Key-value store key.
+    /// The key string directly identifies the record.
+    Key(String),
 }
 
-impl RowIdentity {
-    pub fn new(columns: Vec<String>, values: Vec<Value>) -> Self {
+impl RecordIdentity {
+    /// Create a composite identity from column names and values.
+    pub fn composite(columns: Vec<String>, values: Vec<Value>) -> Self {
         debug_assert_eq!(
             columns.len(),
             values.len(),
-            "RowIdentity: columns and values must have same length"
+            "RecordIdentity: columns and values must have same length"
         );
-        Self { columns, values }
+        Self::Composite { columns, values }
+    }
+
+    /// Alias for `composite` (backward compatibility).
+    pub fn new(columns: Vec<String>, values: Vec<Value>) -> Self {
+        Self::composite(columns, values)
+    }
+
+    pub fn object_id(id: impl Into<String>) -> Self {
+        Self::ObjectId(id.into())
+    }
+
+    pub fn key(key: impl Into<String>) -> Self {
+        Self::Key(key.into())
     }
 
     pub fn is_valid(&self) -> bool {
-        !self.columns.is_empty() && self.columns.len() == self.values.len()
+        match self {
+            Self::Composite { columns, values } => {
+                !columns.is_empty() && columns.len() == values.len()
+            }
+            Self::ObjectId(id) => !id.is_empty(),
+            Self::Key(key) => !key.is_empty(),
+        }
+    }
+
+    /// Returns columns for composite identity, empty slice for others.
+    pub fn columns(&self) -> &[String] {
+        match self {
+            Self::Composite { columns, .. } => columns,
+            _ => &[],
+        }
+    }
+
+    /// Returns values for composite identity, empty slice for others.
+    pub fn values(&self) -> &[Value] {
+        match self {
+            Self::Composite { values, .. } => values,
+            _ => &[],
+        }
     }
 }
+
+/// Legacy alias for backward compatibility.
+pub type RowIdentity = RecordIdentity;
 
 /// Changes to apply to a single row via UPDATE.
 #[derive(Debug, Clone)]
@@ -133,9 +183,10 @@ impl RowDelete {
 }
 
 /// State of a row during editing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RowState {
     /// No pending changes.
+    #[default]
     Clean,
 
     /// Has unsaved local modifications.
@@ -152,12 +203,6 @@ pub enum RowState {
 
     /// Existing row marked for DELETE (will be removed on save).
     PendingDelete,
-}
-
-impl Default for RowState {
-    fn default() -> Self {
-        Self::Clean
-    }
 }
 
 impl RowState {

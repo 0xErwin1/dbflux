@@ -2,8 +2,9 @@ use bitflags::bitflags;
 
 use crate::{
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DriverFormDef, FormValues, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert,
-    RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, QueryHandle, QueryRequest,
+    QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -120,14 +121,36 @@ pub trait DbDriver: Send + Sync {
     /// Returns the database kind this driver handles.
     fn kind(&self) -> DbKind;
 
+    /// Returns the driver metadata including category, capabilities, and query language.
+    ///
+    /// This is the primary way for drivers to declare what they are and what they support.
+    /// The UI uses this to adapt its behavior without driver-specific logic.
+    fn metadata(&self) -> &'static DriverMetadata;
+
     /// Human-readable name for UI display (e.g., "PostgreSQL", "SQLite").
+    ///
+    /// Default implementation uses `metadata().display_name`.
     fn display_name(&self) -> &'static str {
-        self.kind().display_name()
+        self.metadata().display_name
     }
 
     /// Optional description shown in the connection manager.
+    ///
+    /// Default implementation uses `metadata().description`.
     fn description(&self) -> &'static str {
-        ""
+        self.metadata().description
+    }
+
+    /// Returns the capabilities supported by this driver.
+    ///
+    /// Default implementation uses `metadata().capabilities`.
+    fn capabilities(&self) -> DriverCapabilities {
+        self.metadata().capabilities
+    }
+
+    /// Check if a specific capability is supported.
+    fn supports(&self, capability: DriverCapabilities) -> bool {
+        self.capabilities().contains(capability)
     }
 
     /// Returns the form field definitions for the connection manager UI.
@@ -147,11 +170,12 @@ pub trait DbDriver: Send + Sync {
     /// Used when loading a saved connection profile into the form.
     fn extract_values(&self, config: &crate::DbConfig) -> FormValues;
 
-    /// Whether this database type requires a password for connection.
+    /// Whether this database type requires authentication.
     ///
     /// Returns `false` for file-based databases like SQLite.
+    /// Default implementation checks for the AUTHENTICATION capability.
     fn requires_password(&self) -> bool {
-        true
+        self.supports(DriverCapabilities::AUTHENTICATION)
     }
 
     /// Create a connection without providing a password.
@@ -195,6 +219,22 @@ pub trait DbDriver: Send + Sync {
 /// The UI interacts exclusively through this trait, never accessing driver internals.
 /// Implementations must be thread-safe (`Send + Sync`) for background query execution.
 pub trait Connection: Send + Sync {
+    /// Returns the driver metadata for this connection.
+    ///
+    /// This provides access to the driver's capabilities, category, and query language
+    /// without needing a reference to the driver itself.
+    fn metadata(&self) -> &'static DriverMetadata;
+
+    /// Returns the capabilities supported by this connection's driver.
+    fn capabilities(&self) -> DriverCapabilities {
+        self.metadata().capabilities
+    }
+
+    /// Check if a specific capability is supported.
+    fn supports(&self, capability: DriverCapabilities) -> bool {
+        self.capabilities().contains(capability)
+    }
+
     /// Check if the connection is still alive.
     ///
     /// Typically sends a lightweight query like `SELECT 1`.

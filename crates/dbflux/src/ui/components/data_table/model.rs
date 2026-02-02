@@ -177,6 +177,9 @@ impl From<&Value> for CellValue {
             Value::DateTime(dt) => CellValue::text(&dt.format("%Y-%m-%d %H:%M:%S").to_string()),
             Value::Date(d) => CellValue::text(&d.format("%Y-%m-%d").to_string()),
             Value::Time(t) => CellValue::text(&t.format("%H:%M:%S").to_string()),
+            Value::ObjectId(id) => CellValue::text(id.as_str()),
+            Value::Array(arr) => CellValue::text(&format!("[{} items]", arr.len())),
+            Value::Document(doc) => CellValue::text(&format!("{{{} fields}}", doc.len())),
         }
     }
 }
@@ -635,11 +638,11 @@ impl EditBuffer {
     /// Unmark a row from deletion.
     #[allow(dead_code)]
     pub fn unmark_delete(&mut self, row: usize) {
-        if let Some(state) = self.row_states.get(&row) {
-            if state.is_pending_delete() {
-                self.push_undo(EditAction::UnmarkDelete { row });
-                self.row_states.remove(&row);
-            }
+        if let Some(state) = self.row_states.get(&row)
+            && state.is_pending_delete()
+        {
+            self.push_undo(EditAction::UnmarkDelete { row });
+            self.row_states.remove(&row);
         }
     }
 
@@ -750,10 +753,10 @@ impl EditBuffer {
                 new_value: value.clone(),
             });
 
-            if let Some(insert) = self.pending_inserts.get_mut(insert_idx) {
-                if col < insert.data.len() {
-                    insert.data[col] = value;
-                }
+            if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
+                && col < insert.data.len()
+            {
+                insert.data[col] = value;
             }
         }
     }
@@ -859,10 +862,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
-                if let Some(insert) = self.pending_inserts.get_mut(insert_idx) {
-                    if col < insert.data.len() {
-                        insert.data[col] = old_value.clone();
-                    }
+                if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
+                    && col < insert.data.len()
+                {
+                    insert.data[col] = old_value.clone();
                 }
                 self.redo_stack.push(EditAction::SetInsertCell {
                     insert_idx,
@@ -953,10 +956,10 @@ impl EditBuffer {
                 old_value,
                 new_value,
             } => {
-                if let Some(insert) = self.pending_inserts.get_mut(insert_idx) {
-                    if col < insert.data.len() {
-                        insert.data[col] = new_value.clone();
-                    }
+                if let Some(insert) = self.pending_inserts.get_mut(insert_idx)
+                    && col < insert.data.len()
+                {
+                    insert.data[col] = new_value.clone();
                 }
                 self.undo_stack.push(EditAction::SetInsertCell {
                     insert_idx,

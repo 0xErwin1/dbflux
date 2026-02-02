@@ -1,11 +1,14 @@
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 /// Database value type.
 ///
 /// Custom enum instead of `serde_json::Value` to enable proper type-aware
 /// sorting, efficient rendering, and clean CSV export without JSON overhead.
+///
+/// Supports both relational (SQL) and document (NoSQL) value types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Null,
@@ -14,16 +17,31 @@ pub enum Value {
     Float(f64),
     Text(String),
     Bytes(Vec<u8>),
+
     /// JSON/JSONB stored as string for exact round-trip preservation.
     Json(String),
+
     /// Decimal stored as string to preserve exact precision.
     Decimal(String),
+
     /// Timestamp with timezone.
     DateTime(DateTime<Utc>),
+
     /// Date without time component.
     Date(NaiveDate),
+
     /// Time without date component.
     Time(NaiveTime),
+
+    // === Document database types ===
+    /// Array of values (MongoDB arrays, PostgreSQL arrays).
+    Array(Vec<Value>),
+
+    /// Nested document/object (MongoDB embedded documents).
+    Document(BTreeMap<String, Value>),
+
+    /// MongoDB ObjectId (24-character hex string).
+    ObjectId(String),
 }
 
 impl Value {
@@ -53,6 +71,29 @@ impl Value {
             Value::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
             Value::Date(d) => d.format("%Y-%m-%d").to_string(),
             Value::Time(t) => t.format("%H:%M:%S").to_string(),
+            Value::Array(arr) => {
+                let preview = format!("[{} items]", arr.len());
+                if preview.len() <= max_len {
+                    preview
+                } else {
+                    format!("[{}...]", arr.len())
+                }
+            }
+            Value::Document(doc) => {
+                let preview = format!("{{{} fields}}", doc.len());
+                if preview.len() <= max_len {
+                    preview
+                } else {
+                    format!("{{{}...}}", doc.len())
+                }
+            }
+            Value::ObjectId(id) => {
+                if id.len() <= max_len {
+                    format!("ObjectId({})", id)
+                } else {
+                    format!("ObjectId({}...)", &id[..max_len.saturating_sub(12)])
+                }
+            }
         }
     }
 }
@@ -76,7 +117,39 @@ impl Value {
             Value::Date(_) => 7,
             Value::Time(_) => 8,
             Value::Bytes(_) => 9,
-            Value::Null => 10,
+            Value::ObjectId(_) => 10,
+            Value::Array(_) => 11,
+            Value::Document(_) => 12,
+            Value::Null => 13,
+        }
+    }
+
+    pub fn is_complex(&self) -> bool {
+        matches!(self, Value::Array(_) | Value::Document(_))
+    }
+
+    pub fn is_object_id(&self) -> bool {
+        matches!(self, Value::ObjectId(_))
+    }
+
+    pub fn as_object_id(&self) -> Option<&str> {
+        match self {
+            Value::ObjectId(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            Value::Array(arr) => Some(arr),
+            _ => None,
+        }
+    }
+
+    pub fn as_document(&self) -> Option<&BTreeMap<String, Value>> {
+        match self {
+            Value::Document(doc) => Some(doc),
+            _ => None,
         }
     }
 }
@@ -108,6 +181,9 @@ impl Ord for Value {
             (DateTime(a), DateTime(b)) => a.cmp(b),
             (Date(a), Date(b)) => a.cmp(b),
             (Time(a), Time(b)) => a.cmp(b),
+            (ObjectId(a), ObjectId(b)) => a.cmp(b),
+            (Array(a), Array(b)) => a.cmp(b),
+            (Document(a), Document(b)) => a.cmp(b),
 
             // Cross-type numeric promotion
             (Int(a), Float(b)) => (*a as f64).total_cmp(b),

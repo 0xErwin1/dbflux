@@ -4765,12 +4765,17 @@ impl Render for Sidebar {
         let active_id = state.active_connection_id;
         let connections = state.connections.keys().copied().collect::<Vec<_>>();
 
-        // Pre-compute profile_id -> DbKind map for use in the tree closure
+        // Pre-compute profile_id -> Icon map for use in the tree closure
         // (closure requires 'static, so we can't borrow state inside it)
-        let profile_db_kinds: HashMap<Uuid, DbKind> = state
+        let profile_icons: HashMap<Uuid, dbflux_core::Icon> = state
             .profiles
             .iter()
-            .map(|p| (p.id, p.config.kind()))
+            .filter_map(|p| {
+                state
+                    .drivers
+                    .get(&p.kind())
+                    .map(|driver| (p.id, driver.metadata().icon))
+            })
             .collect();
 
         let active_databases = self.active_databases.clone();
@@ -5029,12 +5034,11 @@ impl Render for Sidebar {
                                     (Some(AppIcon::Folder), "", theme.muted_foreground)
                                 }
                                 TreeNodeKind::Profile => {
-                                    let db_kind = item_id
+                                    let icon = item_id
                                         .strip_prefix("profile_")
                                         .and_then(|id_str| Uuid::parse_str(id_str).ok())
-                                        .and_then(|id| profile_db_kinds.get(&id).copied());
-
-                                    let icon = db_kind.map(AppIcon::from_db_kind);
+                                        .and_then(|id| profile_icons.get(&id).copied())
+                                        .map(AppIcon::from_icon);
 
                                     let color = if is_connected {
                                         color_green

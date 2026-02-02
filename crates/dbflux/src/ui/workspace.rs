@@ -1214,10 +1214,10 @@ impl Render for Workspace {
                 let chord = KeyChord::from_gpui(&event.keystroke);
                 let context = this.active_context(cx);
 
-                if let Some(cmd) = this.keymap.resolve(context, &chord) {
-                    if this.dispatch(cmd, window, cx) {
-                        cx.stop_propagation();
-                    }
+                if let Some(cmd) = this.keymap.resolve(context, &chord)
+                    && this.dispatch(cmd, window, cx)
+                {
+                    cx.stop_propagation();
                 }
             }))
             .child(

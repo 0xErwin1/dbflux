@@ -2496,10 +2496,10 @@ impl DataGridPanel {
                                                         .edit_buffer()
                                                         .compute_visual_order()
                                                         .len();
-                                                    if let Some(active) = state.selection().active {
-                                                        if active.row >= visual_count {
-                                                            state.clear_selection(cx);
-                                                        }
+                                                    if let Some(active) = state.selection().active
+                                                        && active.row >= visual_count
+                                                    {
+                                                        state.clear_selection(cx);
                                                     }
                                                     cx.notify();
                                                 }
@@ -2545,10 +2545,10 @@ impl DataGridPanel {
                                                         .edit_buffer()
                                                         .compute_visual_order()
                                                         .len();
-                                                    if let Some(active) = state.selection().active {
-                                                        if active.row >= visual_count {
-                                                            state.clear_selection(cx);
-                                                        }
+                                                    if let Some(active) = state.selection().active
+                                                        && active.row >= visual_count
+                                                    {
+                                                        state.clear_selection(cx);
                                                     }
                                                     cx.notify();
                                                 }
@@ -3020,11 +3020,11 @@ impl DataGridPanel {
                         })
                     })
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                        if let Some(ref mut menu) = this.context_menu {
-                            if menu.selected_index != current_index {
-                                menu.selected_index = current_index;
-                                cx.notify();
-                            }
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != current_index
+                        {
+                            menu.selected_index = current_index;
+                            cx.notify();
                         }
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -3094,11 +3094,12 @@ impl DataGridPanel {
                     d.hover(|d| d.bg(submenu_hover))
                 })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if let Some(ref mut menu) = this.context_menu {
-                        if menu.selected_index != gen_sql_index && !menu.sql_submenu_open {
-                            menu.selected_index = gen_sql_index;
-                            cx.notify();
-                        }
+                    if let Some(ref mut menu) = this.context_menu
+                        && menu.selected_index != gen_sql_index
+                        && !menu.sql_submenu_open
+                    {
+                        menu.selected_index = gen_sql_index;
+                        cx.notify();
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3184,11 +3185,11 @@ impl DataGridPanel {
                                             d.hover(|d| d.bg(submenu_hover))
                                         })
                                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                                            if let Some(ref mut menu) = this.context_menu {
-                                                if menu.submenu_selected_index != idx {
-                                                    menu.submenu_selected_index = idx;
-                                                    cx.notify();
-                                                }
+                                            if let Some(ref mut menu) = this.context_menu
+                                                && menu.submenu_selected_index != idx
+                                            {
+                                                menu.submenu_selected_index = idx;
+                                                cx.notify();
                                             }
                                         }))
                                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -3227,10 +3228,10 @@ impl DataGridPanel {
                     let chord = KeyChord::from_gpui(&event.keystroke);
                     let keymap = default_keymap();
 
-                    if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord) {
-                        if this.dispatch_menu_command(cmd, window, cx) {
-                            cx.stop_propagation();
-                        }
+                    if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord)
+                        && this.dispatch_menu_command(cmd, window, cx)
+                    {
+                        cx.stop_propagation();
                     }
                 }))
                 .on_mouse_down(
@@ -3861,6 +3862,15 @@ impl DataGridPanel {
             Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S%.f%z")),
             Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
             Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
+            Value::ObjectId(id) => format!("'{}'", id.replace('\'', "''")),
+            Value::Array(arr) => {
+                let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
+                format!("'{}'", json.replace('\'', "''"))
+            }
+            Value::Document(doc) => {
+                let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
+                format!("'{}'", json.replace('\'', "''"))
+            }
         }
     }
 
