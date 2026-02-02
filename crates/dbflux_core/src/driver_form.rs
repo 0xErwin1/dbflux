@@ -360,4 +360,12 @@ impl DriverFormDef {
             .flat_map(|s| s.fields.iter())
             .any(|f| f.id == "path")
     }
+
+    pub fn field(&self, id: &str) -> Option<&FormFieldDef> {
+        self.tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .find(|f| f.id == id)
+    }
 }
