@@ -120,6 +120,7 @@ pub enum ContextMenuAction {
     GenerateCode(String),
     Connect,
     Disconnect,
+    Refresh,
     Edit,
     Delete,
     OpenDatabase,
@@ -166,6 +167,7 @@ impl ContextMenuAction {
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
             Self::Disconnect => Some(AppIcon::Unplug),
+            Self::Refresh => Some(AppIcon::RefreshCcw),
             Self::Edit => Some(AppIcon::Pencil),
             Self::Delete => Some(AppIcon::Delete),
             Self::OpenDatabase => Some(AppIcon::Database),
@@ -2057,6 +2059,10 @@ impl Sidebar {
                         label: "Disconnect".into(),
                         action: ContextMenuAction::Disconnect,
                     });
+                    items.push(ContextMenuItem {
+                        label: "Refresh".into(),
+                        action: ContextMenuAction::Refresh,
+                    });
                 } else {
                     items.push(ContextMenuItem {
                         label: "Connect".into(),
@@ -2412,6 +2418,13 @@ impl Sidebar {
                     self.disconnect_profile(profile_id, cx);
                 }
             }
+            ContextMenuAction::Refresh => {
+                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
+                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
+                {
+                    self.refresh_connection(profile_id, cx);
+                }
+            }
             ContextMenuAction::Edit => {
                 if let Some(profile_id_str) = item_id.strip_prefix("profile_")
                     && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
@@ -2664,15 +2677,37 @@ impl Sidebar {
         self.refresh_tree(cx);
     }
 
-    fn create_connection_in_folder(&mut self, _item_id: &str, cx: &mut Context<Self>) {
-        // TODO: Open connection manager window with folder context
-        // For now, show a toast indicating this feature is pending
-        // The connection manager is opened via the main workspace, not directly from sidebar
-        self.pending_toast = Some(PendingToast {
-            message: "Use the + button in the sidebar header to create a new connection".into(),
-            is_error: false,
-        });
-        cx.notify();
+    fn create_connection_in_folder(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") else {
+            return;
+        };
+
+        let Ok(folder_id) = Uuid::parse_str(folder_id_str) else {
+            return;
+        };
+
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
+
+        cx.open_window(
+            WindowOptions {
+                app_id: Some("dbflux".into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Connection Manager".into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                kind: WindowKind::Floating,
+                ..Default::default()
+            },
+            |window, cx| {
+                let manager = cx.new(|cx| {
+                    ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx)
+                });
+                cx.new(|cx| Root::new(manager, window, cx))
+            },
+        )
+        .ok();
     }
 
     fn start_rename(&mut self, item_id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -4539,6 +4574,16 @@ impl Sidebar {
             cx.notify();
         });
         self.refresh_tree(cx);
+    }
+
+    fn refresh_connection(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        self.app_state.update(cx, |state, cx| {
+            state.disconnect(profile_id);
+            log::info!("Refreshing connection for profile {}", profile_id);
+            cx.notify();
+        });
+        self.refresh_tree(cx);
+        self.connect_to_profile(profile_id, cx);
     }
 
     fn delete_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {

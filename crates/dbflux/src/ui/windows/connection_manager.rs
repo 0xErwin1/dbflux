@@ -509,6 +509,9 @@ pub struct ConnectionManagerWindow {
     // Dropdown state
     ssh_tunnel_uuids: Vec<Uuid>,
     _subscriptions: Vec<Subscription>,
+
+    // Target folder for new connections
+    target_folder_id: Option<Uuid>,
 }
 
 impl ConnectionManagerWindow {
@@ -669,7 +672,19 @@ impl ConnectionManagerWindow {
             form_scroll_handle: ScrollHandle::new(),
             ssh_tunnel_uuids: Vec::new(),
             _subscriptions: subscriptions,
+            target_folder_id: None,
         }
+    }
+
+    pub fn new_in_folder(
+        app_state: Entity<AppState>,
+        folder_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut instance = Self::new(app_state, window, cx);
+        instance.target_folder_id = Some(folder_id);
+        instance
     }
 
     pub fn new_for_edit(
@@ -682,9 +697,14 @@ impl ConnectionManagerWindow {
         instance.editing_profile_id = Some(profile.id);
 
         let driver = app_state.read(cx).drivers.get(&profile.kind()).cloned();
-        instance.selected_driver = driver;
+        instance.selected_driver = driver.clone();
         instance.form_save_password = profile.save_password;
         instance.view = View::EditForm;
+
+        // Apply placeholders from driver form definition
+        if let Some(driver) = &driver {
+            instance.apply_form_placeholders(driver.form_definition(), window, cx);
+        }
 
         instance.input_name.update(cx, |state, cx| {
             state.set_value(&profile.name, window, cx);
@@ -835,7 +855,7 @@ impl ConnectionManagerWindow {
 
     fn select_driver(&mut self, kind: DbKind, window: &mut Window, cx: &mut Context<Self>) {
         let driver = self.app_state.read(cx).drivers.get(&kind).cloned();
-        self.selected_driver = driver;
+        self.selected_driver = driver.clone();
         self.form_save_password = false;
         self.ssh_enabled = false;
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
@@ -849,82 +869,8 @@ impl ConnectionManagerWindow {
             state.set_value("", window, cx);
         });
 
-        match kind {
-            DbKind::Postgres => {
-                self.input_host.update(cx, |state, cx| {
-                    state.set_value("localhost", window, cx);
-                });
-                self.input_port.update(cx, |state, cx| {
-                    state.set_value("5432", window, cx);
-                });
-                self.input_user.update(cx, |state, cx| {
-                    state.set_value("postgres", window, cx);
-                });
-                self.input_password.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_database.update(cx, |state, cx| {
-                    state.set_value("postgres", window, cx);
-                });
-                self.input_ssh_host.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_port.update(cx, |state, cx| {
-                    state.set_value("22", window, cx);
-                });
-                self.input_ssh_user.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_key_path.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_key_passphrase.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_password.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-            }
-            DbKind::SQLite => {
-                self.input_path.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-            }
-            DbKind::MySQL | DbKind::MariaDB => {
-                self.input_host.update(cx, |state, cx| {
-                    state.set_value("localhost", window, cx);
-                });
-                self.input_port.update(cx, |state, cx| {
-                    state.set_value("3306", window, cx);
-                });
-                self.input_user.update(cx, |state, cx| {
-                    state.set_value("root", window, cx);
-                });
-                self.input_password.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_database.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_host.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_port.update(cx, |state, cx| {
-                    state.set_value("22", window, cx);
-                });
-                self.input_ssh_user.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_key_path.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_key_passphrase.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.input_ssh_password.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-            }
+        if let Some(driver) = driver {
+            self.apply_form_defaults(driver.form_definition(), window, cx);
         }
 
         self.view = View::EditForm;
@@ -932,6 +878,69 @@ impl ConnectionManagerWindow {
         self.form_focus = FormFocus::Name;
         window.focus(&self.focus_handle);
         cx.notify();
+    }
+
+    fn apply_form_placeholders(
+        &self,
+        form: &dbflux_core::DriverFormDef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let fields: &[(&str, &Entity<InputState>)] = &[
+            ("host", &self.input_host),
+            ("port", &self.input_port),
+            ("user", &self.input_user),
+            ("database", &self.input_database),
+            ("path", &self.input_path),
+            ("ssh_host", &self.input_ssh_host),
+            ("ssh_port", &self.input_ssh_port),
+            ("ssh_user", &self.input_ssh_user),
+            ("ssh_key_path", &self.input_ssh_key_path),
+            ("ssh_passphrase", &self.input_ssh_key_passphrase),
+            ("ssh_password", &self.input_ssh_password),
+        ];
+
+        for (id, input) in fields {
+            if let Some(f) = form.field(id) {
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(f.placeholder, window, cx);
+                });
+            }
+        }
+    }
+
+    fn apply_form_defaults(
+        &self,
+        form: &dbflux_core::DriverFormDef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let fields: &[(&str, &Entity<InputState>)] = &[
+            ("host", &self.input_host),
+            ("port", &self.input_port),
+            ("user", &self.input_user),
+            ("database", &self.input_database),
+            ("path", &self.input_path),
+            ("ssh_host", &self.input_ssh_host),
+            ("ssh_port", &self.input_ssh_port),
+            ("ssh_user", &self.input_ssh_user),
+            ("ssh_key_path", &self.input_ssh_key_path),
+            ("ssh_passphrase", &self.input_ssh_key_passphrase),
+            ("ssh_password", &self.input_ssh_password),
+        ];
+
+        for (id, input) in fields {
+            if let Some(f) = form.field(id) {
+                input.update(cx, |state, cx| {
+                    state.set_value(f.default_value, window, cx);
+                    state.set_placeholder(f.placeholder, window, cx);
+                });
+            }
+        }
+
+        self.input_password.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
     }
 
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1370,7 +1379,7 @@ impl ConnectionManagerWindow {
             if is_edit {
                 state.update_profile(profile);
             } else {
-                state.add_profile(profile);
+                state.add_profile_in_folder(profile, self.target_folder_id);
             }
 
             cx.emit(crate::app::AppStateChanged);
@@ -3622,6 +3631,12 @@ impl ConnectionManagerWindow {
         let secondary = theme.secondary;
         let muted_foreground = theme.muted_foreground;
 
+        let icon_path = if show {
+            AppIcon::EyeOff.path()
+        } else {
+            AppIcon::Eye.path()
+        };
+
         div()
             .id(toggle_id)
             .w(px(32.0))
@@ -3633,13 +3648,10 @@ impl ConnectionManagerWindow {
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
             .child(
-                Icon::new(if show {
-                    IconName::EyeOff
-                } else {
-                    IconName::Eye
-                })
-                .size(px(16.0))
-                .text_color(muted_foreground),
+                svg()
+                    .path(icon_path)
+                    .size_4()
+                    .text_color(muted_foreground),
             )
     }
 }

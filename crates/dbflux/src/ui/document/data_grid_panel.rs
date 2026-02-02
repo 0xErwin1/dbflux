@@ -2231,7 +2231,7 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(!has_data, |d| {
+                    .when(self.data_table.is_none(), |d| {
                         d.flex().items_center().justify_center().child(
                             div()
                                 .text_size(FontSizes::BASE)

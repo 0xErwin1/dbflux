@@ -551,15 +551,19 @@ impl AppState {
         }
     }
 
-    pub fn add_profile(&mut self, profile: ConnectionProfile) {
+    pub fn add_profile_in_folder(
+        &mut self,
+        profile: ConnectionProfile,
+        folder_id: Option<Uuid>,
+    ) {
         let profile_id = profile.id;
         self.profiles.push(profile);
         self.save_profiles();
 
         // Add to connection tree if not already present
         if self.connection_tree.find_by_profile(profile_id).is_none() {
-            let sort_index = self.connection_tree.next_sort_index(None);
-            let node = ConnectionTreeNode::new_connection_ref(profile_id, None, sort_index);
+            let sort_index = self.connection_tree.next_sort_index(folder_id);
+            let node = ConnectionTreeNode::new_connection_ref(profile_id, folder_id, sort_index);
             self.connection_tree.add_node(node);
             self.save_connection_tree();
         }
