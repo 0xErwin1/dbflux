@@ -2,7 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
-use dbflux_core::{QueryResult, TableRef};
+use dbflux_core::{QueryResult, TableRef, Value};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ pub enum DataDocumentEvent {
         schema_name: Option<String>,
         table_name: String,
         column_names: Vec<String>,
-        row_values: Vec<String>,
+        row_values: Vec<Value>,
         pk_indices: Vec<usize>,
         generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
     },

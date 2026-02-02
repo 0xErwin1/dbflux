@@ -8,9 +8,10 @@ use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, ForeignKeyInfo,
-    FormValues, Icon, IndexInfo, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value, ViewInfo,
+    FormValues, Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -42,6 +43,34 @@ pub static METADATA: DriverMetadata = DriverMetadata {
     uri_scheme: "sqlite",
     icon: Icon::Sqlite,
 };
+
+/// SQLite SQL dialect implementation.
+pub struct SqliteDialect;
+
+impl SqlDialect for SqliteDialect {
+    fn quote_identifier(&self, name: &str) -> String {
+        sqlite_quote_ident(name)
+    }
+
+    fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+        // SQLite doesn't use schema prefixes for table references
+        sqlite_quote_ident(table)
+    }
+
+    fn value_to_literal(&self, value: &Value) -> String {
+        value_to_sqlite_literal(value)
+    }
+
+    fn escape_string(&self, s: &str) -> String {
+        sqlite_escape_string(s)
+    }
+
+    fn placeholder_style(&self) -> PlaceholderStyle {
+        PlaceholderStyle::QuestionMark
+    }
+}
+
+static SQLITE_DIALECT: SqliteDialect = SqliteDialect;
 
 pub struct SqliteDriver;
 
@@ -680,6 +709,10 @@ impl Connection for SqliteConnection {
         }
 
         Ok(CrudResult::new(affected as u64, returning_row))
+    }
+
+    fn dialect(&self) -> &dyn SqlDialect {
+        &SQLITE_DIALECT
     }
 }
 

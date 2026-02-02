@@ -8,9 +8,10 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
     DriverFormDef, DriverMetadata, ForeignKeyInfo, FormValues, Icon, IndexInfo, POSTGRES_FORM,
-    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row, RowDelete,
-    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, SslMode, TableInfo, Value,
+    ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -44,6 +45,33 @@ pub static METADATA: DriverMetadata = DriverMetadata {
     uri_scheme: "postgresql",
     icon: Icon::Postgres,
 };
+
+/// PostgreSQL SQL dialect implementation.
+pub struct PostgresDialect;
+
+impl SqlDialect for PostgresDialect {
+    fn quote_identifier(&self, name: &str) -> String {
+        pg_quote_ident(name)
+    }
+
+    fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+        pg_qualified_name(schema, table)
+    }
+
+    fn value_to_literal(&self, value: &Value) -> String {
+        value_to_pg_literal(value)
+    }
+
+    fn escape_string(&self, s: &str) -> String {
+        pg_escape_string(s)
+    }
+
+    fn placeholder_style(&self) -> PlaceholderStyle {
+        PlaceholderStyle::DollarNumber
+    }
+}
+
+static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
 
 pub struct PostgresDriver;
 
@@ -981,6 +1009,10 @@ impl Connection for PostgresConnection {
             .collect();
 
         Ok(CrudResult::success(returning_row))
+    }
+
+    fn dialect(&self) -> &dyn SqlDialect {
+        &POSTGRES_DIALECT
     }
 }
 

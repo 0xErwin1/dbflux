@@ -11,6 +11,8 @@ mod saved_query;
 mod schema;
 mod secrets;
 mod shutdown;
+mod sql_dialect;
+mod sql_generation;
 mod store;
 mod table_browser;
 mod task;
@@ -53,6 +55,11 @@ pub use traits::{
     SchemaFeatures, SchemaLoadingStrategy,
 };
 pub use value::Value;
+
+pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
+pub use sql_generation::{
+    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_sql,
+};
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {

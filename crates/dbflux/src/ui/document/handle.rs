@@ -6,6 +6,7 @@ use super::types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
 };
 use crate::keymap::{Command, ContextId};
+use dbflux_core::Value;
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
@@ -216,7 +217,7 @@ pub enum DocumentEvent {
         schema_name: Option<String>,
         table_name: String,
         column_names: Vec<String>,
-        row_values: Vec<String>,
+        row_values: Vec<Value>,
         pk_indices: Vec<usize>,
         generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
     },

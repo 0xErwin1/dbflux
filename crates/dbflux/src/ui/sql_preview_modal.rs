@@ -1,7 +1,11 @@
+use crate::app::AppState;
 use crate::keymap::ContextId;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::TableInfo;
+use dbflux_core::{
+    ColumnInfo, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, TableInfo,
+    Value,
+};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -67,7 +71,7 @@ pub enum SqlPreviewContext {
         schema_name: Option<String>,
         table_name: String,
         column_names: Vec<String>,
-        row_values: Vec<String>,
+        row_values: Vec<Value>,
         pk_indices: Vec<usize>,
     },
     /// From sidebar: table metadata
@@ -103,6 +107,7 @@ impl SqlPreviewContext {
 
 /// Modal for previewing and copying generated SQL.
 pub struct SqlPreviewModal {
+    app_state: Entity<AppState>,
     visible: bool,
     context: Option<SqlPreviewContext>,
     generation_type: SqlGenerationType,
@@ -113,7 +118,7 @@ pub struct SqlPreviewModal {
 }
 
 impl SqlPreviewModal {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sql_display = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("sql")
@@ -122,6 +127,7 @@ impl SqlPreviewModal {
         });
 
         Self {
+            app_state,
             visible: false,
             context: None,
             generation_type: SqlGenerationType::SelectWhere,
@@ -166,22 +172,25 @@ impl SqlPreviewModal {
 
         let sql = match context {
             SqlPreviewContext::DataTableRow {
+                profile_id,
                 schema_name,
                 table_name,
                 column_names,
                 row_values,
                 pk_indices,
-                ..
             } => self.generate_from_row_data(
+                *profile_id,
                 schema_name.as_deref(),
                 table_name,
                 column_names,
                 row_values,
                 pk_indices,
+                cx,
             ),
-            SqlPreviewContext::SidebarTable { table_info, .. } => {
-                self.generate_from_table_info(table_info)
-            }
+            SqlPreviewContext::SidebarTable {
+                profile_id,
+                table_info,
+            } => self.generate_from_table_info(*profile_id, table_info, cx),
         };
 
         self.generated_sql = sql.clone();
@@ -190,274 +199,122 @@ impl SqlPreviewModal {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_from_row_data(
         &self,
+        profile_id: Uuid,
         schema_name: Option<&str>,
         table_name: &str,
         column_names: &[String],
-        row_values: &[String],
+        row_values: &[Value],
         pk_indices: &[usize],
+        cx: &App,
     ) -> String {
-        let table_ref = self.build_table_reference(schema_name, table_name);
-        let separator = if self.settings.compact_sql {
-            " "
-        } else {
-            "\n    "
-        };
-        let newline = if self.settings.compact_sql { " " } else { "\n" };
+        let connection = self.app_state.read(cx).get_connection(profile_id);
 
-        match self.generation_type {
-            SqlGenerationType::SelectWhere => {
-                let where_clause = self.build_where_clause(column_names, row_values, pk_indices);
-                if self.settings.compact_sql {
-                    format!("SELECT * FROM {} WHERE {};", table_ref, where_clause)
-                } else {
-                    format!("SELECT *\nFROM {}\nWHERE {};", table_ref, where_clause)
-                }
-            }
-
-            SqlGenerationType::Insert => {
-                let cols_str = column_names.join(", ");
-                let vals_str = row_values.join(", ");
-                if self.settings.compact_sql {
-                    format!(
-                        "INSERT INTO {} ({}) VALUES ({});",
-                        table_ref, cols_str, vals_str
-                    )
-                } else {
-                    format!(
-                        "INSERT INTO {} ({}){}VALUES ({});",
-                        table_ref, cols_str, newline, vals_str
-                    )
-                }
-            }
-
-            SqlGenerationType::Update => {
-                let set_parts: Vec<String> = column_names
-                    .iter()
-                    .zip(row_values.iter())
-                    .map(|(col, val)| format!("{} = {}", col, val))
-                    .collect();
-                let set_clause = set_parts.join(&format!(",{}", separator));
-                let where_clause = self.build_where_clause(column_names, row_values, pk_indices);
-
-                if self.settings.compact_sql {
-                    format!(
-                        "UPDATE {} SET {} WHERE {};",
-                        table_ref, set_clause, where_clause
-                    )
-                } else {
-                    format!(
-                        "UPDATE {}\nSET {}\nWHERE {};",
-                        table_ref, set_clause, where_clause
-                    )
-                }
-            }
-
-            SqlGenerationType::Delete => {
-                let where_clause = self.build_where_clause(column_names, row_values, pk_indices);
-                if self.settings.compact_sql {
-                    format!("DELETE FROM {} WHERE {};", table_ref, where_clause)
-                } else {
-                    format!("DELETE FROM {}\nWHERE {};", table_ref, where_clause)
-                }
-            }
-        }
-    }
-
-    fn generate_from_table_info(&self, table_info: &TableInfo) -> String {
-        let table_ref = self.build_table_reference(table_info.schema.as_deref(), &table_info.name);
-
-        let columns: Vec<&str> = table_info
-            .columns
-            .as_ref()
-            .map(|cols| cols.iter().map(|c| c.name.as_str()).collect())
-            .unwrap_or_default();
-
-        let pk_columns: Vec<&str> = table_info
-            .columns
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .filter(|c| c.is_primary_key)
-                    .map(|c| c.name.as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let separator = if self.settings.compact_sql {
-            " "
-        } else {
-            "\n    "
-        };
-        let newline = if self.settings.compact_sql { " " } else { "\n" };
-
-        match self.generation_type {
-            SqlGenerationType::SelectWhere => {
-                let cols_str = if columns.is_empty() {
-                    "*".to_string()
-                } else if self.settings.compact_sql {
-                    columns.join(", ")
-                } else {
-                    columns.join(&format!(",{}", separator))
-                };
-
-                let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() {
-                        vec!["id"]
-                    } else {
-                        vec![columns[0]]
-                    }
-                } else {
-                    pk_columns.clone()
-                };
-
-                let where_clause = where_cols
-                    .iter()
-                    .map(|c| format!("{} = ?", c))
-                    .collect::<Vec<_>>()
-                    .join(" AND ");
-
-                if self.settings.compact_sql {
-                    format!(
-                        "SELECT {} FROM {} WHERE {};",
-                        cols_str, table_ref, where_clause
-                    )
-                } else {
-                    format!(
-                        "SELECT {}{}\nFROM {}\nWHERE {};",
-                        separator, cols_str, table_ref, where_clause
-                    )
-                }
-            }
-
-            SqlGenerationType::Insert => {
-                let cols_str = if columns.is_empty() {
-                    "column1, column2".to_string()
-                } else {
-                    columns.join(", ")
-                };
-
-                let vals_str = if columns.is_empty() {
-                    "?, ?".to_string()
-                } else {
-                    vec!["?"; columns.len()].join(", ")
-                };
-
-                if self.settings.compact_sql {
-                    format!(
-                        "INSERT INTO {} ({}) VALUES ({});",
-                        table_ref, cols_str, vals_str
-                    )
-                } else {
-                    format!(
-                        "INSERT INTO {} ({}){}VALUES ({});",
-                        table_ref, cols_str, newline, vals_str
-                    )
-                }
-            }
-
-            SqlGenerationType::Update => {
-                let set_parts: Vec<String> = if columns.is_empty() {
-                    vec!["column1 = ?".to_string(), "column2 = ?".to_string()]
-                } else {
-                    columns.iter().map(|c| format!("{} = ?", c)).collect()
-                };
-                let set_clause = set_parts.join(&format!(",{}", separator));
-
-                let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() {
-                        vec!["id"]
-                    } else {
-                        vec![columns[0]]
-                    }
-                } else {
-                    pk_columns.clone()
-                };
-
-                let where_clause = where_cols
-                    .iter()
-                    .map(|c| format!("{} = ?", c))
-                    .collect::<Vec<_>>()
-                    .join(" AND ");
-
-                if self.settings.compact_sql {
-                    format!(
-                        "UPDATE {} SET {} WHERE {};",
-                        table_ref, set_clause, where_clause
-                    )
-                } else {
-                    format!(
-                        "UPDATE {}\nSET {}{}\nWHERE {};",
-                        table_ref, separator, set_clause, where_clause
-                    )
-                }
-            }
-
-            SqlGenerationType::Delete => {
-                let where_cols = if pk_columns.is_empty() {
-                    if columns.is_empty() {
-                        vec!["id"]
-                    } else {
-                        vec![columns[0]]
-                    }
-                } else {
-                    pk_columns
-                };
-
-                let where_clause = where_cols
-                    .iter()
-                    .map(|c| format!("{} = ?", c))
-                    .collect::<Vec<_>>()
-                    .join(" AND ");
-
-                if self.settings.compact_sql {
-                    format!("DELETE FROM {} WHERE {};", table_ref, where_clause)
-                } else {
-                    format!("DELETE FROM {}\nWHERE {};", table_ref, where_clause)
-                }
-            }
-        }
-    }
-
-    fn build_table_reference(&self, schema: Option<&str>, table: &str) -> String {
-        if self.settings.use_fully_qualified_names
-            && let Some(schema) = schema
-        {
-            return format!("{}.{}", schema, table);
-        }
-        table.to_string()
-    }
-
-    fn build_where_clause(
-        &self,
-        column_names: &[String],
-        row_values: &[String],
-        pk_indices: &[usize],
-    ) -> String {
-        let indices: Vec<usize> = if pk_indices.is_empty() {
-            (0..column_names.len()).collect()
-        } else {
-            pk_indices.to_vec()
-        };
-
-        let conditions: Vec<String> = indices
+        let columns: Vec<ColumnInfo> = column_names
             .iter()
-            .filter_map(|&idx| {
-                let col = column_names.get(idx)?;
-                let val = row_values.get(idx)?;
-                if val == "NULL" {
-                    Some(format!("{} IS NULL", col))
-                } else {
-                    Some(format!("{} = {}", col, val))
-                }
+            .enumerate()
+            .map(|(idx, name)| ColumnInfo {
+                name: name.clone(),
+                type_name: String::new(),
+                nullable: true,
+                is_primary_key: pk_indices.contains(&idx),
+                default_value: None,
             })
             .collect();
 
-        if conditions.is_empty() {
-            "1=1".to_string()
+        let operation = match self.generation_type {
+            SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
+            SqlGenerationType::Insert => SqlOperation::Insert,
+            SqlGenerationType::Update => SqlOperation::Update,
+            SqlGenerationType::Delete => SqlOperation::Delete,
+        };
+
+        let request = SqlGenerationRequest {
+            operation,
+            schema: schema_name,
+            table: table_name,
+            columns: &columns,
+            values: SqlValueMode::WithValues(row_values),
+            pk_indices,
+            options: SqlGenerationOptions {
+                fully_qualified: self.settings.use_fully_qualified_names,
+                compact: self.settings.compact_sql,
+            },
+        };
+
+        if let Some(conn) = connection {
+            match conn.generate_sql(&request) {
+                Ok(sql) => sql,
+                Err(e) => format!("-- Error generating SQL: {}", e),
+            }
         } else {
-            conditions.join(" AND ")
+            dbflux_core::generate_sql(&dbflux_core::DefaultSqlDialect, &request)
+        }
+    }
+
+    fn generate_from_table_info(
+        &self,
+        profile_id: Uuid,
+        table_info: &TableInfo,
+        cx: &App,
+    ) -> String {
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+
+        let columns: Vec<ColumnInfo> = table_info.columns.clone().unwrap_or_else(|| {
+                vec![
+                    ColumnInfo {
+                        name: "column1".to_string(),
+                        type_name: String::new(),
+                        nullable: true,
+                        is_primary_key: true,
+                        default_value: None,
+                    },
+                    ColumnInfo {
+                        name: "column2".to_string(),
+                        type_name: String::new(),
+                        nullable: true,
+                        is_primary_key: false,
+                        default_value: None,
+                    },
+                ]
+            });
+
+        let pk_indices: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_primary_key)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        let operation = match self.generation_type {
+            SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
+            SqlGenerationType::Insert => SqlOperation::Insert,
+            SqlGenerationType::Update => SqlOperation::Update,
+            SqlGenerationType::Delete => SqlOperation::Delete,
+        };
+
+        let request = SqlGenerationRequest {
+            operation,
+            schema: table_info.schema.as_deref(),
+            table: &table_info.name,
+            columns: &columns,
+            values: SqlValueMode::WithPlaceholders,
+            pk_indices: &pk_indices,
+            options: SqlGenerationOptions {
+                fully_qualified: self.settings.use_fully_qualified_names,
+                compact: self.settings.compact_sql,
+            },
+        };
+
+        if let Some(conn) = connection {
+            match conn.generate_sql(&request) {
+                Ok(sql) => sql,
+                Err(e) => format!("-- Error generating SQL: {}", e),
+            }
+        } else {
+            dbflux_core::generate_sql(&dbflux_core::DefaultSqlDialect, &request)
         }
     }
 

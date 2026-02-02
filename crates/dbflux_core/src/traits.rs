@@ -4,7 +4,7 @@ use crate::{
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
     DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, QueryHandle, QueryRequest,
     QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, TableInfo, ViewInfo,
+    SchemaSnapshot, SqlDialect, SqlGenerationRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -441,5 +441,18 @@ pub trait Connection: Send + Sync {
         Err(DbError::NotSupported(
             "Row deletes not supported by this driver".to_string(),
         ))
+    }
+
+    /// Returns the SQL dialect for this connection.
+    ///
+    /// Used for generating database-specific SQL statements with proper
+    /// quoting, escaping, and literal formatting.
+    fn dialect(&self) -> &dyn SqlDialect;
+
+    /// Generate SQL using this connection's dialect.
+    ///
+    /// Default implementation delegates to `crate::generate_sql()`.
+    fn generate_sql(&self, request: &SqlGenerationRequest) -> Result<String, DbError> {
+        Ok(crate::generate_sql(self.dialect(), request))
     }
 }
