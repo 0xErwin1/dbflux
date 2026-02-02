@@ -9,9 +9,10 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
     ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle, QueryCancelHandle,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, Row, RowDelete,
+    RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value,
+    ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1023,33 +1024,12 @@ impl Connection for MysqlConnection {
             return Err(DbError::QueryFailed("No changes to save".to_string()));
         }
 
-        // MySQL uses schema as database name
-        let qualified_table = patch
-            .schema
-            .as_ref()
-            .map(|db| format!("`{}`.`{}`", db, patch.table))
-            .unwrap_or_else(|| format!("`{}`", patch.table));
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
 
-        let set_clause: Vec<String> = patch
-            .changes
-            .iter()
-            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
-            .collect();
-
-        let where_clause: Vec<String> = patch
-            .identity
-            .columns()
-            .iter()
-            .zip(patch.identity.values().iter())
-            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
-            .collect();
-
-        let update_sql = format!(
-            "UPDATE {} SET {} WHERE {} LIMIT 1",
-            qualified_table,
-            set_clause.join(", "),
-            where_clause.join(" AND ")
-        );
+        let update_sql = builder
+            .build_update(patch, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
+        let update_sql = format!("{} LIMIT 1", update_sql);
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
@@ -1058,7 +1038,6 @@ impl Connection for MysqlConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        // Switch database if needed
         if let Some(ref db) = patch.schema
             && state.current_database.as_ref() != Some(db)
         {
@@ -1081,12 +1060,9 @@ impl Connection for MysqlConnection {
             return Ok(CrudResult::empty());
         }
 
-        // Re-query the updated row using the same WHERE clause
-        let select_sql = format!(
-            "SELECT * FROM {} WHERE {} LIMIT 1",
-            qualified_table,
-            where_clause.join(" AND ")
-        );
+        let select_sql = builder
+            .build_select_by_identity(patch.schema.as_deref(), &patch.table, &patch.identity)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[UPDATE] Re-querying: {}", select_sql);
 
@@ -1113,23 +1089,11 @@ impl Connection for MysqlConnection {
             ));
         }
 
-        // MySQL uses schema as database name
-        let qualified_table = insert
-            .schema
-            .as_ref()
-            .map(|db| format!("`{}`.`{}`", db, insert.table))
-            .unwrap_or_else(|| format!("`{}`", insert.table));
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
 
-        let columns: Vec<String> = insert.columns.iter().map(|c| format!("`{}`", c)).collect();
-
-        let values: Vec<String> = insert.values.iter().map(value_to_mysql_literal).collect();
-
-        let insert_sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            qualified_table,
-            columns.join(", "),
-            values.join(", ")
-        );
+        let insert_sql = builder
+            .build_insert(insert, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
@@ -1138,7 +1102,6 @@ impl Connection for MysqlConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        // Switch database if needed
         if let Some(ref db) = insert.schema
             && state.current_database.as_ref() != Some(db)
         {
@@ -1157,28 +1120,26 @@ impl Connection for MysqlConnection {
 
         let last_id = state.conn.last_insert_id();
 
-        // Try to re-query the inserted row using LAST_INSERT_ID() if we have an auto_increment
         let select_sql = if last_id > 0 {
-            // Assume first column might be the auto_increment PK
+            let first_col = insert
+                .columns
+                .first()
+                .map(|c| MYSQL_DIALECT.quote_identifier(c))
+                .unwrap_or_else(|| "`id`".to_string());
+            let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
+
             format!(
                 "SELECT * FROM {} WHERE {} = {} LIMIT 1",
-                qualified_table,
-                columns.first().map(|c| c.as_str()).unwrap_or("id"),
-                last_id
+                table, first_col, last_id
             )
         } else {
-            // Without auto_increment, re-query using the inserted values
-            let where_clause: Vec<String> = insert
-                .columns
-                .iter()
-                .zip(insert.values.iter())
-                .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
-                .collect();
-            format!(
-                "SELECT * FROM {} WHERE {} LIMIT 1",
-                qualified_table,
-                where_clause.join(" AND ")
-            )
+            let identity = RecordIdentity::composite(
+                insert.columns.clone(),
+                insert.values.clone(),
+            );
+            builder
+                .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
+                .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?
         };
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
@@ -1206,27 +1167,11 @@ impl Connection for MysqlConnection {
             ));
         }
 
-        // MySQL uses schema as database name
-        let qualified_table = delete
-            .schema
-            .as_ref()
-            .map(|db| format!("`{}`.`{}`", db, delete.table))
-            .unwrap_or_else(|| format!("`{}`", delete.table));
+        let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
 
-        let where_clause: Vec<String> = delete
-            .identity
-            .columns()
-            .iter()
-            .zip(delete.identity.values().iter())
-            .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
-            .collect();
-
-        // First fetch the row we're about to delete
-        let select_sql = format!(
-            "SELECT * FROM {} WHERE {} LIMIT 1",
-            qualified_table,
-            where_clause.join(" AND ")
-        );
+        let select_sql = builder
+            .build_select_by_identity(delete.schema.as_deref(), &delete.table, &delete.identity)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[DELETE] Fetching row: {}", select_sql);
 
@@ -1235,7 +1180,6 @@ impl Connection for MysqlConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        // Switch database if needed
         if let Some(ref db) = delete.schema
             && state.current_database.as_ref() != Some(db)
         {
@@ -1259,12 +1203,10 @@ impl Connection for MysqlConnection {
                 .collect::<Row>()
         });
 
-        // Now delete the row
-        let delete_sql = format!(
-            "DELETE FROM {} WHERE {} LIMIT 1",
-            qualified_table,
-            where_clause.join(" AND ")
-        );
+        let delete_sql = builder
+            .build_delete(delete, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
+        let delete_sql = format!("{} LIMIT 1", delete_sql);
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 

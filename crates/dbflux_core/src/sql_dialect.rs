@@ -32,6 +32,12 @@ pub trait SqlDialect: Send + Sync {
 
     /// Returns the placeholder style for this dialect.
     fn placeholder_style(&self) -> PlaceholderStyle;
+
+    /// Whether this dialect supports RETURNING clause in INSERT/UPDATE/DELETE.
+    /// PostgreSQL supports it natively; SQLite/MySQL require re-query.
+    fn supports_returning(&self) -> bool {
+        false
+    }
 }
 
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).

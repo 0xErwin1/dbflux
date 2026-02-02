@@ -13,6 +13,7 @@ mod secrets;
 mod shutdown;
 mod sql_dialect;
 mod sql_generation;
+mod sql_query_builder;
 mod store;
 mod table_browser;
 mod task;
@@ -60,6 +61,7 @@ pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 pub use sql_generation::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_sql,
 };
+pub use sql_query_builder::SqlQueryBuilder;
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {

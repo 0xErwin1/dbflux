@@ -10,8 +10,8 @@ use dbflux_core::{
     DriverFormDef, DriverMetadata, ForeignKeyInfo, FormValues, Icon, IndexInfo, POSTGRES_FORM,
     PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, SslMode, TableInfo, Value,
-    ViewInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -68,6 +68,10 @@ impl SqlDialect for PostgresDialect {
 
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::DollarNumber
+    }
+
+    fn supports_returning(&self) -> bool {
+        true
     }
 }
 
@@ -876,28 +880,10 @@ impl Connection for PostgresConnection {
             return Err(DbError::QueryFailed("No changes to save".to_string()));
         }
 
-        let qualified_table = pg_qualified_name(patch.schema.as_deref(), &patch.table);
-
-        let set_clause: Vec<String> = patch
-            .changes
-            .iter()
-            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
-            .collect();
-
-        let where_clause: Vec<String> = patch
-            .identity
-            .columns()
-            .iter()
-            .zip(patch.identity.values().iter())
-            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
-            .collect();
-
-        let sql = format!(
-            "UPDATE {} SET {} WHERE {} RETURNING *",
-            qualified_table,
-            set_clause.join(", "),
-            where_clause.join(" AND ")
-        );
+        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
+        let sql = builder
+            .build_update(patch, true)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
 
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -929,18 +915,10 @@ impl Connection for PostgresConnection {
             ));
         }
 
-        let qualified_table = pg_qualified_name(insert.schema.as_deref(), &insert.table);
-
-        let columns: Vec<String> = insert.columns.iter().map(|c| pg_quote_ident(c)).collect();
-
-        let values: Vec<String> = insert.values.iter().map(value_to_pg_literal).collect();
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
-            qualified_table,
-            columns.join(", "),
-            values.join(", ")
-        );
+        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
+        let sql = builder
+            .build_insert(insert, true)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", sql);
 
@@ -972,21 +950,10 @@ impl Connection for PostgresConnection {
             ));
         }
 
-        let qualified_table = pg_qualified_name(delete.schema.as_deref(), &delete.table);
-
-        let where_clause: Vec<String> = delete
-            .identity
-            .columns()
-            .iter()
-            .zip(delete.identity.values().iter())
-            .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
-            .collect();
-
-        let sql = format!(
-            "DELETE FROM {} WHERE {} RETURNING *",
-            qualified_table,
-            where_clause.join(" AND ")
-        );
+        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
+        let sql = builder
+            .build_delete(delete, true)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
 
         log::debug!("[DELETE] Executing: {}", sql);
 
