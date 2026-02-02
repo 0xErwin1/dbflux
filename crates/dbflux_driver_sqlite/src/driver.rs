@@ -11,7 +11,7 @@ use dbflux_core::{
     FormValues, Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    TableInfo, Value, ViewInfo,
+    SqlQueryBuilder, TableInfo, Value, ViewInfo,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -489,40 +489,11 @@ impl Connection for SqliteConnection {
             return Err(DbError::QueryFailed("No changes to save".to_string()));
         }
 
-        let table_name = sqlite_quote_ident(&patch.table);
+        let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
 
-        let set_clause: Vec<String> = patch
-            .changes
-            .iter()
-            .map(|(col, val)| {
-                format!(
-                    "{} = {}",
-                    sqlite_quote_ident(col),
-                    value_to_sqlite_literal(val)
-                )
-            })
-            .collect();
-
-        let where_clause: Vec<String> = patch
-            .identity
-            .columns()
-            .iter()
-            .zip(patch.identity.values().iter())
-            .map(|(col, val)| {
-                format!(
-                    "{} = {}",
-                    sqlite_quote_ident(col),
-                    value_to_sqlite_literal(val)
-                )
-            })
-            .collect();
-
-        let update_sql = format!(
-            "UPDATE {} SET {} WHERE {}",
-            table_name,
-            set_clause.join(", "),
-            where_clause.join(" AND ")
-        );
+        let update_sql = builder
+            .build_update(patch, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
@@ -539,12 +510,9 @@ impl Connection for SqliteConnection {
             return Ok(CrudResult::empty());
         }
 
-        // Re-query the updated row using the same WHERE clause
-        let select_sql = format!(
-            "SELECT * FROM {} WHERE {} LIMIT 1",
-            table_name,
-            where_clause.join(" AND ")
-        );
+        let select_sql = builder
+            .build_select_by_identity(patch.schema.as_deref(), &patch.table, &patch.identity)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[UPDATE] Re-querying: {}", select_sql);
 
@@ -565,7 +533,6 @@ impl Connection for SqliteConnection {
                 .collect();
             Ok(CrudResult::success(returning_row))
         } else {
-            // Row was updated but not found on re-query (unlikely but possible with triggers)
             Ok(CrudResult::new(affected as u64, None))
         }
     }
@@ -577,22 +544,11 @@ impl Connection for SqliteConnection {
             ));
         }
 
-        let table_name = sqlite_quote_ident(&insert.table);
+        let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
 
-        let columns: Vec<String> = insert
-            .columns
-            .iter()
-            .map(|c| sqlite_quote_ident(c))
-            .collect();
-
-        let values: Vec<String> = insert.values.iter().map(value_to_sqlite_literal).collect();
-
-        let insert_sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            table_name,
-            columns.join(", "),
-            values.join(", ")
-        );
+        let insert_sql = builder
+            .build_insert(insert, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
@@ -604,8 +560,8 @@ impl Connection for SqliteConnection {
         conn.execute(&insert_sql, [])
             .map_err(|e| format_sqlite_query_error(&e))?;
 
-        // Get the last inserted row using rowid
         let rowid = conn.last_insert_rowid();
+        let table_name = SQLITE_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
 
         let select_sql = format!(
             "SELECT * FROM {} WHERE rowid = {} LIMIT 1",
@@ -642,28 +598,11 @@ impl Connection for SqliteConnection {
             ));
         }
 
-        let table_name = sqlite_quote_ident(&delete.table);
+        let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
 
-        let where_clause: Vec<String> = delete
-            .identity
-            .columns()
-            .iter()
-            .zip(delete.identity.values().iter())
-            .map(|(col, val)| {
-                format!(
-                    "{} = {}",
-                    sqlite_quote_ident(col),
-                    value_to_sqlite_literal(val)
-                )
-            })
-            .collect();
-
-        // First fetch the row we're about to delete
-        let select_sql = format!(
-            "SELECT * FROM {} WHERE {} LIMIT 1",
-            table_name,
-            where_clause.join(" AND ")
-        );
+        let select_sql = builder
+            .build_select_by_identity(delete.schema.as_deref(), &delete.table, &delete.identity)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[DELETE] Fetching row: {}", select_sql);
 
@@ -691,12 +630,9 @@ impl Connection for SqliteConnection {
                 })
         };
 
-        // Now delete the row
-        let delete_sql = format!(
-            "DELETE FROM {} WHERE {}",
-            table_name,
-            where_clause.join(" AND ")
-        );
+        let delete_sql = builder
+            .build_delete(delete, false)
+            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 
