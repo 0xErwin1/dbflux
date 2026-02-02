@@ -106,12 +106,12 @@ impl CellEditorModal {
         let value = self.input.read(cx).value().to_string();
 
         // Validate JSON if needed
-        if self.is_json {
-            if let Err(e) = Self::validate_json(&value) {
-                self.validation_error = Some(e);
-                cx.notify();
-                return;
-            }
+        if self.is_json
+            && let Err(e) = Self::validate_json(&value)
+        {
+            self.validation_error = Some(e);
+            cx.notify();
+            return;
         }
 
         cx.emit(CellEditorSaveEvent {
@@ -125,13 +125,13 @@ impl CellEditorModal {
 
     fn compact_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.input.read(cx).value().to_string();
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&value) {
-            if let Ok(compact) = serde_json::to_string(&parsed) {
-                self.input.update(cx, |state, cx| {
-                    state.set_value(&compact, window, cx);
-                });
-                self.validation_error = None;
-            }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&value)
+            && let Ok(compact) = serde_json::to_string(&parsed)
+        {
+            self.input.update(cx, |state, cx| {
+                state.set_value(&compact, window, cx);
+            });
+            self.validation_error = None;
         }
     }
 

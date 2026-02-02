@@ -421,10 +421,10 @@ impl SqlPreviewModal {
     }
 
     fn build_table_reference(&self, schema: Option<&str>, table: &str) -> String {
-        if self.settings.use_fully_qualified_names {
-            if let Some(schema) = schema {
-                return format!("{}.{}", schema, table);
-            }
+        if self.settings.use_fully_qualified_names
+            && let Some(schema) = schema
+        {
+            return format!("{}.{}", schema, table);
         }
         table.to_string()
     }

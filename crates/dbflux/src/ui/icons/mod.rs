@@ -1,4 +1,4 @@
-use dbflux_core::DbKind;
+use dbflux_core::Icon;
 
 /// App-specific icons embedded from resources/icons/
 ///
@@ -164,13 +164,18 @@ impl AppIcon {
         }
     }
 
-    /// Maps a database kind to its brand icon.
-    pub const fn from_db_kind(kind: DbKind) -> Self {
-        match kind {
-            DbKind::Postgres => Self::BrandPostgres,
-            DbKind::MySQL => Self::BrandMysql,
-            DbKind::MariaDB => Self::BrandMariadb,
-            DbKind::SQLite => Self::BrandSqlite,
+    /// Maps a core Icon to the corresponding AppIcon.
+    ///
+    /// This is the preferred way to get database brand icons from driver metadata.
+    pub const fn from_icon(icon: Icon) -> Self {
+        match icon {
+            Icon::Postgres => Self::BrandPostgres,
+            Icon::Mysql => Self::BrandMysql,
+            Icon::Mariadb => Self::BrandMariadb,
+            Icon::Sqlite => Self::BrandSqlite,
+            Icon::Mongodb => Self::BrandMongodb,
+            Icon::Redis => Self::BrandRedis,
+            Icon::Database => Self::Database,
         }
     }
 }

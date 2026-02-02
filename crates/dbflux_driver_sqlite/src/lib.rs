@@ -1,3 +1,3 @@
 pub mod driver;
 
-pub use driver::SqliteDriver;
+pub use driver::{METADATA, SqliteDriver};

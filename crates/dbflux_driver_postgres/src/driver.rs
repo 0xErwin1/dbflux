@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues,
-    IndexInfo, POSTGRES_FORM, QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row,
-    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
+    DriverFormDef, DriverMetadata, ForeignKeyInfo, FormValues, Icon, IndexInfo, POSTGRES_FORM,
+    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row, RowDelete,
+    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
@@ -16,6 +17,33 @@ use native_tls::TlsConnector;
 use postgres::{CancelToken as PgCancelToken, Client, NoTls};
 use postgres_native_tls::MakeTlsConnector;
 use uuid::Uuid;
+
+/// PostgreSQL driver metadata.
+pub static METADATA: DriverMetadata = DriverMetadata {
+    id: "postgres",
+    display_name: "PostgreSQL",
+    description: "Advanced open-source relational database",
+    category: DatabaseCategory::Relational,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::SCHEMAS.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::FOREIGN_KEYS.bits()
+            | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+            | DriverCapabilities::CUSTOM_TYPES.bits()
+            | DriverCapabilities::TRIGGERS.bits()
+            | DriverCapabilities::STORED_PROCEDURES.bits()
+            | DriverCapabilities::SEQUENCES.bits()
+            | DriverCapabilities::RETURNING.bits(),
+    ),
+    default_port: Some(5432),
+    uri_scheme: "postgresql",
+    icon: Icon::Postgres,
+};
 
 pub struct PostgresDriver;
 
@@ -36,8 +64,8 @@ impl DbDriver for PostgresDriver {
         DbKind::Postgres
     }
 
-    fn description(&self) -> &'static str {
-        "Advanced open source relational database"
+    fn metadata(&self) -> &'static DriverMetadata {
+        &METADATA
     }
 
     fn connect_with_secrets(
@@ -413,6 +441,10 @@ const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
 ];
 
 impl Connection for PostgresConnection {
+    fn metadata(&self) -> &'static DriverMetadata {
+        &METADATA
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         let mut client = self
             .client
@@ -827,9 +859,9 @@ impl Connection for PostgresConnection {
 
         let where_clause: Vec<String> = patch
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(patch.identity.values.iter())
+            .zip(patch.identity.values().iter())
             .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
             .collect();
 
@@ -874,11 +906,7 @@ impl Connection for PostgresConnection {
 
         let columns: Vec<String> = insert.columns.iter().map(|c| pg_quote_ident(c)).collect();
 
-        let values: Vec<String> = insert
-            .values
-            .iter()
-            .map(|v| value_to_pg_literal(v))
-            .collect();
+        let values: Vec<String> = insert.values.iter().map(value_to_pg_literal).collect();
 
         let sql = format!(
             "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
@@ -921,9 +949,9 @@ impl Connection for PostgresConnection {
 
         let where_clause: Vec<String> = delete
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(delete.identity.values.iter())
+            .zip(delete.identity.values().iter())
             .map(|(col, val)| format!("{} = {}", pg_quote_ident(col), value_to_pg_literal(val)))
             .collect();
 
@@ -1535,6 +1563,15 @@ fn value_to_pg_literal(value: &Value) -> String {
         Value::DateTime(dt) => format!("'{}'::timestamptz", dt.to_rfc3339()),
         Value::Date(d) => format!("'{}'::date", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'::time", t.format("%H:%M:%S%.f")),
+        Value::ObjectId(id) => pg_quote_string(id),
+        Value::Array(arr) => {
+            let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
+            format!("{}::jsonb", pg_quote_string(&json))
+        }
+        Value::Document(doc) => {
+            let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
+            format!("{}::jsonb", pg_quote_string(&json))
+        }
     }
 }
 

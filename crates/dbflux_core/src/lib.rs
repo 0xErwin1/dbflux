@@ -1,6 +1,7 @@
 mod connection_tree;
 mod connection_tree_store;
 mod crud;
+mod driver_capabilities;
 mod driver_form;
 mod error;
 mod history;
@@ -17,7 +18,10 @@ mod value;
 
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
-pub use crud::{CrudResult, RowDelete, RowIdentity, RowInsert, RowPatch, RowState};
+pub use crud::{CrudResult, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState};
+pub use driver_capabilities::{
+    DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
+};
 pub use driver_form::{
     DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MYSQL_FORM,
     POSTGRES_FORM, SQLITE_FORM,
@@ -30,9 +34,10 @@ pub use profile::{
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
-    ColumnInfo, ConstraintInfo, ConstraintKind, CustomTypeInfo, CustomTypeKind, DatabaseInfo,
-    DbSchemaInfo, ForeignKeyInfo, IndexInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    TableInfo, ViewInfo,
+    CollectionIndexInfo, CollectionInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo,
+    CustomTypeInfo, CustomTypeKind, DatabaseInfo, DbSchemaInfo, FieldInfo, ForeignKeyInfo,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueType, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
 };
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,

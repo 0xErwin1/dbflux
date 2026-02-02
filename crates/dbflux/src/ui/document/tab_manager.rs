@@ -46,29 +46,27 @@ impl TabManager {
         let tab_manager = cx.entity().clone();
         let subscription = doc.subscribe(cx, move |event, cx| {
             use super::handle::DocumentEvent;
-            match event {
-                DocumentEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
-                    generation_type,
-                } => {
-                    tab_manager.update(cx, |_, cx| {
-                        cx.emit(TabManagerEvent::RequestSqlPreview {
-                            profile_id: *profile_id,
-                            schema_name: schema_name.clone(),
-                            table_name: table_name.clone(),
-                            column_names: column_names.clone(),
-                            row_values: row_values.clone(),
-                            pk_indices: pk_indices.clone(),
-                            generation_type: *generation_type,
-                        });
+            if let DocumentEvent::RequestSqlPreview {
+                profile_id,
+                schema_name,
+                table_name,
+                column_names,
+                row_values,
+                pk_indices,
+                generation_type,
+            } = event
+            {
+                tab_manager.update(cx, |_, cx| {
+                    cx.emit(TabManagerEvent::RequestSqlPreview {
+                        profile_id: *profile_id,
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_names: column_names.clone(),
+                        row_values: row_values.clone(),
+                        pk_indices: pk_indices.clone(),
+                        generation_type: *generation_type,
                     });
-                }
-                _ => {}
+                });
             }
         });
         self.subscriptions.insert(id, subscription);

@@ -202,14 +202,12 @@ impl SqlQueryDocument {
         }
 
         // Check if context menu is open in the active result tab
-        if self.focus_mode == SqlQueryFocus::Results {
-            if let Some(index) = self.active_result_index {
-                if let Some(tab) = self.result_tabs.get(index) {
-                    if tab.grid.read(cx).is_context_menu_open() {
-                        return ContextId::ContextMenu;
-                    }
-                }
-            }
+        if self.focus_mode == SqlQueryFocus::Results
+            && let Some(index) = self.active_result_index
+            && let Some(tab) = self.result_tabs.get(index)
+            && tab.grid.read(cx).is_context_menu_open()
+        {
+            return ContextId::ContextMenu;
         }
 
         match self.focus_mode {

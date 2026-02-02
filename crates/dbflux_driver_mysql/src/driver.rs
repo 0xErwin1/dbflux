@@ -6,15 +6,60 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DriverFormDef, ForeignKeyInfo, FormValues, IndexInfo, MYSQL_FORM,
-    QueryCancelHandle, QueryHandle, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
+    ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
+    DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
+    ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, QueryCancelHandle, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
     SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
 use mysql::{Conn, Opts, OptsBuilder, SslOpts};
+
+/// MySQL driver metadata.
+pub static MYSQL_METADATA: DriverMetadata = DriverMetadata {
+    id: "mysql",
+    display_name: "MySQL",
+    description: "Popular open-source relational database",
+    category: DatabaseCategory::Relational,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::FOREIGN_KEYS.bits()
+            | DriverCapabilities::TRIGGERS.bits()
+            | DriverCapabilities::STORED_PROCEDURES.bits(),
+    ),
+    default_port: Some(3306),
+    uri_scheme: "mysql",
+    icon: Icon::Mysql,
+};
+
+/// MariaDB driver metadata.
+pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
+    id: "mariadb",
+    display_name: "MariaDB",
+    description: "Community-developed fork of MySQL",
+    category: DatabaseCategory::Relational,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::from_bits_truncate(
+        DriverCapabilities::RELATIONAL_BASE.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::FOREIGN_KEYS.bits()
+            | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+            | DriverCapabilities::TRIGGERS.bits()
+            | DriverCapabilities::STORED_PROCEDURES.bits()
+            | DriverCapabilities::SEQUENCES.bits(),
+    ),
+    default_port: Some(3306),
+    uri_scheme: "mariadb",
+    icon: Icon::Mariadb,
+};
 
 pub struct MysqlDriver {
     kind: DbKind,
@@ -31,19 +76,10 @@ impl DbDriver for MysqlDriver {
         self.kind
     }
 
-    fn display_name(&self) -> &'static str {
+    fn metadata(&self) -> &'static DriverMetadata {
         match self.kind {
-            DbKind::MySQL => "MySQL",
-            DbKind::MariaDB => "MariaDB",
-            _ => "MySQL",
-        }
-    }
-
-    fn description(&self) -> &'static str {
-        match self.kind {
-            DbKind::MySQL => "Popular open source relational database",
-            DbKind::MariaDB => "Community-developed fork of MySQL",
-            _ => "MySQL-compatible database",
+            DbKind::MariaDB => &MARIADB_METADATA,
+            _ => &MYSQL_METADATA,
         }
     }
 
@@ -581,6 +617,13 @@ const MYSQL_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
 ];
 
 impl Connection for MysqlConnection {
+    fn metadata(&self) -> &'static DriverMetadata {
+        match self.kind {
+            DbKind::MariaDB => &MARIADB_METADATA,
+            _ => &MYSQL_METADATA,
+        }
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         let mut conn = self
             .catalog_conn
@@ -966,9 +1009,9 @@ impl Connection for MysqlConnection {
 
         let where_clause: Vec<String> = patch
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(patch.identity.values.iter())
+            .zip(patch.identity.values().iter())
             .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
             .collect();
 
@@ -987,15 +1030,15 @@ impl Connection for MysqlConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         // Switch database if needed
-        if let Some(ref db) = patch.schema {
-            if state.current_database.as_ref() != Some(db) {
-                log::debug!("[USE] Switching to database: {}", db);
-                state
-                    .conn
-                    .query_drop(format!("USE `{}`", db))
-                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
-                state.current_database = Some(db.clone());
-            }
+        if let Some(ref db) = patch.schema
+            && state.current_database.as_ref() != Some(db)
+        {
+            log::debug!("[USE] Switching to database: {}", db);
+            state
+                .conn
+                .query_drop(format!("USE `{}`", db))
+                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+            state.current_database = Some(db.clone());
         }
 
         state
@@ -1050,11 +1093,7 @@ impl Connection for MysqlConnection {
 
         let columns: Vec<String> = insert.columns.iter().map(|c| format!("`{}`", c)).collect();
 
-        let values: Vec<String> = insert
-            .values
-            .iter()
-            .map(|v| value_to_mysql_literal(v))
-            .collect();
+        let values: Vec<String> = insert.values.iter().map(value_to_mysql_literal).collect();
 
         let insert_sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -1071,15 +1110,15 @@ impl Connection for MysqlConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         // Switch database if needed
-        if let Some(ref db) = insert.schema {
-            if state.current_database.as_ref() != Some(db) {
-                log::debug!("[USE] Switching to database: {}", db);
-                state
-                    .conn
-                    .query_drop(format!("USE `{}`", db))
-                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
-                state.current_database = Some(db.clone());
-            }
+        if let Some(ref db) = insert.schema
+            && state.current_database.as_ref() != Some(db)
+        {
+            log::debug!("[USE] Switching to database: {}", db);
+            state
+                .conn
+                .query_drop(format!("USE `{}`", db))
+                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+            state.current_database = Some(db.clone());
         }
 
         state
@@ -1147,9 +1186,9 @@ impl Connection for MysqlConnection {
 
         let where_clause: Vec<String> = delete
             .identity
-            .columns
+            .columns()
             .iter()
-            .zip(delete.identity.values.iter())
+            .zip(delete.identity.values().iter())
             .map(|(col, val)| format!("`{}` = {}", col, value_to_mysql_literal(val)))
             .collect();
 
@@ -1168,15 +1207,15 @@ impl Connection for MysqlConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
         // Switch database if needed
-        if let Some(ref db) = delete.schema {
-            if state.current_database.as_ref() != Some(db) {
-                log::debug!("[USE] Switching to database: {}", db);
-                state
-                    .conn
-                    .query_drop(format!("USE `{}`", db))
-                    .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
-                state.current_database = Some(db.clone());
-            }
+        if let Some(ref db) = delete.schema
+            && state.current_database.as_ref() != Some(db)
+        {
+            log::debug!("[USE] Switching to database: {}", db);
+            state
+                .conn
+                .query_drop(format!("USE `{}`", db))
+                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+            state.current_database = Some(db.clone());
         }
 
         let rows: Vec<mysql::Row> = state
@@ -1313,6 +1352,15 @@ fn value_to_mysql_literal(value: &Value) -> String {
         Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
+        Value::ObjectId(id) => format!("'{}'", mysql_escape_string(id)),
+        Value::Array(arr) => {
+            let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
+            format!("'{}'", mysql_escape_string(&json))
+        }
+        Value::Document(doc) => {
+            let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
+            format!("'{}'", mysql_escape_string(&json))
+        }
     }
 }
 
