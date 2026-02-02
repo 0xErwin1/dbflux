@@ -3647,12 +3647,7 @@ impl ConnectionManagerWindow {
             .rounded(px(4.0))
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
-            .child(
-                svg()
-                    .path(icon_path)
-                    .size_4()
-                    .text_color(muted_foreground),
-            )
+            .child(svg().path(icon_path).size_4().text_color(muted_foreground))
     }
 }
 

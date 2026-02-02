@@ -7,6 +7,7 @@ pub mod document;
 pub mod dropdown;
 pub mod history_modal;
 pub mod icons;
+pub mod shutdown_overlay;
 pub mod sidebar;
 pub mod sql_preview_modal;
 pub mod status_bar;

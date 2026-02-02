@@ -10,6 +10,7 @@ mod query;
 mod saved_query;
 mod schema;
 mod secrets;
+mod shutdown;
 mod store;
 mod table_browser;
 mod task;
@@ -43,6 +44,7 @@ pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
     ssh_tunnel_secret_ref,
 };
+pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};

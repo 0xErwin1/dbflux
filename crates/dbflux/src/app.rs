@@ -2,8 +2,8 @@ use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, ConnectionTree, ConnectionTreeNode,
     ConnectionTreeStore, CustomTypeInfo, DbConfig, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
     HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SecretStore, SshTunnelProfile, SshTunnelStore, TableInfo, TaskId, TaskKind,
-    TaskManager, TaskSnapshot, create_secret_store,
+    SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile,
+    SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -112,9 +112,23 @@ pub struct AppState {
     /// Hierarchical folder organization for connection profiles.
     pub connection_tree: ConnectionTree,
     connection_tree_store: Option<ConnectionTreeStore>,
+
+    /// Graceful shutdown coordinator.
+    pub shutdown: ShutdownCoordinator,
 }
 
 impl AppState {
+    /// Get read lock on secret store, recovering from poison errors.
+    fn secret_store_read(&self) -> std::sync::RwLockReadGuard<'_, Box<dyn SecretStore>> {
+        match self.secret_store.read() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned, recovering...");
+                poison_err.into_inner()
+            }
+        }
+    }
+
     pub fn new() -> Self {
         let mut drivers: HashMap<DbKind, Arc<dyn DbDriver>> = HashMap::new();
 
@@ -228,6 +242,7 @@ impl AppState {
             settings_window: None,
             connection_tree,
             connection_tree_store,
+            shutdown: ShutdownCoordinator::new(),
         }
     }
 
@@ -239,6 +254,11 @@ impl AppState {
     #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         self.active_connection_id.is_some()
+    }
+
+    /// Returns true if there are any open connections.
+    pub fn has_connections(&self) -> bool {
+        !self.connections.is_empty()
     }
 
     #[allow(dead_code)]
@@ -304,6 +324,100 @@ impl AppState {
         for id in ids {
             self.disconnect(id);
         }
+    }
+
+    // --- Shutdown methods ---
+
+    /// Begin graceful shutdown.
+    ///
+    /// Returns `true` if this call initiated shutdown, `false` if already shutting down.
+    pub fn begin_shutdown(&self) -> bool {
+        self.shutdown.request_shutdown()
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown.is_shutdown_requested()
+    }
+
+    /// Get the current shutdown phase.
+    pub fn shutdown_phase(&self) -> ShutdownPhase {
+        self.shutdown.phase()
+    }
+
+    /// Cancel all running tasks.
+    ///
+    /// Returns the number of tasks that were cancelled.
+    pub fn cancel_all_tasks(&mut self) -> usize {
+        if !self
+            .shutdown
+            .advance_phase(ShutdownPhase::SignalSent, ShutdownPhase::CancellingTasks)
+        {
+            return 0;
+        }
+
+        let count = self.tasks.cancel_all();
+        info!("Cancelled {} running tasks during shutdown", count);
+        count
+    }
+
+    /// Close all database connections.
+    ///
+    /// Cancels any active queries first, then closes the connection.
+    /// Logs errors but continues closing other connections.
+    pub fn close_all_connections(&mut self) {
+        if !self.shutdown.advance_phase(
+            ShutdownPhase::CancellingTasks,
+            ShutdownPhase::ClosingConnections,
+        ) {
+            return;
+        }
+
+        let ids: Vec<Uuid> = self.connections.keys().copied().collect();
+        let count = ids.len();
+
+        for id in ids {
+            if let Some(mut connected) = self.connections.remove(&id) {
+                let name = connected.profile.name.clone();
+
+                // Cancel any active query first
+                if let Err(e) = connected.connection.cancel_active() {
+                    log::debug!(
+                        "Could not cancel active query for {} (may not have one): {:?}",
+                        name,
+                        e
+                    );
+                }
+
+                // Close the connection
+                if let Some(conn) = Arc::get_mut(&mut connected.connection) {
+                    if let Err(e) = conn.close() {
+                        error!("Failed to close connection for {}: {:?}", name, e);
+                    } else {
+                        info!("Closed connection: {}", name);
+                    }
+                } else {
+                    log::warn!(
+                        "Could not get exclusive access to connection {} for close",
+                        name
+                    );
+                }
+            }
+        }
+
+        info!("Closed {} connections during shutdown", count);
+        self.active_connection_id = None;
+    }
+
+    /// Mark shutdown as complete.
+    pub fn complete_shutdown(&self) {
+        self.shutdown.complete();
+    }
+
+    /// Mark shutdown as failed.
+    #[allow(dead_code)]
+    pub fn fail_shutdown(&self) {
+        self.shutdown.fail();
     }
 
     // --- Lazy schema cache ---
@@ -551,11 +665,7 @@ impl AppState {
         }
     }
 
-    pub fn add_profile_in_folder(
-        &mut self,
-        profile: ConnectionProfile,
-        folder_id: Option<Uuid>,
-    ) {
+    pub fn add_profile_in_folder(&mut self, profile: ConnectionProfile, folder_id: Option<Uuid>) {
         let profile_id = profile.id;
         self.profiles.push(profile);
         self.save_profiles();
@@ -753,15 +863,7 @@ impl AppState {
     }
 
     pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<String> {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
-
-        match store.get(&tunnel.secret_ref()) {
+        match self.secret_store_read().get(&tunnel.secret_ref()) {
             Ok(secret) => secret,
             Err(e) => {
                 error!("Failed to get SSH tunnel secret: {:?}", e);
@@ -771,13 +873,7 @@ impl AppState {
     }
 
     pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &str) {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
+        let store = self.secret_store_read();
 
         if !store.is_available() {
             return;
@@ -789,13 +885,7 @@ impl AppState {
     }
 
     pub fn delete_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
+        let store = self.secret_store_read();
 
         if !store.is_available() {
             return;
@@ -807,13 +897,7 @@ impl AppState {
     }
 
     pub fn secret_store_available(&self) -> bool {
-        match self.secret_store.read() {
-            Ok(s) => s.is_available(),
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner().is_available()
-            }
-        }
+        self.secret_store_read().is_available()
     }
 
     #[allow(dead_code)]
@@ -826,13 +910,7 @@ impl AppState {
             return;
         }
 
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
+        let store = self.secret_store_read();
 
         if !store.is_available() {
             return;
@@ -844,27 +922,13 @@ impl AppState {
     }
 
     pub fn delete_password(&self, profile: &ConnectionProfile) {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
-
-        if let Err(e) = store.delete(&profile.secret_ref()) {
+        if let Err(e) = self.secret_store_read().delete(&profile.secret_ref()) {
             error!("Failed to delete password: {:?}", e);
         }
     }
 
     pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<String> {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
+        let store = self.secret_store_read();
 
         if !store.is_available() {
             return None;
@@ -880,13 +944,7 @@ impl AppState {
     }
 
     pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &str) {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
+        let store = self.secret_store_read();
 
         if !store.is_available() {
             return;
@@ -898,15 +956,7 @@ impl AppState {
     }
 
     pub fn delete_ssh_password(&self, profile: &ConnectionProfile) {
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned, recovering...");
-                poison_err.into_inner()
-            }
-        };
-
-        if let Err(e) = store.delete(&profile.ssh_secret_ref()) {
+        if let Err(e) = self.secret_store_read().delete(&profile.ssh_secret_ref()) {
             error!("Failed to delete SSH secret: {:?}", e);
         }
     }
@@ -1154,7 +1204,6 @@ impl AppState {
         self.tasks.running_tasks()
     }
 
-    #[allow(dead_code)]
     pub fn has_running_tasks(&self) -> bool {
         self.tasks.has_running_tasks()
     }
