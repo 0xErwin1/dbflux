@@ -6,6 +6,7 @@ use dbflux_core::{
     ColumnInfo, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, TableInfo,
     Value,
 };
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -20,6 +21,9 @@ pub enum SqlGenerationType {
     Insert,
     Update,
     Delete,
+    CreateTable,
+    Truncate,
+    DropTable,
 }
 
 impl SqlGenerationType {
@@ -29,6 +33,9 @@ impl SqlGenerationType {
             SqlGenerationType::Insert => "INSERT",
             SqlGenerationType::Update => "UPDATE",
             SqlGenerationType::Delete => "DELETE",
+            SqlGenerationType::CreateTable => "CREATE TABLE",
+            SqlGenerationType::Truncate => "TRUNCATE",
+            SqlGenerationType::DropTable => "DROP TABLE",
         }
     }
 
@@ -40,6 +47,29 @@ impl SqlGenerationType {
             "insert" => Some(SqlGenerationType::Insert),
             "update" => Some(SqlGenerationType::Update),
             "delete" => Some(SqlGenerationType::Delete),
+            "create_table" => Some(SqlGenerationType::CreateTable),
+            "truncate" => Some(SqlGenerationType::Truncate),
+            "drop_table" => Some(SqlGenerationType::DropTable),
+            _ => None,
+        }
+    }
+
+    /// DDL operations don't support column selection or value options.
+    pub fn is_ddl(&self) -> bool {
+        matches!(
+            self,
+            SqlGenerationType::CreateTable
+                | SqlGenerationType::Truncate
+                | SqlGenerationType::DropTable
+        )
+    }
+
+    /// Returns the driver generator_id for DDL operations.
+    pub fn driver_generator_id(&self) -> Option<&'static str> {
+        match self {
+            SqlGenerationType::CreateTable => Some("create_table"),
+            SqlGenerationType::Truncate => Some("truncate"),
+            SqlGenerationType::DropTable => Some("drop_table"),
             _ => None,
         }
     }
@@ -229,6 +259,15 @@ impl SqlPreviewModal {
             SqlGenerationType::Insert => SqlOperation::Insert,
             SqlGenerationType::Update => SqlOperation::Update,
             SqlGenerationType::Delete => SqlOperation::Delete,
+            // DDL operations are not supported from row data context
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => {
+                return format!(
+                    "-- {} is not supported from row context",
+                    self.generation_type.label()
+                );
+            }
         };
 
         let request = SqlGenerationRequest {
@@ -262,24 +301,40 @@ impl SqlPreviewModal {
     ) -> String {
         let connection = self.app_state.read(cx).get_connection(profile_id);
 
+        // DDL operations use the driver directly
+        if let Some(generator_id) = self.generation_type.driver_generator_id() {
+            if let Some(conn) = connection {
+                match conn.generate_code(generator_id, table_info) {
+                    Ok(sql) => return sql,
+                    Err(e) => return format!("-- Error generating SQL: {}", e),
+                }
+            } else {
+                return format!(
+                    "-- Error: DDL generation requires an active connection for {}",
+                    self.generation_type.label()
+                );
+            }
+        }
+
+        // DML operations use SqlGenerationRequest
         let columns: Vec<ColumnInfo> = table_info.columns.clone().unwrap_or_else(|| {
-                vec![
-                    ColumnInfo {
-                        name: "column1".to_string(),
-                        type_name: String::new(),
-                        nullable: true,
-                        is_primary_key: true,
-                        default_value: None,
-                    },
-                    ColumnInfo {
-                        name: "column2".to_string(),
-                        type_name: String::new(),
-                        nullable: true,
-                        is_primary_key: false,
-                        default_value: None,
-                    },
-                ]
-            });
+            vec![
+                ColumnInfo {
+                    name: "column1".to_string(),
+                    type_name: String::new(),
+                    nullable: true,
+                    is_primary_key: true,
+                    default_value: None,
+                },
+                ColumnInfo {
+                    name: "column2".to_string(),
+                    type_name: String::new(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                },
+            ]
+        });
 
         let pk_indices: Vec<usize> = columns
             .iter()
@@ -293,6 +348,10 @@ impl SqlPreviewModal {
             SqlGenerationType::Insert => SqlOperation::Insert,
             SqlGenerationType::Update => SqlOperation::Update,
             SqlGenerationType::Delete => SqlOperation::Delete,
+            // DDL operations are handled above
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => unreachable!(),
         };
 
         let request = SqlGenerationRequest {
@@ -344,6 +403,7 @@ impl Render for SqlPreviewModal {
         let theme = cx.theme();
         let sql_display = self.sql_display.clone();
         let generation_type = self.generation_type;
+        let is_ddl = generation_type.is_ddl();
         let use_fqn = self.settings.use_fully_qualified_names;
         let compact = self.settings.compact_sql;
 
@@ -452,64 +512,66 @@ impl Render for SqlPreviewModal {
                             .overflow_hidden()
                             .child(Input::new(&sql_display).w_full().h_full()),
                     )
-                    // Options
-                    .child(
-                        div()
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::LG)
-                            .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Options"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Checkbox::new("fqn-checkbox")
-                                            .checked(use_fqn)
-                                            .small()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_fully_qualified(window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.foreground)
-                                            .child("Fully qualified names"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Checkbox::new("compact-checkbox")
-                                            .checked(compact)
-                                            .small()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_compact(window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.foreground)
-                                            .child("Compact SQL"),
-                                    ),
-                            ),
-                    )
+                    // Options (only for DML operations)
+                    .when(!is_ddl, |el: Div| {
+                        el.child(
+                            div()
+                                .px(Spacing::MD)
+                                .py(Spacing::SM)
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::LG)
+                                .child(
+                                    div()
+                                        .text_size(FontSizes::XS)
+                                        .text_color(theme.muted_foreground)
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Options"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            Checkbox::new("fqn-checkbox")
+                                                .checked(use_fqn)
+                                                .small()
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_fully_qualified(window, cx);
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(FontSizes::SM)
+                                                .text_color(theme.foreground)
+                                                .child("Fully qualified names"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            Checkbox::new("compact-checkbox")
+                                                .checked(compact)
+                                                .small()
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_compact(window, cx);
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(FontSizes::SM)
+                                                .text_color(theme.foreground)
+                                                .child("Compact SQL"),
+                                        ),
+                                ),
+                        )
+                    })
                     // Footer
                     .child(
                         div()

@@ -860,7 +860,12 @@ impl SqlQueryDocument {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .child(Input::new(&self.input_state).appearance(false)),
+                    .child(
+                        Input::new(&self.input_state)
+                            .appearance(false)
+                            .w_full()
+                            .h_full(),
+                    ),
             )
     }
 
