@@ -10,6 +10,7 @@ use crate::ui::document::{
     DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
+use crate::ui::shutdown_overlay::ShutdownOverlay;
 use crate::ui::sidebar::{Sidebar, SidebarEvent};
 use crate::ui::sql_preview_modal::SqlPreviewModal;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
@@ -53,6 +54,7 @@ pub struct Workspace {
     toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
     sql_preview_modal: Entity<SqlPreviewModal>,
+    shutdown_overlay: Entity<ShutdownOverlay>,
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
@@ -90,6 +92,7 @@ impl Workspace {
         });
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(window, cx));
+        let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
@@ -215,6 +218,7 @@ impl Workspace {
             toast_host,
             command_palette,
             sql_preview_modal,
+            shutdown_overlay,
             tab_manager,
             tab_bar,
             tasks_state: PanelState::Collapsed,
@@ -1262,6 +1266,8 @@ impl Render for Workspace {
                     .bottom_0()
                     .child(toast_host),
             )
+            // Shutdown overlay (rendered above everything during shutdown)
+            .child(self.shutdown_overlay.clone())
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
                 let theme = cx.theme();

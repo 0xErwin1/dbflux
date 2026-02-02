@@ -192,6 +192,26 @@ impl TaskManager {
         false
     }
 
+    /// Cancel all running tasks.
+    ///
+    /// Returns the number of tasks that were actually cancelled.
+    pub fn cancel_all(&mut self) -> usize {
+        let running_ids: Vec<TaskId> = self
+            .tasks
+            .iter()
+            .filter(|(_, t)| t.status == TaskStatus::Running)
+            .map(|(id, _)| *id)
+            .collect();
+
+        let mut cancelled_count = 0;
+        for id in running_ids {
+            if self.cancel(id) {
+                cancelled_count += 1;
+            }
+        }
+        cancelled_count
+    }
+
     pub fn update_progress(&mut self, id: TaskId, progress: f32) {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
