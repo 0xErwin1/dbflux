@@ -3,6 +3,7 @@
 
 use super::handle::DocumentHandle;
 use super::types::DocumentId;
+use dbflux_core::Value;
 use gpui::{App, Context, EventEmitter, Subscription};
 use std::collections::HashMap;
 
@@ -306,7 +307,7 @@ pub enum TabManagerEvent {
         schema_name: Option<String>,
         table_name: String,
         column_names: Vec<String>,
-        row_values: Vec<String>,
+        row_values: Vec<Value>,
         pk_indices: Vec<usize>,
         generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
     },

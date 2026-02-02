@@ -784,6 +784,7 @@ impl DataTable {
 }
 
 /// Renders the visible rows for the uniform_list.
+#[allow(clippy::too_many_arguments)]
 fn render_rows(
     state_entity: &Entity<DataTableState>,
     visible_range: Range<usize>,

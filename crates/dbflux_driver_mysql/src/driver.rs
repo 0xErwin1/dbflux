@@ -8,10 +8,10 @@ use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
-    ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, QueryCancelHandle, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SshTunnelConfig,
-    SslMode, TableInfo, Value, ViewInfo,
+    ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle, QueryCancelHandle,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -60,6 +60,33 @@ pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
     uri_scheme: "mariadb",
     icon: Icon::Mariadb,
 };
+
+/// MySQL/MariaDB SQL dialect implementation.
+pub struct MysqlDialect;
+
+impl SqlDialect for MysqlDialect {
+    fn quote_identifier(&self, name: &str) -> String {
+        mysql_quote_ident(name)
+    }
+
+    fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+        mysql_qualified_name(schema, table)
+    }
+
+    fn value_to_literal(&self, value: &Value) -> String {
+        value_to_mysql_literal(value)
+    }
+
+    fn escape_string(&self, s: &str) -> String {
+        mysql_escape_string(s)
+    }
+
+    fn placeholder_style(&self) -> PlaceholderStyle {
+        PlaceholderStyle::QuestionMark
+    }
+}
+
+static MYSQL_DIALECT: MysqlDialect = MysqlDialect;
 
 pub struct MysqlDriver {
     kind: DbKind,
@@ -1254,6 +1281,10 @@ impl Connection for MysqlConnection {
 
         Ok(CrudResult::new(affected, returning_row))
     }
+
+    fn dialect(&self) -> &dyn SqlDialect {
+        &MYSQL_DIALECT
+    }
 }
 
 fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Value {
@@ -1363,6 +1394,20 @@ fn value_to_mysql_literal(value: &Value) -> String {
             let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
             format!("'{}'", mysql_escape_string(&json))
         }
+    }
+}
+
+/// Quote an identifier (table/column name) for MySQL using backticks.
+fn mysql_quote_ident(ident: &str) -> String {
+    debug_assert!(!ident.is_empty(), "identifier cannot be empty");
+    format!("`{}`", ident.replace('`', "``"))
+}
+
+/// Build a qualified table name for MySQL.
+fn mysql_qualified_name(schema: Option<&str>, name: &str) -> String {
+    match schema {
+        Some(s) => format!("{}.{}", mysql_quote_ident(s), mysql_quote_ident(name)),
+        None => mysql_quote_ident(name),
     }
 }
 

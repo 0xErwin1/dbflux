@@ -271,6 +271,12 @@ impl AppState {
         self.active_connection().and_then(|c| c.schema.as_ref())
     }
 
+    pub fn get_connection(&self, profile_id: Uuid) -> Option<Arc<dyn Connection>> {
+        self.connections
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+    }
+
     pub fn set_active_connection(&mut self, profile_id: Uuid) {
         if self.connections.contains_key(&profile_id) {
             self.active_connection_id = Some(profile_id);

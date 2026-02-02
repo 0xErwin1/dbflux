@@ -91,7 +91,8 @@ impl Workspace {
             palette
         });
 
-        let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(window, cx));
+        let sql_preview_modal =
+            cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
