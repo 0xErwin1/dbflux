@@ -255,8 +255,9 @@ fn results_layer() -> KeymapLayer {
 
     // Panel navigation (Ctrl+hjkl)
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
-    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusDown);
+    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
     layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::FocusUp);
+    layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
 
     // Table navigation
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);

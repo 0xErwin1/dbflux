@@ -1552,7 +1552,7 @@ impl DataGridPanel {
         // Handle toolbar mode commands
         if self.focus_mode == GridFocusMode::Toolbar {
             match cmd {
-                Command::Cancel => {
+                Command::Cancel | Command::FocusUp => {
                     self.focus_table(window, cx);
                     return true;
                 }
@@ -1634,15 +1634,19 @@ impl DataGridPanel {
 
         let (row, col, cell_x, horizontal_offset) = {
             let ts = table_state.read(cx);
-            let Some(active) = ts.selection().active else {
-                return;
-            };
+
+            let (row, col) = ts
+                .selection()
+                .active
+                .map(|c| (c.row, c.col))
+                .unwrap_or((0, 0));
+
             let widths = ts.column_widths();
 
             // Calculate cell x position: sum of column widths up to col
-            let cell_x: f32 = widths.iter().take(active.col).sum();
+            let cell_x: f32 = widths.iter().take(col).sum();
 
-            (active.row, active.col, cell_x, ts.horizontal_offset())
+            (row, col, cell_x, ts.horizontal_offset())
         };
 
         // Calculate position in window coordinates:
@@ -2053,6 +2057,7 @@ impl Render for DataGridPanel {
         let focus_handle = self.focus_handle.clone();
 
         let has_data = !self.result.rows.is_empty();
+        let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
         let muted_fg = theme.muted_foreground;
 
@@ -2083,11 +2088,8 @@ impl Render for DataGridPanel {
             })
             .unwrap_or((false, false, 0, false, false));
 
-        // Show PK warning only for table views without PK
         let show_pk_warning = is_table_view && has_data && !is_editable;
-
-        // Always show edit toolbar for editable tables
-        let show_edit_toolbar = is_table_view && has_data && is_editable;
+        let show_edit_toolbar = is_table_view && has_columns && is_editable;
 
         div()
             .track_focus(&focus_handle)
