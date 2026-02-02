@@ -9,6 +9,7 @@ mod profile;
 mod query;
 mod saved_query;
 mod schema;
+mod schema_builder;
 mod secrets;
 mod shutdown;
 mod sql_dialect;
@@ -64,6 +65,9 @@ pub use sql_generation::{
     generate_truncate, generate_update_template, generate_drop_table,
 };
 pub use sql_query_builder::SqlQueryBuilder;
+pub use schema_builder::{
+    ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder,
+};
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {

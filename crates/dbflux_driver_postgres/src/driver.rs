@@ -7,12 +7,13 @@ use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
-    DriverFormDef, DriverMetadata, ForeignKeyInfo, FormValues, Icon, IndexInfo, POSTGRES_FORM,
-    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    TableInfo, Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    DriverFormDef, DriverMetadata, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo,
+    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1363,9 +1364,7 @@ fn get_foreign_keys(
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    // Group rows by constraint name
-    let mut fk_map: std::collections::HashMap<String, ForeignKeyInfo> =
-        std::collections::HashMap::new();
+    let mut builder = ForeignKeyBuilder::new();
 
     for row in &rows {
         let name: String = row.get(0);
@@ -1373,31 +1372,21 @@ fn get_foreign_keys(
         let referenced_schema: Option<String> = row.get(2);
         let referenced_table: String = row.get(3);
         let referenced_column: String = row.get(4);
-        let on_delete: Option<String> = row.get(5);
-        let on_update: Option<String> = row.get(6);
+        let on_delete: Option<String> = row.get::<_, Option<String>>(5).filter(|s| s != "NO ACTION");
+        let on_update: Option<String> = row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
 
-        let entry = fk_map
-            .entry(name.clone())
-            .or_insert_with(|| ForeignKeyInfo {
-                name,
-                columns: Vec::new(),
-                referenced_schema,
-                referenced_table,
-                referenced_columns: Vec::new(),
-                on_delete: on_delete.filter(|s| s != "NO ACTION"),
-                on_update: on_update.filter(|s| s != "NO ACTION"),
-            });
-
-        if !entry.columns.contains(&column) {
-            entry.columns.push(column);
-        }
-        if !entry.referenced_columns.contains(&referenced_column) {
-            entry.referenced_columns.push(referenced_column);
-        }
+        builder.add_column(
+            name,
+            column,
+            referenced_schema,
+            referenced_table,
+            referenced_column,
+            on_update,
+            on_delete,
+        );
     }
 
-    let mut fks: Vec<ForeignKeyInfo> = fk_map.into_values().collect();
-    fks.sort_by(|a, b| a.name.cmp(&b.name));
+    let fks = builder.build_sorted();
 
     log::debug!(
         "[SCHEMA] get_foreign_keys for {}.{}: {} FKs found",
@@ -1795,9 +1784,7 @@ fn get_schema_foreign_keys(
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    // Group rows by constraint name
-    let mut fk_map: std::collections::HashMap<String, SchemaForeignKeyInfo> =
-        std::collections::HashMap::new();
+    let mut builder = SchemaForeignKeyBuilder::new();
 
     for row in &rows {
         let name: String = row.get(0);
@@ -1806,32 +1793,20 @@ fn get_schema_foreign_keys(
         let referenced_schema: Option<String> = row.get(3);
         let referenced_table: String = row.get(4);
         let referenced_column: String = row.get(5);
-        let on_delete: Option<String> = row.get(6);
-        let on_update: Option<String> = row.get(7);
+        let on_delete: Option<String> = row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
+        let on_update: Option<String> = row.get::<_, Option<String>>(7).filter(|s| s != "NO ACTION");
 
-        let entry = fk_map
-            .entry(name.clone())
-            .or_insert_with(|| SchemaForeignKeyInfo {
-                name,
-                table_name,
-                columns: Vec::new(),
-                referenced_schema,
-                referenced_table,
-                referenced_columns: Vec::new(),
-                on_delete: on_delete.filter(|s| s != "NO ACTION"),
-                on_update: on_update.filter(|s| s != "NO ACTION"),
-            });
-
-        if !entry.columns.contains(&column) {
-            entry.columns.push(column);
-        }
-        if !entry.referenced_columns.contains(&referenced_column) {
-            entry.referenced_columns.push(referenced_column);
-        }
+        builder.add_column(
+            table_name,
+            name,
+            column,
+            referenced_schema,
+            referenced_table,
+            referenced_column,
+            on_update,
+            on_delete,
+        );
     }
 
-    let mut fks: Vec<SchemaForeignKeyInfo> = fk_map.into_values().collect();
-    fks.sort_by(|a, b| (&a.table_name, &a.name).cmp(&(&b.table_name, &b.name)));
-
-    Ok(fks)
+    Ok(builder.build_sorted())
 }

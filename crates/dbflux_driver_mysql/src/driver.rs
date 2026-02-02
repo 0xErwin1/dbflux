@@ -8,12 +8,12 @@ use dbflux_core::{
     CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
-    ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle, QueryCancelHandle,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, Row, RowDelete,
-    RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value,
-    ViewInfo, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template,
+    ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle,
+    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, Row,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1544,7 +1544,7 @@ fn fetch_foreign_keys(
         .query(&query)
         .map_err(|e| format_mysql_query_error(&e))?;
 
-    let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
+    let mut builder = ForeignKeyBuilder::new();
 
     for row in rows {
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
@@ -1555,23 +1555,18 @@ fn fetch_foreign_keys(
         let on_delete: Option<String> = row.get("DELETE_RULE");
         let on_update: Option<String> = row.get("UPDATE_RULE");
 
-        let entry = fk_map
-            .entry(constraint_name.clone())
-            .or_insert_with(|| ForeignKeyInfo {
-                name: constraint_name,
-                columns: Vec::new(),
-                referenced_table: ref_table,
-                referenced_schema: ref_schema,
-                referenced_columns: Vec::new(),
-                on_delete,
-                on_update,
-            });
-
-        entry.columns.push(column_name);
-        entry.referenced_columns.push(ref_column);
+        builder.add_column(
+            constraint_name,
+            column_name,
+            ref_schema,
+            ref_table,
+            ref_column,
+            on_update,
+            on_delete,
+        );
     }
 
-    Ok(fk_map.into_values().collect())
+    Ok(builder.build())
 }
 
 fn fetch_constraints(
@@ -1711,7 +1706,7 @@ fn fetch_schema_foreign_keys(
         .query(&query)
         .map_err(|e| format_mysql_query_error(&e))?;
 
-    let mut fk_map: HashMap<(String, String), SchemaForeignKeyInfo> = HashMap::new();
+    let mut builder = SchemaForeignKeyBuilder::new();
 
     for row in rows {
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
@@ -1723,21 +1718,17 @@ fn fetch_schema_foreign_keys(
         let on_delete: Option<String> = row.get("DELETE_RULE");
         let on_update: Option<String> = row.get("UPDATE_RULE");
 
-        let key = (table_name.clone(), constraint_name.clone());
-        let entry = fk_map.entry(key).or_insert_with(|| SchemaForeignKeyInfo {
-            name: constraint_name,
+        builder.add_column(
             table_name,
-            columns: Vec::new(),
-            referenced_schema: ref_schema,
-            referenced_table: ref_table,
-            referenced_columns: Vec::new(),
-            on_delete,
+            constraint_name,
+            column_name,
+            ref_schema,
+            ref_table,
+            ref_column,
             on_update,
-        });
-
-        entry.columns.push(column_name);
-        entry.referenced_columns.push(ref_column);
+            on_delete,
+        );
     }
 
-    Ok(fk_map.into_values().collect())
+    Ok(builder.build())
 }
