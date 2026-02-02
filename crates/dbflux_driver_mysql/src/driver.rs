@@ -12,7 +12,8 @@ use dbflux_core::{
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, Row, RowDelete,
     RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value,
-    ViewInfo,
+    ViewInfo, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -943,13 +944,14 @@ impl Connection for MysqlConnection {
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
         match generator_id {
-            "select_star" => Ok(mysql_generate_select_star(table)),
-            "insert" => Ok(mysql_generate_insert(table)),
-            "update" => Ok(mysql_generate_update(table)),
-            "delete" => Ok(mysql_generate_delete(table)),
+            "select_star" => Ok(generate_select_star(&MYSQL_DIALECT, table, 100)),
+            "insert" => Ok(generate_insert_template(&MYSQL_DIALECT, table)),
+            "update" => Ok(generate_update_template(&MYSQL_DIALECT, table)),
+            "delete" => Ok(generate_delete_template(&MYSQL_DIALECT, table)),
+            // MySQL uses SHOW CREATE TABLE to get accurate DDL from server
             "create_table" => self.mysql_generate_create_table(table),
-            "truncate" => Ok(mysql_generate_truncate(table)),
-            "drop_table" => Ok(mysql_generate_drop_table(table)),
+            "truncate" => Ok(generate_truncate(&MYSQL_DIALECT, table)),
+            "drop_table" => Ok(generate_drop_table(&MYSQL_DIALECT, table)),
             _ => Err(DbError::NotSupported(format!(
                 "Unknown generator: {}",
                 generator_id
@@ -1487,100 +1489,6 @@ fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Ind
 
 // Code generators
 
-fn get_schema_prefix(table: &TableInfo) -> String {
-    table
-        .schema
-        .as_ref()
-        .map(|s| format!("`{}`.", s))
-        .unwrap_or_default()
-}
-
-fn mysql_generate_select_star(table: &TableInfo) -> String {
-    format!(
-        "SELECT *\nFROM {}`{}`\nLIMIT 100;",
-        get_schema_prefix(table),
-        table.name
-    )
-}
-
-fn mysql_generate_insert(table: &TableInfo) -> String {
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-    let columns: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
-    let placeholders: Vec<&str> = cols.iter().map(|_| "?").collect();
-
-    format!(
-        "INSERT INTO {}`{}` ({})\nVALUES ({});",
-        get_schema_prefix(table),
-        table.name,
-        columns.join(", "),
-        placeholders.join(", ")
-    )
-}
-
-fn mysql_generate_update(table: &TableInfo) -> String {
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
-
-    let set_clause: String = cols
-        .iter()
-        .filter(|c| !c.is_primary_key)
-        .map(|c| format!("`{}` = ?", c.name))
-        .collect::<Vec<_>>()
-        .join(",\n    ");
-
-    let where_clause = if pk_columns.is_empty() {
-        "1 = 0 -- WARNING: No primary key found".to_string()
-    } else {
-        pk_columns
-            .iter()
-            .map(|c| format!("`{}` = ?", c.name))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!(
-        "UPDATE {}`{}`\nSET {}\nWHERE {};",
-        get_schema_prefix(table),
-        table.name,
-        set_clause,
-        where_clause
-    )
-}
-
-fn mysql_generate_delete(table: &TableInfo) -> String {
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
-
-    let where_clause = if pk_columns.is_empty() {
-        "1 = 0 -- WARNING: No primary key found".to_string()
-    } else {
-        pk_columns
-            .iter()
-            .map(|c| format!("`{}` = ?", c.name))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!(
-        "DELETE FROM {}`{}`\nWHERE {};",
-        get_schema_prefix(table),
-        table.name,
-        where_clause
-    )
-}
-
-fn mysql_generate_truncate(table: &TableInfo) -> String {
-    format!(
-        "TRUNCATE TABLE {}`{}`;",
-        get_schema_prefix(table),
-        table.name
-    )
-}
-
-fn mysql_generate_drop_table(table: &TableInfo) -> String {
-    format!("DROP TABLE {}`{}`;", get_schema_prefix(table), table.name)
-}
-
 impl MysqlConnection {
     fn mysql_generate_create_table(&self, table: &TableInfo) -> Result<String, DbError> {
         let mut conn = self
@@ -1588,8 +1496,8 @@ impl MysqlConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        let schema_prefix = get_schema_prefix(table);
-        let query = format!("SHOW CREATE TABLE {}`{}`", schema_prefix, table.name);
+        let table_ref = MysqlDialect.qualified_table(table.schema.as_deref(), &table.name);
+        let query = format!("SHOW CREATE TABLE {}", table_ref);
 
         let result: Option<(String, String)> = conn
             .query_first(&query)
@@ -1598,8 +1506,8 @@ impl MysqlConnection {
         match result {
             Some((_, create_statement)) => Ok(format!("{};\n", create_statement)),
             None => Err(DbError::QueryFailed(format!(
-                "Could not get CREATE TABLE for {}{}",
-                schema_prefix, table.name
+                "Could not get CREATE TABLE for {}",
+                table_ref
             ))),
         }
     }

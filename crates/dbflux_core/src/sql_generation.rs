@@ -1,4 +1,4 @@
-use crate::schema::ColumnInfo;
+use crate::schema::{ColumnInfo, TableInfo};
 use crate::sql_dialect::{PlaceholderStyle, SqlDialect};
 use crate::Value;
 
@@ -259,4 +259,178 @@ fn format_placeholder(dialect: &dyn SqlDialect, index: usize) -> String {
         PlaceholderStyle::QuestionMark => "?".to_string(),
         PlaceholderStyle::DollarNumber => format!("${}", index + 1),
     }
+}
+
+/// Generate SELECT * with LIMIT for browsing.
+pub fn generate_select_star(dialect: &dyn SqlDialect, table: &TableInfo, limit: u32) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    format!("SELECT * FROM {} LIMIT {};", table_ref, limit)
+}
+
+/// Generate INSERT template with placeholders.
+pub fn generate_insert_template(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
+
+    if cols.is_empty() {
+        return format!("INSERT INTO {} DEFAULT VALUES;", table_ref);
+    }
+
+    let columns: Vec<String> = cols
+        .iter()
+        .map(|c| dialect.quote_identifier(&c.name))
+        .collect();
+
+    let placeholders: Vec<String> = (0..cols.len())
+        .map(|i| format_placeholder(dialect, i))
+        .collect();
+
+    format!(
+        "INSERT INTO {} ({})\nVALUES ({});",
+        table_ref,
+        columns.join(", "),
+        placeholders.join(", ")
+    )
+}
+
+/// Generate UPDATE template with placeholders.
+pub fn generate_update_template(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
+
+    if cols.is_empty() {
+        return format!("UPDATE {}\nSET -- no columns\nWHERE <condition>;", table_ref);
+    }
+
+    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
+
+    let non_pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| !c.is_primary_key).collect();
+
+    let set_columns: &[&ColumnInfo] = if non_pk_columns.is_empty() {
+        &cols.iter().collect::<Vec<_>>()
+    } else {
+        &non_pk_columns
+    };
+
+    let set_clauses: Vec<String> = set_columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            format!(
+                "{} = {}",
+                dialect.quote_identifier(&col.name),
+                format_placeholder(dialect, i)
+            )
+        })
+        .collect();
+
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        let start_idx = set_columns.len();
+        pk_columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                format!(
+                    "{} = {}",
+                    dialect.quote_identifier(&col.name),
+                    format_placeholder(dialect, start_idx + i)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!(
+        "UPDATE {}\nSET {}\nWHERE {};",
+        table_ref,
+        set_clauses.join(",\n    "),
+        where_clause
+    )
+}
+
+/// Generate DELETE template with placeholders.
+pub fn generate_delete_template(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
+
+    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
+
+    let where_clause = if pk_columns.is_empty() {
+        "<condition>".to_string()
+    } else {
+        pk_columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                format!(
+                    "{} = {}",
+                    dialect.quote_identifier(&col.name),
+                    format_placeholder(dialect, i)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+
+    format!("DELETE FROM {}\nWHERE {};", table_ref, where_clause)
+}
+
+/// Generate CREATE TABLE DDL from table metadata.
+pub fn generate_create_table(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    let cols = table.columns.as_deref().unwrap_or(&[]);
+
+    if cols.is_empty() {
+        return format!("CREATE TABLE {} ();", table_ref);
+    }
+
+    let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
+
+    let mut lines: Vec<String> = Vec::with_capacity(cols.len() + 1);
+
+    for col in cols {
+        let mut line = if col.type_name.is_empty() {
+            format!("    {}", dialect.quote_identifier(&col.name))
+        } else {
+            format!(
+                "    {} {}",
+                dialect.quote_identifier(&col.name),
+                col.type_name
+            )
+        };
+
+        if !col.nullable {
+            line.push_str(" NOT NULL");
+        }
+
+        if let Some(ref default) = col.default_value {
+            line.push_str(&format!(" DEFAULT {}", default));
+        }
+
+        lines.push(line);
+    }
+
+    if !pk_columns.is_empty() {
+        let pk_quoted: Vec<String> = pk_columns
+            .iter()
+            .map(|c| dialect.quote_identifier(&c.name))
+            .collect();
+        lines.push(format!("    PRIMARY KEY ({})", pk_quoted.join(", ")));
+    }
+
+    format!("CREATE TABLE {} (\n{}\n);", table_ref, lines.join(",\n"))
+}
+
+/// Generate TRUNCATE statement.
+pub fn generate_truncate(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    format!("TRUNCATE TABLE {};", table_ref)
+}
+
+/// Generate DROP TABLE statement.
+pub fn generate_drop_table(dialect: &dyn SqlDialect, table: &TableInfo) -> String {
+    let table_ref = dialect.qualified_table(table.schema.as_deref(), &table.name);
+    format!("DROP TABLE {};", table_ref)
 }

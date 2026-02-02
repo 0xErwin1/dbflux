@@ -11,7 +11,8 @@ use dbflux_core::{
     PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    TableInfo, Value, ViewInfo,
+    TableInfo, Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -855,13 +856,13 @@ impl Connection for PostgresConnection {
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
         match generator_id {
-            "select_star" => Ok(pg_generate_select_star(table)),
-            "insert" => Ok(pg_generate_insert(table)),
-            "update" => Ok(pg_generate_update(table)),
-            "delete" => Ok(pg_generate_delete(table)),
-            "create_table" => Ok(pg_generate_create_table(table)),
-            "truncate" => Ok(pg_generate_truncate(table)),
-            "drop_table" => Ok(pg_generate_drop_table(table)),
+            "select_star" => Ok(generate_select_star(&POSTGRES_DIALECT, table, 100)),
+            "insert" => Ok(generate_insert_template(&POSTGRES_DIALECT, table)),
+            "update" => Ok(generate_update_template(&POSTGRES_DIALECT, table)),
+            "delete" => Ok(generate_delete_template(&POSTGRES_DIALECT, table)),
+            "create_table" => Ok(generate_create_table(&POSTGRES_DIALECT, table)),
+            "truncate" => Ok(generate_truncate(&POSTGRES_DIALECT, table)),
+            "drop_table" => Ok(generate_drop_table(&POSTGRES_DIALECT, table)),
             _ => Err(DbError::NotSupported(format!(
                 "Code generator '{}' not supported",
                 generator_id
@@ -1714,164 +1715,6 @@ fn pg_qualified_name(schema: Option<&str>, name: &str) -> String {
         Some(s) => format!("{}.{}", pg_quote_ident(s), pg_quote_ident(name)),
         None => pg_quote_ident(name),
     }
-}
-
-fn pg_generate_select_star(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    format!("SELECT * FROM {} LIMIT 100;", qualified)
-}
-
-fn pg_generate_insert(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    if cols.is_empty() {
-        return format!("INSERT INTO {} DEFAULT VALUES;", qualified);
-    }
-
-    let columns: Vec<String> = cols.iter().map(|c| pg_quote_ident(&c.name)).collect();
-
-    let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
-
-    format!(
-        "INSERT INTO {} ({})\nVALUES ({});",
-        qualified,
-        columns.join(", "),
-        placeholders.join(", ")
-    )
-}
-
-fn pg_generate_update(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    if cols.is_empty() {
-        return format!(
-            "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
-            qualified
-        );
-    }
-
-    let pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let non_pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| !c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let set_columns = if non_pk_columns.is_empty() {
-        &cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
-    } else {
-        &non_pk_columns[..]
-    };
-
-    let set_clauses: Vec<String> = set_columns
-        .iter()
-        .enumerate()
-        .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), i + 1))
-        .collect();
-
-    let where_clause = if pk_columns.is_empty() {
-        "<condition>".to_string()
-    } else {
-        let start_idx = set_columns.len() + 1;
-        pk_columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), start_idx + i))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!(
-        "UPDATE {}\nSET {}\nWHERE {};",
-        qualified,
-        set_clauses.join(",\n    "),
-        where_clause
-    )
-}
-
-fn pg_generate_delete(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    let pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let where_clause = if pk_columns.is_empty() {
-        "<condition>".to_string()
-    } else {
-        pk_columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| format!("{} = ${}", pg_quote_ident(col), i + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!("DELETE FROM {}\nWHERE {};", qualified, where_clause)
-}
-
-fn pg_generate_create_table(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    let mut sql = format!("CREATE TABLE {} (\n", qualified);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    let pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    for (i, col) in cols.iter().enumerate() {
-        // TODO: Consider normalizing type names for more canonical output
-        // (e.g., "character varying" → "varchar", handle arrays, domains, etc.)
-        let mut line = format!("    {} {}", pg_quote_ident(&col.name), col.type_name);
-
-        if !col.nullable {
-            line.push_str(" NOT NULL");
-        }
-
-        if let Some(ref default) = col.default_value {
-            line.push_str(&format!(" DEFAULT {}", default));
-        }
-
-        let is_last_column = i == cols.len() - 1;
-        let has_pk_constraint = !pk_columns.is_empty();
-
-        if !is_last_column || has_pk_constraint {
-            line.push(',');
-        }
-
-        sql.push_str(&line);
-        sql.push('\n');
-    }
-
-    if !pk_columns.is_empty() {
-        let pk_quoted: Vec<String> = pk_columns.iter().map(|c| pg_quote_ident(c)).collect();
-        sql.push_str(&format!("    PRIMARY KEY ({})\n", pk_quoted.join(", ")));
-    }
-
-    sql.push_str(");");
-    sql
-}
-
-fn pg_generate_truncate(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    format!("TRUNCATE {};", qualified)
-}
-
-fn pg_generate_drop_table(table: &TableInfo) -> String {
-    let qualified = pg_qualified_name(table.schema.as_deref(), &table.name);
-    format!("DROP TABLE {};", qualified)
 }
 
 fn get_schema_indexes(client: &mut Client, schema: &str) -> Result<Vec<SchemaIndexInfo>, DbError> {

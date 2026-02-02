@@ -59,7 +59,9 @@ pub use value::Value;
 
 pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 pub use sql_generation::{
-    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_sql,
+    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,
+    generate_delete_template, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template, generate_drop_table,
 };
 pub use sql_query_builder::SqlQueryBuilder;
 

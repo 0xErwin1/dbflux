@@ -11,7 +11,8 @@ use dbflux_core::{
     FormValues, Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -465,12 +466,13 @@ impl Connection for SqliteConnection {
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
         match generator_id {
-            "select_star" => Ok(sqlite_generate_select_star(table)),
-            "insert" => Ok(sqlite_generate_insert(table)),
-            "update" => Ok(sqlite_generate_update(table)),
-            "delete" => Ok(sqlite_generate_delete(table)),
+            "select_star" => Ok(generate_select_star(&SQLITE_DIALECT, table, 100)),
+            "insert" => Ok(generate_insert_template(&SQLITE_DIALECT, table)),
+            "update" => Ok(generate_update_template(&SQLITE_DIALECT, table)),
+            "delete" => Ok(generate_delete_template(&SQLITE_DIALECT, table)),
+            // SQLite needs special handling for INTEGER PRIMARY KEY (rowid semantics)
             "create_table" => Ok(sqlite_generate_create_table(table)),
-            "drop_table" => Ok(sqlite_generate_drop_table(table)),
+            "drop_table" => Ok(generate_drop_table(&SQLITE_DIALECT, table)),
             _ => Err(DbError::NotSupported(format!(
                 "Code generator '{}' not supported",
                 generator_id
@@ -1090,108 +1092,7 @@ fn sqlite_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-fn sqlite_generate_select_star(table: &TableInfo) -> String {
-    format!(
-        "SELECT * FROM {} LIMIT 100;",
-        sqlite_quote_ident(&table.name)
-    )
-}
-
-fn sqlite_generate_insert(table: &TableInfo) -> String {
-    let quoted_name = sqlite_quote_ident(&table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    if cols.is_empty() {
-        return format!("INSERT INTO {} DEFAULT VALUES;", quoted_name);
-    }
-
-    let columns: Vec<String> = cols.iter().map(|c| sqlite_quote_ident(&c.name)).collect();
-
-    let placeholders: Vec<&str> = vec!["?"; cols.len()];
-
-    format!(
-        "INSERT INTO {} ({})\nVALUES ({});",
-        quoted_name,
-        columns.join(", "),
-        placeholders.join(", ")
-    )
-}
-
-fn sqlite_generate_update(table: &TableInfo) -> String {
-    let quoted_name = sqlite_quote_ident(&table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    if cols.is_empty() {
-        return format!(
-            "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
-            quoted_name
-        );
-    }
-
-    let pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let non_pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| !c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let set_columns = if non_pk_columns.is_empty() {
-        &cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()[..]
-    } else {
-        &non_pk_columns[..]
-    };
-
-    let set_clauses: Vec<String> = set_columns
-        .iter()
-        .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
-        .collect();
-
-    let where_clause = if pk_columns.is_empty() {
-        "<condition>".to_string()
-    } else {
-        pk_columns
-            .iter()
-            .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!(
-        "UPDATE {}\nSET {}\nWHERE {};",
-        quoted_name,
-        set_clauses.join(",\n    "),
-        where_clause
-    )
-}
-
-fn sqlite_generate_delete(table: &TableInfo) -> String {
-    let quoted_name = sqlite_quote_ident(&table.name);
-    let cols = table.columns.as_deref().unwrap_or(&[]);
-
-    let pk_columns: Vec<&str> = cols
-        .iter()
-        .filter(|c| c.is_primary_key)
-        .map(|c| c.name.as_str())
-        .collect();
-
-    let where_clause = if pk_columns.is_empty() {
-        "<condition>".to_string()
-    } else {
-        pk_columns
-            .iter()
-            .map(|col| format!("{} = ?", sqlite_quote_ident(col)))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    };
-
-    format!("DELETE FROM {}\nWHERE {};", quoted_name, where_clause)
-}
-
+/// SQLite-specific CREATE TABLE to handle INTEGER PRIMARY KEY rowid semantics.
 fn sqlite_generate_create_table(table: &TableInfo) -> String {
     let mut sql = format!("CREATE TABLE {} (\n", sqlite_quote_ident(&table.name));
     let cols = table.columns.as_deref().unwrap_or(&[]);
@@ -1245,8 +1146,4 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
 
     sql.push_str(");");
     sql
-}
-
-fn sqlite_generate_drop_table(table: &TableInfo) -> String {
-    format!("DROP TABLE {};", sqlite_quote_ident(&table.name))
 }
