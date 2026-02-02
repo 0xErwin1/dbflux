@@ -485,7 +485,7 @@ impl Connection for PostgresConnection {
             sql_preview.replace('\n', " ")
         );
 
-        let query_result = {
+        let (columns, rows) = {
             let mut client = match self.client.lock() {
                 Ok(guard) => guard,
                 Err(poison_err) => {
@@ -494,7 +494,38 @@ impl Connection for PostgresConnection {
                 }
             };
 
-            client.query(&req.sql, &[])
+            // Prepare the statement first to get column metadata
+            let stmt = client.prepare(&req.sql).map_err(|e| {
+                if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+                    log::info!("[QUERY] Query {} was cancelled during prepare", query_id);
+                    DbError::Cancelled
+                } else {
+                    format_pg_query_error(&e)
+                }
+            })?;
+
+            // Extract column metadata from the prepared statement
+            let columns: Vec<ColumnMeta> = stmt
+                .columns()
+                .iter()
+                .map(|col| ColumnMeta {
+                    name: col.name().to_string(),
+                    type_name: col.type_().name().to_string(),
+                    nullable: true,
+                })
+                .collect();
+
+            // Execute the prepared statement
+            let rows = client.query(&stmt, &[]).map_err(|e| {
+                if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+                    log::info!("[QUERY] Query {} was cancelled", query_id);
+                    DbError::Cancelled
+                } else {
+                    format_pg_query_error(&e)
+                }
+            })?;
+
+            (columns, rows)
         };
 
         {
@@ -505,39 +536,7 @@ impl Connection for PostgresConnection {
             *active = None;
         }
 
-        let rows = query_result.map_err(|e| {
-            if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                log::info!("[QUERY] Query {} was cancelled", query_id);
-                DbError::Cancelled
-            } else {
-                format_pg_query_error(&e)
-            }
-        })?;
-
         let query_time = start.elapsed();
-
-        if rows.is_empty() {
-            log::debug!(
-                "[QUERY] Completed in {:.2}ms, 0 rows",
-                query_time.as_secs_f64() * 1000.0
-            );
-            return Ok(QueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                affected_rows: None,
-                execution_time: query_time,
-            });
-        }
-
-        let columns: Vec<ColumnMeta> = rows[0]
-            .columns()
-            .iter()
-            .map(|col| ColumnMeta {
-                name: col.name().to_string(),
-                type_name: col.type_().name().to_string(),
-                nullable: true,
-            })
-            .collect();
 
         let result_rows: Vec<Row> = rows
             .iter()

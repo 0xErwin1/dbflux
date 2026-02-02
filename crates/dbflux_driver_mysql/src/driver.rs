@@ -670,8 +670,25 @@ impl Connection for MysqlConnection {
             state.current_database = Some(db.clone());
         }
 
-        // Execute the query
-        let result: Result<Vec<mysql::Row>, mysql::Error> = state.conn.query(&req.sql);
+        // Prepare the statement to get column metadata
+        let stmt = state
+            .conn
+            .prep(&req.sql)
+            .map_err(|e| format_mysql_query_error(&e))?;
+
+        // Extract column metadata from the prepared statement
+        let columns: Vec<ColumnMeta> = stmt
+            .columns()
+            .iter()
+            .map(|col| ColumnMeta {
+                name: col.name_str().to_string(),
+                type_name: format!("{:?}", col.column_type()),
+                nullable: true,
+            })
+            .collect();
+
+        // Execute the prepared statement
+        let result: Result<Vec<mysql::Row>, mysql::Error> = state.conn.exec(&stmt, ());
 
         let query_time = start.elapsed();
 
@@ -689,7 +706,7 @@ impl Connection for MysqlConnection {
                             query_time.as_secs_f64() * 1000.0
                         );
                         return Ok(QueryResult {
-                            columns: Vec::new(),
+                            columns,
                             rows: Vec::new(),
                             affected_rows: None,
                             execution_time: query_time,
@@ -703,28 +720,13 @@ impl Connection for MysqlConnection {
                             affected
                         );
                         return Ok(QueryResult {
-                            columns: Vec::new(),
+                            columns,
                             rows: Vec::new(),
                             affected_rows: Some(affected),
                             execution_time: query_time,
                         });
                     }
                 }
-
-                // Build columns from first row
-                let columns: Vec<ColumnMeta> = rows
-                    .first()
-                    .map(|row| {
-                        row.columns()
-                            .iter()
-                            .map(|col| ColumnMeta {
-                                name: col.name_str().to_string(),
-                                type_name: format!("{:?}", col.column_type()),
-                                nullable: true,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
 
                 // Convert rows
                 let result_rows: Vec<Row> = rows
