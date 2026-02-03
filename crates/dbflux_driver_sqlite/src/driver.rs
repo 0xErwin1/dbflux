@@ -9,7 +9,7 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, ForeignKeyInfo,
     FormValues, Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
+    QueryRequest, QueryResult, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
     SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_update_template,
@@ -380,13 +380,13 @@ impl Connection for SqliteConnection {
             custom_types: None,
         };
 
-        Ok(SchemaSnapshot {
+        Ok(SchemaSnapshot::relational(RelationalSchema {
             databases: Vec::new(),
             current_database: None,
             schemas: vec![main_schema],
             tables: Vec::new(),
             views: Vec::new(),
-        })
+        }))
     }
 
     fn kind(&self) -> DbKind {

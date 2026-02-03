@@ -1239,7 +1239,7 @@ impl AppState {
         }
 
         if let Some(ref schema) = connected.schema
-            && schema.current_database.as_deref() == Some(database)
+            && schema.current_database() == Some(database)
         {
             return Err("Already connected to this database".to_string());
         }
@@ -1526,8 +1526,8 @@ impl ConnectProfileParams {
             Ok(s) => {
                 info!(
                     "Fetched schema: {} databases, {} schemas",
-                    s.databases.len(),
-                    s.schemas.len()
+                    s.databases().len(),
+                    s.schemas().len()
                 );
                 Some(s)
             }
@@ -1599,8 +1599,8 @@ impl SwitchDatabaseParams {
                 info!(
                     "Switched to {}: {} schemas, {} tables",
                     self.database,
-                    s.schemas.len(),
-                    s.schemas.iter().map(|s| s.tables.len()).sum::<usize>()
+                    s.schemas().len(),
+                    s.schemas().iter().map(|s| s.tables.len()).sum::<usize>()
                 );
                 Some(s)
             }

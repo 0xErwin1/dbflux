@@ -9,11 +9,12 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
     ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle,
-    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -815,13 +816,13 @@ impl Connection for MysqlConnection {
         let databases = self.list_databases()?;
         log::info!("[SCHEMA] Found {} databases", databases.len());
 
-        Ok(SchemaSnapshot {
+        Ok(SchemaSnapshot::relational(RelationalSchema {
             databases,
             current_database: None,
             schemas: Vec::new(),
             tables: Vec::new(),
             views: Vec::new(),
-        })
+        }))
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
