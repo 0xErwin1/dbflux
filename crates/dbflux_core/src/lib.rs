@@ -40,9 +40,10 @@ pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo,
-    CustomTypeInfo, CustomTypeKind, DatabaseInfo, DbSchemaInfo, FieldInfo, ForeignKeyInfo,
-    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueType, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, TableInfo, ViewInfo,
+    CustomTypeInfo, CustomTypeKind, DatabaseInfo, DataStructure, DbSchemaInfo, DocumentSchema,
+    FieldInfo, ForeignKeyInfo, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema,
+    KeyValueType, RelationalSchema, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    TableInfo, ViewInfo,
 };
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,

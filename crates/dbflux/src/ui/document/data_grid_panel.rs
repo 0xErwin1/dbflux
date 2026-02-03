@@ -1941,7 +1941,7 @@ impl DataGridPanel {
             return Vec::new();
         };
 
-        for db_schema in &schema.schemas {
+        for db_schema in schema.schemas() {
             if table.schema.as_deref() == Some(&db_schema.name) || table.schema.is_none() {
                 for t in &db_schema.tables {
                     if t.name == table.name {

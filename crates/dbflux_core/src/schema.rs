@@ -21,10 +21,29 @@ pub struct DbSchemaInfo {
     pub custom_types: Option<Vec<CustomTypeInfo>>,
 }
 
-/// Complete schema snapshot returned by `Connection::schema()`.
+/// Unified schema structure for different database paradigms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DataStructure {
+    /// SQL databases (PostgreSQL, MySQL, SQLite, etc.)
+    Relational(RelationalSchema),
+
+    /// Document databases (MongoDB, CouchDB, etc.)
+    Document(DocumentSchema),
+
+    /// Key-value stores (Redis, Valkey, etc.)
+    KeyValue(KeyValueSchema),
+}
+
+impl Default for DataStructure {
+    fn default() -> Self {
+        Self::Relational(RelationalSchema::default())
+    }
+}
+
+/// Schema for SQL/relational databases.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SchemaSnapshot {
-    /// All databases on the server (PostgreSQL) or empty (SQLite).
+pub struct RelationalSchema {
+    /// All databases on the server (PostgreSQL, MySQL) or empty (SQLite).
     pub databases: Vec<DatabaseInfo>,
 
     /// Name of the currently connected database.
@@ -40,6 +59,158 @@ pub struct SchemaSnapshot {
     /// Views in the current schema (for databases without schema support).
     #[serde(default)]
     pub views: Vec<ViewInfo>,
+}
+
+/// Schema for document databases (MongoDB, CouchDB, etc.)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DocumentSchema {
+    /// All databases on the server.
+    pub databases: Vec<DatabaseInfo>,
+
+    /// Name of the currently connected database.
+    pub current_database: Option<String>,
+
+    /// Collections in the current database.
+    pub collections: Vec<CollectionInfo>,
+}
+
+/// Schema for key-value stores (Redis, Valkey, etc.)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KeyValueSchema {
+    /// Key spaces (numbered databases in Redis).
+    pub keyspaces: Vec<KeySpaceInfo>,
+
+    /// Currently selected keyspace index.
+    pub current_keyspace: Option<u32>,
+}
+
+/// Complete schema snapshot returned by `Connection::schema()`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchemaSnapshot {
+    /// The underlying schema structure, typed by database paradigm.
+    pub structure: DataStructure,
+}
+
+impl SchemaSnapshot {
+    /// Create a new relational schema snapshot.
+    pub fn relational(schema: RelationalSchema) -> Self {
+        Self {
+            structure: DataStructure::Relational(schema),
+        }
+    }
+
+    /// Create a new document schema snapshot.
+    pub fn document(schema: DocumentSchema) -> Self {
+        Self {
+            structure: DataStructure::Document(schema),
+        }
+    }
+
+    /// Create a new key-value schema snapshot.
+    pub fn key_value(schema: KeyValueSchema) -> Self {
+        Self {
+            structure: DataStructure::KeyValue(schema),
+        }
+    }
+
+    /// Returns true if this is a relational database schema.
+    pub fn is_relational(&self) -> bool {
+        matches!(self.structure, DataStructure::Relational(_))
+    }
+
+    /// Returns true if this is a document database schema.
+    pub fn is_document(&self) -> bool {
+        matches!(self.structure, DataStructure::Document(_))
+    }
+
+    /// Returns true if this is a key-value store schema.
+    pub fn is_key_value(&self) -> bool {
+        matches!(self.structure, DataStructure::KeyValue(_))
+    }
+
+    /// Get the relational schema, if this is a relational database.
+    pub fn as_relational(&self) -> Option<&RelationalSchema> {
+        match &self.structure {
+            DataStructure::Relational(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get the document schema, if this is a document database.
+    pub fn as_document(&self) -> Option<&DocumentSchema> {
+        match &self.structure {
+            DataStructure::Document(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get the key-value schema, if this is a key-value store.
+    pub fn as_key_value(&self) -> Option<&KeyValueSchema> {
+        match &self.structure {
+            DataStructure::KeyValue(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    // Convenience accessors for relational schemas (backward compatibility)
+
+    /// Get databases (relational only, empty for others).
+    pub fn databases(&self) -> &[DatabaseInfo] {
+        match &self.structure {
+            DataStructure::Relational(s) => &s.databases,
+            DataStructure::Document(s) => &s.databases,
+            DataStructure::KeyValue(_) => &[],
+        }
+    }
+
+    /// Get current database name (relational/document only).
+    pub fn current_database(&self) -> Option<&str> {
+        match &self.structure {
+            DataStructure::Relational(s) => s.current_database.as_deref(),
+            DataStructure::Document(s) => s.current_database.as_deref(),
+            DataStructure::KeyValue(_) => None,
+        }
+    }
+
+    /// Get schemas (relational only, empty for others).
+    pub fn schemas(&self) -> &[DbSchemaInfo] {
+        match &self.structure {
+            DataStructure::Relational(s) => &s.schemas,
+            _ => &[],
+        }
+    }
+
+    /// Get tables (relational only, empty for others).
+    pub fn tables(&self) -> &[TableInfo] {
+        match &self.structure {
+            DataStructure::Relational(s) => &s.tables,
+            _ => &[],
+        }
+    }
+
+    /// Get views (relational only, empty for others).
+    pub fn views(&self) -> &[ViewInfo] {
+        match &self.structure {
+            DataStructure::Relational(s) => &s.views,
+            _ => &[],
+        }
+    }
+
+    /// Get collections (document only, empty for others).
+    pub fn collections(&self) -> &[CollectionInfo] {
+        match &self.structure {
+            DataStructure::Document(s) => &s.collections,
+            _ => &[],
+        }
+    }
+
+    /// Get keyspaces (key-value only, empty for others).
+    pub fn keyspaces(&self) -> &[KeySpaceInfo] {
+        match &self.structure {
+            DataStructure::KeyValue(s) => &s.keyspaces,
+            _ => &[],
+        }
+    }
 }
 
 /// Table metadata.

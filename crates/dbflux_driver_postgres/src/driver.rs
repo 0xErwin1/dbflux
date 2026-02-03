@@ -9,11 +9,11 @@ use dbflux_core::{
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
     DriverFormDef, DriverMetadata, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo,
     POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template,
+    QueryResult, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value,
+    ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -730,13 +730,13 @@ impl Connection for PostgresConnection {
             total_start.elapsed().as_secs_f64() * 1000.0
         );
 
-        Ok(SchemaSnapshot {
+        Ok(SchemaSnapshot::relational(RelationalSchema {
             databases,
             current_database,
             schemas,
             tables: Vec::new(),
             views: Vec::new(),
-        })
+        }))
     }
 
     fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {

@@ -1054,7 +1054,7 @@ impl Sidebar {
             .or_else(|| {
                 conn.schema
                     .as_ref()
-                    .and_then(|s| s.current_database.clone())
+                    .and_then(|s| s.current_database().map(str::to_owned))
             })
             .unwrap_or_else(|| "main".to_string())
     }
@@ -1577,7 +1577,7 @@ impl Sidebar {
     ) -> Option<&'a TableInfo> {
         let schema = schema.as_ref()?;
 
-        for db_schema in &schema.schemas {
+        for db_schema in schema.schemas() {
             if db_schema.name == parts.schema_name {
                 return db_schema
                     .tables
@@ -1587,7 +1587,7 @@ impl Sidebar {
         }
 
         // For databases without schemas (fallback)
-        schema.tables.iter().find(|t| t.name == parts.object_name)
+        schema.tables().iter().find(|t| t.name == parts.object_name)
     }
 
     fn find_view_for_item<'a>(
@@ -1596,14 +1596,14 @@ impl Sidebar {
     ) -> Option<&'a ViewInfo> {
         let schema = schema.as_ref()?;
 
-        for db_schema in &schema.schemas {
+        for db_schema in schema.schemas() {
             if db_schema.name == parts.schema_name {
                 return db_schema.views.iter().find(|v| v.name == parts.object_name);
             }
         }
 
         // For databases without schemas (fallback)
-        schema.views.iter().find(|v| v.name == parts.object_name)
+        schema.views().iter().find(|v| v.name == parts.object_name)
     }
 
     /// Check if a table has detailed schema (columns/indexes) loaded.
@@ -1642,7 +1642,7 @@ impl Sidebar {
 
         // Check schema.schemas (PostgreSQL/SQLite path)
         if let Some(ref schema) = conn.schema {
-            for db_schema in &schema.schemas {
+            for db_schema in schema.schemas() {
                 if db_schema.name == parts.schema_name
                     && let Some(table) = db_schema
                         .tables
@@ -3882,8 +3882,8 @@ impl Sidebar {
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
 
-            if !schema.databases.is_empty() {
-                for db in &schema.databases {
+            if !schema.databases().is_empty() {
+                for db in schema.databases() {
                     let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                     let is_active_db = connected.active_database.as_deref() == Some(&db.name);
 
@@ -3943,7 +3943,7 @@ impl Sidebar {
                 let database_name = connected
                     .active_database
                     .as_deref()
-                    .or_else(|| schema.schemas.first().map(|s| s.name.as_str()))
+                    .or_else(|| schema.schemas().first().map(|s| s.name.as_str()))
                     .unwrap_or("default");
 
                 profile_children = Self::build_schema_children(
@@ -4015,7 +4015,7 @@ impl Sidebar {
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
-        for db_schema in &snapshot.schemas {
+        for db_schema in snapshot.schemas() {
             let schema_content = Self::build_db_schema_content(
                 profile_id,
                 database_name,
