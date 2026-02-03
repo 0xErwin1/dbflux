@@ -23,7 +23,10 @@ mod value;
 
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
-pub use crud::{CrudResult, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState};
+pub use crud::{
+    CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, KeyDelete, KeySet,
+    MutationRequest, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
+};
 pub use driver_capabilities::{
     DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
 };
