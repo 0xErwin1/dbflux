@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+chrono = "0.4"
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
 hex.workspace = true
