@@ -60,6 +60,10 @@ pub struct DataTableState {
 
     /// Whether this table is editable (requires PK for row identification).
     is_editable: bool,
+
+    /// Whether this table supports INSERT operations (add/duplicate rows).
+    /// True for Table and Collection sources, false for query results.
+    is_insertable: bool,
 }
 
 impl DataTableState {
@@ -88,6 +92,7 @@ impl DataTableState {
             edit_buffer,
             pk_columns: Vec::new(),
             is_editable: false,
+            is_insertable: false,
         }
     }
 
@@ -419,6 +424,16 @@ impl DataTableState {
         &self.pk_columns
     }
 
+    /// Check if the table supports INSERT operations (add/duplicate rows).
+    pub fn is_insertable(&self) -> bool {
+        self.is_insertable
+    }
+
+    /// Set whether the table supports INSERT operations.
+    pub fn set_insertable(&mut self, insertable: bool) {
+        self.is_insertable = insertable;
+    }
+
     /// Check if a cell is currently being edited.
     pub fn is_editing(&self) -> bool {
         self.editing_cell.is_some()
@@ -431,6 +446,10 @@ impl DataTableState {
 
     /// Start editing a cell. Returns false if the table is not editable.
     /// Note: `coord` uses visual row indices (accounting for pending inserts).
+    ///
+    /// Editing is allowed when:
+    /// - `is_editable` is true (can edit any row, requires PK for UPDATE)
+    /// - `is_insertable` is true AND the row is a pending insert (can edit new rows)
     pub fn start_editing(
         &mut self,
         coord: CellCoord,
@@ -438,10 +457,6 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
-
-        if !self.is_editable {
-            return false;
-        }
 
         let column_kind = self
             .model
@@ -454,7 +469,20 @@ impl DataTableState {
         let visual_order = self.edit_buffer.compute_visual_order();
         let null_cell = super::model::CellValue::null();
 
-        let (initial_value, needs_modal) = match visual_order.get(coord.row).copied() {
+        let row_source = visual_order.get(coord.row).copied();
+
+        // Check if editing is allowed for this row
+        let can_edit = match row_source {
+            Some(VisualRowSource::Base(_)) => self.is_editable,
+            Some(VisualRowSource::Insert(_)) => self.is_insertable || self.is_editable,
+            None => false,
+        };
+
+        if !can_edit {
+            return false;
+        }
+
+        let (initial_value, needs_modal) = match row_source {
             Some(VisualRowSource::Base(base_idx)) => {
                 // Base row - check EditBuffer first, fall back to model
                 let base_cell = self.model.cell(base_idx, coord.col);
@@ -591,38 +619,39 @@ impl DataTableState {
     }
 
     /// Request saving the current row's changes.
-    /// Emits SaveRowRequested if the row has pending changes.
-    /// If no row is selected, saves the first dirty row.
-    /// Note: Selection uses visual row indices.
+    /// Emits SaveRowRequested for base row edits, CommitInsertRequested for pending inserts,
+    /// CommitDeleteRequested for rows marked for deletion.
     pub fn request_save_row(&mut self, cx: &mut Context<Self>) {
         use super::model::VisualRowSource;
 
-        // Try active selection first (visual index)
-        let base_row = if let Some(coord) = self.selection.active {
+        if let Some(coord) = self.selection.active {
             let visual_order = self.edit_buffer.compute_visual_order();
             match visual_order.get(coord.row).copied() {
                 Some(VisualRowSource::Base(base_idx)) => {
-                    if self.edit_buffer.row_state(base_idx).is_dirty() {
-                        Some(base_idx)
-                    } else {
-                        None
+                    let row_state = self.edit_buffer.row_state(base_idx);
+                    if row_state.is_pending_delete() {
+                        cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
+                        return;
+                    }
+                    if row_state.is_dirty() {
+                        cx.emit(DataTableEvent::SaveRowRequested(base_idx));
+                        return;
                     }
                 }
-                Some(VisualRowSource::Insert(_)) => {
-                    // Pending inserts are always "dirty" - need INSERT operation
-                    // TODO: Handle pending insert saving separately
-                    None
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
+                    return;
                 }
-                None => None,
+                None => {}
             }
-        } else {
-            None
-        };
+        }
 
-        // Fall back to first dirty row (base indices)
-        let row = base_row.or_else(|| self.edit_buffer.dirty_rows().into_iter().next());
+        if let Some(row_idx) = self.edit_buffer.pending_delete_rows().into_iter().next() {
+            cx.emit(DataTableEvent::CommitDeleteRequested(row_idx));
+            return;
+        }
 
-        if let Some(row_idx) = row {
+        if let Some(row_idx) = self.edit_buffer.dirty_rows().into_iter().next() {
             cx.emit(DataTableEvent::SaveRowRequested(row_idx));
         }
     }

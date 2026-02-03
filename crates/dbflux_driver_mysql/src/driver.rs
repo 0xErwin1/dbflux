@@ -1541,6 +1541,65 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         }
     }
 
+    // Handle DATETIME and TIMESTAMP types - parse from string representation
+    if matches!(
+        col_type,
+        ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_TIMESTAMP
+    ) {
+        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
+            match val {
+                Ok(Some(s)) => {
+                    // Parse "YYYY-MM-DD HH:MM:SS" format
+                    if let Ok(naive) =
+                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                    {
+                        let utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                            naive,
+                            chrono::Utc,
+                        );
+                        return Value::DateTime(utc);
+                    }
+                    // Fall back to text if parsing fails
+                    return Value::Text(s);
+                }
+                Ok(None) => return Value::Null,
+                Err(_) => {}
+            }
+        }
+    }
+
+    // Handle DATE type - parse from string representation
+    if col_type == ColumnType::MYSQL_TYPE_DATE {
+        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
+            match val {
+                Ok(Some(s)) => {
+                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                        return Value::Date(date);
+                    }
+                    return Value::Text(s);
+                }
+                Ok(None) => return Value::Null,
+                Err(_) => {}
+            }
+        }
+    }
+
+    // Handle TIME type - parse from string representation
+    if col_type == ColumnType::MYSQL_TYPE_TIME {
+        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
+            match val {
+                Ok(Some(s)) => {
+                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+                        return Value::Time(time);
+                    }
+                    return Value::Text(s);
+                }
+                Ok(None) => return Value::Null,
+                Err(_) => {}
+            }
+        }
+    }
+
     // Try signed integer (covers most integer types)
     if let Some(val) = row.get_opt::<Option<i64>, _>(idx) {
         match val {
@@ -1713,14 +1772,32 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
         .query(&query)
         .map_err(|e| format_mysql_query_error(&e))?;
 
+    log::debug!(
+        "[MYSQL] Fetched {} columns for {}.{}",
+        rows.len(),
+        database,
+        table
+    );
+
     Ok(rows
         .into_iter()
-        .map(|(name, type_name, nullable, default, key)| ColumnInfo {
-            name,
-            type_name,
-            nullable: nullable == "YES",
-            default_value: default,
-            is_primary_key: key == "PRI",
+        .map(|(name, type_name, nullable, default, key)| {
+            let is_pk = key == "PRI";
+            if is_pk {
+                log::info!(
+                    "[MYSQL] Column '{}' has Key='{}' -> is_primary_key={}",
+                    name,
+                    key,
+                    is_pk
+                );
+            }
+            ColumnInfo {
+                name,
+                type_name,
+                nullable: nullable == "YES",
+                default_value: default,
+                is_primary_key: is_pk,
+            }
         })
         .collect())
 }

@@ -338,7 +338,7 @@ impl gpui::Render for DataTable {
         let s = self.state.clone();
         let on_add_row = move |_: &AddRow, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
-                if !state.is_editable() {
+                if !state.is_insertable() {
                     return;
                 }
                 let row = state.selection().active.map(|c| c.row).unwrap_or(0);
@@ -349,7 +349,7 @@ impl gpui::Render for DataTable {
         let s = self.state.clone();
         let on_duplicate_row = move |_: &DuplicateRow, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
-                if !state.is_editable() {
+                if !state.is_insertable() {
                     return;
                 }
                 if let Some(coord) = state.selection().active {

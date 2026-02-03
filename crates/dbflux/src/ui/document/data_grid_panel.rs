@@ -9,9 +9,9 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, CollectionRef, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult,
-    RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SortDirection, TableBrowseRequest,
-    TableRef, TaskId, TaskKind, Value,
+    CancelToken, CollectionRef, DbKind, DocumentFilter, DocumentUpdate, OrderByColumn, Pagination,
+    QueryRequest, QueryResult, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
+    SortDirection, TableBrowseRequest, TableRef, TaskId, TaskKind, Value,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
@@ -60,6 +60,14 @@ impl DataSource {
 
     pub fn is_collection(&self) -> bool {
         matches!(self, DataSource::Collection { .. })
+    }
+
+    /// Returns true if this source supports server-side pagination.
+    pub fn is_paginated(&self) -> bool {
+        matches!(
+            self,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
     }
 
     pub fn table_ref(&self) -> Option<&TableRef> {
@@ -199,7 +207,8 @@ struct PendingRequery {
 }
 
 struct PendingTotalCount {
-    table_qualified: String,
+    /// Qualified name of the table or collection (e.g., "public.users" or "mydb.users")
+    source_qualified: String,
     total: u64,
 }
 
@@ -301,6 +310,9 @@ pub struct DataGridPanel {
 
     // Panel origin in window coordinates (for context menu positioning)
     panel_origin: Point<Pixels>,
+
+    // View mode configuration
+    view_config: super::data_view::DataViewConfig,
 }
 
 impl DataGridPanel {
@@ -376,13 +388,22 @@ impl DataGridPanel {
                 .unwrap_or_else(|| "default".to_string())
         };
 
+        log::info!(
+            "[PK] Fetching table details for PK columns: {}.{}",
+            database,
+            table.qualified_name()
+        );
+
         let params = match self.app_state.read(cx).prepare_fetch_table_details(
             profile_id,
             &database,
             &table.name,
         ) {
             Ok(p) => p,
-            Err(_) => return,
+            Err(e) => {
+                log::warn!("[PK] Failed to prepare fetch_table_details: {}", e);
+                return;
+            }
         };
 
         let entity = cx.entity().clone();
@@ -395,7 +416,36 @@ impl DataGridPanel {
                 .await;
 
             cx.update(|cx| {
-                let Ok(fetch_result) = result else { return };
+                let fetch_result = match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::error!("[PK] Failed to fetch table details: {}", e);
+                        return;
+                    }
+                };
+
+                // Extract PK columns
+                let columns = fetch_result.details.columns.as_deref().unwrap_or(&[]);
+                log::info!(
+                    "[PK] Fetched {} columns for {}.{}",
+                    columns.len(),
+                    fetch_result.database,
+                    fetch_result.table
+                );
+
+                for col in columns {
+                    if col.is_primary_key {
+                        log::info!("[PK]   - Column '{}' is_primary_key=true", col.name);
+                    }
+                }
+
+                let pk_names: Vec<String> = columns
+                    .iter()
+                    .filter(|c| c.is_primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
+
+                let table_name = fetch_result.table.clone();
 
                 // Store in cache
                 app_state.update(cx, |state, _| {
@@ -403,27 +453,23 @@ impl DataGridPanel {
                         fetch_result.profile_id,
                         fetch_result.database,
                         fetch_result.table,
-                        fetch_result.details.clone(),
+                        fetch_result.details,
                     );
                 });
 
-                // Extract PK columns and update panel
-                let pk_names: Vec<String> = fetch_result
-                    .details
-                    .columns
-                    .as_deref()
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter(|c| c.is_primary_key)
-                    .map(|c| c.name.clone())
-                    .collect();
-
+                // Update panel with PK info
                 if !pk_names.is_empty() {
+                    log::info!("[PK] Found PK columns: {:?}", pk_names);
                     entity.update(cx, |panel, cx| {
                         panel.pk_columns = pk_names;
                         panel.pending_rebuild = true;
                         cx.notify();
                     });
+                } else {
+                    log::warn!(
+                        "[PK] No PK columns found for table {}, table will not be editable",
+                        table_name
+                    );
                 }
             })
             .ok();
@@ -513,6 +559,8 @@ impl DataGridPanel {
         )
         .detach();
 
+        let view_config = super::data_view::DataViewConfig::for_source(&source);
+
         Self {
             source,
             app_state,
@@ -543,6 +591,7 @@ impl DataGridPanel {
             cell_editor,
             pending_modal_open: None,
             panel_origin: Point::default(),
+            view_config,
         }
     }
 
@@ -557,6 +606,35 @@ impl DataGridPanel {
     pub fn set_maximized(&mut self, maximized: bool, cx: &mut Context<Self>) {
         self.is_maximized = maximized;
         cx.notify();
+    }
+
+    /// Toggle between available view modes for the current data source.
+    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        use super::data_view::DataViewMode;
+
+        let available = DataViewMode::available_for(&self.source);
+        if available.len() <= 1 {
+            return;
+        }
+
+        let current_idx = available
+            .iter()
+            .position(|m| *m == self.view_config.mode)
+            .unwrap_or(0);
+
+        let next_idx = (current_idx + 1) % available.len();
+        self.view_config.mode = available[next_idx];
+        cx.notify();
+    }
+
+    /// Get the current view mode.
+    pub fn view_mode(&self) -> super::data_view::DataViewMode {
+        self.view_config.mode
+    }
+
+    /// Check if view mode toggle is available for the current source.
+    pub fn can_toggle_view(&self) -> bool {
+        super::data_view::DataViewMode::available_for(&self.source).len() > 1
     }
 
     /// Update the result data (for QueryResult source or after table fetch).
@@ -602,6 +680,11 @@ impl DataGridPanel {
                 .collect::<Vec<_>>()
         );
 
+        let is_insertable = matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
@@ -609,6 +692,7 @@ impl DataGridPanel {
                 state.set_sort_without_emit(sort);
             }
             state.set_pk_columns(pk_indices.clone());
+            state.set_insertable(is_insertable);
             state
         });
         let data_table = cx.new(|cx| DataTable::new("data-grid-table", table_state.clone(), cx));
@@ -675,6 +759,12 @@ impl DataGridPanel {
                             is_json: *is_json,
                         });
                         cx.notify();
+                    }
+                    DataTableEvent::CommitInsertRequested(insert_idx) => {
+                        this.handle_commit_insert(*insert_idx, cx);
+                    }
+                    DataTableEvent::CommitDeleteRequested(row_idx) => {
+                        this.handle_commit_delete(*row_idx, cx);
                     }
                 }
             });
@@ -1036,7 +1126,10 @@ impl DataGridPanel {
         })
         .detach();
 
-        // TODO: Fetch total document count
+        // Fetch total count if not known
+        if total_docs.is_none() {
+            self.fetch_collection_count(profile_id, collection, cx);
+        }
     }
 
     fn apply_collection_result(
@@ -1159,7 +1252,7 @@ impl DataGridPanel {
                     let total = *count as u64;
                     entity.update(cx, |panel, cx| {
                         panel.pending_total_count = Some(PendingTotalCount {
-                            table_qualified: qualified,
+                            source_qualified: qualified,
                             total,
                         });
                         cx.notify();
@@ -1171,44 +1264,150 @@ impl DataGridPanel {
         .detach();
     }
 
-    fn apply_total_count(&mut self, table_qualified: String, total: u64, cx: &mut Context<Self>) {
-        if let DataSource::Table {
-            table, total_rows, ..
-        } = &mut self.source
-            && table.qualified_name() == table_qualified
-        {
-            *total_rows = Some(total);
-            cx.notify();
+    fn apply_total_count(&mut self, source_qualified: String, total: u64, cx: &mut Context<Self>) {
+        match &mut self.source {
+            DataSource::Table {
+                table, total_rows, ..
+            } if table.qualified_name() == source_qualified => {
+                *total_rows = Some(total);
+                cx.notify();
+            }
+            DataSource::Collection {
+                collection,
+                total_docs,
+                ..
+            } if collection.qualified_name() == source_qualified => {
+                *total_docs = Some(total);
+                cx.notify();
+            }
+            _ => {}
         }
+    }
+
+    fn fetch_collection_count(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        cx: &mut Context<Self>,
+    ) {
+        let (conn, active_database) = {
+            let state = self.app_state.read(cx);
+            match state.connections.get(&profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                None => (None, None),
+            }
+        };
+
+        let Some(conn) = conn else {
+            return;
+        };
+
+        // MongoDB count query format
+        let json_query = serde_json::json!({
+            "database": collection.database,
+            "collection": collection.name,
+            "count": {}
+        });
+
+        let request = QueryRequest::new(json_query.to_string()).with_database(active_database);
+        let entity = cx.entity().clone();
+        let qualified = collection.qualified_name();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                if let Ok(query_result) = result
+                    && let Some(row) = query_result.rows.first()
+                    && let Some(dbflux_core::Value::Int(count)) = row.first()
+                {
+                    let total = *count as u64;
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: qualified,
+                            total,
+                        });
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // === Row Editing ===
 
     fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
+        log::info!("[SAVE] handle_save_row called for row {}", row_idx);
+
+        let Some(table_state) = &self.table_state else {
+            log::warn!("[SAVE] No table_state, cannot save");
+            return;
+        };
+
+        let changes = {
+            let state = table_state.read(cx);
+
+            if !state.is_editable() {
+                log::warn!("[SAVE] Table is not editable, cannot save");
+                return;
+            }
+
+            let row_changes = state.edit_buffer().row_changes(row_idx);
+            if row_changes.is_empty() {
+                log::info!("[SAVE] No changes for row {}, nothing to save", row_idx);
+                return;
+            }
+
+            log::info!(
+                "[SAVE] Found {} changes for row {}",
+                row_changes.len(),
+                row_idx
+            );
+            row_changes
+                .into_iter()
+                .map(|(idx, cell)| (idx, cell.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let changes_ref: Vec<(usize, &crate::ui::components::data_table::model::CellValue)> =
+            changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
+
+        match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => {
+                self.save_table_row(*profile_id, table.clone(), row_idx, &changes_ref, cx);
+            }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => {
+                self.save_document(*profile_id, collection.clone(), row_idx, &changes_ref, cx);
+            }
+            DataSource::QueryResult { .. } => {}
+        }
+    }
+
+    fn save_table_row(
+        &mut self,
+        profile_id: Uuid,
+        table_ref: TableRef,
+        row_idx: usize,
+        changes: &[(usize, &crate::ui::components::data_table::model::CellValue)],
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_state) = &self.table_state else {
             return;
         };
 
         let state = table_state.read(cx);
-
-        if !state.is_editable() {
-            return;
-        }
-
-        let changes = state.edit_buffer().row_changes(row_idx);
-        if changes.is_empty() {
-            return;
-        }
-
-        let (profile_id, table_ref) = match &self.source {
-            DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table.clone()),
-            DataSource::Collection { .. } => return,
-            DataSource::QueryResult { .. } => return,
-        };
-
-        // Build PK identity from original row values
         let pk_indices = state.pk_columns();
         let model = state.model();
 
@@ -1231,7 +1430,6 @@ impl DataGridPanel {
 
         let identity = RowIdentity::new(pk_columns, pk_values);
 
-        // Build column changes
         let change_values: Vec<(String, Value)> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
@@ -1249,7 +1447,6 @@ impl DataGridPanel {
             change_values,
         );
 
-        // Set row state to Saving
         let table_state_for_update = table_state.clone();
         table_state_for_update.update(cx, |state, cx| {
             state
@@ -1258,12 +1455,10 @@ impl DataGridPanel {
             cx.notify();
         });
 
-        // Execute update asynchronously
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
-            // Get connection
             let conn = cx
                 .update(|cx| {
                     app_state
@@ -1294,7 +1489,6 @@ impl DataGridPanel {
                 return;
             };
 
-            // Execute on background
             let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
                 .background_executor()
                 .spawn(async move { conn.update_row(&patch) })
@@ -1302,35 +1496,355 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    let Some(table_state) = &panel.table_state else {
-                        return;
-                    };
+                    panel.handle_save_result(row_idx, result, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
 
-                    match result {
-                        Ok(crud_result) => {
+    fn save_document(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        row_idx: usize,
+        changes: &[(usize, &crate::ui::components::data_table::model::CellValue)],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let model = state.model();
+
+        // Find _id column and get its value
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = model
+            .cell(row_idx, id_col_idx)
+            .map(|c| c.to_value())
+            .unwrap_or(Value::Null);
+
+        let filter = match &id_value {
+            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
+            Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
+            _ => {
+                log::error!("[SAVE] Invalid _id value for document");
+                return;
+            }
+        };
+
+        // Build $set update from changes
+        let mut set_fields = serde_json::Map::new();
+        for &(col_idx, cell_value) in changes {
+            if let Some(col) = model.columns.get(col_idx) {
+                let value = cell_value.to_value();
+                set_fields.insert(col.title.to_string(), value_to_json(&value));
+            }
+        }
+
+        let update_doc = serde_json::json!({"$set": set_fields});
+
+        let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+            .with_database(collection.database.clone());
+
+        let table_state_for_update = table_state.clone();
+        table_state_for_update.update(cx, |state, cx| {
+            state
+                .edit_buffer_mut()
+                .set_row_state(row_idx, RowState::Saving);
+            cx.notify();
+        });
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[SAVE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        if let Some(table_state) = &panel.table_state {
                             table_state.update(cx, |state, cx| {
-                                // Apply returning row if available (server-computed values)
-                                if let Some(returning_row) = crud_result.returning_row {
-                                    state.apply_returning_row(row_idx, &returning_row);
-                                }
-                                state.edit_buffer_mut().clear_row(row_idx);
+                                state.edit_buffer_mut().set_row_state(
+                                    row_idx,
+                                    RowState::Error("No connection".to_string()),
+                                );
                                 cx.notify();
-                            });
-                            panel.pending_toast = Some(PendingToast {
-                                message: "Row saved".to_string(),
-                                is_error: false,
                             });
                         }
-                        Err(e) => {
-                            log::error!("[SAVE] Failed to save row {}: {}", row_idx, e);
-                            table_state.update(cx, |state, cx| {
+                    });
+                })
+                .ok();
+                return;
+            };
+
+            let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
+                .background_executor()
+                .spawn(async move { conn.update_document(&update) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.handle_save_result(row_idx, result, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn handle_save_result(
+        &mut self,
+        row_idx: usize,
+        result: Result<dbflux_core::CrudResult, dbflux_core::DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        match result {
+            Ok(crud_result) => {
+                table_state.update(cx, |state, cx| {
+                    if let Some(returning_row) = crud_result.returning_row {
+                        state.apply_returning_row(row_idx, &returning_row);
+                    }
+                    state.edit_buffer_mut().clear_row(row_idx);
+                    cx.notify();
+                });
+                self.pending_toast = Some(PendingToast {
+                    message: "Saved".to_string(),
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                log::error!("[SAVE] Failed to save row {}: {}", row_idx, e);
+                table_state.update(cx, |state, cx| {
+                    state
+                        .edit_buffer_mut()
+                        .set_row_state(row_idx, RowState::Error(e.to_string()));
+                    cx.notify();
+                });
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Save failed: {}", e),
+                    is_error: true,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn handle_commit_insert(&mut self, insert_idx: usize, cx: &mut Context<Self>) {
+        let (profile_id, collection) = match &self.source {
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => (*profile_id, collection.clone()),
+            DataSource::Table { .. } => {
+                // TODO: Implement table INSERT persistence
+                return;
+            }
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let insert_data = {
+            let state = table_state.read(cx);
+            state
+                .edit_buffer()
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.to_vec())
+        };
+
+        let Some(cells) = insert_data else {
+            return;
+        };
+
+        let mut doc = serde_json::Map::new();
+        for (col_idx, cell) in cells.iter().enumerate() {
+            if let Some(col) = self.result.columns.get(col_idx) {
+                let value = cell.to_value();
+                if !matches!(value, Value::Null) {
+                    doc.insert(col.name.clone(), value_to_json(&value));
+                }
+            }
+        }
+
+        let insert = dbflux_core::DocumentInsert::one(collection.name.clone(), doc.into())
+            .with_database(collection.database.clone());
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[INSERT] No connection for profile {}", profile_id);
+                return;
+            };
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.insert_document(&insert) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            table_state_clone.update(cx, |state, cx| {
                                 state
                                     .edit_buffer_mut()
-                                    .set_row_state(row_idx, RowState::Error(e.to_string()));
+                                    .remove_pending_insert_by_idx(insert_idx);
                                 cx.notify();
                             });
                             panel.pending_toast = Some(PendingToast {
-                                message: format!("Save failed: {}", e),
+                                message: "Document inserted".to_string(),
+                                is_error: false,
+                            });
+                            // Data modified - user can refresh to see changes
+                        }
+                        Err(e) => {
+                            log::error!("[INSERT] Failed: {}", e);
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Insert failed: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn handle_commit_delete(&mut self, row_idx: usize, cx: &mut Context<Self>) {
+        let (profile_id, collection) = match &self.source {
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => (*profile_id, collection.clone()),
+            DataSource::Table { .. } => {
+                // TODO: Implement table DELETE persistence
+                return;
+            }
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let model = state.model();
+
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = model
+            .cell(row_idx, id_col_idx)
+            .map(|c| c.to_value())
+            .unwrap_or(Value::Null);
+
+        let filter = match &id_value {
+            Value::ObjectId(oid) => {
+                dbflux_core::DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
+            }
+            Value::Text(s) => dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s})),
+            _ => {
+                log::error!("[DELETE] Invalid _id value for document");
+                return;
+            }
+        };
+
+        let delete = dbflux_core::DocumentDelete::new(collection.name.clone(), filter)
+            .with_database(collection.database.clone());
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[DELETE] No connection for profile {}", profile_id);
+                return;
+            };
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.delete_document(&delete) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            table_state_clone.update(cx, |state, cx| {
+                                state.edit_buffer_mut().unmark_delete(row_idx);
+                                cx.notify();
+                            });
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Document deleted".to_string(),
+                                is_error: false,
+                            });
+                            // Data modified - user can refresh to see changes
+                        }
+                        Err(e) => {
+                            log::error!("[DELETE] Failed: {}", e);
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Delete failed: {}", e),
                                 is_error: true,
                             });
                         }
@@ -1542,67 +2056,83 @@ impl DataGridPanel {
     // === Pagination ===
 
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let DataSource::Table {
-            profile_id,
-            table,
-            pagination,
-            order_by,
-            total_rows,
-        } = &self.source
-        else {
-            return;
-        };
-
-        let filter_value = self.filter_input.read(cx).value();
-        let _filter = if filter_value.trim().is_empty() {
-            None
-        } else {
-            Some(filter_value.to_string())
-        };
-
-        self.run_table_query(
-            *profile_id,
-            table.clone(),
-            pagination.next_page(),
-            order_by.clone(),
-            *total_rows,
-            window,
-            cx,
-        );
+        match &self.source {
+            DataSource::Table {
+                profile_id,
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => {
+                self.run_table_query(
+                    *profile_id,
+                    table.clone(),
+                    pagination.next_page(),
+                    order_by.clone(),
+                    *total_rows,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                pagination,
+                total_docs,
+            } => {
+                self.run_collection_query(
+                    *profile_id,
+                    collection.clone(),
+                    pagination.next_page(),
+                    *total_docs,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::QueryResult { .. } => {}
+        }
     }
 
     pub fn go_to_prev_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let DataSource::Table {
-            profile_id,
-            table,
-            pagination,
-            order_by,
-            total_rows,
-        } = &self.source
-        else {
+        let Some(prev) = self.source.pagination().and_then(|p| p.prev_page()) else {
             return;
         };
 
-        let Some(prev) = pagination.prev_page() else {
-            return;
-        };
-
-        let filter_value = self.filter_input.read(cx).value();
-        let _filter = if filter_value.trim().is_empty() {
-            None
-        } else {
-            Some(filter_value.to_string())
-        };
-
-        self.run_table_query(
-            *profile_id,
-            table.clone(),
-            prev,
-            order_by.clone(),
-            *total_rows,
-            window,
-            cx,
-        );
+        match &self.source {
+            DataSource::Table {
+                profile_id,
+                table,
+                order_by,
+                total_rows,
+                ..
+            } => {
+                self.run_table_query(
+                    *profile_id,
+                    table.clone(),
+                    prev,
+                    order_by.clone(),
+                    *total_rows,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                total_docs,
+                ..
+            } => {
+                self.run_collection_query(
+                    *profile_id,
+                    collection.clone(),
+                    prev,
+                    *total_docs,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::QueryResult { .. } => {}
+        }
     }
 
     fn can_go_prev(&self) -> bool {
@@ -2243,7 +2773,7 @@ impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Process pending state
         if let Some(pending) = self.pending_total_count.take() {
-            self.apply_total_count(pending.table_qualified, pending.total, cx);
+            self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
 
         if let Some(toast) = self.pending_toast.take() {
@@ -2287,6 +2817,7 @@ impl Render for DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
+        let is_paginated = self.source.is_paginated();
         let table_name = self.source.table_ref().map(|t| t.qualified_name());
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
@@ -2469,8 +3000,12 @@ impl Render for DataGridPanel {
                         ),
                 )
             })
-            // Grid
-            .child(
+            // Grid or Document View
+            .child({
+                let view_mode = self.view_config.mode;
+                let use_document_view =
+                    view_mode == super::data_view::DataViewMode::Document && has_data;
+
                 div()
                     .flex_1()
                     .overflow_hidden()
@@ -2482,7 +3017,7 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(self.data_table.is_none(), |d| {
+                    .when(!has_data, |d| {
                         d.flex().items_center().justify_center().child(
                             div()
                                 .text_size(FontSizes::BASE)
@@ -2490,13 +3025,18 @@ impl Render for DataGridPanel {
                                 .child(if is_loading { "Loading..." } else { "No data" }),
                         )
                     })
-                    .when_some(self.data_table.clone(), |d, data_table| d.child(data_table)),
-            )
+                    .when(has_data && use_document_view, |d| {
+                        d.child(self.render_document_view(&theme, cx))
+                    })
+                    .when(has_data && !use_document_view, |d| {
+                        d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
+                    })
+            })
             // Status bar
             .child(self.render_status_bar(
                 row_count,
                 &exec_time,
-                is_table_view,
+                is_paginated,
                 pagination_info,
                 total_pages,
                 can_prev,
@@ -2678,6 +3218,49 @@ impl DataGridPanel {
                             .text_color(theme.muted_foreground),
                     ),
             )
+            .when(self.can_toggle_view(), |d| {
+                let mode = self.view_config.mode;
+                let icon_path = match mode {
+                    super::data_view::DataViewMode::Table => AppIcon::Table.path(),
+                    super::data_view::DataViewMode::Document => AppIcon::Braces.path(),
+                    super::data_view::DataViewMode::KeyValue => AppIcon::Database.path(),
+                };
+                let _tooltip = match mode {
+                    super::data_view::DataViewMode::Table => "Switch to Document View",
+                    super::data_view::DataViewMode::Document => "Switch to Table View",
+                    super::data_view::DataViewMode::KeyValue => "Switch View",
+                };
+
+                d.child(
+                    div()
+                        .id("view-toggle-btn")
+                        .w(Heights::ICON_MD)
+                        .h(Heights::ICON_MD)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(Radii::SM)
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_view_mode(cx);
+                        }))
+                        .child(
+                            svg()
+                                .path(icon_path)
+                                .size_4()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .text_size(FontSizes::XS)
+                                .ml(Spacing::XS)
+                                .text_color(theme.muted_foreground)
+                                .child(mode.label()),
+                        ),
+                )
+            })
     }
 
     fn render_edit_toolbar(
@@ -2896,12 +3479,206 @@ impl DataGridPanel {
             )
     }
 
+    fn render_document_view(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let rows = &self.result.rows;
+        let columns = &self.result.columns;
+
+        let cards: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .map(|(row_idx, row)| self.render_document_card(row_idx, row, columns, theme))
+            .collect();
+
+        div()
+            .id("document-view-container")
+            .flex()
+            .flex_col()
+            .size_full()
+            .p(Spacing::MD)
+            .gap(Spacing::MD)
+            .children(cards)
+    }
+
+    fn render_document_card(
+        &self,
+        row_idx: usize,
+        row: &[Value],
+        columns: &[dbflux_core::ColumnMeta],
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        div()
+            .id(ElementId::Name(format!("doc-{}", row_idx).into()))
+            .flex()
+            .flex_col()
+            .w_full()
+            .p(Spacing::MD)
+            .rounded(Radii::MD)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .gap(Spacing::XS)
+            .children(
+                columns
+                    .iter()
+                    .zip(row.iter())
+                    .filter(|(_, val)| !matches!(val, Value::Null))
+                    .map(|(col, val)| self.render_document_field(&col.name, val, theme, 0)),
+            )
+    }
+
+    fn render_document_field(
+        &self,
+        name: &str,
+        value: &Value,
+        theme: &gpui_component::theme::Theme,
+        depth: usize,
+    ) -> impl IntoElement {
+        let indent = px(depth as f32 * 16.0);
+
+        div()
+            .flex()
+            .pl(indent)
+            .gap(Spacing::SM)
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{}:", name)),
+            )
+            .child(self.render_value(value, theme, depth))
+    }
+
+    fn render_value(
+        &self,
+        value: &Value,
+        theme: &gpui_component::theme::Theme,
+        depth: usize,
+    ) -> impl IntoElement {
+        let text_color = match value {
+            Value::Null => theme.muted_foreground,
+            Value::Bool(_) => theme.chart_1,
+            Value::Int(_) | Value::Float(_) => theme.chart_2,
+            Value::Text(_) => theme.chart_3,
+            Value::ObjectId(_) => theme.chart_4,
+            _ => theme.foreground,
+        };
+
+        match value {
+            Value::Null => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child("null"),
+
+            Value::Bool(b) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(if *b { "true" } else { "false" }),
+
+            Value::Int(i) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(i.to_string()),
+
+            Value::Float(f) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(f.to_string()),
+
+            Value::Text(s) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(format!("\"{}\"", s)),
+
+            Value::ObjectId(oid) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(format!("ObjectId(\"{}\")", oid)),
+
+            Value::DateTime(dt) => div()
+                .text_size(FontSizes::SM)
+                .text_color(text_color)
+                .child(dt.to_rfc3339()),
+
+            Value::Array(arr) => {
+                if arr.is_empty() {
+                    div()
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .child("[]")
+                } else if arr.len() <= 3 && depth < 2 {
+                    div()
+                        .flex()
+                        .gap(Spacing::XS)
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .child("["),
+                        )
+                        .children(arr.iter().enumerate().map(|(i, v)| {
+                            div()
+                                .flex()
+                                .child(self.render_value(v, theme, depth + 1))
+                                .when(i < arr.len() - 1, |d| {
+                                    d.child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.muted_foreground)
+                                            .child(","),
+                                    )
+                                })
+                        }))
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .child("]"),
+                        )
+                } else {
+                    div()
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .child(format!("[{} items]", arr.len()))
+                }
+            }
+
+            Value::Document(doc) => {
+                if doc.is_empty() {
+                    div()
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .child("{}")
+                } else if depth < 2 {
+                    div().flex().flex_col().pl(Spacing::MD).children(
+                        doc.iter()
+                            .map(|(k, v)| self.render_document_field(k, v, theme, depth + 1)),
+                    )
+                } else {
+                    div()
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{{{} fields}}", doc.len()))
+                }
+            }
+
+            _ => div()
+                .text_size(FontSizes::SM)
+                .text_color(theme.foreground)
+                .child(format!("{:?}", value)),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_status_bar(
         &self,
         row_count: usize,
         exec_time: &str,
-        is_table_view: bool,
+        is_paginated: bool,
         pagination_info: Option<Pagination>,
         total_pages: Option<u64>,
         can_prev: bool,
@@ -2964,9 +3741,9 @@ impl DataGridPanel {
                         )
                     }),
             )
-            // Center: pagination (only for Table source)
+            // Center: pagination (for Table and Collection sources)
             .child(div().flex().items_center().gap(Spacing::SM).when(
-                is_table_view && pagination_info.is_some(),
+                is_paginated && pagination_info.is_some(),
                 |d| {
                     let pagination = pagination_info.clone().unwrap();
                     let page = pagination.current_page();
@@ -3805,7 +4582,10 @@ impl DataGridPanel {
     fn handle_add_row(&mut self, after_visual_row: usize, cx: &mut Context<Self>) {
         use crate::ui::components::data_table::model::VisualRowSource;
 
-        if !matches!(self.source, DataSource::Table { .. }) {
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
             return;
         }
 
@@ -3813,49 +4593,53 @@ impl DataGridPanel {
             return;
         };
 
-        // Determine the base row index to insert after
         let insert_after_base = {
             let state = table_state.read(cx);
             let buffer = state.edit_buffer();
             let visual_order = buffer.compute_visual_order();
 
             match visual_order.get(after_visual_row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    // Insert after this base row
-                    base_idx
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    // Insert after the same base row as this pending insert
-                    buffer
-                        .pending_inserts()
-                        .get(insert_idx)
-                        .and_then(|pi| pi.insert_after)
-                        .unwrap_or(self.result.rows.len().saturating_sub(1))
-                }
+                Some(VisualRowSource::Base(base_idx)) => base_idx,
+                Some(VisualRowSource::Insert(insert_idx)) => buffer
+                    .pending_inserts()
+                    .get(insert_idx)
+                    .and_then(|pi| pi.insert_after)
+                    .unwrap_or(self.result.rows.len().saturating_sub(1)),
                 None => self.result.rows.len().saturating_sub(1),
             }
         };
 
-        // Get column defaults from table metadata
-        let column_defaults = self.get_all_column_defaults(cx);
-
-        // Create a new row with default values or NULL
-        let new_row: Vec<crate::ui::components::data_table::model::CellValue> = self
-            .result
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| {
-                if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
-                    // Column has a default expression (e.g., nextval(), now())
-                    crate::ui::components::data_table::model::CellValue::auto_generated(
-                        default_expr,
-                    )
-                } else {
-                    crate::ui::components::data_table::model::CellValue::null()
-                }
-            })
-            .collect();
+        let new_row: Vec<crate::ui::components::data_table::model::CellValue> = if is_collection {
+            self.result
+                .columns
+                .iter()
+                .map(|col| {
+                    if col.name == "_id" {
+                        let new_oid =
+                            uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string();
+                        crate::ui::components::data_table::model::CellValue::text(&new_oid)
+                    } else {
+                        crate::ui::components::data_table::model::CellValue::null()
+                    }
+                })
+                .collect()
+        } else {
+            let column_defaults = self.get_all_column_defaults(cx);
+            self.result
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| {
+                    if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                        crate::ui::components::data_table::model::CellValue::auto_generated(
+                            default_expr,
+                        )
+                    } else {
+                        crate::ui::components::data_table::model::CellValue::null()
+                    }
+                })
+                .collect()
+        };
 
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();
@@ -3868,7 +4652,10 @@ impl DataGridPanel {
     fn handle_duplicate_row(&mut self, visual_row: usize, cx: &mut Context<Self>) {
         use crate::ui::components::data_table::model::VisualRowSource;
 
-        if !matches!(self.source, DataSource::Table { .. }) {
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
             return;
         }
 
@@ -3876,15 +4663,26 @@ impl DataGridPanel {
             return;
         };
 
-        // Find PK column indices to use default values
-        let pk_indices: std::collections::HashSet<usize> = self
-            .pk_columns
-            .iter()
-            .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
-            .collect();
+        let id_column_idx = if is_collection {
+            self.result.columns.iter().position(|c| c.name == "_id")
+        } else {
+            None
+        };
 
-        // Get column defaults for PK columns
-        let column_defaults = self.get_all_column_defaults(cx);
+        let pk_indices: std::collections::HashSet<usize> = if is_table {
+            self.pk_columns
+                .iter()
+                .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        let column_defaults = if is_table {
+            self.get_all_column_defaults(cx)
+        } else {
+            vec![]
+        };
 
         // Get source row data and determine insert position
         let base_row_count = self.result.rows.len();
@@ -3892,12 +4690,13 @@ impl DataGridPanel {
         let buffer = state.edit_buffer();
         let visual_order = buffer.compute_visual_order();
 
+        let new_oid = || uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string();
+
         let (source_values, insert_after_base): (
             Vec<crate::ui::components::data_table::model::CellValue>,
             usize,
         ) = match visual_order.get(visual_row).copied() {
             Some(VisualRowSource::Base(base_idx)) => {
-                // Copying from base model row - insert after this row
                 let values = self
                     .result
                     .rows
@@ -3906,8 +4705,9 @@ impl DataGridPanel {
                         r.iter()
                             .enumerate()
                             .map(|(idx, val)| {
-                                // Use default for PK columns, copy value for others
-                                if pk_indices.contains(&idx) {
+                                if Some(idx) == id_column_idx {
+                                    crate::ui::components::data_table::model::CellValue::text(&new_oid())
+                                } else if pk_indices.contains(&idx) {
                                     if let Some(default_expr) =
                                         column_defaults.get(idx).and_then(|d| d.as_ref())
                                     {
@@ -3925,7 +4725,6 @@ impl DataGridPanel {
                 (values, base_idx)
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
-                // Copying from pending insert - insert after same base row
                 let insert_after = buffer
                     .pending_inserts()
                     .get(insert_idx)
@@ -3939,7 +4738,9 @@ impl DataGridPanel {
                             .iter()
                             .enumerate()
                             .map(|(idx, val)| {
-                                if pk_indices.contains(&idx) {
+                                if Some(idx) == id_column_idx {
+                                    crate::ui::components::data_table::model::CellValue::text(&new_oid())
+                                } else if pk_indices.contains(&idx) {
                                     if let Some(default_expr) =
                                         column_defaults.get(idx).and_then(|d| d.as_ref())
                                     {
@@ -3974,7 +4775,10 @@ impl DataGridPanel {
     fn handle_delete_row(&mut self, row: usize, cx: &mut Context<Self>) {
         use crate::ui::components::data_table::model::VisualRowSource;
 
-        if !matches!(self.source, DataSource::Table { .. }) {
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
             return;
         }
 
@@ -3988,7 +4792,6 @@ impl DataGridPanel {
             let buffer = state.edit_buffer_mut();
             buffer.set_base_row_count(base_row_count);
 
-            // Use visual ordering to determine the actual row type
             let visual_order = buffer.compute_visual_order();
 
             match visual_order.get(row).copied() {
@@ -4109,7 +4912,37 @@ impl DataGridPanel {
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
         }
     }
+}
 
+fn value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::json!(*i),
+        Value::Float(f) => serde_json::json!(*f),
+        Value::Text(s) => serde_json::Value::String(s.clone()),
+        Value::Bytes(b) => {
+            let hex: String = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+            serde_json::json!({"$binary": {"hex": hex}})
+        }
+        Value::Json(j) => serde_json::from_str(j).unwrap_or(serde_json::Value::String(j.clone())),
+        Value::Decimal(d) => serde_json::Value::String(d.clone()),
+        Value::DateTime(dt) => serde_json::json!({"$date": dt.to_rfc3339()}),
+        Value::Date(d) => serde_json::Value::String(d.to_string()),
+        Value::Time(t) => serde_json::Value::String(t.to_string()),
+        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(value_to_json).collect()),
+        Value::Document(doc) => {
+            let map: serde_json::Map<String, serde_json::Value> = doc
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+    }
+}
+
+impl DataGridPanel {
     fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
         let (profile_id, table_ref) = match &self.source {
             DataSource::Table {
