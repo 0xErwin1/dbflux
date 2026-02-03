@@ -6,8 +6,8 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
@@ -16,7 +16,8 @@ use ssh2::Session;
 /// An active SSH tunnel that forwards local connections to a remote host.
 ///
 /// The tunnel runs in a background thread and automatically shuts down
-/// when dropped.
+/// when dropped. All SSH operations are serialized through a single thread
+/// to avoid libssh2 thread-safety issues.
 pub struct SshTunnel {
     local_port: u16,
     shutdown: Arc<AtomicBool>,
@@ -29,7 +30,30 @@ impl SshTunnel {
     ///
     /// Returns a tunnel that listens on a random local port. Use `local_port()`
     /// to get the assigned port number.
+    ///
+    /// This function verifies the tunnel can reach the remote host before returning.
     pub fn start(session: Session, remote_host: String, remote_port: u16) -> Result<Self, DbError> {
+        // Test that we can actually forward to the remote host before starting the tunnel
+        log::info!(
+            "[SSH] Testing tunnel connectivity to {}:{}",
+            remote_host,
+            remote_port
+        );
+
+        session.set_blocking(true);
+        let test_channel = session
+            .channel_direct_tcpip(&remote_host, remote_port, None)
+            .map_err(|e| {
+                DbError::ConnectionFailed(format!(
+                    "SSH tunnel test failed - cannot reach {}:{} through SSH server: {}",
+                    remote_host, remote_port, e
+                ))
+            })?;
+
+        // Close test channel
+        drop(test_channel);
+        log::info!("[SSH] Tunnel connectivity verified");
+
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
             DbError::ConnectionFailed(format!("Failed to bind local tunnel port: {}", e))
         })?;
@@ -47,8 +71,6 @@ impl SshTunnel {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
-
-        let session = Arc::new(Mutex::new(session));
 
         let thread = thread::spawn(move || {
             run_tunnel_loop(listener, session, remote_host, remote_port, shutdown_clone);
@@ -274,102 +296,156 @@ fn authenticate_with_key(
     )))
 }
 
+/// A single tunnel connection pairing a client TCP stream with an SSH channel.
+struct TunnelConnection {
+    client: TcpStream,
+    channel: ssh2::Channel,
+    client_buf: Vec<u8>,
+    channel_buf: Vec<u8>,
+    closed: bool,
+}
+
+impl TunnelConnection {
+    fn new(client: TcpStream, channel: ssh2::Channel) -> std::io::Result<Self> {
+        client.set_nodelay(true)?;
+        client.set_nonblocking(true)?;
+
+        Ok(Self {
+            client,
+            channel,
+            client_buf: vec![0u8; 8192],
+            channel_buf: vec![0u8; 8192],
+            closed: false,
+        })
+    }
+
+    /// Poll this connection for data transfer. Returns true if any data was transferred.
+    fn poll(&mut self) -> bool {
+        if self.closed {
+            return false;
+        }
+
+        let mut activity = false;
+
+        // Client -> SSH channel
+        match self.client.read(&mut self.client_buf) {
+            Ok(0) => {
+                self.closed = true;
+                return false;
+            }
+            Ok(n) => {
+                if self.channel.write_all(&self.client_buf[..n]).is_err() {
+                    self.closed = true;
+                    return false;
+                }
+                activity = true;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => {
+                self.closed = true;
+                return false;
+            }
+        }
+
+        // SSH channel -> Client
+        match self.channel.read(&mut self.channel_buf) {
+            Ok(0) => {
+                self.closed = true;
+                return false;
+            }
+            Ok(n) => {
+                if self.client.write_all(&self.channel_buf[..n]).is_err() {
+                    self.closed = true;
+                    return false;
+                }
+                activity = true;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => {
+                self.closed = true;
+                return false;
+            }
+        }
+
+        activity
+    }
+}
+
+/// Single-threaded tunnel loop that multiplexes all connections.
+///
+/// This approach avoids libssh2 thread-safety issues by keeping all SSH
+/// operations on a single thread. The session and all its channels are
+/// only ever accessed from this one thread.
 fn run_tunnel_loop(
     listener: TcpListener,
-    session: Arc<Mutex<Session>>,
+    session: Session,
     remote_host: String,
     remote_port: u16,
     shutdown: Arc<AtomicBool>,
 ) {
-    while !shutdown.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((client_stream, _)) => {
-                let session = session.clone();
-                let remote_host = remote_host.clone();
-                let shutdown = shutdown.clone();
+    session.set_blocking(false);
 
-                thread::spawn(move || {
-                    if let Err(e) = handle_tunnel_connection(
-                        client_stream,
-                        session,
-                        &remote_host,
-                        remote_port,
-                        shutdown,
-                    ) {
-                        log::error!("SSH tunnel connection error: {}", e);
-                    }
-                });
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Err(e) => {
-                log::error!("SSH tunnel listener error: {}", e);
-                break;
-            }
-        }
-    }
-}
-
-fn open_ssh_channel_blocking(
-    session: &Session,
-    remote_host: &str,
-    remote_port: u16,
-) -> Result<ssh2::Channel, ssh2::Error> {
-    session.set_blocking(true);
-    session.channel_direct_tcpip(remote_host, remote_port, None)
-}
-
-fn handle_tunnel_connection(
-    mut client_stream: TcpStream,
-    session: Arc<Mutex<Session>>,
-    remote_host: &str,
-    remote_port: u16,
-    shutdown: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut channel = {
-        let session = session
-            .lock()
-            .map_err(|e| format!("Session lock failed: {}", e))?;
-
-        let channel = open_ssh_channel_blocking(&session, remote_host, remote_port)?;
-        session.set_blocking(false);
-        channel
-    };
-
-    client_stream.set_nodelay(true)?;
-    client_stream.set_nonblocking(true)?;
-
-    let mut client_buf = [0u8; 8192];
-    let mut channel_buf = [0u8; 8192];
+    let mut connections: Vec<TunnelConnection> = Vec::new();
 
     while !shutdown.load(Ordering::SeqCst) {
         let mut activity = false;
 
-        match client_stream.read(&mut client_buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                channel.write_all(&client_buf[..n])?;
-                activity = true;
+        // Accept new connections
+        match listener.accept() {
+            Ok((client_stream, addr)) => {
+                log::debug!("[SSH] New tunnel connection from {}", addr);
+
+                // Temporarily set blocking to open the channel
+                session.set_blocking(true);
+                match session.channel_direct_tcpip(&remote_host, remote_port, None) {
+                    Ok(channel) => {
+                        session.set_blocking(false);
+                        match TunnelConnection::new(client_stream, channel) {
+                            Ok(conn) => {
+                                connections.push(conn);
+                                activity = true;
+                            }
+                            Err(e) => {
+                                log::error!("[SSH] Failed to setup tunnel connection: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        session.set_blocking(false);
+                        log::error!("[SSH] Failed to open SSH channel: {}", e);
+                    }
+                }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(Box::new(e)),
+            Err(e) => {
+                log::error!("[SSH] Tunnel listener error: {}", e);
+                break;
+            }
         }
 
-        match channel.read(&mut channel_buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                client_stream.write_all(&channel_buf[..n])?;
+        // Poll all active connections
+        for conn in &mut connections {
+            if conn.poll() {
                 activity = true;
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(Box::new(e)),
         }
 
+        // Remove closed connections
+        let before = connections.len();
+        connections.retain(|c| !c.closed);
+        if connections.len() < before {
+            log::debug!(
+                "[SSH] Removed {} closed connections, {} active",
+                before - connections.len(),
+                connections.len()
+            );
+        }
+
+        // Sleep briefly if no activity to avoid busy-spinning
         if !activity {
-            thread::sleep(std::time::Duration::from_micros(100));
+            thread::sleep(std::time::Duration::from_micros(500));
         }
     }
 
-    Ok(())
+    log::info!("[SSH] Tunnel loop shutting down");
 }

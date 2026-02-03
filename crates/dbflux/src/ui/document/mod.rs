@@ -2,6 +2,7 @@
 
 mod data_document;
 mod data_grid_panel;
+mod data_view;
 mod handle;
 mod sql_query;
 mod tab_bar;
@@ -10,6 +11,7 @@ mod types;
 
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
+pub use data_view::{DataViewConfig, DataViewMode};
 pub use handle::{DocumentEvent, DocumentHandle};
 pub use sql_query::SqlQueryDocument;
 pub use tab_bar::{TabBar, TabBarEvent};

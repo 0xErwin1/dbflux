@@ -2,8 +2,9 @@ use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, ConnectionTree, ConnectionTreeNode,
     ConnectionTreeStore, CustomTypeInfo, DbConfig, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
     HistoryStore, ProfileStore, SavedQuery, SavedQueryStore, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile,
-    SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager, TaskSnapshot, create_secret_store,
+    SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
+    SshTunnelProfile, SshTunnelStore, TableInfo, TaskId, TaskKind, TaskManager, TaskSnapshot,
+    create_secret_store,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -230,7 +231,23 @@ impl AppState {
 
         // Sync tree with profiles to handle orphaned nodes and new profiles
         let profile_ids: Vec<Uuid> = profiles.iter().map(|p| p.id).collect();
+        let nodes_before = connection_tree.nodes.len();
         connection_tree.sync_with_profiles(&profile_ids);
+        let nodes_after = connection_tree.nodes.len();
+
+        // Save tree if sync made changes (added or removed nodes)
+        if nodes_before != nodes_after {
+            if let Some(ref store) = connection_tree_store {
+                if let Err(e) = store.save(&connection_tree) {
+                    error!("Failed to save connection tree after sync: {:?}", e);
+                } else {
+                    info!(
+                        "Synced connection tree: {} -> {} nodes",
+                        nodes_before, nodes_after
+                    );
+                }
+            }
+        }
 
         Self {
             drivers,
@@ -1108,28 +1125,46 @@ impl AppState {
     }
 
     fn get_ssh_secret_for_profile(&self, profile: &ConnectionProfile) -> Option<String> {
-        let tunnel_profile_id = match &profile.config {
+        // Extract SSH-related fields from config
+        let (ssh_tunnel, ssh_tunnel_profile_id) = match &profile.config {
             DbConfig::Postgres {
-                ssh_tunnel_profile_id: Some(id),
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
                 ..
-            } => *id,
+            } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
             DbConfig::MySQL {
-                ssh_tunnel_profile_id: Some(id),
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
                 ..
-            } => *id,
-            _ => return None,
+            } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
+            DbConfig::MongoDB {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
+            DbConfig::SQLite { .. } => return None,
         };
 
-        let tunnel = self
-            .ssh_tunnels
-            .iter()
-            .find(|t| t.id == tunnel_profile_id)?;
+        // If using a saved tunnel profile, get secret from there
+        if let Some(tunnel_profile_id) = ssh_tunnel_profile_id {
+            let tunnel = self
+                .ssh_tunnels
+                .iter()
+                .find(|t| t.id == tunnel_profile_id)?;
 
-        if !tunnel.save_secret {
-            return None;
+            if !tunnel.save_secret {
+                return None;
+            }
+
+            return self.get_ssh_tunnel_secret(tunnel);
         }
 
-        self.get_ssh_tunnel_secret(tunnel)
+        // If using inline SSH config, get secret from profile's SSH secret store
+        if ssh_tunnel.is_some() {
+            return self.get_ssh_password(profile);
+        }
+
+        None
     }
 
     pub fn apply_connect_profile(
@@ -1302,7 +1337,8 @@ impl AppState {
         );
     }
 
-    /// Fetch schema for a database without reconnecting (MySQL/MariaDB).
+    /// Fetch schema for a database without reconnecting.
+    /// Supported for drivers with LazyPerDatabase loading strategy (MySQL, MariaDB, MongoDB).
     pub fn prepare_fetch_database_schema(
         &self,
         profile_id: Uuid,
@@ -1313,10 +1349,13 @@ impl AppState {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        // Only for MySQL/MariaDB
-        let kind = connected.profile.kind();
-        if kind != DbKind::MySQL && kind != DbKind::MariaDB {
-            return Err("Database schema fetch only supported for MySQL/MariaDB".to_string());
+        // Only for drivers that support lazy per-database loading
+        let strategy = connected.connection.schema_loading_strategy();
+        if strategy != SchemaLoadingStrategy::LazyPerDatabase {
+            return Err(format!(
+                "Database schema fetch not supported for {:?} strategy",
+                strategy
+            ));
         }
 
         // Check if already cached

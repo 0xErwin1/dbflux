@@ -1331,6 +1331,8 @@ impl ConnectionManagerWindow {
             Some(password)
         };
 
+        let ssh_secret = self.get_ssh_secret(cx);
+
         let Some(driver) = self.selected_driver.clone() else {
             self.test_status = TestStatus::Failed;
             self.test_error = Some("No driver selected".to_string());
@@ -1341,9 +1343,9 @@ impl ConnectionManagerWindow {
         let profile_name = profile.name.clone();
         let this = cx.entity().clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { driver.connect_with_password(&profile, password_opt.as_deref()) });
+        let task = cx.background_executor().spawn(async move {
+            driver.connect_with_secrets(&profile, password_opt.as_deref(), ssh_secret.as_deref())
+        });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;

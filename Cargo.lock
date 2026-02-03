@@ -1661,6 +1661,7 @@ dependencies = [
 name = "dbflux_driver_mysql"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dbflux_core",
  "dbflux_ssh",
  "hex",

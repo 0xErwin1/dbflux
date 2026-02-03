@@ -125,4 +125,10 @@ pub enum DataTableEvent {
         value: String,
         is_json: bool,
     },
+
+    /// Request to commit a pending insert (insert_idx in pending_inserts list).
+    CommitInsertRequested(usize),
+
+    /// Request to commit a pending delete (base_row_idx marked for deletion).
+    CommitDeleteRequested(usize),
 }

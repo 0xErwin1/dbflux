@@ -664,6 +664,12 @@ impl Sidebar {
             }
         }
 
+        // When expanding a database, trigger schema fetch via handle_database_click
+        // which properly dispatches based on the driver's schema_loading_strategy
+        if expanded && item_id.starts_with("db_") {
+            self.handle_database_click(item_id, cx);
+        }
+
         // Sync folder collapsed state with AppState
         if item_id.starts_with("conn_folder_")
             && let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
@@ -709,6 +715,27 @@ impl Sidebar {
         }
 
         None
+    }
+
+    /// Parse database item ID in format `db_{profile_id}_{db_name}`.
+    fn parse_database_id(item_id: &str) -> Option<(Uuid, String)> {
+        let rest = item_id.strip_prefix("db_")?;
+
+        // UUID is 36 chars, followed by "_"
+        if rest.len() < 37 {
+            return None;
+        }
+
+        let uuid_str = rest.get(..36)?;
+        let profile_id = Uuid::parse_str(uuid_str).ok()?;
+
+        // After UUID and underscore, we have the database name
+        let db_name = rest.get(37..)?.to_string();
+        if db_name.is_empty() {
+            return None;
+        }
+
+        Some((profile_id, db_name))
     }
 
     fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
@@ -2008,6 +2035,12 @@ impl Sidebar {
 
                 items
             }
+            TreeNodeKind::Collection => {
+                vec![ContextMenuItem {
+                    label: "Open".into(),
+                    action: ContextMenuAction::Open,
+                }]
+            }
             TreeNodeKind::Profile => {
                 let is_connected = if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
                     if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
@@ -2377,7 +2410,12 @@ impl Sidebar {
                 return;
             }
             ContextMenuAction::Open => {
-                self.browse_table(&item_id, cx);
+                let node_kind = TreeNodeKind::from_id(&item_id);
+                if node_kind == TreeNodeKind::Collection {
+                    self.browse_collection(&item_id, cx);
+                } else {
+                    self.browse_table(&item_id, cx);
+                }
             }
             ContextMenuAction::ViewSchema => {
                 self.set_expanded(&item_id, true, cx);
@@ -3538,7 +3576,21 @@ impl Sidebar {
         }) {
             Ok(p) => p,
             Err(e) => {
-                log::info!("Fetch database schema skipped: {}", e);
+                // Only show toast for unexpected errors, not for expected skips
+                let is_expected = e.contains("already cached")
+                    || e.contains("already pending")
+                    || e.contains("another thread");
+
+                if is_expected {
+                    log::info!("Fetch database schema skipped: {}", e);
+                } else {
+                    log::error!("Failed to load database schema: {}", e);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!("Failed to load schema: {}", e),
+                        is_error: true,
+                    });
+                }
+
                 self.refresh_tree(cx);
                 return;
             }
@@ -3576,21 +3628,24 @@ impl Sidebar {
                     return;
                 }
 
-                let toast = match &result {
+                let (toast, failed) = match &result {
                     Ok(_) => {
                         app_state.update(cx, |state, _| {
                             state.complete_task(task_id);
                         });
-                        None
+                        (None, false)
                     }
                     Err(e) => {
                         app_state.update(cx, |state, _| {
                             state.fail_task(task_id, e.clone());
                         });
-                        Some(PendingToast {
-                            message: format!("Failed to load schema: {}", e),
-                            is_error: true,
-                        })
+                        (
+                            Some(PendingToast {
+                                message: format!("Failed to load schema: {}", e),
+                                is_error: true,
+                            }),
+                            true,
+                        )
                     }
                 };
 
@@ -3607,6 +3662,13 @@ impl Sidebar {
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = toast;
+
+                    // Collapse database on failure
+                    if failed {
+                        let db_item_id = format!("db_{}_{}", profile_id, db_name_owned);
+                        sidebar.expansion_overrides.remove(&db_item_id);
+                    }
+
                     sidebar.refresh_tree(cx);
                 });
             })
@@ -3916,6 +3978,7 @@ impl Sidebar {
                                 "Loading...".to_string(),
                             )]
                         } else {
+                            // Empty placeholder - schema not loaded yet
                             Vec::new()
                         }
                     } else if db.is_current {
@@ -5267,6 +5330,8 @@ impl Render for Sidebar {
                                             let id_md = item_id_for_mousedown.clone();
                                             let sidebar_cl = sidebar_for_click.clone();
                                             let id_cl = item_id_for_click.clone();
+                                            let is_collection =
+                                                node_kind == TreeNodeKind::Collection;
                                             el.on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                 cx.stop_propagation();
                                                 sidebar_md.update(cx, |this, cx| {
@@ -5285,7 +5350,11 @@ impl Render for Sidebar {
                                                 move |event, _window, cx| {
                                                     if event.click_count() == 2 {
                                                         sidebar_cl.update(cx, |this, cx| {
-                                                            this.browse_table(&id_cl, cx);
+                                                            if is_collection {
+                                                                this.browse_collection(&id_cl, cx);
+                                                            } else {
+                                                                this.browse_table(&id_cl, cx);
+                                                            }
                                                         });
                                                     }
                                                 },
@@ -5588,6 +5657,7 @@ impl Render for Sidebar {
                                                     | TreeNodeKind::ConnectionFolder
                                                     | TreeNodeKind::Table
                                                     | TreeNodeKind::View
+                                                    | TreeNodeKind::Collection
                                                     | TreeNodeKind::Database
                                                     | TreeNodeKind::Index
                                                     | TreeNodeKind::SchemaIndex
@@ -5599,47 +5669,43 @@ impl Render for Sidebar {
                                                 let sidebar_for_menu = sidebar_entity.clone();
                                                 let item_id_for_menu = item_id.clone();
                                                 let hover_bg = theme.secondary;
-                                                let has_menu = node_kind != TreeNodeKind::Database
-                                                    || !is_active_database;
 
-                                                el.when(has_menu, |el| {
-                                                    el.child(
-                                                        div()
-                                                            .id(SharedString::from(format!(
-                                                                "menu-btn-{}",
-                                                                item_id_for_menu
-                                                            )))
-                                                            .flex_shrink_0()
-                                                            .ml_auto()
-                                                            .px_1()
-                                                            .rounded(Radii::SM)
-                                                            .cursor_pointer()
-                                                            .hover(move |d| d.bg(hover_bg))
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                |_, _, cx| {
-                                                                    cx.stop_propagation();
-                                                                },
-                                                            )
-                                                            .on_click({
-                                                                let sidebar = sidebar_for_menu.clone();
-                                                                let item_id = item_id_for_menu.clone();
-                                                                move |event, _, cx| {
-                                                                    cx.stop_propagation();
-                                                                    let position = event.position();
-                                                                    sidebar.update(cx, |this, cx| {
-                                                                        cx.emit(
-                                                                            SidebarEvent::RequestFocus,
-                                                                        );
-                                                                        this.open_menu_for_item(
-                                                                            &item_id, position, cx,
-                                                                        );
-                                                                    });
-                                                                }
-                                                            })
-                                                            .child("⋯"),
-                                                    )
-                                                })
+                                                el.child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "menu-btn-{}",
+                                                            item_id_for_menu
+                                                        )))
+                                                        .flex_shrink_0()
+                                                        .ml_auto()
+                                                        .px_1()
+                                                        .rounded(Radii::SM)
+                                                        .cursor_pointer()
+                                                        .hover(move |d| d.bg(hover_bg))
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            |_, _, cx| {
+                                                                cx.stop_propagation();
+                                                            },
+                                                        )
+                                                        .on_click({
+                                                            let sidebar = sidebar_for_menu.clone();
+                                                            let item_id = item_id_for_menu.clone();
+                                                            move |event, _, cx| {
+                                                                cx.stop_propagation();
+                                                                let position = event.position();
+                                                                sidebar.update(cx, |this, cx| {
+                                                                    cx.emit(
+                                                                        SidebarEvent::RequestFocus,
+                                                                    );
+                                                                    this.open_menu_for_item(
+                                                                        &item_id, position, cx,
+                                                                    );
+                                                                });
+                                                            }
+                                                        })
+                                                        .child("⋯"),
+                                                )
                                             },
                                         )
                                         // Right-click context menu
@@ -5650,6 +5716,7 @@ impl Render for Sidebar {
                                                     | TreeNodeKind::ConnectionFolder
                                                     | TreeNodeKind::Table
                                                     | TreeNodeKind::View
+                                                    | TreeNodeKind::Collection
                                                     | TreeNodeKind::Database
                                                     | TreeNodeKind::Index
                                                     | TreeNodeKind::SchemaIndex

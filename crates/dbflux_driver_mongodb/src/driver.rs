@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DocumentSchema, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues, Icon, MONGODB_FORM, PlaceholderStyle, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SshTunnelConfig, TableInfo, Value, ViewInfo,
+    ColumnMeta, Connection, ConnectionProfile, CrudResult, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert,
+    DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, FormValues,
+    Icon, MONGODB_FORM, PlaceholderStyle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, Value,
+    ViewInfo,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -76,6 +77,10 @@ impl DbDriver for MongoDriver {
 
         let user = values.get("user").filter(|s| !s.is_empty()).cloned();
         let database = values.get("database").filter(|s| !s.is_empty()).cloned();
+        let auth_database = values
+            .get("auth_database")
+            .filter(|s| !s.is_empty())
+            .cloned();
 
         if use_uri && uri.is_none() {
             return Err(DbError::InvalidProfile(
@@ -94,6 +99,7 @@ impl DbDriver for MongoDriver {
             port,
             user,
             database,
+            auth_database,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -109,6 +115,7 @@ impl DbDriver for MongoDriver {
             port,
             user,
             database,
+            auth_database,
             ..
         } = config
         {
@@ -121,6 +128,10 @@ impl DbDriver for MongoDriver {
             values.insert("port".to_string(), port.to_string());
             values.insert("user".to_string(), user.clone().unwrap_or_default());
             values.insert("database".to_string(), database.clone().unwrap_or_default());
+            values.insert(
+                "auth_database".to_string(),
+                auth_database.clone().unwrap_or_default(),
+            );
         }
 
         values
@@ -149,6 +160,7 @@ impl DbDriver for MongoDriver {
                 config.port,
                 config.user.as_deref(),
                 config.database.clone(),
+                config.auth_database.as_deref(),
                 password,
             )
         } else {
@@ -157,6 +169,7 @@ impl DbDriver for MongoDriver {
                 config.port,
                 config.user.as_deref(),
                 config.database,
+                config.auth_database.as_deref(),
                 password,
             )
         }
@@ -203,9 +216,10 @@ impl MongoDriver {
         port: u16,
         user: Option<&str>,
         database: Option<String>,
+        auth_database: Option<&str>,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let uri = build_mongodb_uri(host, port, user, password);
+        let uri = build_mongodb_uri(host, port, user, password, auth_database);
 
         log::info!("Connecting to MongoDB at {}:{}", host, port);
 
@@ -234,6 +248,7 @@ impl MongoDriver {
         db_port: u16,
         user: Option<&str>,
         database: Option<String>,
+        auth_database: Option<&str>,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
@@ -269,7 +284,7 @@ impl MongoDriver {
         log::info!("[DB] Connecting to MongoDB via tunnel");
         let phase_start = Instant::now();
 
-        let uri = build_mongodb_uri("127.0.0.1", local_port, user, password);
+        let uri = build_mongodb_uri("127.0.0.1", local_port, user, password, auth_database);
         let client = Client::with_uri_str(&uri)
             .map_err(|e| format_mongo_error(&e, "127.0.0.1", local_port))?;
 
@@ -306,6 +321,7 @@ struct ExtractedMongoConfig {
     port: u16,
     user: Option<String>,
     database: Option<String>,
+    auth_database: Option<String>,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -318,6 +334,7 @@ fn extract_mongodb_config(config: &DbConfig) -> Result<ExtractedMongoConfig, DbE
             port,
             user,
             database,
+            auth_database,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMongoConfig {
@@ -327,6 +344,7 @@ fn extract_mongodb_config(config: &DbConfig) -> Result<ExtractedMongoConfig, DbE
             port: *port,
             user: user.clone(),
             database: database.clone(),
+            auth_database: auth_database.clone(),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -335,7 +353,13 @@ fn extract_mongodb_config(config: &DbConfig) -> Result<ExtractedMongoConfig, DbE
     }
 }
 
-fn build_mongodb_uri(host: &str, port: u16, user: Option<&str>, password: Option<&str>) -> String {
+fn build_mongodb_uri(
+    host: &str,
+    port: u16,
+    user: Option<&str>,
+    password: Option<&str>,
+    auth_database: Option<&str>,
+) -> String {
     let mut uri = String::from("mongodb://");
 
     if let Some(u) = user {
@@ -351,6 +375,15 @@ fn build_mongodb_uri(host: &str, port: u16, user: Option<&str>, password: Option
     uri.push(':');
     uri.push_str(&port.to_string());
     uri.push_str("/?appName=dbflux");
+
+    // Add authSource if specified, or default to "admin" when user is provided
+    if let Some(auth_db) = auth_database {
+        uri.push_str("&authSource=");
+        uri.push_str(&urlencoding::encode(auth_db));
+    } else if user.is_some() {
+        // Default to admin for authenticated connections
+        uri.push_str("&authSource=admin");
+    }
 
     uri
 }
@@ -625,6 +658,124 @@ impl Connection for MongoConnection {
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
         SchemaLoadingStrategy::LazyPerDatabase
+    }
+
+    fn update_document(&self, update: &DocumentUpdate) -> Result<CrudResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let db_name = update
+            .database
+            .as_ref()
+            .or(self.default_database.as_ref())
+            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+
+        let db = client.database(db_name);
+        let collection = db.collection::<Document>(&update.collection);
+
+        let filter = json_to_bson_doc(&update.filter.filter)?;
+        let update_doc = json_to_bson_doc(&update.update)?;
+
+        let mut options = mongodb::options::UpdateOptions::default();
+        options.upsert = Some(update.upsert);
+
+        let result = if update.many {
+            collection
+                .update_many(filter, update_doc)
+                .with_options(options)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?
+        } else {
+            collection
+                .update_one(filter, update_doc)
+                .with_options(options)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?
+        };
+
+        let affected = result.modified_count + result.upserted_id.map(|_| 1).unwrap_or(0);
+
+        Ok(CrudResult::new(affected, None))
+    }
+
+    fn insert_document(&self, insert: &DocumentInsert) -> Result<CrudResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let db_name = insert
+            .database
+            .as_ref()
+            .or(self.default_database.as_ref())
+            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+
+        let db = client.database(db_name);
+        let collection = db.collection::<Document>(&insert.collection);
+
+        if insert.documents.is_empty() {
+            return Ok(CrudResult::empty());
+        }
+
+        let docs: Vec<Document> = insert
+            .documents
+            .iter()
+            .map(json_to_bson_doc)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if docs.len() == 1 {
+            let result = collection
+                .insert_one(docs.into_iter().next().unwrap())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let inserted_id = bson_to_value(&Bson::ObjectId(
+                result.inserted_id.as_object_id().unwrap_or_default(),
+            ));
+
+            Ok(CrudResult::new(1, Some(vec![inserted_id])))
+        } else {
+            let result = collection
+                .insert_many(docs)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            Ok(CrudResult::new(result.inserted_ids.len() as u64, None))
+        }
+    }
+
+    fn delete_document(&self, delete: &DocumentDelete) -> Result<CrudResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let db_name = delete
+            .database
+            .as_ref()
+            .or(self.default_database.as_ref())
+            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+
+        let db = client.database(db_name);
+        let collection = db.collection::<Document>(&delete.collection);
+
+        let filter = json_to_bson_doc(&delete.filter.filter)?;
+
+        let result = if delete.many {
+            collection
+                .delete_many(filter)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?
+        } else {
+            collection
+                .delete_one(filter)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?
+        };
+
+        Ok(CrudResult::new(result.deleted_count, None))
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

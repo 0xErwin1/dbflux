@@ -159,16 +159,18 @@ impl Render for ToastHost {
                             .text_color(theme.muted_foreground),
                     );
 
+                let is_error = matches!(toast.kind, ToastKind::Error);
+
                 gpui::div()
                     .id(("toast", toast_id))
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap(Spacing::MD)
                     .pl(Spacing::MD)
                     .pr(Spacing::SM)
                     .py(Spacing::SM)
                     .min_w(rems(20.0))
-                    .max_w(rems(28.0))
+                    .max_w(if is_error { rems(40.0) } else { rems(28.0) })
                     .border_1()
                     .border_color(border_color)
                     .bg(background)
@@ -179,13 +181,14 @@ impl Render for ToastHost {
                             .path(icon_path)
                             .size(px(18.0))
                             .flex_shrink_0()
+                            .mt(px(2.0))
                             .text_color(accent),
                     )
                     .child(
                         gpui::div()
                             .flex_1()
-                            .overflow_hidden()
-                            .text_ellipsis()
+                            .min_w_0()
+                            .when(!is_error, |d| d.overflow_hidden().text_ellipsis())
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
                             .child(toast.message.clone()),

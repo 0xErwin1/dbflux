@@ -380,8 +380,9 @@ impl SqlQueryDocument {
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                record.error = Some(error_msg);
+                record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
+                cx.toast_error(format!("Query failed: {}", error_msg), window);
             }
         }
 

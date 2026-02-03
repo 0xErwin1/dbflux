@@ -148,6 +148,9 @@ pub enum DbConfig {
         port: u16,
         user: Option<String>,
         database: Option<String>,
+        /// Authentication database (defaults to "admin" if user is specified).
+        #[serde(default)]
+        auth_database: Option<String>,
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
@@ -210,6 +213,7 @@ impl DbConfig {
             port: 27017,
             user: None,
             database: None,
+            auth_database: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         }
