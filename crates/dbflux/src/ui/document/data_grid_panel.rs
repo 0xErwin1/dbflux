@@ -224,6 +224,11 @@ struct PendingModalOpen {
     is_json: bool,
 }
 
+struct PendingDeleteConfirm {
+    row_idx: usize,
+    is_table: bool,
+}
+
 /// Context menu state for right-click operations.
 struct TableContextMenu {
     /// Row index of the clicked cell.
@@ -287,7 +292,9 @@ pub struct DataGridPanel {
     pending_requery: Option<PendingRequery>,
     pending_total_count: Option<PendingTotalCount>,
     pending_rebuild: bool,
+    pending_refresh: bool,
     pending_toast: Option<PendingToast>,
+    pending_delete_confirm: Option<PendingDeleteConfirm>,
 
     // Focus
     focus_handle: FocusHandle,
@@ -426,26 +433,12 @@ impl DataGridPanel {
 
                 // Extract PK columns
                 let columns = fetch_result.details.columns.as_deref().unwrap_or(&[]);
-                log::info!(
-                    "[PK] Fetched {} columns for {}.{}",
-                    columns.len(),
-                    fetch_result.database,
-                    fetch_result.table
-                );
-
-                for col in columns {
-                    if col.is_primary_key {
-                        log::info!("[PK]   - Column '{}' is_primary_key=true", col.name);
-                    }
-                }
 
                 let pk_names: Vec<String> = columns
                     .iter()
                     .filter(|c| c.is_primary_key)
                     .map(|c| c.name.clone())
                     .collect();
-
-                let table_name = fetch_result.table.clone();
 
                 // Store in cache
                 app_state.update(cx, |state, _| {
@@ -459,17 +452,11 @@ impl DataGridPanel {
 
                 // Update panel with PK info
                 if !pk_names.is_empty() {
-                    log::info!("[PK] Found PK columns: {:?}", pk_names);
                     entity.update(cx, |panel, cx| {
                         panel.pk_columns = pk_names;
                         panel.pending_rebuild = true;
                         cx.notify();
                     });
-                } else {
-                    log::warn!(
-                        "[PK] No PK columns found for table {}, table will not be editable",
-                        table_name
-                    );
                 }
             })
             .ok();
@@ -578,7 +565,9 @@ impl DataGridPanel {
             pending_requery: None,
             pending_total_count: None,
             pending_rebuild: false,
+            pending_refresh: false,
             pending_toast: None,
+            pending_delete_confirm: None,
             focus_handle,
             focus_mode: GridFocusMode::default(),
             toolbar_focus: ToolbarFocus::default(),
@@ -670,14 +659,9 @@ impl DataGridPanel {
             .collect();
 
         log::debug!(
-            "[EDIT] rebuild_table: pk_columns={:?}, pk_indices={:?}, result_columns={:?}",
+            "rebuild_table: pk_columns={:?}, pk_indices={:?}",
             self.pk_columns,
             pk_indices,
-            self.result
-                .columns
-                .iter()
-                .map(|c| &c.name)
-                .collect::<Vec<_>>()
         );
 
         let is_insertable = matches!(
@@ -1343,10 +1327,7 @@ impl DataGridPanel {
     // === Row Editing ===
 
     fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
-        log::info!("[SAVE] handle_save_row called for row {}", row_idx);
-
         let Some(table_state) = &self.table_state else {
-            log::warn!("[SAVE] No table_state, cannot save");
             return;
         };
 
@@ -1354,21 +1335,14 @@ impl DataGridPanel {
             let state = table_state.read(cx);
 
             if !state.is_editable() {
-                log::warn!("[SAVE] Table is not editable, cannot save");
                 return;
             }
 
             let row_changes = state.edit_buffer().row_changes(row_idx);
             if row_changes.is_empty() {
-                log::info!("[SAVE] No changes for row {}, nothing to save", row_idx);
                 return;
             }
 
-            log::info!(
-                "[SAVE] Found {} changes for row {}",
-                row_changes.len(),
-                row_idx
-            );
             row_changes
                 .into_iter()
                 .map(|(idx, cell)| (idx, cell.clone()))
@@ -1654,19 +1628,30 @@ impl DataGridPanel {
     }
 
     fn handle_commit_insert(&mut self, insert_idx: usize, cx: &mut Context<Self>) {
-        let (profile_id, collection) = match &self.source {
+        match &self.source {
             DataSource::Collection {
                 profile_id,
                 collection,
                 ..
-            } => (*profile_id, collection.clone()),
-            DataSource::Table { .. } => {
-                // TODO: Implement table INSERT persistence
-                return;
+            } => {
+                self.commit_insert_collection(*profile_id, collection.clone(), insert_idx, cx);
             }
-            DataSource::QueryResult { .. } => return,
-        };
+            DataSource::Table {
+                profile_id, table, ..
+            } => {
+                self.commit_insert_table(*profile_id, table.clone(), insert_idx, cx);
+            }
+            DataSource::QueryResult { .. } => {}
+        }
+    }
 
+    fn commit_insert_collection(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        insert_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_state) = &self.table_state else {
             return;
         };
@@ -1736,7 +1721,127 @@ impl DataGridPanel {
                                 message: "Document inserted".to_string(),
                                 is_error: false,
                             });
-                            // Data modified - user can refresh to see changes
+                            panel.pending_refresh = true;
+                        }
+                        Err(e) => {
+                            log::error!("[INSERT] Failed: {}", e);
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Insert failed: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn commit_insert_table(
+        &mut self,
+        profile_id: Uuid,
+        table_ref: TableRef,
+        insert_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let insert_data = {
+            let state = table_state.read(cx);
+            state
+                .edit_buffer()
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.to_vec())
+        };
+
+        let Some(cells) = insert_data else {
+            return;
+        };
+
+        let (columns, values) = {
+            let state = table_state.read(cx);
+            let model = state.model();
+
+            let mut columns = Vec::new();
+            let mut values = Vec::new();
+
+            for (col_idx, cell) in cells.iter().enumerate() {
+                let value = cell.to_value();
+
+                if matches!(value, Value::Null) {
+                    continue;
+                }
+
+                if let Some(col) = model.columns.get(col_idx) {
+                    columns.push(col.title.to_string());
+                    values.push(value);
+                }
+            }
+
+            (columns, values)
+        };
+
+        if columns.is_empty() {
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot insert: no values provided".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        let insert = RowInsert::new(
+            table_ref.name.clone(),
+            table_ref.schema.clone(),
+            columns,
+            values,
+        );
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[INSERT] No connection for profile {}", profile_id);
+                return;
+            };
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.insert_row(&insert) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            table_state_clone.update(cx, |state, cx| {
+                                state
+                                    .edit_buffer_mut()
+                                    .remove_pending_insert_by_idx(insert_idx);
+                                cx.notify();
+                            });
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Row inserted".to_string(),
+                                is_error: false,
+                            });
+                            panel.pending_refresh = true;
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
@@ -1755,25 +1860,64 @@ impl DataGridPanel {
     }
 
     fn handle_commit_delete(&mut self, row_idx: usize, cx: &mut Context<Self>) {
-        let (profile_id, collection) = match &self.source {
+        match &self.source {
             DataSource::Collection {
                 profile_id,
                 collection,
                 ..
-            } => (*profile_id, collection.clone()),
-            DataSource::Table { .. } => {
-                // TODO: Implement table DELETE persistence
-                return;
+            } => {
+                self.commit_delete_collection(*profile_id, collection.clone(), row_idx, cx);
             }
-            DataSource::QueryResult { .. } => return,
-        };
+            DataSource::Table { .. } => {
+                // Show confirmation before deleting from SQL tables
+                self.pending_delete_confirm = Some(PendingDeleteConfirm {
+                    row_idx,
+                    is_table: true,
+                });
+                cx.notify();
+            }
+            DataSource::QueryResult { .. } => {}
+        }
+    }
 
-        let Some(table_state) = &self.table_state else {
+    pub fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(confirm) = self.pending_delete_confirm.take() else {
             return;
         };
 
-        let state = table_state.read(cx);
-        let model = state.model();
+        if confirm.is_table {
+            if let DataSource::Table {
+                profile_id, table, ..
+            } = &self.source
+            {
+                self.commit_delete_table(*profile_id, table.clone(), confirm.row_idx, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+        if self.pending_delete_confirm.is_some() {
+            self.pending_delete_confirm = None;
+            cx.notify();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn has_delete_confirm(&self) -> bool {
+        self.pending_delete_confirm.is_some()
+    }
+
+    fn commit_delete_collection(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        row_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
 
         let id_col_idx = self
             .result
@@ -1782,10 +1926,14 @@ impl DataGridPanel {
             .position(|c| c.name == "_id")
             .unwrap_or(0);
 
-        let id_value = model
-            .cell(row_idx, id_col_idx)
-            .map(|c| c.to_value())
-            .unwrap_or(Value::Null);
+        let id_value = {
+            let state = table_state.read(cx);
+            let model = state.model();
+            model
+                .cell(row_idx, id_col_idx)
+                .map(|c| c.to_value())
+                .unwrap_or(Value::Null)
+        };
 
         let filter = match &id_value {
             Value::ObjectId(oid) => {
@@ -1839,7 +1987,121 @@ impl DataGridPanel {
                                 message: "Document deleted".to_string(),
                                 is_error: false,
                             });
-                            // Data modified - user can refresh to see changes
+                            panel.pending_refresh = true;
+                        }
+                        Err(e) => {
+                            log::error!("[DELETE] Failed: {}", e);
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Delete failed: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn commit_delete_table(
+        &mut self,
+        profile_id: Uuid,
+        table_ref: TableRef,
+        row_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let (pk_columns, pk_values, pk_count) = {
+            let state = table_state.read(cx);
+            let pk_indices = state.pk_columns();
+            let model = state.model();
+
+            if pk_indices.is_empty() {
+                (Vec::new(), Vec::new(), 0)
+            } else {
+                let mut pk_columns = Vec::with_capacity(pk_indices.len());
+                let mut pk_values = Vec::with_capacity(pk_indices.len());
+                let pk_count = pk_indices.len();
+
+                for &col_idx in pk_indices {
+                    if let Some(col_spec) = model.columns.get(col_idx) {
+                        pk_columns.push(col_spec.title.to_string());
+                    }
+                    if let Some(cell) = model.cell(row_idx, col_idx) {
+                        pk_values.push(cell.to_value());
+                    }
+                }
+
+                (pk_columns, pk_values, pk_count)
+            }
+        };
+
+        if pk_count == 0 {
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot delete: no primary key defined for this table".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        if pk_columns.len() != pk_count || pk_values.len() != pk_count {
+            log::error!("[DELETE] Failed to build row identity");
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot delete: failed to identify row".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        let identity = RowIdentity::new(pk_columns, pk_values);
+        let delete = RowDelete::new(identity, table_ref.name.clone(), table_ref.schema.clone());
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[DELETE] No connection for profile {}", profile_id);
+                return;
+            };
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.delete_row(&delete) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            table_state_clone.update(cx, |state, cx| {
+                                state.edit_buffer_mut().unmark_delete(row_idx);
+                                cx.notify();
+                            });
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Row deleted".to_string(),
+                                is_error: false,
+                            });
+                            panel.pending_refresh = true;
                         }
                         Err(e) => {
                             log::error!("[DELETE] Failed: {}", e);
@@ -2321,6 +2583,21 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Handle delete confirmation modal
+        if self.pending_delete_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_delete(cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_delete(cx);
+                    return true;
+                }
+                _ => return true, // Block other commands while modal is open
+            }
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
@@ -2804,6 +3081,11 @@ impl Render for DataGridPanel {
             self.rebuild_table(sort, cx);
         }
 
+        if self.pending_refresh {
+            self.pending_refresh = false;
+            self.refresh(window, cx);
+        }
+
         if let Some(modal) = self.pending_modal_open.take() {
             self.cell_editor.update(cx, |editor, cx| {
                 editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
@@ -3049,6 +3331,10 @@ impl Render for DataGridPanel {
             // Context menu overlay
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, is_editable, &theme, cx))
+            })
+            // Delete confirmation modal
+            .when(self.pending_delete_confirm.is_some(), |d| {
+                d.child(self.render_delete_confirm_modal(&theme, cx))
             })
             // Cell editor modal overlay
             .when(self.cell_editor.read(cx).is_visible(), |d| {
@@ -3961,6 +4247,127 @@ impl DataGridPanel {
         let base_items = Self::build_context_menu_items(is_editable);
         // Count non-separator items + 1 for Generate SQL
         base_items.iter().filter(|i| !i.is_separator).count() + 1
+    }
+
+    fn render_delete_confirm_modal(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let entity = cx.entity().clone();
+        let entity_cancel = cx.entity().clone();
+
+        let btn_hover = theme.muted;
+
+        // Backdrop with centered modal
+        div()
+            .id("delete-modal-overlay")
+            .absolute()
+            .inset_0()
+            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                div()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(Radii::MD)
+                    .p(Spacing::MD)
+                    .min_w(px(300.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                svg()
+                                    .path(AppIcon::TriangleAlert.path())
+                                    .size_5()
+                                    .text_color(theme.warning),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .child("Delete row?"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.muted_foreground)
+                            .child("This action cannot be undone."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(Spacing::SM)
+                            .child(
+                                div()
+                                    .id("delete-cancel-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.muted_foreground)
+                                    .bg(theme.secondary)
+                                    .hover(|d| d.bg(btn_hover))
+                                    .on_click(move |_, _, cx| {
+                                        entity_cancel.update(cx, |panel, cx| {
+                                            panel.cancel_delete(cx);
+                                        });
+                                    })
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::X.path())
+                                            .size_4()
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child("Cancel"),
+                            )
+                            .child(
+                                div()
+                                    .id("delete-confirm-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.background)
+                                    .bg(theme.danger)
+                                    .hover(|d| d.opacity(0.9))
+                                    .on_click(move |_, _, cx| {
+                                        entity.update(cx, |panel, cx| {
+                                            panel.confirm_delete(cx);
+                                        });
+                                    })
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::Delete.path())
+                                            .size_4()
+                                            .text_color(theme.background),
+                                    )
+                                    .child("Delete"),
+                            ),
+                    ),
+            )
     }
 
     fn render_context_menu(
