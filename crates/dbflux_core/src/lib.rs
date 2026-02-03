@@ -1,3 +1,4 @@
+mod code_generation;
 mod connection_tree;
 mod connection_tree_store;
 mod crud;
@@ -22,6 +23,11 @@ mod task;
 mod traits;
 mod value;
 
+pub use code_generation::{
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
+    CreateIndexRequest, CreateTypeRequest, DropForeignKeyRequest, DropIndexRequest,
+    DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeDefinition,
+};
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
 pub use crud::{
@@ -33,8 +39,8 @@ pub use driver_capabilities::{
     DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
 };
 pub use driver_form::{
-    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MYSQL_FORM,
-    POSTGRES_FORM, SQLITE_FORM,
+    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MONGODB_FORM,
+    MYSQL_FORM, POSTGRES_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
 pub use history::{HistoryEntry, HistoryStore};

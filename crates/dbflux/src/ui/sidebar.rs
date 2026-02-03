@@ -4,9 +4,11 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    CodeGenScope, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CustomTypeInfo,
-    CustomTypeKind, DbKind, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, TableInfo, TableRef, TaskKind, ViewInfo,
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
+    ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
+    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DropForeignKeyRequest, DropIndexRequest,
+    DropTypeRequest, ReindexRequest, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -1059,11 +1061,15 @@ impl Sidebar {
             .unwrap_or_else(|| "main".to_string())
     }
 
-    fn get_db_kind_for_item(&self, item_id: &str, cx: &App) -> Option<DbKind> {
-        let profile_id = Self::extract_profile_id_from_item(item_id)?;
+    fn get_capabilities_for_item(&self, item_id: &str, cx: &App) -> CodeGenCapabilities {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return CodeGenCapabilities::empty();
+        };
         let state = self.app_state.read(cx);
-        let conn = state.connections.get(&profile_id)?;
-        Some(conn.connection.kind())
+        let Some(conn) = state.connections.get(&profile_id) else {
+            return CodeGenCapabilities::empty();
+        };
+        conn.connection.code_gen_capabilities()
     }
 
     fn extract_profile_id_from_item(item_id: &str) -> Option<Uuid> {
@@ -1237,8 +1243,8 @@ impl Sidebar {
             return;
         };
 
-        let db_kind = conn.connection.kind();
         let current_db = Self::get_current_database(conn);
+        let code_gen = conn.connection.code_generator();
 
         // Find the index info
         let index_info = if is_schema_level {
@@ -1250,7 +1256,6 @@ impl Sidebar {
                     .map(|idx| (idx.table_name.clone(), idx.columns.clone(), idx.is_unique))
             })
         } else {
-            // For table-level, find in table_details
             let table_name = context_name.clone();
             conn.table_details
                 .values()
@@ -1266,69 +1271,50 @@ impl Sidebar {
 
         let sql = match action {
             IndexSqlAction::Create => {
-                if let Some((table_name, columns, is_unique)) = index_info {
-                    let unique = if is_unique { "UNIQUE " } else { "" };
-                    let cols = columns.join(", ");
-
-                    match db_kind {
-                        DbKind::Postgres => format!(
-                            "CREATE {}INDEX {} ON {}.{} ({});",
-                            unique, index_name, context_name, table_name, cols
-                        ),
-                        DbKind::MySQL | DbKind::MariaDB => format!(
-                            "CREATE {}INDEX {} ON {}.{} ({});",
-                            unique, index_name, current_db, table_name, cols
-                        ),
-                        DbKind::SQLite => format!(
-                            "CREATE {}INDEX {} ON {} ({});",
-                            unique, index_name, table_name, cols
-                        ),
-                    }
+                if let Some((table_name, columns, is_unique)) = &index_info {
+                    let request = CreateIndexRequest {
+                        index_name: &index_name,
+                        table_name,
+                        schema_name: Some(&context_name),
+                        columns,
+                        unique: *is_unique,
+                    };
+                    code_gen.generate_create_index(&request)
                 } else {
-                    match db_kind {
-                        DbKind::Postgres => format!(
-                            "CREATE INDEX {} ON schema.table_name (column1, column2);",
-                            index_name
-                        ),
-                        DbKind::MySQL | DbKind::MariaDB => format!(
-                            "CREATE INDEX {} ON database.table_name (column1, column2);",
-                            index_name
-                        ),
-                        DbKind::SQLite => format!(
-                            "CREATE INDEX {} ON table_name (column1, column2);",
-                            index_name
-                        ),
-                    }
+                    let placeholder_cols = vec!["column1".to_string(), "column2".to_string()];
+                    let request = CreateIndexRequest {
+                        index_name: &index_name,
+                        table_name: "table_name",
+                        schema_name: Some("schema"),
+                        columns: &placeholder_cols,
+                        unique: false,
+                    };
+                    code_gen.generate_create_index(&request)
                 }
             }
 
-            IndexSqlAction::Drop => match db_kind {
-                DbKind::Postgres => format!("DROP INDEX {}.{};", context_name, index_name),
-                DbKind::MySQL | DbKind::MariaDB => {
-                    if let Some((table_name, _, _)) = index_info {
-                        format!(
-                            "DROP INDEX {} ON {}.{};",
-                            index_name, current_db, table_name
-                        )
-                    } else {
-                        format!("DROP INDEX {} ON {}.table_name;", index_name, current_db)
-                    }
-                }
-                DbKind::SQLite => format!("DROP INDEX {};", index_name),
-            },
+            IndexSqlAction::Drop => {
+                let table_name = index_info.as_ref().map(|(t, _, _)| t.as_str());
+                let request = DropIndexRequest {
+                    index_name: &index_name,
+                    table_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_drop_index(&request)
+            }
 
-            // REINDEX is filtered to only PostgreSQL and SQLite in build_context_menu_items
-            IndexSqlAction::Reindex => match db_kind {
-                DbKind::Postgres => format!("REINDEX INDEX {}.{};", context_name, index_name),
-                DbKind::SQLite => format!("REINDEX {};", index_name),
-                DbKind::MySQL | DbKind::MariaDB => {
-                    // This branch shouldn't be reached due to menu filtering, but handle gracefully
-                    format!("-- REINDEX not supported; index: {}", index_name)
-                }
-            },
+            IndexSqlAction::Reindex => {
+                let request = ReindexRequest {
+                    index_name: &index_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_reindex(&request)
+            }
         };
 
-        cx.emit(SidebarEvent::GenerateSql(sql));
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
     }
 
     fn generate_foreign_key_sql(
@@ -1349,8 +1335,8 @@ impl Sidebar {
             return;
         };
 
-        let db_kind = conn.connection.kind();
         let current_db = Self::get_current_database(conn);
+        let code_gen = conn.connection.code_generator();
 
         // Find the FK info
         let fk_info = if is_schema_level {
@@ -1369,7 +1355,6 @@ impl Sidebar {
                 })
             })
         } else {
-            // For table-level, find in table_details
             let table_name = context_name.clone();
             conn.table_details
                 .values()
@@ -1390,100 +1375,53 @@ impl Sidebar {
                 })
         };
 
-        // SQLite is filtered out in build_context_menu_items (doesn't support ALTER TABLE for FKs)
         let sql = match action {
             ForeignKeySqlAction::AddConstraint => {
-                if let Some((
-                    table_name,
-                    columns,
-                    ref_schema,
-                    ref_table,
-                    ref_columns,
-                    on_delete,
-                    on_update,
-                )) = fk_info
-                {
-                    let cols = columns.join(", ");
-                    let ref_cols = ref_columns.join(", ");
-
-                    let ref_table_full = if let Some(schema) = ref_schema {
-                        format!("{}.{}", schema, ref_table)
-                    } else {
-                        ref_table
+                if let Some((table_name, columns, ref_schema, ref_table, ref_columns, on_delete, on_update)) = &fk_info {
+                    let request = AddForeignKeyRequest {
+                        constraint_name: &fk_name,
+                        table_name,
+                        schema_name: Some(&context_name),
+                        columns,
+                        ref_table,
+                        ref_schema: ref_schema.as_deref(),
+                        ref_columns,
+                        on_delete: on_delete.as_deref(),
+                        on_update: on_update.as_deref(),
                     };
-
-                    let on_delete_clause = on_delete
-                        .map(|d| format!(" ON DELETE {}", d))
-                        .unwrap_or_default();
-                    let on_update_clause = on_update
-                        .map(|u| format!(" ON UPDATE {}", u))
-                        .unwrap_or_default();
-
-                    match db_kind {
-                        DbKind::Postgres => format!(
-                            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({}){}{};",
-                            context_name,
-                            table_name,
-                            fk_name,
-                            cols,
-                            ref_table_full,
-                            ref_cols,
-                            on_delete_clause,
-                            on_update_clause
-                        ),
-                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
-                            "ALTER TABLE {}.{}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({}){}{};",
-                            current_db,
-                            table_name,
-                            fk_name,
-                            cols,
-                            ref_table_full,
-                            ref_cols,
-                            on_delete_clause,
-                            on_update_clause
-                        ),
-                    }
+                    code_gen.generate_add_foreign_key(&request)
                 } else {
-                    match db_kind {
-                        DbKind::Postgres => format!(
-                            "ALTER TABLE schema.table_name\n    ADD CONSTRAINT {}\n    FOREIGN KEY (column_name)\n    REFERENCES ref_table (ref_column);",
-                            fk_name
-                        ),
-                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
-                            "ALTER TABLE database.table_name\n    ADD CONSTRAINT {}\n    FOREIGN KEY (column_name)\n    REFERENCES ref_table (ref_column);",
-                            fk_name
-                        ),
-                    }
+                    let placeholder_cols = vec!["column_name".to_string()];
+                    let placeholder_ref_cols = vec!["ref_column".to_string()];
+                    let request = AddForeignKeyRequest {
+                        constraint_name: &fk_name,
+                        table_name: "table_name",
+                        schema_name: Some("schema"),
+                        columns: &placeholder_cols,
+                        ref_table: "ref_table",
+                        ref_schema: None,
+                        ref_columns: &placeholder_ref_cols,
+                        on_delete: None,
+                        on_update: None,
+                    };
+                    code_gen.generate_add_foreign_key(&request)
                 }
             }
 
             ForeignKeySqlAction::DropConstraint => {
-                if let Some((table_name, ..)) = fk_info {
-                    match db_kind {
-                        DbKind::Postgres => format!(
-                            "ALTER TABLE {}.{} DROP CONSTRAINT {};",
-                            context_name, table_name, fk_name
-                        ),
-                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
-                            "ALTER TABLE {}.{} DROP FOREIGN KEY {};",
-                            current_db, table_name, fk_name
-                        ),
-                    }
-                } else {
-                    match db_kind {
-                        DbKind::Postgres => {
-                            format!("ALTER TABLE schema.table_name DROP CONSTRAINT {};", fk_name)
-                        }
-                        DbKind::MySQL | DbKind::MariaDB | DbKind::SQLite => format!(
-                            "ALTER TABLE database.table_name DROP FOREIGN KEY {};",
-                            fk_name
-                        ),
-                    }
-                }
+                let table_name = fk_info.as_ref().map(|(t, ..)| t.as_str()).unwrap_or("table_name");
+                let request = DropForeignKeyRequest {
+                    constraint_name: &fk_name,
+                    table_name,
+                    schema_name: Some(&context_name),
+                };
+                code_gen.generate_drop_foreign_key(&request)
             }
         };
 
-        cx.emit(SidebarEvent::GenerateSql(sql));
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
     }
 
     fn generate_type_sql(&mut self, item_id: &str, action: TypeSqlAction, cx: &mut Context<Self>) {
@@ -1497,78 +1435,65 @@ impl Sidebar {
             return;
         };
 
-        let db_kind = conn.connection.kind();
+        let code_gen = conn.connection.code_generator();
         let current_db = Self::get_current_database(conn);
 
-        // Find the type info
         let cache_key = format!("{}__{}", current_db, schema_name);
         let type_info = conn
             .schema_types
             .get(&cache_key)
             .and_then(|types| types.iter().find(|t| t.name == type_name));
 
-        // Only PostgreSQL supports custom types (filtered in build_context_menu_items)
         let sql = match action {
             TypeSqlAction::Create => {
-                if let Some(type_info) = type_info {
+                let definition = if let Some(type_info) = type_info {
                     match type_info.kind {
                         CustomTypeKind::Enum => {
-                            let values = type_info
-                                .enum_values
-                                .as_ref()
-                                .map(|v| {
-                                    v.iter()
-                                        .map(|s| format!("'{}'", s))
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_else(|| "'value1', 'value2'".to_string());
-
-                            format!(
-                                "CREATE TYPE {}.{} AS ENUM ({});",
-                                schema_name, type_name, values
-                            )
+                            let values = type_info.enum_values.clone().unwrap_or_default();
+                            TypeDefinition::Enum { values }
                         }
                         CustomTypeKind::Domain => {
-                            let base_type = type_info
+                            let base = type_info
                                 .base_type
-                                .as_ref()
-                                .cloned()
+                                .clone()
                                 .unwrap_or_else(|| "text".to_string());
-
-                            format!(
-                                "CREATE DOMAIN {}.{} AS {};",
-                                schema_name, type_name, base_type
-                            )
+                            TypeDefinition::Domain { base_type: base }
                         }
-                        CustomTypeKind::Composite => {
-                            format!(
-                                "CREATE TYPE {}.{} AS (\n    field1 type1,\n    field2 type2\n);",
-                                schema_name, type_name
-                            )
-                        }
+                        CustomTypeKind::Composite => TypeDefinition::Composite,
                     }
                 } else {
-                    format!(
-                        "CREATE TYPE {}.{} AS ENUM ('value1', 'value2');",
-                        schema_name, type_name
-                    )
-                }
+                    TypeDefinition::Enum { values: vec![] }
+                };
+
+                let request = CreateTypeRequest {
+                    type_name: &type_name,
+                    schema_name: Some(&schema_name),
+                    definition,
+                };
+                code_gen.generate_create_type(&request)
             }
 
             TypeSqlAction::AddEnumValue => {
-                format!(
-                    "ALTER TYPE {}.{} ADD VALUE 'new_value';",
-                    schema_name, type_name
-                )
+                let request = AddEnumValueRequest {
+                    type_name: &type_name,
+                    schema_name: Some(&schema_name),
+                    new_value: "new_value",
+                };
+                code_gen.generate_add_enum_value(&request)
             }
 
-            TypeSqlAction::Drop => format!("DROP TYPE {}.{};", schema_name, type_name),
+            TypeSqlAction::Drop => {
+                let request = DropTypeRequest {
+                    type_name: &type_name,
+                    schema_name: Some(&schema_name),
+                };
+                code_gen.generate_drop_type(&request)
+            }
         };
 
-        let _ = db_kind;
-
-        cx.emit(SidebarEvent::GenerateSql(sql));
+        if let Some(sql) = sql {
+            cx.emit(SidebarEvent::GenerateSql(sql));
+        }
     }
 
     fn find_table_for_item<'a>(
@@ -2144,94 +2069,106 @@ impl Sidebar {
             }
 
             TreeNodeKind::Index | TreeNodeKind::SchemaIndex => {
-                let db_kind = self.get_db_kind_for_item(item_id, cx);
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
 
-                let mut submenu = vec![
-                    ContextMenuItem {
+                if caps.contains(CodeGenCapabilities::CREATE_INDEX) {
+                    submenu.push(ContextMenuItem {
                         label: "CREATE INDEX".into(),
                         action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Create),
-                    },
-                    ContextMenuItem {
+                    });
+                }
+
+                if caps.contains(CodeGenCapabilities::DROP_INDEX) {
+                    submenu.push(ContextMenuItem {
                         label: "DROP INDEX".into(),
                         action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Drop),
-                    },
-                ];
+                    });
+                }
 
-                // REINDEX is supported by PostgreSQL and SQLite, not MySQL/MariaDB
-                if matches!(db_kind, Some(DbKind::Postgres) | Some(DbKind::SQLite)) {
+                if caps.contains(CodeGenCapabilities::REINDEX) {
                     submenu.push(ContextMenuItem {
                         label: "REINDEX".into(),
                         action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Reindex),
                     });
                 }
 
-                vec![ContextMenuItem {
-                    label: "Generate SQL".into(),
-                    action: ContextMenuAction::Submenu(submenu),
-                }]
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![ContextMenuItem {
+                        label: "Generate SQL".into(),
+                        action: ContextMenuAction::Submenu(submenu),
+                    }]
+                }
             }
 
             TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
-                let db_kind = self.get_db_kind_for_item(item_id, cx);
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
 
-                // SQLite doesn't support ALTER TABLE ADD/DROP CONSTRAINT for FKs
-                if matches!(db_kind, Some(DbKind::SQLite)) {
-                    return vec![];
+                if caps.contains(CodeGenCapabilities::ADD_FOREIGN_KEY) {
+                    submenu.push(ContextMenuItem {
+                        label: "ADD CONSTRAINT".into(),
+                        action: ContextMenuAction::GenerateForeignKeySql(
+                            ForeignKeySqlAction::AddConstraint,
+                        ),
+                    });
                 }
 
-                vec![ContextMenuItem {
-                    label: "Generate SQL".into(),
-                    action: ContextMenuAction::Submenu(vec![
-                        ContextMenuItem {
-                            label: "ADD CONSTRAINT".into(),
-                            action: ContextMenuAction::GenerateForeignKeySql(
-                                ForeignKeySqlAction::AddConstraint,
-                            ),
-                        },
-                        ContextMenuItem {
-                            label: "DROP CONSTRAINT".into(),
-                            action: ContextMenuAction::GenerateForeignKeySql(
-                                ForeignKeySqlAction::DropConstraint,
-                            ),
-                        },
-                    ]),
-                }]
+                if caps.contains(CodeGenCapabilities::DROP_FOREIGN_KEY) {
+                    submenu.push(ContextMenuItem {
+                        label: "DROP CONSTRAINT".into(),
+                        action: ContextMenuAction::GenerateForeignKeySql(
+                            ForeignKeySqlAction::DropConstraint,
+                        ),
+                    });
+                }
+
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![ContextMenuItem {
+                        label: "Generate SQL".into(),
+                        action: ContextMenuAction::Submenu(submenu),
+                    }]
+                }
             }
 
             TreeNodeKind::CustomType => {
-                let db_kind = self.get_db_kind_for_item(item_id, cx);
+                let caps = self.get_capabilities_for_item(item_id, cx);
+                let mut submenu = Vec::new();
 
-                // Only PostgreSQL supports custom types
-                if !matches!(db_kind, Some(DbKind::Postgres)) {
-                    return vec![];
-                }
-
-                let mut submenu = vec![
-                    ContextMenuItem {
+                if caps.contains(CodeGenCapabilities::CREATE_TYPE) {
+                    submenu.push(ContextMenuItem {
                         label: "CREATE TYPE".into(),
                         action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
-                    },
-                    ContextMenuItem {
-                        label: "DROP TYPE".into(),
-                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
-                    },
-                ];
-
-                // Check if this is an enum type to show ADD VALUE option
-                if self.is_enum_type(item_id, cx) {
-                    submenu.insert(
-                        1,
-                        ContextMenuItem {
-                            label: "ADD VALUE".into(),
-                            action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
-                        },
-                    );
+                    });
                 }
 
-                vec![ContextMenuItem {
-                    label: "Generate SQL".into(),
-                    action: ContextMenuAction::Submenu(submenu),
-                }]
+                if caps.contains(CodeGenCapabilities::ALTER_TYPE) && self.is_enum_type(item_id, cx)
+                {
+                    submenu.push(ContextMenuItem {
+                        label: "ADD VALUE".into(),
+                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
+                    });
+                }
+
+                if caps.contains(CodeGenCapabilities::DROP_TYPE) {
+                    submenu.push(ContextMenuItem {
+                        label: "DROP TYPE".into(),
+                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
+                    });
+                }
+
+                if submenu.is_empty() {
+                    vec![]
+                } else {
+                    vec![ContextMenuItem {
+                        label: "Generate SQL".into(),
+                        action: ContextMenuAction::Submenu(submenu),
+                    }]
+                }
             }
 
             _ => vec![],

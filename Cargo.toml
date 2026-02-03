@@ -5,6 +5,7 @@ members = [
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
     "crates/dbflux_driver_mysql",
+    "crates/dbflux_driver_mongodb",
     "crates/dbflux_ssh",
     "crates/dbflux_export",
 ]
@@ -26,6 +27,7 @@ dbflux_core = { path = "crates/dbflux_core" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
 dbflux_driver_mysql = { path = "crates/dbflux_driver_mysql" }
+dbflux_driver_mongodb = { path = "crates/dbflux_driver_mongodb" }
 dbflux_ssh = { path = "crates/dbflux_ssh" }
 dbflux_export = { path = "crates/dbflux_export" }
 mysql = "25"

@@ -1,11 +1,12 @@
 use bitflags::bitflags;
 
 use crate::{
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues, KeyDelete, KeySet, QueryHandle, QueryRequest, QueryResult,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    SqlDialect, SqlGenerationRequest, TableInfo, ViewInfo,
+    CodeGenCapabilities, CodeGenerator, ConnectionProfile, CrudResult, CustomTypeInfo,
+    DatabaseInfo, DbError, DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, KeyDelete, KeySet,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
+    TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -492,6 +493,16 @@ pub trait Connection: Send + Sync {
     /// Used for generating database-specific SQL statements with proper
     /// quoting, escaping, and literal formatting.
     fn dialect(&self) -> &dyn SqlDialect;
+
+    /// Returns the code generation capabilities of this connection.
+    fn code_gen_capabilities(&self) -> CodeGenCapabilities {
+        self.code_generator().capabilities()
+    }
+
+    /// Returns the code generator for this connection.
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &NoOpCodeGenerator
+    }
 
     /// Generate SQL using this connection's dialect.
     ///

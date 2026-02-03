@@ -4,16 +4,19 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use dbflux_core::{
-    CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
-    DriverFormDef, DriverMetadata, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo,
-    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value,
-    ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
+    CodeGeneratorInfo, CodeGenerator, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult,
+    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon,
+    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    TableInfo, TypeDefinition, Value, ViewInfo, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -78,6 +81,147 @@ impl SqlDialect for PostgresDialect {
 }
 
 static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
+
+// =============================================================================
+// PostgreSQL Code Generator
+// =============================================================================
+
+pub struct PostgresCodeGenerator;
+
+static POSTGRES_CODE_GENERATOR: PostgresCodeGenerator = PostgresCodeGenerator;
+
+impl PostgresCodeGenerator {
+    fn quote(&self, name: &str) -> String {
+        POSTGRES_DIALECT.quote_identifier(name)
+    }
+
+    fn qualified(&self, schema: Option<&str>, name: &str) -> String {
+        POSTGRES_DIALECT.qualified_table(schema, name)
+    }
+}
+
+impl CodeGenerator for PostgresCodeGenerator {
+    fn capabilities(&self) -> CodeGenCapabilities {
+        CodeGenCapabilities::POSTGRES_FULL
+    }
+
+    fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
+        let unique = if req.unique { "UNIQUE " } else { "" };
+        let table = self.qualified(req.schema_name, req.table_name);
+        let cols = req
+            .columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "CREATE {}INDEX {} ON {} ({});",
+            unique,
+            self.quote(req.index_name),
+            table,
+            cols
+        ))
+    }
+
+    fn generate_drop_index(&self, req: &DropIndexRequest) -> Option<String> {
+        let index = self.qualified(req.schema_name, req.index_name);
+        Some(format!("DROP INDEX {};", index))
+    }
+
+    fn generate_reindex(&self, req: &ReindexRequest) -> Option<String> {
+        let index = self.qualified(req.schema_name, req.index_name);
+        Some(format!("REINDEX INDEX {};", index))
+    }
+
+    fn generate_add_foreign_key(&self, req: &AddForeignKeyRequest) -> Option<String> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        let ref_table = self.qualified(req.ref_schema, req.ref_table);
+        let cols = req
+            .columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ref_cols = req
+            .ref_columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut sql = format!(
+            "ALTER TABLE {}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({})",
+            table,
+            self.quote(req.constraint_name),
+            cols,
+            ref_table,
+            ref_cols
+        );
+
+        if let Some(on_delete) = req.on_delete {
+            sql.push_str(&format!("\n    ON DELETE {}", on_delete));
+        }
+        if let Some(on_update) = req.on_update {
+            sql.push_str(&format!("\n    ON UPDATE {}", on_update));
+        }
+        sql.push(';');
+
+        Some(sql)
+    }
+
+    fn generate_drop_foreign_key(&self, req: &DropForeignKeyRequest) -> Option<String> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Some(format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            table,
+            self.quote(req.constraint_name)
+        ))
+    }
+
+    fn generate_create_type(&self, req: &CreateTypeRequest) -> Option<String> {
+        let type_name = self.qualified(req.schema_name, req.type_name);
+
+        match &req.definition {
+            TypeDefinition::Enum { values } => {
+                let vals = if values.is_empty() {
+                    "'value1', 'value2'".to_string()
+                } else {
+                    values
+                        .iter()
+                        .map(|v| format!("'{}'", v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                Some(format!("CREATE TYPE {} AS ENUM ({});", type_name, vals))
+            }
+
+            TypeDefinition::Domain { base_type } => {
+                Some(format!("CREATE DOMAIN {} AS {};", type_name, base_type))
+            }
+
+            TypeDefinition::Composite => Some(format!(
+                "CREATE TYPE {} AS (\n    field1 type1,\n    field2 type2\n);",
+                type_name
+            )),
+        }
+    }
+
+    fn generate_drop_type(&self, req: &DropTypeRequest) -> Option<String> {
+        let type_name = self.qualified(req.schema_name, req.type_name);
+        Some(format!("DROP TYPE {};", type_name))
+    }
+
+    fn generate_add_enum_value(&self, req: &AddEnumValueRequest) -> Option<String> {
+        let type_name = self.qualified(req.schema_name, req.type_name);
+        Some(format!(
+            "ALTER TYPE {} ADD VALUE '{}';",
+            type_name, req.new_value
+        ))
+    }
+}
+
+// =============================================================================
 
 pub struct PostgresDriver;
 
@@ -982,6 +1126,10 @@ impl Connection for PostgresConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &POSTGRES_DIALECT
+    }
+
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &POSTGRES_CODE_GENERATOR
     }
 }
 

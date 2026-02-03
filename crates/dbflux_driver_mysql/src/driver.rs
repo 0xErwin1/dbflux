@@ -5,12 +5,13 @@ use std::time::Instant;
 use std::collections::HashMap;
 
 use dbflux_core::{
-    CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
-    ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle,
-    QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
+    AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
+    ColumnInfo, ColumnMeta, Connection, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
+    DropIndexRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM,
+    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
     SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
@@ -90,6 +91,114 @@ impl SqlDialect for MysqlDialect {
 }
 
 static MYSQL_DIALECT: MysqlDialect = MysqlDialect;
+
+// =============================================================================
+// MySQL Code Generator
+// =============================================================================
+
+pub struct MysqlCodeGenerator;
+
+static MYSQL_CODE_GENERATOR: MysqlCodeGenerator = MysqlCodeGenerator;
+
+impl MysqlCodeGenerator {
+    fn quote(&self, name: &str) -> String {
+        MYSQL_DIALECT.quote_identifier(name)
+    }
+
+    fn qualified(&self, schema: Option<&str>, name: &str) -> String {
+        MYSQL_DIALECT.qualified_table(schema, name)
+    }
+}
+
+impl CodeGenerator for MysqlCodeGenerator {
+    fn capabilities(&self) -> CodeGenCapabilities {
+        CodeGenCapabilities::CRUD
+            | CodeGenCapabilities::INDEXES
+            | CodeGenCapabilities::FOREIGN_KEYS
+            | CodeGenCapabilities::CREATE_TABLE
+            | CodeGenCapabilities::DROP_TABLE
+            | CodeGenCapabilities::ALTER_TABLE
+    }
+
+    fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
+        let unique = if req.unique { "UNIQUE " } else { "" };
+        let table = self.qualified(req.schema_name, req.table_name);
+        let cols = req
+            .columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "CREATE {}INDEX {} ON {} ({});",
+            unique,
+            self.quote(req.index_name),
+            table,
+            cols
+        ))
+    }
+
+    fn generate_drop_index(&self, req: &DropIndexRequest) -> Option<String> {
+        // MySQL requires table name for DROP INDEX
+        let table = req
+            .table_name
+            .map(|t| self.qualified(req.schema_name, t))
+            .unwrap_or_else(|| "table_name".to_string());
+        Some(format!(
+            "DROP INDEX {} ON {};",
+            self.quote(req.index_name),
+            table
+        ))
+    }
+
+    fn generate_add_foreign_key(&self, req: &AddForeignKeyRequest) -> Option<String> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        let ref_table = self.qualified(req.ref_schema, req.ref_table);
+        let cols = req
+            .columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ref_cols = req
+            .ref_columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut sql = format!(
+            "ALTER TABLE {}\n    ADD CONSTRAINT {}\n    FOREIGN KEY ({})\n    REFERENCES {} ({})",
+            table,
+            self.quote(req.constraint_name),
+            cols,
+            ref_table,
+            ref_cols
+        );
+
+        if let Some(on_delete) = req.on_delete {
+            sql.push_str(&format!("\n    ON DELETE {}", on_delete));
+        }
+        if let Some(on_update) = req.on_update {
+            sql.push_str(&format!("\n    ON UPDATE {}", on_update));
+        }
+        sql.push(';');
+
+        Some(sql)
+    }
+
+    fn generate_drop_foreign_key(&self, req: &DropForeignKeyRequest) -> Option<String> {
+        let table = self.qualified(req.schema_name, req.table_name);
+        Some(format!(
+            "ALTER TABLE {} DROP FOREIGN KEY {};",
+            table,
+            self.quote(req.constraint_name)
+        ))
+    }
+}
+
+// =============================================================================
 
 pub struct MysqlDriver {
     kind: DbKind,
@@ -1243,6 +1352,10 @@ impl Connection for MysqlConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &MYSQL_DIALECT
+    }
+
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &MYSQL_CODE_GENERATOR
     }
 }
 
