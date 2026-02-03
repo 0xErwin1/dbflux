@@ -516,7 +516,21 @@ fn format_mysql_error(e: &mysql::Error, host: &str, port: u16) -> DbError {
 }
 
 fn format_mysql_query_error(e: &mysql::Error) -> DbError {
-    let message = e.to_string();
+    let message = match e {
+        mysql::Error::MySqlError(mysql_err) => {
+            let mut parts = Vec::new();
+            parts.push(mysql_err.message.clone());
+            parts.push(format!("Code: {}", mysql_err.code));
+
+            if !mysql_err.state.is_empty() {
+                parts.push(format!("State: {}", mysql_err.state));
+            }
+
+            parts.join(". ")
+        }
+        _ => e.to_string(),
+    };
+
     log::error!("MySQL query failed: {}", message);
     DbError::QueryFailed(message)
 }
