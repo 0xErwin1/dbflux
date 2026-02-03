@@ -2742,6 +2742,8 @@ impl DataGridPanel {
     pub fn active_context(&self) -> ContextId {
         if self.context_menu.is_some() {
             ContextId::ContextMenu
+        } else if self.edit_state == EditState::Editing {
+            ContextId::TextInput
         } else {
             ContextId::Results
         }
