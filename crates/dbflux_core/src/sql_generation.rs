@@ -1,6 +1,6 @@
+use crate::Value;
 use crate::schema::{ColumnInfo, TableInfo};
 use crate::sql_dialect::{PlaceholderStyle, SqlDialect};
-use crate::Value;
 
 /// Type of SQL statement to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,18 +56,10 @@ pub fn generate_sql(dialect: &dyn SqlDialect, request: &SqlGenerationRequest) ->
     let newline = if request.options.compact { " " } else { "\n" };
 
     match request.operation {
-        SqlOperation::SelectWhere => {
-            generate_select_where(dialect, request, &table_ref, newline)
-        }
-        SqlOperation::Insert => {
-            generate_insert(dialect, request, &table_ref, newline)
-        }
-        SqlOperation::Update => {
-            generate_update(dialect, request, &table_ref, separator, newline)
-        }
-        SqlOperation::Delete => {
-            generate_delete(dialect, request, &table_ref, newline)
-        }
+        SqlOperation::SelectWhere => generate_select_where(dialect, request, &table_ref, newline),
+        SqlOperation::Insert => generate_insert(dialect, request, &table_ref, newline),
+        SqlOperation::Update => generate_update(dialect, request, &table_ref, separator, newline),
+        SqlOperation::Delete => generate_delete(dialect, request, &table_ref, newline),
     }
 }
 
@@ -82,7 +74,10 @@ fn generate_select_where(
     if request.options.compact {
         format!("SELECT * FROM {} WHERE {};", table_ref, where_clause)
     } else {
-        format!("SELECT *{}FROM {}{}WHERE {};", newline, table_ref, newline, where_clause)
+        format!(
+            "SELECT *{}FROM {}{}WHERE {};",
+            newline, table_ref, newline, where_clause
+        )
     }
 }
 
@@ -102,7 +97,10 @@ fn generate_insert(
     let vals_str = build_values_list(dialect, request);
 
     if request.options.compact {
-        format!("INSERT INTO {} ({}) VALUES ({});", table_ref, cols_str, vals_str)
+        format!(
+            "INSERT INTO {} ({}) VALUES ({});",
+            table_ref, cols_str, vals_str
+        )
     } else {
         format!(
             "INSERT INTO {} ({}){}VALUES ({});",
@@ -122,7 +120,10 @@ fn generate_update(
     let where_clause = build_where_clause(dialect, request);
 
     if request.options.compact {
-        format!("UPDATE {} SET {} WHERE {};", table_ref, set_clause, where_clause)
+        format!(
+            "UPDATE {} SET {} WHERE {};",
+            table_ref, set_clause, where_clause
+        )
     } else {
         format!(
             "UPDATE {}{}SET {}{}WHERE {};",
@@ -142,7 +143,10 @@ fn generate_delete(
     if request.options.compact {
         format!("DELETE FROM {} WHERE {};", table_ref, where_clause)
     } else {
-        format!("DELETE FROM {}{}WHERE {};", table_ref, newline, where_clause)
+        format!(
+            "DELETE FROM {}{}WHERE {};",
+            table_ref, newline, where_clause
+        )
     }
 }
 
@@ -154,34 +158,30 @@ fn build_where_clause(dialect: &dyn SqlDialect, request: &SqlGenerationRequest) 
     };
 
     let conditions: Vec<String> = match &request.values {
-        SqlValueMode::WithValues(values) => {
-            indices
-                .iter()
-                .filter_map(|&idx| {
-                    let col = request.columns.get(idx)?;
-                    let val = values.get(idx)?;
-                    let col_name = dialect.quote_identifier(&col.name);
+        SqlValueMode::WithValues(values) => indices
+            .iter()
+            .filter_map(|&idx| {
+                let col = request.columns.get(idx)?;
+                let val = values.get(idx)?;
+                let col_name = dialect.quote_identifier(&col.name);
 
-                    if val.is_null() {
-                        Some(format!("{} IS NULL", col_name))
-                    } else {
-                        Some(format!("{} = {}", col_name, dialect.value_to_literal(val)))
-                    }
-                })
-                .collect()
-        }
-        SqlValueMode::WithPlaceholders => {
-            indices
-                .iter()
-                .enumerate()
-                .filter_map(|(placeholder_idx, &col_idx)| {
-                    let col = request.columns.get(col_idx)?;
-                    let col_name = dialect.quote_identifier(&col.name);
-                    let placeholder = format_placeholder(dialect, placeholder_idx);
-                    Some(format!("{} = {}", col_name, placeholder))
-                })
-                .collect()
-        }
+                if val.is_null() {
+                    Some(format!("{} IS NULL", col_name))
+                } else {
+                    Some(format!("{} = {}", col_name, dialect.value_to_literal(val)))
+                }
+            })
+            .collect(),
+        SqlValueMode::WithPlaceholders => indices
+            .iter()
+            .enumerate()
+            .filter_map(|(placeholder_idx, &col_idx)| {
+                let col = request.columns.get(col_idx)?;
+                let col_name = dialect.quote_identifier(&col.name);
+                let placeholder = format_placeholder(dialect, placeholder_idx);
+                Some(format!("{} = {}", col_name, placeholder))
+            })
+            .collect(),
     };
 
     if conditions.is_empty() {
@@ -197,33 +197,29 @@ fn build_set_clause(
     separator: &str,
 ) -> String {
     let set_parts: Vec<String> = match &request.values {
-        SqlValueMode::WithValues(values) => {
-            request
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(idx, col)| {
-                    let col_name = dialect.quote_identifier(&col.name);
-                    let val_str = values
-                        .get(idx)
-                        .map(|v| dialect.value_to_literal(v))
-                        .unwrap_or_else(|| "NULL".to_string());
-                    format!("{} = {}", col_name, val_str)
-                })
-                .collect()
-        }
-        SqlValueMode::WithPlaceholders => {
-            request
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(idx, col)| {
-                    let col_name = dialect.quote_identifier(&col.name);
-                    let placeholder = format_placeholder(dialect, idx);
-                    format!("{} = {}", col_name, placeholder)
-                })
-                .collect()
-        }
+        SqlValueMode::WithValues(values) => request
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                let col_name = dialect.quote_identifier(&col.name);
+                let val_str = values
+                    .get(idx)
+                    .map(|v| dialect.value_to_literal(v))
+                    .unwrap_or_else(|| "NULL".to_string());
+                format!("{} = {}", col_name, val_str)
+            })
+            .collect(),
+        SqlValueMode::WithPlaceholders => request
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                let col_name = dialect.quote_identifier(&col.name);
+                let placeholder = format_placeholder(dialect, idx);
+                format!("{} = {}", col_name, placeholder)
+            })
+            .collect(),
     };
 
     set_parts.join(&format!(",{}", separator))
@@ -299,7 +295,10 @@ pub fn generate_update_template(dialect: &dyn SqlDialect, table: &TableInfo) -> 
     let cols = table.columns.as_deref().unwrap_or(&[]);
 
     if cols.is_empty() {
-        return format!("UPDATE {}\nSET -- no columns\nWHERE <condition>;", table_ref);
+        return format!(
+            "UPDATE {}\nSET -- no columns\nWHERE <condition>;",
+            table_ref
+        );
     }
 
     let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();

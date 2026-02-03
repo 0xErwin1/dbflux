@@ -1,0 +1,25 @@
+[package]
+name = "dbflux_driver_mongodb"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core.workspace = true
+dbflux_ssh.workspace = true
+mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "bson-2", "compat-3-3-0"] }
+bson = "2"
+log.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+base64 = "0.22"
+urlencoding = "2"

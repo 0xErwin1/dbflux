@@ -504,9 +504,9 @@ impl SchemaSnapshot {
             DataStructure::TimeSeries(s) => &s.databases,
             DataStructure::Vector(s) => &s.databases,
             DataStructure::MultiModel(s) => &s.databases,
-            DataStructure::KeyValue(_) | DataStructure::WideColumn(_) | DataStructure::Search(_) => {
-                &[]
-            }
+            DataStructure::KeyValue(_)
+            | DataStructure::WideColumn(_)
+            | DataStructure::Search(_) => &[],
         }
     }
 
@@ -519,9 +519,9 @@ impl SchemaSnapshot {
             DataStructure::TimeSeries(s) => s.current_database.as_deref(),
             DataStructure::Vector(s) => s.current_database.as_deref(),
             DataStructure::MultiModel(s) => s.current_database.as_deref(),
-            DataStructure::KeyValue(_) | DataStructure::WideColumn(_) | DataStructure::Search(_) => {
-                None
-            }
+            DataStructure::KeyValue(_)
+            | DataStructure::WideColumn(_)
+            | DataStructure::Search(_) => None,
         }
     }
 

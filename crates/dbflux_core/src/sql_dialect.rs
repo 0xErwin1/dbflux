@@ -51,7 +51,11 @@ impl SqlDialect for DefaultSqlDialect {
 
     fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
         match schema {
-            Some(s) => format!("{}.{}", self.quote_identifier(s), self.quote_identifier(table)),
+            Some(s) => format!(
+                "{}.{}",
+                self.quote_identifier(s),
+                self.quote_identifier(table)
+            ),
             None => self.quote_identifier(table),
         }
     }

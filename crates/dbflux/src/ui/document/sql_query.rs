@@ -857,15 +857,12 @@ impl SqlQueryDocument {
                 el.border_2().border_color(accent.opacity(0.3))
             })
             .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        Input::new(&self.input_state)
-                            .appearance(false)
-                            .w_full()
-                            .h_full(),
-                    ),
+                div().flex_1().overflow_hidden().child(
+                    Input::new(&self.input_state)
+                        .appearance(false)
+                        .w_full()
+                        .h_full(),
+                ),
             )
     }
 

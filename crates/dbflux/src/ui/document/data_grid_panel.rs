@@ -9,9 +9,9 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult, RowDelete,
-    RowIdentity, RowInsert, RowPatch, RowState, SortDirection, TableBrowseRequest, TableRef,
-    TaskId, TaskKind, Value,
+    CancelToken, CollectionRef, DbKind, OrderByColumn, Pagination, QueryRequest, QueryResult,
+    RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SortDirection, TableBrowseRequest,
+    TableRef, TaskId, TaskKind, Value,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
@@ -19,6 +19,7 @@ use gpui::{Subscription, deferred, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use log::info;
+use serde_json;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::BufWriter;
@@ -36,6 +37,13 @@ pub enum DataSource {
         order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
     },
+    /// Collection (document database) with server-side pagination.
+    Collection {
+        profile_id: Uuid,
+        collection: CollectionRef,
+        pagination: Pagination,
+        total_docs: Option<u64>,
+    },
     /// Static query result (in-memory sorting only).
     QueryResult {
         #[allow(dead_code)]
@@ -50,16 +58,28 @@ impl DataSource {
         matches!(self, DataSource::Table { .. })
     }
 
+    pub fn is_collection(&self) -> bool {
+        matches!(self, DataSource::Collection { .. })
+    }
+
     pub fn table_ref(&self) -> Option<&TableRef> {
         match self {
             DataSource::Table { table, .. } => Some(table),
-            DataSource::QueryResult { .. } => None,
+            _ => None,
+        }
+    }
+
+    pub fn collection_ref(&self) -> Option<&CollectionRef> {
+        match self {
+            DataSource::Collection { collection, .. } => Some(collection),
+            _ => None,
         }
     }
 
     pub fn pagination(&self) -> Option<&Pagination> {
         match self {
             DataSource::Table { pagination, .. } => Some(pagination),
+            DataSource::Collection { pagination, .. } => Some(pagination),
             DataSource::QueryResult { .. } => None,
         }
     }
@@ -67,6 +87,15 @@ impl DataSource {
     pub fn total_rows(&self) -> Option<u64> {
         match self {
             DataSource::Table { total_rows, .. } => *total_rows,
+            DataSource::Collection { total_docs, .. } => *total_docs,
+            DataSource::QueryResult { .. } => None,
+        }
+    }
+
+    pub fn profile_id(&self) -> Option<Uuid> {
+        match self {
+            DataSource::Table { profile_id, .. } => Some(*profile_id),
+            DataSource::Collection { profile_id, .. } => Some(*profile_id),
             DataSource::QueryResult { .. } => None,
         }
     }
@@ -304,6 +333,30 @@ impl DataGridPanel {
             panel.fetch_table_details_for_pk(profile_id, &table, cx);
         }
 
+        panel
+    }
+
+    pub fn new_for_collection(
+        profile_id: Uuid,
+        collection: CollectionRef,
+        app_state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let pagination = Pagination::default();
+
+        let source = DataSource::Collection {
+            profile_id,
+            collection,
+            pagination,
+            total_docs: None,
+        };
+
+        // Document collections use _id as the primary key
+        let pk_columns = vec!["_id".to_string()];
+
+        let mut panel = Self::new_internal(source, app_state, pk_columns, window, cx);
+        panel.refresh(window, cx);
         panel
     }
 
@@ -653,6 +706,21 @@ impl DataGridPanel {
                     cx,
                 );
             }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                pagination,
+                total_docs,
+            } => {
+                self.run_collection_query(
+                    *profile_id,
+                    collection.clone(),
+                    pagination.clone(),
+                    *total_docs,
+                    window,
+                    cx,
+                );
+            }
             DataSource::QueryResult { .. } => {
                 // QueryResult is static, nothing to refresh
             }
@@ -825,6 +893,182 @@ impl DataGridPanel {
         }
     }
 
+    fn run_collection_query(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        pagination: Pagination,
+        total_docs: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.running_query.is_some() {
+            cx.toast_error("A query is already running", window);
+            return;
+        }
+
+        let limit_value = self.limit_input.read(cx).value();
+        let limit_str = limit_value.trim();
+        let pagination = match limit_str.parse::<u32>() {
+            Ok(0) => {
+                cx.toast_warning("Limit must be greater than 0", window);
+                pagination
+            }
+            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(_) => pagination,
+            Err(_) if !limit_str.is_empty() => {
+                cx.toast_warning("Invalid limit value", window);
+                pagination
+            }
+            Err(_) => pagination,
+        };
+
+        let (conn, active_database) = {
+            let state = self.app_state.read(cx);
+            match state.connections.get(&profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                None => {
+                    cx.toast_error("Connection not found", window);
+                    return;
+                }
+            }
+        };
+
+        let Some(conn) = conn else {
+            cx.toast_error("Connection not available", window);
+            return;
+        };
+
+        let json_query = serde_json::json!({
+            "database": collection.database,
+            "collection": collection.name,
+            "filter": {},
+            "limit": pagination.limit(),
+            "skip": pagination.offset()
+        });
+
+        let sql = json_query.to_string();
+        info!("Running collection query: {}", sql);
+
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
+            state.start_task(
+                TaskKind::Query,
+                format!("find {}.{}", collection.database, collection.name),
+            )
+        });
+
+        self.running_query = Some(RunningQuery {
+            task_id,
+            cancel_token: cancel_token.clone(),
+        });
+        self.state = GridState::Loading;
+        cx.notify();
+
+        let query_request = QueryRequest::new(sql).with_database(active_database);
+        let entity = cx.entity().clone();
+        let app_state = self.app_state.clone();
+        let conn_for_cleanup = conn.clone();
+        let collection_for_spawn = collection.clone();
+        let pagination_for_spawn = pagination.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&query_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, _cx| {
+                    panel.running_query = None;
+                });
+
+                if cancel_token.is_cancelled() {
+                    log::info!("Query was cancelled, discarding result");
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    return;
+                }
+
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Collection query returned {} documents in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
+
+                        app_state.update(cx, |state, _| {
+                            state.complete_task(task_id);
+                        });
+
+                        entity.update(cx, |panel, cx| {
+                            panel.apply_collection_result(
+                                profile_id,
+                                collection_for_spawn,
+                                pagination_for_spawn,
+                                total_docs,
+                                query_result.clone(),
+                                cx,
+                            );
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Collection query failed: {}", e);
+
+                        app_state.update(cx, |state, _| {
+                            state.fail_task(task_id, e.to_string());
+                        });
+
+                        entity.update(cx, |panel, cx| {
+                            panel.state = GridState::Error;
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Query failed: {}", e),
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+
+        // TODO: Fetch total document count
+    }
+
+    fn apply_collection_result(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        pagination: Pagination,
+        total_docs: Option<u64>,
+        result: QueryResult,
+        cx: &mut Context<Self>,
+    ) {
+        // Preserve existing total_docs if not provided
+        let existing_total = match &self.source {
+            DataSource::Collection { total_docs, .. } => *total_docs,
+            _ => None,
+        };
+
+        self.source = DataSource::Collection {
+            profile_id,
+            collection,
+            pagination,
+            total_docs: total_docs.or(existing_total),
+        };
+
+        self.result = result;
+        self.local_sort_state = None;
+        self.original_row_order = None;
+        self.rebuild_table(None, cx);
+        self.state = GridState::Ready;
+        cx.notify();
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_table_result(
         &mut self,
@@ -960,6 +1204,7 @@ impl DataGridPanel {
             DataSource::Table {
                 profile_id, table, ..
             } => (*profile_id, table.clone()),
+            DataSource::Collection { .. } => return,
             DataSource::QueryResult { .. } => return,
         };
 
@@ -1127,6 +1372,7 @@ impl DataGridPanel {
                 pagination.reset_offset(),
                 *total_rows,
             )),
+            DataSource::Collection { .. } => None,
             DataSource::QueryResult { .. } => None,
         };
 
@@ -1190,6 +1436,7 @@ impl DataGridPanel {
                     pk_order,
                 ))
             }
+            DataSource::Collection { .. } => None,
             DataSource::QueryResult { .. } => None,
         };
 
@@ -1837,6 +2084,7 @@ impl DataGridPanel {
         let result = self.result.clone();
         let suggested_name = match &self.source {
             DataSource::Table { table, .. } => format!("{}.csv", table.name),
+            DataSource::Collection { collection, .. } => format!("{}.csv", collection.name),
             DataSource::QueryResult { .. } => {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1964,6 +2212,7 @@ impl DataGridPanel {
             DataSource::Table { order_by, .. } => order_by
                 .first()
                 .map(|col| (col.name.clone(), col.direction, true)),
+            DataSource::Collection { .. } => None,
             DataSource::QueryResult { .. } => self.local_sort_state.and_then(|state| {
                 self.result
                     .columns
@@ -3769,6 +4018,7 @@ impl DataGridPanel {
             DataSource::Table {
                 profile_id, table, ..
             } => (*profile_id, table.clone()),
+            DataSource::Collection { .. } => return,
             DataSource::QueryResult { .. } => return,
         };
 
@@ -3794,12 +4044,9 @@ impl DataGridPanel {
         let visual_order = buffer.compute_visual_order();
 
         let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
-            Some(VisualRowSource::Base(base_idx)) => self
-                .result
-                .rows
-                .get(base_idx)
-                .cloned()
-                .unwrap_or_default(),
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
             Some(VisualRowSource::Insert(insert_idx)) => buffer
                 .get_pending_insert_by_idx(insert_idx)
                 .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
@@ -3868,6 +4115,7 @@ impl DataGridPanel {
             DataSource::Table {
                 profile_id, table, ..
             } => (*profile_id, table),
+            DataSource::Collection { .. } => return None,
             DataSource::QueryResult { .. } => return None,
         };
 
@@ -3893,6 +4141,9 @@ impl DataGridPanel {
             DataSource::Table {
                 profile_id, table, ..
             } => (*profile_id, table),
+            DataSource::Collection { .. } => {
+                return vec![None; self.result.columns.len()];
+            }
             DataSource::QueryResult { .. } => {
                 return vec![None; self.result.columns.len()];
             }

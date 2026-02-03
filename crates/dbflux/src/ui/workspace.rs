@@ -91,8 +91,7 @@ impl Workspace {
             palette
         });
 
-        let sql_preview_modal =
-            cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
+        let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
@@ -126,6 +125,12 @@ impl Workspace {
                 }
                 SidebarEvent::OpenTable { profile_id, table } => {
                     this.open_table_document(*profile_id, table.clone(), window, cx);
+                }
+                SidebarEvent::OpenCollection {
+                    profile_id,
+                    collection,
+                } => {
+                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
                 }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
@@ -620,6 +625,70 @@ impl Workspace {
         });
 
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
+    }
+
+    fn open_collection_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        collection: dbflux_core::CollectionRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::toast::ToastExt;
+
+        // Check if connection exists
+        if !self
+            .app_state
+            .read(cx)
+            .connections
+            .contains_key(&profile_id)
+        {
+            cx.toast_error("No active connection for this collection", window);
+            return;
+        }
+
+        // Check if collection is already open - if so, focus that tab
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| doc.is_collection(&collection, cx))
+            .map(|doc| doc.id());
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            log::info!(
+                "Focused existing collection document: {}.{}",
+                collection.database,
+                collection.name
+            );
+            return;
+        }
+
+        // Create a DataDocument for the collection
+        let doc = cx.new(|cx| {
+            DataDocument::new_for_collection(
+                profile_id,
+                collection.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::data(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        log::info!(
+            "Opened collection document: {}.{}",
+            collection.database,
+            collection.name
+        );
     }
 
     /// Creates a new SQL query tab (v0.3).

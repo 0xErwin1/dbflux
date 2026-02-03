@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use dbflux_core::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
-    CodeGeneratorInfo, CodeGenerator, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult,
-    CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
-    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
+    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile, ConstraintInfo,
+    ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult, CustomTypeInfo,
+    CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
     DropIndexRequest, DropTypeRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon,
     IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
@@ -1595,8 +1595,10 @@ fn get_foreign_keys(
         let referenced_schema: Option<String> = row.get(2);
         let referenced_table: String = row.get(3);
         let referenced_column: String = row.get(4);
-        let on_delete: Option<String> = row.get::<_, Option<String>>(5).filter(|s| s != "NO ACTION");
-        let on_update: Option<String> = row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
+        let on_delete: Option<String> =
+            row.get::<_, Option<String>>(5).filter(|s| s != "NO ACTION");
+        let on_update: Option<String> =
+            row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
 
         builder.add_column(
             name,
@@ -2083,8 +2085,10 @@ fn get_schema_foreign_keys(
         let referenced_schema: Option<String> = row.get(3);
         let referenced_table: String = row.get(4);
         let referenced_column: String = row.get(5);
-        let on_delete: Option<String> = row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
-        let on_update: Option<String> = row.get::<_, Option<String>>(7).filter(|s| s != "NO ACTION");
+        let on_delete: Option<String> =
+            row.get::<_, Option<String>>(6).filter(|s| s != "NO ACTION");
+        let on_update: Option<String> =
+            row.get::<_, Option<String>>(7).filter(|s| s != "NO ACTION");
 
         builder.add_column(
             table_name,
