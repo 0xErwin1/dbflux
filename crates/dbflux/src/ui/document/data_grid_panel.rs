@@ -101,14 +101,6 @@ impl DataSource {
             DataSource::QueryResult { .. } => None,
         }
     }
-
-    pub fn profile_id(&self) -> Option<Uuid> {
-        match self {
-            DataSource::Table { profile_id, .. } => Some(*profile_id),
-            DataSource::Collection { profile_id, .. } => Some(*profile_id),
-            DataSource::QueryResult { .. } => None,
-        }
-    }
 }
 
 /// Events emitted by DataGridPanel.
@@ -657,11 +649,6 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Get the current view mode.
-    pub fn view_mode(&self) -> super::data_view::DataViewMode {
-        self.view_config.mode
-    }
-
     /// Check if view mode toggle is available for the current source.
     pub fn can_toggle_view(&self) -> bool {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
@@ -851,7 +838,7 @@ impl DataGridPanel {
                         cx.notify();
                     }
                 }
-                DocumentTreeEvent::CursorMoved(_) | DocumentTreeEvent::ExpandToggled(_) => {}
+                DocumentTreeEvent::CursorMoved | DocumentTreeEvent::ExpandToggled => {}
             },
         );
 
@@ -3639,12 +3626,10 @@ impl DataGridPanel {
                 let icon_path = match mode {
                     super::data_view::DataViewMode::Table => AppIcon::Table.path(),
                     super::data_view::DataViewMode::Document => AppIcon::Braces.path(),
-                    super::data_view::DataViewMode::KeyValue => AppIcon::Database.path(),
                 };
                 let _tooltip = match mode {
                     super::data_view::DataViewMode::Table => "Switch to Document View",
                     super::data_view::DataViewMode::Document => "Switch to Table View",
-                    super::data_view::DataViewMode::KeyValue => "Switch View",
                 };
 
                 d.child(

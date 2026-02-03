@@ -3,7 +3,6 @@ mod node;
 mod state;
 mod tree;
 
-pub use events::*;
-pub use node::*;
-pub use state::*;
-pub use tree::*;
+pub use events::DocumentTreeEvent;
+pub use state::DocumentTreeState;
+pub use tree::{DocumentTree, init};

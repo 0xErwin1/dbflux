@@ -717,27 +717,6 @@ impl Sidebar {
         None
     }
 
-    /// Parse database item ID in format `db_{profile_id}_{db_name}`.
-    fn parse_database_id(item_id: &str) -> Option<(Uuid, String)> {
-        let rest = item_id.strip_prefix("db_")?;
-
-        // UUID is 36 chars, followed by "_"
-        if rest.len() < 37 {
-            return None;
-        }
-
-        let uuid_str = rest.get(..36)?;
-        let profile_id = Uuid::parse_str(uuid_str).ok()?;
-
-        // After UUID and underscore, we have the database name
-        let db_name = rest.get(37..)?.to_string();
-        if db_name.is_empty() {
-            return None;
-        }
-
-        Some((profile_id, db_name))
-    }
-
     fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));

@@ -43,14 +43,6 @@ impl NodeId {
     pub fn doc_index(&self) -> Option<usize> {
         self.path.first().and_then(|s| s.parse().ok())
     }
-
-    /// Returns the dotted path for MongoDB field updates (e.g., "address.city").
-    pub fn dotted_path(&self) -> String {
-        if self.path.len() <= 1 {
-            return String::new();
-        }
-        self.path[1..].join(".")
-    }
 }
 
 /// Value stored in a tree node.
@@ -78,14 +70,6 @@ impl NodeValue {
             NodeValue::Scalar(_) => false,
             NodeValue::Document(fields) => !fields.is_empty(),
             NodeValue::Array(items) => !items.is_empty(),
-        }
-    }
-
-    pub fn child_count(&self) -> usize {
-        match self {
-            NodeValue::Scalar(_) => 0,
-            NodeValue::Document(fields) => fields.len(),
-            NodeValue::Array(items) => items.len(),
         }
     }
 

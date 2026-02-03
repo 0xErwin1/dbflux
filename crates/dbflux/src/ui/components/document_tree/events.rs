@@ -14,7 +14,7 @@ pub enum DocumentTreeEvent {
     Focused,
 
     /// Cursor moved to a different node.
-    CursorMoved(NodeId),
+    CursorMoved,
 
     /// User requested to edit a field value.
     EditRequested {
@@ -24,7 +24,7 @@ pub enum DocumentTreeEvent {
     },
 
     /// User toggled expand/collapse on a node.
-    ExpandToggled(NodeId),
+    ExpandToggled,
 
     /// User requested to delete a document (root node only).
     DeleteRequested(NodeId),

@@ -131,7 +131,7 @@ impl DocumentTreeState {
     pub fn set_cursor(&mut self, id: &NodeId, cx: &mut Context<Self>) {
         if self.cursor.as_ref() != Some(id) {
             self.cursor = Some(id.clone());
-            cx.emit(DocumentTreeEvent::CursorMoved(id.clone()));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }
@@ -144,15 +144,6 @@ impl DocumentTreeState {
         &self.vertical_scroll
     }
 
-    pub fn document_count(&self) -> usize {
-        self.documents.len()
-    }
-
-    /// Get the raw document value for a document index.
-    pub fn raw_document(&self, index: usize) -> Option<&Value> {
-        self.raw_documents.get(index)
-    }
-
     // === Expand/Collapse ===
 
     pub fn toggle_expand(&mut self, id: &NodeId, cx: &mut Context<Self>) {
@@ -162,7 +153,7 @@ impl DocumentTreeState {
             self.expanded.insert(id.clone());
         }
         self.needs_rebuild = true;
-        cx.emit(DocumentTreeEvent::ExpandToggled(id.clone()));
+        cx.emit(DocumentTreeEvent::ExpandToggled);
         cx.notify();
     }
 
@@ -205,7 +196,7 @@ impl DocumentTreeState {
             if let Some(id) = node_id {
                 self.cursor = Some(id.clone());
                 self.scroll_to_cursor(cx);
-                cx.emit(DocumentTreeEvent::CursorMoved(id));
+                cx.emit(DocumentTreeEvent::CursorMoved);
                 cx.notify();
             }
         }
@@ -218,7 +209,7 @@ impl DocumentTreeState {
         {
             self.cursor = Some(parent_id.clone());
             self.scroll_to_cursor(cx);
-            cx.emit(DocumentTreeEvent::CursorMoved(parent_id));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }
@@ -254,7 +245,7 @@ impl DocumentTreeState {
                 if is_child {
                     self.cursor = Some(next_id.clone());
                     self.scroll_to_cursor(cx);
-                    cx.emit(DocumentTreeEvent::CursorMoved(next_id));
+                    cx.emit(DocumentTreeEvent::CursorMoved);
                     cx.notify();
                 }
             }
@@ -304,7 +295,7 @@ impl DocumentTreeState {
         if let Some(id) = first_id {
             self.cursor = Some(id.clone());
             self.scroll_to_cursor(cx);
-            cx.emit(DocumentTreeEvent::CursorMoved(id));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }
@@ -318,7 +309,7 @@ impl DocumentTreeState {
         if let Some(id) = last_id {
             self.cursor = Some(id.clone());
             self.scroll_to_cursor(cx);
-            cx.emit(DocumentTreeEvent::CursorMoved(id));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }
@@ -340,7 +331,7 @@ impl DocumentTreeState {
         if let Some(id) = node_id {
             self.cursor = Some(id.clone());
             self.scroll_to_cursor(cx);
-            cx.emit(DocumentTreeEvent::CursorMoved(id));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }
@@ -362,7 +353,7 @@ impl DocumentTreeState {
         if let Some(id) = node_id {
             self.cursor = Some(id.clone());
             self.scroll_to_cursor(cx);
-            cx.emit(DocumentTreeEvent::CursorMoved(id));
+            cx.emit(DocumentTreeEvent::CursorMoved);
             cx.notify();
         }
     }

@@ -23,8 +23,7 @@ struct ResultTab {
     id: Uuid,
     title: String,
     grid: Entity<DataGridPanel>,
-    query: String,
-    subscription: Subscription,
+    _subscription: Subscription,
 }
 
 /// Internal layout of the document.
@@ -103,7 +102,6 @@ struct PendingDangerousQuery {
 #[derive(Clone)]
 pub struct ExecutionRecord {
     pub id: Uuid,
-    pub query: String,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
     pub result: Option<Arc<QueryResult>>,
@@ -304,7 +302,6 @@ impl SqlQueryDocument {
         let exec_id = Uuid::new_v4();
         let record = ExecutionRecord {
             id: exec_id,
-            query: query.clone(),
             started_at: Instant::now(),
             finished_at: None,
             result: None,
@@ -490,7 +487,6 @@ impl SqlQueryDocument {
         {
             tab.grid
                 .update(cx, |g, cx| g.set_query_result(result, query.clone(), cx));
-            tab.query = query;
         }
     }
 
@@ -549,8 +545,7 @@ impl SqlQueryDocument {
             id: tab_id,
             title,
             grid,
-            query,
-            subscription,
+            _subscription: subscription,
         };
 
         self.result_tabs.push(tab);
@@ -627,15 +622,6 @@ impl SqlQueryDocument {
         self.active_result_index
             .and_then(|i| self.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
-    }
-
-    pub fn cycle_layout(&mut self, cx: &mut Context<Self>) {
-        self.layout = match self.layout {
-            SqlQueryLayout::Split => SqlQueryLayout::EditorOnly,
-            SqlQueryLayout::EditorOnly => SqlQueryLayout::ResultsOnly,
-            SqlQueryLayout::ResultsOnly => SqlQueryLayout::Split,
-        };
-        cx.notify();
     }
 
     // === Command Dispatch ===
