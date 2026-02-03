@@ -953,6 +953,22 @@ impl AppState {
         }
     }
 
+    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<String> {
+        let store = self.secret_store_read();
+
+        if !store.is_available() {
+            return None;
+        }
+
+        match store.get(&profile.secret_ref()) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("Failed to get password: {:?}", e);
+                None
+            }
+        }
+    }
+
     pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<String> {
         let store = self.secret_store_read();
 

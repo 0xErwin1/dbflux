@@ -712,6 +712,12 @@ impl ConnectionManagerWindow {
             state.set_value(&profile.name, window, cx);
         });
 
+        if let Some(password) = app_state.read(cx).get_password(profile) {
+            instance.input_password.update(cx, |state, cx| {
+                state.set_value(&password, window, cx);
+            });
+        }
+
         if let Some(ssh) = profile.config.ssh_tunnel() {
             instance.ssh_enabled = true;
             instance.input_ssh_host.update(cx, |state, cx| {
