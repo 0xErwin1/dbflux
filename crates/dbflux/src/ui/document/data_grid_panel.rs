@@ -1885,13 +1885,12 @@ impl DataGridPanel {
             return;
         };
 
-        if confirm.is_table {
-            if let DataSource::Table {
+        if confirm.is_table
+            && let DataSource::Table {
                 profile_id, table, ..
             } = &self.source
-            {
-                self.commit_delete_table(*profile_id, table.clone(), confirm.row_idx, cx);
-            }
+        {
+            self.commit_delete_table(*profile_id, table.clone(), confirm.row_idx, cx);
         }
         cx.notify();
     }

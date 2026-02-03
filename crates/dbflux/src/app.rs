@@ -53,8 +53,6 @@ pub struct ConnectedProfile {
 }
 
 /// Session-based suppressions for dangerous query confirmations.
-/// TODO: Re-integrate with SqlQueryDocument.
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct DangerousQuerySuppressions {
     delete_no_where: bool,
@@ -66,7 +64,6 @@ pub struct DangerousQuerySuppressions {
 }
 
 impl DangerousQuerySuppressions {
-    #[allow(dead_code)]
     pub fn is_suppressed(&self, kind: crate::ui::dangerous_query::DangerousQueryKind) -> bool {
         use crate::ui::dangerous_query::DangerousQueryKind;
         match kind {
@@ -79,7 +76,6 @@ impl DangerousQuerySuppressions {
         }
     }
 
-    #[allow(dead_code)]
     pub fn set_suppressed(&mut self, kind: crate::ui::dangerous_query::DangerousQueryKind) {
         use crate::ui::dangerous_query::DangerousQueryKind;
         match kind {
@@ -108,7 +104,6 @@ pub struct AppState {
     saved_query_store: Option<SavedQueryStore>,
     #[allow(dead_code)]
     pending_saved_query_warning: Option<String>,
-    #[allow(dead_code)]
     pub dangerous_query_suppressions: DangerousQuerySuppressions,
 
     pub settings_window: Option<WindowHandle<Root>>,
@@ -236,16 +231,16 @@ impl AppState {
         let nodes_after = connection_tree.nodes.len();
 
         // Save tree if sync made changes (added or removed nodes)
-        if nodes_before != nodes_after {
-            if let Some(ref store) = connection_tree_store {
-                if let Err(e) = store.save(&connection_tree) {
-                    error!("Failed to save connection tree after sync: {:?}", e);
-                } else {
-                    info!(
-                        "Synced connection tree: {} -> {} nodes",
-                        nodes_before, nodes_after
-                    );
-                }
+        if nodes_before != nodes_after
+            && let Some(ref store) = connection_tree_store
+        {
+            if let Err(e) = store.save(&connection_tree) {
+                error!("Failed to save connection tree after sync: {:?}", e);
+            } else {
+                info!(
+                    "Synced connection tree: {} -> {} nodes",
+                    nodes_before, nodes_after
+                );
             }
         }
 

@@ -126,7 +126,7 @@ impl DocumentHandle {
     /// Can this document be closed? (checks unsaved changes)
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
-            Self::SqlQuery { entity, .. } => entity.read(cx).can_close(),
+            Self::SqlQuery { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
         }
     }
