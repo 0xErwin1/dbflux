@@ -5,6 +5,8 @@ use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, Direction, Edge, HEADER_HEIGHT,
     ROW_HEIGHT, SortState as TableSortState, TableModel,
 };
+use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
+use crate::ui::document_preview_modal::{DocumentPreviewModal, DocumentPreviewSaveEvent};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -229,6 +231,11 @@ struct PendingDeleteConfirm {
     is_table: bool,
 }
 
+struct PendingDocumentPreview {
+    doc_index: usize,
+    document_json: String,
+}
+
 /// Context menu state for right-click operations.
 struct TableContextMenu {
     /// Row index of the clicked cell.
@@ -320,6 +327,15 @@ pub struct DataGridPanel {
 
     // View mode configuration
     view_config: super::data_view::DataViewConfig,
+
+    // Document tree for MongoDB document view
+    document_tree: Option<Entity<DocumentTree>>,
+    document_tree_state: Option<Entity<DocumentTreeState>>,
+    document_tree_subscription: Option<Subscription>,
+
+    // Document preview modal for viewing/editing full documents
+    document_preview_modal: Entity<DocumentPreviewModal>,
+    pending_document_preview: Option<PendingDocumentPreview>,
 }
 
 impl DataGridPanel {
@@ -490,9 +506,13 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("e.g. id > 10 AND name LIKE '%test%'")
-        });
+        let filter_placeholder = if source.is_collection() {
+            r#"e.g. {"name": {"$regex": "test"}}"#
+        } else {
+            "e.g. id > 10 AND name LIKE '%test%'"
+        };
+
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
 
         let limit_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("100");
@@ -546,6 +566,22 @@ impl DataGridPanel {
         )
         .detach();
 
+        let document_preview_modal = cx.new(|cx| DocumentPreviewModal::new(window, cx));
+
+        cx.subscribe_in(
+            &document_preview_modal,
+            window,
+            |this, _, event: &DocumentPreviewSaveEvent, window, cx| {
+                this.handle_document_preview_save(
+                    event.doc_index,
+                    &event.document_json,
+                    window,
+                    cx,
+                );
+            },
+        )
+        .detach();
+
         let view_config = super::data_view::DataViewConfig::for_source(&source);
 
         Self {
@@ -581,6 +617,11 @@ impl DataGridPanel {
             pending_modal_open: None,
             panel_origin: Point::default(),
             view_config,
+            document_tree: None,
+            document_tree_state: None,
+            document_tree_subscription: None,
+            document_preview_modal,
+            pending_document_preview: None,
         }
     }
 
@@ -756,6 +797,67 @@ impl DataGridPanel {
         self.table_state = Some(table_state);
         self.data_table = Some(data_table);
         self.table_subscription = Some(subscription);
+
+        // Also rebuild document tree for collections
+        if self.source.is_collection() {
+            self.rebuild_document_tree(cx);
+        }
+    }
+
+    fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
+        let tree_state = cx.new(|cx| {
+            let mut state = DocumentTreeState::new(cx);
+            state.load_from_result(&self.result, cx);
+            state
+        });
+
+        let tree = cx.new(|cx| DocumentTree::new("document-tree", tree_state.clone(), cx));
+
+        let subscription = cx.subscribe(
+            &tree_state,
+            |this, _state, event: &DocumentTreeEvent, cx| match event {
+                DocumentTreeEvent::Focused => {
+                    cx.emit(DataGridEvent::Focused);
+                }
+                DocumentTreeEvent::EditRequested {
+                    node_id,
+                    current_value,
+                    is_json,
+                } => {
+                    this.pending_modal_open = Some(PendingModalOpen {
+                        row: node_id.doc_index().unwrap_or(0),
+                        col: 0,
+                        value: current_value.clone(),
+                        is_json: *is_json,
+                    });
+                    cx.notify();
+                }
+                DocumentTreeEvent::DocumentPreviewRequested {
+                    doc_index,
+                    document_json,
+                } => {
+                    this.pending_document_preview = Some(PendingDocumentPreview {
+                        doc_index: *doc_index,
+                        document_json: document_json.clone(),
+                    });
+                    cx.notify();
+                }
+                DocumentTreeEvent::DeleteRequested(node_id) => {
+                    if let Some(doc_idx) = node_id.doc_index() {
+                        this.pending_delete_confirm = Some(PendingDeleteConfirm {
+                            row_idx: doc_idx,
+                            is_table: false,
+                        });
+                        cx.notify();
+                    }
+                }
+                DocumentTreeEvent::CursorMoved(_) | DocumentTreeEvent::ExpandToggled(_) => {}
+            },
+        );
+
+        self.document_tree_state = Some(tree_state);
+        self.document_tree = Some(tree);
+        self.document_tree_subscription = Some(subscription);
     }
 
     // === Refresh / Query Execution ===
@@ -1013,10 +1115,26 @@ impl DataGridPanel {
             return;
         };
 
+        let filter_value = self.filter_input.read(cx).value();
+        let filter_str = filter_value.trim();
+        let filter: serde_json::Value = if filter_str.is_empty() {
+            serde_json::json!({})
+        } else {
+            match serde_json::from_str(filter_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    cx.toast_error(format!("Invalid JSON filter: {}", e), window);
+                    return;
+                }
+            }
+        };
+
+        let filter_for_count = filter.clone();
+
         let json_query = serde_json::json!({
             "database": collection.database,
             "collection": collection.name,
-            "filter": {},
+            "filter": filter,
             "limit": pagination.limit(),
             "skip": pagination.offset()
         });
@@ -1110,9 +1228,9 @@ impl DataGridPanel {
         })
         .detach();
 
-        // Fetch total count if not known
+        // Fetch total count if not known (always re-fetch when filter changes)
         if total_docs.is_none() {
-            self.fetch_collection_count(profile_id, collection, cx);
+            self.fetch_collection_count(profile_id, collection, filter_for_count, cx);
         }
     }
 
@@ -1272,6 +1390,7 @@ impl DataGridPanel {
         &mut self,
         profile_id: Uuid,
         collection: CollectionRef,
+        filter: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
         let (conn, active_database) = {
@@ -1286,11 +1405,11 @@ impl DataGridPanel {
             return;
         };
 
-        // MongoDB count query format
+        // MongoDB count query format with filter
         let json_query = serde_json::json!({
             "database": collection.database,
             "collection": collection.name,
-            "count": {}
+            "count": filter
         });
 
         let request = QueryRequest::new(json_query.to_string()).with_database(active_database);
@@ -3093,6 +3212,12 @@ impl Render for DataGridPanel {
             });
         }
 
+        if let Some(preview) = self.pending_document_preview.take() {
+            self.document_preview_modal.update(cx, |modal, cx| {
+                modal.open(preview.doc_index, preview.document_json, window, cx);
+            });
+        }
+
         // Clone theme colors to avoid borrow conflicts with cx
         let theme = cx.theme().clone();
 
@@ -3340,6 +3465,10 @@ impl Render for DataGridPanel {
             // Cell editor modal overlay
             .when(self.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.cell_editor.clone())
+            })
+            // Document preview modal overlay
+            .when(self.document_preview_modal.read(cx).is_visible(), |d| {
+                d.child(self.document_preview_modal.clone())
             })
     }
 }
@@ -3768,26 +3897,33 @@ impl DataGridPanel {
 
     fn render_document_view(
         &self,
-        theme: &gpui_component::theme::Theme,
+        _theme: &gpui_component::theme::Theme,
         _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let rows = &self.result.rows;
-        let columns = &self.result.columns;
+        if let Some(tree) = &self.document_tree {
+            div()
+                .id("document-view-container")
+                .size_full()
+                .child(tree.clone())
+        } else {
+            let rows = &self.result.rows;
+            let columns = &self.result.columns;
 
-        let cards: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .map(|(row_idx, row)| self.render_document_card(row_idx, row, columns, theme))
-            .collect();
+            let cards: Vec<_> = rows
+                .iter()
+                .enumerate()
+                .map(|(row_idx, row)| self.render_document_card(row_idx, row, columns, _theme))
+                .collect();
 
-        div()
-            .id("document-view-container")
-            .flex()
-            .flex_col()
-            .size_full()
-            .p(Spacing::MD)
-            .gap(Spacing::MD)
-            .children(cards)
+            div()
+                .id("document-view-container")
+                .flex()
+                .flex_col()
+                .size_full()
+                .p(Spacing::MD)
+                .gap(Spacing::MD)
+                .children(cards)
+        }
     }
 
     fn render_document_card(
@@ -4985,6 +5121,96 @@ impl DataGridPanel {
         });
 
         self.focus_table(window, cx);
+    }
+
+    fn handle_document_preview_save(
+        &mut self,
+        _doc_index: usize,
+        document_json: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_doc: serde_json::Value = match serde_json::from_str(document_json) {
+            Ok(v) => v,
+            Err(e) => {
+                cx.toast_error(format!("Invalid JSON: {}", e), window);
+                return;
+            }
+        };
+
+        let doc_id = match new_doc.get("_id") {
+            Some(id) => id.clone(),
+            None => {
+                cx.toast_error("Document must have an _id field", window);
+                return;
+            }
+        };
+
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
+            return;
+        };
+
+        let (conn, active_database) = {
+            let state = self.app_state.read(cx);
+            match state.connections.get(profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                None => (None, None),
+            }
+        };
+
+        let Some(conn) = conn else {
+            cx.toast_error("Connection not available", window);
+            return;
+        };
+
+        let replace_query = serde_json::json!({
+            "database": collection.database,
+            "collection": collection.name,
+            "replace": {
+                "filter": { "_id": doc_id },
+                "replacement": new_doc
+            }
+        });
+
+        let query_request =
+            QueryRequest::new(replace_query.to_string()).with_database(active_database);
+        let entity = cx.entity().clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&query_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Document updated".to_string(),
+                                is_error: false,
+                            });
+                            panel.pending_refresh = true;
+                        }
+                        Err(e) => {
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Failed to update document: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn handle_add_row(&mut self, after_visual_row: usize, cx: &mut Context<Self>) {

@@ -4,6 +4,7 @@ pub mod components;
 pub mod dangerous_query;
 pub mod dock;
 pub mod document;
+pub mod document_preview_modal;
 pub mod dropdown;
 pub mod history_modal;
 pub mod icons;

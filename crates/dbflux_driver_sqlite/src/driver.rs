@@ -1111,9 +1111,7 @@ impl SqliteErrorFormatter {
     fn format_sqlite_error(e: &rusqlite::Error) -> FormattedError {
         match e {
             rusqlite::Error::SqliteFailure(err, msg) => {
-                let message = msg
-                    .clone()
-                    .unwrap_or_else(|| format!("{:?}", err.code));
+                let message = msg.clone().unwrap_or_else(|| format!("{:?}", err.code));
 
                 FormattedError::new(message)
                     .with_code(format!("{:?} ({})", err.code, err.extended_code))
