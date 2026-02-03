@@ -1,10 +1,9 @@
-#![allow(dead_code)]
-
 use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
+use crate::ui::dangerous_query::{DangerousQueryKind, detect_dangerous_query};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
@@ -15,9 +14,8 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Input, InputState};
 use gpui_component::resizable::{resizable_panel, v_resizable};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use uuid::Uuid;
 
 /// A single result tab within the SqlQueryDocument.
@@ -83,12 +81,22 @@ pub struct SqlQueryDocument {
     focus_mode: SqlQueryFocus,
     active_cancel_token: Option<CancelToken>,
     results_maximized: bool,
+
+    // Dangerous query confirmation
+    pending_dangerous_query: Option<PendingDangerousQuery>,
 }
 
 struct PendingQueryResult {
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
+}
+
+/// Pending dangerous query confirmation.
+struct PendingDangerousQuery {
+    query: String,
+    kind: DangerousQueryKind,
+    in_new_tab: bool,
 }
 
 /// Record of a query execution.
@@ -151,6 +159,7 @@ impl SqlQueryDocument {
             focus_mode: SqlQueryFocus::Editor,
             active_cancel_token: None,
             results_maximized: false,
+            pending_dangerous_query: None,
         }
     }
 
@@ -186,9 +195,14 @@ impl SqlQueryDocument {
         self.connection_id
     }
 
-    pub fn can_close(&self) -> bool {
-        // TODO: check for unsaved changes
-        true
+    pub fn can_close(&self, cx: &App) -> bool {
+        !self.has_unsaved_changes(cx)
+    }
+
+    /// Returns true if the editor content differs from the original content.
+    pub fn has_unsaved_changes(&self, cx: &App) -> bool {
+        let current = self.input_state.read(cx).value();
+        current != self.original_content
     }
 
     pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
@@ -197,6 +211,10 @@ impl SqlQueryDocument {
 
     /// Returns the active context for keyboard handling based on internal focus.
     pub fn active_context(&self, cx: &App) -> ContextId {
+        if self.pending_dangerous_query.is_some() {
+            return ContextId::ConfirmModal;
+        }
+
         if self.history_modal.read(cx).is_visible() {
             return ContextId::HistoryModal;
         }
@@ -219,12 +237,45 @@ impl SqlQueryDocument {
     // === Query Execution ===
 
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_query_impl(false, window, cx);
+    }
+
+    fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.input_state.read(cx).value().to_string();
         if query.trim().is_empty() {
             cx.toast_warning("Enter a query to run", window);
             return;
         }
 
+        // Check for dangerous queries
+        if let Some(kind) = detect_dangerous_query(&query) {
+            let is_suppressed = self
+                .app_state
+                .read(cx)
+                .dangerous_query_suppressions
+                .is_suppressed(kind);
+
+            if !is_suppressed {
+                self.pending_dangerous_query = Some(PendingDangerousQuery {
+                    query,
+                    kind,
+                    in_new_tab,
+                });
+                cx.notify();
+                return;
+            }
+        }
+
+        self.execute_query_internal(query, in_new_tab, window, cx);
+    }
+
+    fn execute_query_internal(
+        &mut self,
+        query: String,
+        in_new_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(conn_id) = self.connection_id else {
             cx.toast_error("No active connection", window);
             return;
@@ -241,6 +292,9 @@ impl SqlQueryDocument {
             cx.toast_error("Connection not found", window);
             return;
         };
+
+        // Set the new tab flag before execution
+        self.run_in_new_tab = in_new_tab;
 
         // Create cancel token for this execution
         let cancel_token = CancelToken::new();
@@ -298,6 +352,25 @@ impl SqlQueryDocument {
             .ok();
         })
         .detach();
+    }
+
+    fn confirm_dangerous_query(&mut self, suppress: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_dangerous_query.take() else {
+            return;
+        };
+
+        if suppress {
+            self.app_state.update(cx, |state, _| {
+                state.dangerous_query_suppressions.set_suppressed(pending.kind);
+            });
+        }
+
+        self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
+    }
+
+    fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
+        self.pending_dangerous_query = None;
+        cx.notify();
     }
 
     /// Process pending query selected from history modal (called from render).
@@ -511,8 +584,7 @@ impl SqlQueryDocument {
     }
 
     pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.run_in_new_tab = true;
-        self.run_query(window, cx);
+        self.run_query_impl(true, window, cx);
     }
 
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
@@ -624,6 +696,21 @@ impl SqlQueryDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // When dangerous query confirmation is showing, handle only modal commands
+        if self.pending_dangerous_query.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_dangerous_query(cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_dangerous_query(false, window, cx);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
         // When history modal is open, route commands to it first
         if self.history_modal.read(cx).is_visible()
             && self.dispatch_to_history_modal(cmd, window, cx)
@@ -1122,6 +1209,154 @@ impl SqlQueryDocument {
                     .child("Run a query to see results"),
             )
     }
+
+    fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let entity = cx.entity().clone();
+        let entity_cancel = cx.entity().clone();
+        let entity_suppress = cx.entity().clone();
+
+        let (title, message) = self
+            .pending_dangerous_query
+            .as_ref()
+            .map(|p| {
+                let title = match p.kind {
+                    DangerousQueryKind::DeleteNoWhere => "DELETE without WHERE",
+                    DangerousQueryKind::UpdateNoWhere => "UPDATE without WHERE",
+                    DangerousQueryKind::Truncate => "TRUNCATE",
+                    DangerousQueryKind::Drop => "DROP",
+                    DangerousQueryKind::Alter => "ALTER",
+                    DangerousQueryKind::Script => "Dangerous Script",
+                };
+                (title, p.kind.message())
+            })
+            .unwrap_or(("Warning", "This query may be dangerous."));
+
+        let btn_hover = theme.muted;
+
+        div()
+            .id("dangerous-query-modal-overlay")
+            .absolute()
+            .inset_0()
+            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                div()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(Radii::MD)
+                    .p(Spacing::MD)
+                    .min_w(px(350.0))
+                    .max_w(px(500.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                svg()
+                                    .path(AppIcon::TriangleAlert.path())
+                                    .size_5()
+                                    .text_color(theme.warning),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .child(title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.muted_foreground)
+                            .child(message),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("dont-ask-again-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(theme.muted_foreground)
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_click(move |_, window, cx| {
+                                        entity_suppress.update(cx, |doc, cx| {
+                                            doc.confirm_dangerous_query(true, window, cx);
+                                        });
+                                    })
+                                    .child("Don't ask again"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(Spacing::SM)
+                                    .child(
+                                        div()
+                                            .id("dangerous-cancel-btn")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px(Spacing::SM)
+                                            .py(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.muted_foreground)
+                                            .bg(theme.secondary)
+                                            .hover(|d| d.bg(btn_hover))
+                                            .on_click(move |_, _, cx| {
+                                                entity_cancel.update(cx, |doc, cx| {
+                                                    doc.cancel_dangerous_query(cx);
+                                                });
+                                            })
+                                            .child("Cancel"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("dangerous-confirm-btn")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px(Spacing::SM)
+                                            .py(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.background)
+                                            .bg(theme.warning)
+                                            .hover(|d| d.opacity(0.9))
+                                            .on_click(move |_, window, cx| {
+                                                entity.update(cx, |doc, cx| {
+                                                    doc.confirm_dangerous_query(false, window, cx);
+                                                });
+                                            })
+                                            .child("Run Anyway"),
+                                    ),
+                            ),
+                    ),
+            )
+    }
 }
 
 impl Render for SqlQueryDocument {
@@ -1180,6 +1415,10 @@ impl Render for SqlQueryDocument {
             })
             // History modal overlay
             .child(self.history_modal.clone())
+            // Dangerous query confirmation modal
+            .when(self.pending_dangerous_query.is_some(), |el| {
+                el.child(self.render_dangerous_query_modal(cx))
+            })
     }
 }
 
