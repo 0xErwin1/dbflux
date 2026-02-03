@@ -32,6 +32,24 @@ pub enum DataStructure {
 
     /// Key-value stores (Redis, Valkey, etc.)
     KeyValue(KeyValueSchema),
+
+    /// Graph databases (Neo4j, Neptune, etc.)
+    Graph(GraphSchema),
+
+    /// Wide-column stores (Cassandra, HBase, ScyllaDB)
+    WideColumn(WideColumnSchema),
+
+    /// Time-series databases (InfluxDB, TimescaleDB, QuestDB)
+    TimeSeries(TimeSeriesSchema),
+
+    /// Search engines (Elasticsearch, OpenSearch, Meilisearch)
+    Search(SearchSchema),
+
+    /// Vector databases (Pinecone, Milvus, Qdrant, pgvector)
+    Vector(VectorSchema),
+
+    /// Multi-model databases (ArangoDB, SurrealDB, PostgreSQL+extensions)
+    MultiModel(MultiModelSchema),
 }
 
 impl Default for DataStructure {
@@ -84,6 +102,229 @@ pub struct KeyValueSchema {
     pub current_keyspace: Option<u32>,
 }
 
+/// Schema for graph databases (Neo4j, Neptune, etc.)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GraphSchema {
+    pub databases: Vec<DatabaseInfo>,
+    pub current_database: Option<String>,
+
+    /// Node labels in the graph.
+    pub node_labels: Vec<NodeLabelInfo>,
+
+    /// Relationship types in the graph.
+    pub relationship_types: Vec<RelationshipTypeInfo>,
+
+    /// Property keys used across nodes/relationships.
+    pub property_keys: Vec<String>,
+}
+
+/// Schema for wide-column stores (Cassandra, HBase, ScyllaDB)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WideColumnSchema {
+    /// Keyspaces (similar to databases).
+    pub keyspaces: Vec<WideColumnKeyspaceInfo>,
+
+    /// Currently selected keyspace.
+    pub current_keyspace: Option<String>,
+}
+
+/// Schema for time-series databases (InfluxDB, TimescaleDB, QuestDB)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TimeSeriesSchema {
+    pub databases: Vec<DatabaseInfo>,
+    pub current_database: Option<String>,
+
+    /// Measurements (InfluxDB) or hypertables (TimescaleDB).
+    pub measurements: Vec<MeasurementInfo>,
+
+    /// Retention policies.
+    pub retention_policies: Vec<RetentionPolicyInfo>,
+}
+
+/// Schema for search engines (Elasticsearch, OpenSearch, Meilisearch)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SearchSchema {
+    /// Search indices.
+    pub indices: Vec<SearchIndexInfo>,
+
+    /// Index templates.
+    pub templates: Vec<String>,
+}
+
+/// Schema for vector databases (Pinecone, Milvus, Qdrant, pgvector)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VectorSchema {
+    pub databases: Vec<DatabaseInfo>,
+    pub current_database: Option<String>,
+
+    /// Vector collections/indices.
+    pub collections: Vec<VectorCollectionInfo>,
+}
+
+/// Schema for multi-model databases (ArangoDB, SurrealDB, PostgreSQL+extensions)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MultiModelSchema {
+    pub databases: Vec<DatabaseInfo>,
+    pub current_database: Option<String>,
+
+    /// Supported paradigms in this multi-model database.
+    pub capabilities: MultiModelCapabilities,
+
+    /// Relational tables (if supported).
+    pub tables: Vec<TableInfo>,
+
+    /// Document collections (if supported).
+    pub collections: Vec<CollectionInfo>,
+
+    /// Graph structures (if supported).
+    pub graphs: Vec<GraphInfo>,
+}
+
+// =============================================================================
+// Graph Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeLabelInfo {
+    pub name: String,
+    pub count: Option<u64>,
+    pub properties: Vec<PropertyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipTypeInfo {
+    pub name: String,
+    pub count: Option<u64>,
+    pub properties: Vec<PropertyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyInfo {
+    pub name: String,
+    pub data_type: Option<String>,
+}
+
+// =============================================================================
+// Wide-Column Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WideColumnKeyspaceInfo {
+    pub name: String,
+    pub replication_strategy: Option<String>,
+    pub column_families: Vec<ColumnFamilyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnFamilyInfo {
+    pub name: String,
+    pub columns: Vec<WideColumnInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WideColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub is_partition_key: bool,
+    pub is_clustering_key: bool,
+}
+
+// =============================================================================
+// Time-Series Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeasurementInfo {
+    pub name: String,
+    /// Tag keys (indexed dimensions).
+    pub tags: Vec<String>,
+    /// Field keys (values).
+    pub fields: Vec<TimeSeriesFieldInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeSeriesFieldInfo {
+    pub name: String,
+    pub data_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionPolicyInfo {
+    pub name: String,
+    pub duration: Option<String>,
+    pub is_default: bool,
+}
+
+// =============================================================================
+// Search Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndexInfo {
+    pub name: String,
+    pub doc_count: Option<u64>,
+    pub mappings: Vec<SearchMappingInfo>,
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMappingInfo {
+    pub field: String,
+    pub field_type: String,
+    pub analyzer: Option<String>,
+}
+
+// =============================================================================
+// Vector Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorCollectionInfo {
+    pub name: String,
+    pub vector_count: Option<u64>,
+    pub dimension: u32,
+    pub metric: VectorMetric,
+    pub metadata_fields: Vec<VectorMetadataField>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VectorMetric {
+    #[default]
+    Cosine,
+    Euclidean,
+    DotProduct,
+    Manhattan,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorMetadataField {
+    pub name: String,
+    pub data_type: String,
+    pub indexed: bool,
+}
+
+// =============================================================================
+// Multi-Model Schema Types
+// =============================================================================
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MultiModelCapabilities {
+    pub relational: bool,
+    pub document: bool,
+    pub graph: bool,
+    pub key_value: bool,
+    pub search: bool,
+    pub vector: bool,
+    pub time_series: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphInfo {
+    pub name: String,
+    pub vertex_collections: Vec<String>,
+    pub edge_collections: Vec<String>,
+}
+
 /// Complete schema snapshot returned by `Connection::schema()`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SchemaSnapshot {
@@ -113,22 +354,82 @@ impl SchemaSnapshot {
         }
     }
 
-    /// Returns true if this is a relational database schema.
+    pub fn graph(schema: GraphSchema) -> Self {
+        Self {
+            structure: DataStructure::Graph(schema),
+        }
+    }
+
+    pub fn wide_column(schema: WideColumnSchema) -> Self {
+        Self {
+            structure: DataStructure::WideColumn(schema),
+        }
+    }
+
+    pub fn time_series(schema: TimeSeriesSchema) -> Self {
+        Self {
+            structure: DataStructure::TimeSeries(schema),
+        }
+    }
+
+    pub fn search(schema: SearchSchema) -> Self {
+        Self {
+            structure: DataStructure::Search(schema),
+        }
+    }
+
+    pub fn vector(schema: VectorSchema) -> Self {
+        Self {
+            structure: DataStructure::Vector(schema),
+        }
+    }
+
+    pub fn multi_model(schema: MultiModelSchema) -> Self {
+        Self {
+            structure: DataStructure::MultiModel(schema),
+        }
+    }
+
+    // Type checking methods
+
     pub fn is_relational(&self) -> bool {
         matches!(self.structure, DataStructure::Relational(_))
     }
 
-    /// Returns true if this is a document database schema.
     pub fn is_document(&self) -> bool {
         matches!(self.structure, DataStructure::Document(_))
     }
 
-    /// Returns true if this is a key-value store schema.
     pub fn is_key_value(&self) -> bool {
         matches!(self.structure, DataStructure::KeyValue(_))
     }
 
-    /// Get the relational schema, if this is a relational database.
+    pub fn is_graph(&self) -> bool {
+        matches!(self.structure, DataStructure::Graph(_))
+    }
+
+    pub fn is_wide_column(&self) -> bool {
+        matches!(self.structure, DataStructure::WideColumn(_))
+    }
+
+    pub fn is_time_series(&self) -> bool {
+        matches!(self.structure, DataStructure::TimeSeries(_))
+    }
+
+    pub fn is_search(&self) -> bool {
+        matches!(self.structure, DataStructure::Search(_))
+    }
+
+    pub fn is_vector(&self) -> bool {
+        matches!(self.structure, DataStructure::Vector(_))
+    }
+
+    pub fn is_multi_model(&self) -> bool {
+        matches!(self.structure, DataStructure::MultiModel(_))
+    }
+
+    // Schema accessors
+
     pub fn as_relational(&self) -> Option<&RelationalSchema> {
         match &self.structure {
             DataStructure::Relational(s) => Some(s),
@@ -136,7 +437,6 @@ impl SchemaSnapshot {
         }
     }
 
-    /// Get the document schema, if this is a document database.
     pub fn as_document(&self) -> Option<&DocumentSchema> {
         match &self.structure {
             DataStructure::Document(s) => Some(s),
@@ -144,7 +444,6 @@ impl SchemaSnapshot {
         }
     }
 
-    /// Get the key-value schema, if this is a key-value store.
     pub fn as_key_value(&self) -> Option<&KeyValueSchema> {
         match &self.structure {
             DataStructure::KeyValue(s) => Some(s),
@@ -152,27 +451,81 @@ impl SchemaSnapshot {
         }
     }
 
-    // Convenience accessors for relational schemas (backward compatibility)
+    pub fn as_graph(&self) -> Option<&GraphSchema> {
+        match &self.structure {
+            DataStructure::Graph(s) => Some(s),
+            _ => None,
+        }
+    }
 
-    /// Get databases (relational only, empty for others).
+    pub fn as_wide_column(&self) -> Option<&WideColumnSchema> {
+        match &self.structure {
+            DataStructure::WideColumn(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_time_series(&self) -> Option<&TimeSeriesSchema> {
+        match &self.structure {
+            DataStructure::TimeSeries(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_search(&self) -> Option<&SearchSchema> {
+        match &self.structure {
+            DataStructure::Search(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_vector(&self) -> Option<&VectorSchema> {
+        match &self.structure {
+            DataStructure::Vector(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_multi_model(&self) -> Option<&MultiModelSchema> {
+        match &self.structure {
+            DataStructure::MultiModel(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    // Convenience accessors (backward compatibility)
+
+    /// Get databases (for types that have them).
     pub fn databases(&self) -> &[DatabaseInfo] {
         match &self.structure {
             DataStructure::Relational(s) => &s.databases,
             DataStructure::Document(s) => &s.databases,
-            DataStructure::KeyValue(_) => &[],
+            DataStructure::Graph(s) => &s.databases,
+            DataStructure::TimeSeries(s) => &s.databases,
+            DataStructure::Vector(s) => &s.databases,
+            DataStructure::MultiModel(s) => &s.databases,
+            DataStructure::KeyValue(_) | DataStructure::WideColumn(_) | DataStructure::Search(_) => {
+                &[]
+            }
         }
     }
 
-    /// Get current database name (relational/document only).
+    /// Get current database name.
     pub fn current_database(&self) -> Option<&str> {
         match &self.structure {
             DataStructure::Relational(s) => s.current_database.as_deref(),
             DataStructure::Document(s) => s.current_database.as_deref(),
-            DataStructure::KeyValue(_) => None,
+            DataStructure::Graph(s) => s.current_database.as_deref(),
+            DataStructure::TimeSeries(s) => s.current_database.as_deref(),
+            DataStructure::Vector(s) => s.current_database.as_deref(),
+            DataStructure::MultiModel(s) => s.current_database.as_deref(),
+            DataStructure::KeyValue(_) | DataStructure::WideColumn(_) | DataStructure::Search(_) => {
+                None
+            }
         }
     }
 
-    /// Get schemas (relational only, empty for others).
+    /// Get schemas (relational only).
     pub fn schemas(&self) -> &[DbSchemaInfo] {
         match &self.structure {
             DataStructure::Relational(s) => &s.schemas,
@@ -180,15 +533,16 @@ impl SchemaSnapshot {
         }
     }
 
-    /// Get tables (relational only, empty for others).
+    /// Get tables (relational and multi-model).
     pub fn tables(&self) -> &[TableInfo] {
         match &self.structure {
             DataStructure::Relational(s) => &s.tables,
+            DataStructure::MultiModel(s) => &s.tables,
             _ => &[],
         }
     }
 
-    /// Get views (relational only, empty for others).
+    /// Get views (relational only).
     pub fn views(&self) -> &[ViewInfo] {
         match &self.structure {
             DataStructure::Relational(s) => &s.views,
@@ -196,15 +550,16 @@ impl SchemaSnapshot {
         }
     }
 
-    /// Get collections (document only, empty for others).
+    /// Get collections (document and multi-model).
     pub fn collections(&self) -> &[CollectionInfo] {
         match &self.structure {
             DataStructure::Document(s) => &s.collections,
+            DataStructure::MultiModel(s) => &s.collections,
             _ => &[],
         }
     }
 
-    /// Get keyspaces (key-value only, empty for others).
+    /// Get keyspaces (key-value only).
     pub fn keyspaces(&self) -> &[KeySpaceInfo] {
         match &self.structure {
             DataStructure::KeyValue(s) => &s.keyspaces,
