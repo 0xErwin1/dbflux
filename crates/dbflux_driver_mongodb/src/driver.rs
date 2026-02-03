@@ -4,12 +4,13 @@ use std::time::Instant;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionProfile, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert,
-    DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, FormValues,
-    Icon, MONGODB_FORM, PlaceholderStyle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, CrudResult,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, FormValues, FormattedError, Icon, MONGODB_FORM,
+    PlaceholderStyle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, Value,
-    ViewInfo,
+    ViewInfo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -421,41 +422,83 @@ fn inject_credentials_into_uri(
     }
 }
 
-fn format_mongo_uri_error(e: &mongodb::error::Error, uri: &str) -> DbError {
-    let msg = e.to_string();
+pub struct MongoErrorFormatter;
 
-    if msg.contains("Connection refused") || msg.contains("No servers available") {
-        DbError::ConnectionFailed(format!("Connection refused. Check URI: {}", uri))
-    } else if msg.contains("Authentication failed") {
-        DbError::ConnectionFailed("Authentication failed. Check username and password.".to_string())
-    } else if msg.contains("timed out") {
-        DbError::ConnectionFailed("Connection timed out.".to_string())
-    } else {
-        DbError::ConnectionFailed(msg)
+impl MongoErrorFormatter {
+    fn format_connection_message(source: &str, host: &str, port: u16) -> String {
+        if source.contains("Connection refused") || source.contains("No servers available") {
+            format!(
+                "Connection refused. Is MongoDB running at {}:{}?",
+                host, port
+            )
+        } else if source.contains("Authentication failed") {
+            "Authentication failed. Check username and password.".to_string()
+        } else if source.contains("timed out") {
+            "Connection timed out.".to_string()
+        } else {
+            source.to_string()
+        }
     }
+}
+
+impl QueryErrorFormatter for MongoErrorFormatter {
+    fn format_query_error(&self, error: &(dyn std::error::Error + 'static)) -> FormattedError {
+        FormattedError::new(error.to_string())
+    }
+}
+
+impl ConnectionErrorFormatter for MongoErrorFormatter {
+    fn format_connection_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        host: &str,
+        port: u16,
+    ) -> FormattedError {
+        let source = error.to_string();
+        let message = Self::format_connection_message(&source, host, port);
+        FormattedError::new(message)
+    }
+
+    fn format_uri_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        sanitized_uri: &str,
+    ) -> FormattedError {
+        let source = error.to_string();
+
+        let message =
+            if source.contains("Connection refused") || source.contains("No servers available") {
+                format!("Connection refused. Check URI: {}", sanitized_uri)
+            } else if source.contains("Authentication failed") {
+                "Authentication failed. Check username and password.".to_string()
+            } else if source.contains("timed out") {
+                "Connection timed out.".to_string()
+            } else {
+                source
+            };
+
+        FormattedError::new(message)
+    }
+}
+
+static MONGO_ERROR_FORMATTER: MongoErrorFormatter = MongoErrorFormatter;
+
+fn format_mongo_uri_error(e: &mongodb::error::Error, uri: &str) -> DbError {
+    let sanitized = sanitize_uri(uri);
+    let formatted = MONGO_ERROR_FORMATTER.format_uri_error(e, &sanitized);
+    formatted.into_connection_error()
 }
 
 fn format_mongo_error(e: &mongodb::error::Error, host: &str, port: u16) -> DbError {
-    let msg = e.to_string();
-
-    if msg.contains("Connection refused") || msg.contains("No servers available") {
-        DbError::ConnectionFailed(format!(
-            "Connection refused. Is MongoDB running at {}:{}?",
-            host, port
-        ))
-    } else if msg.contains("Authentication failed") {
-        DbError::ConnectionFailed("Authentication failed. Check username and password.".to_string())
-    } else if msg.contains("timed out") {
-        DbError::ConnectionFailed("Connection timed out.".to_string())
-    } else {
-        DbError::ConnectionFailed(msg)
-    }
+    let formatted = MONGO_ERROR_FORMATTER.format_connection_error(e, host, port);
+    formatted.into_connection_error()
 }
 
 fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
-    let message = e.to_string();
+    let formatted = MONGO_ERROR_FORMATTER.format_query_error(e);
+    let message = formatted.to_display_string();
     log::error!("MongoDB query failed: {}", message);
-    DbError::QueryFailed(message)
+    formatted.into_query_error()
 }
 
 pub struct MongoConnection {

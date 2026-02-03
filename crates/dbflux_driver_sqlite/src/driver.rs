@@ -8,12 +8,13 @@ use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
-    DriverFormDef, DriverMetadata, DropIndexRequest, ForeignKeyInfo, FormValues, Icon, IndexInfo,
-    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_update_template,
+    DriverFormDef, DriverMetadata, DropIndexRequest, ForeignKeyInfo, FormValues, FormattedError,
+    Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
+    RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -1104,24 +1105,39 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
     }
 }
 
-fn format_sqlite_query_error(e: &rusqlite::Error) -> DbError {
-    let message = match e {
-        rusqlite::Error::SqliteFailure(err, msg) => {
-            let mut parts = Vec::new();
+pub struct SqliteErrorFormatter;
 
-            if let Some(m) = msg {
-                parts.push(m.clone());
+impl SqliteErrorFormatter {
+    fn format_sqlite_error(e: &rusqlite::Error) -> FormattedError {
+        match e {
+            rusqlite::Error::SqliteFailure(err, msg) => {
+                let message = msg
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?}", err.code));
+
+                FormattedError::new(message)
+                    .with_code(format!("{:?} ({})", err.code, err.extended_code))
             }
-
-            parts.push(format!("Code: {:?} ({})", err.code, err.extended_code));
-
-            parts.join(". ")
+            _ => FormattedError::new(e.to_string()),
         }
-        _ => e.to_string(),
-    };
+    }
+}
 
+impl QueryErrorFormatter for SqliteErrorFormatter {
+    fn format_query_error(&self, error: &(dyn std::error::Error + 'static)) -> FormattedError {
+        if let Some(sqlite_err) = error.downcast_ref::<rusqlite::Error>() {
+            Self::format_sqlite_error(sqlite_err)
+        } else {
+            FormattedError::new(error.to_string())
+        }
+    }
+}
+
+fn format_sqlite_query_error(e: &rusqlite::Error) -> DbError {
+    let formatted = SqliteErrorFormatter::format_sqlite_error(e);
+    let message = formatted.to_display_string();
     log::error!("SQLite query failed: {}", message);
-    DbError::QueryFailed(message)
+    formatted.into_query_error()
 }
 
 fn sqlite_quote_ident(ident: &str) -> String {

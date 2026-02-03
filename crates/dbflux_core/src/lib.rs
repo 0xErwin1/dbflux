@@ -6,6 +6,7 @@ mod data_view;
 mod driver_capabilities;
 mod driver_form;
 mod error;
+mod error_formatter;
 mod history;
 mod profile;
 mod query;
@@ -43,6 +44,10 @@ pub use driver_form::{
     MYSQL_FORM, POSTGRES_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
+pub use error_formatter::{
+    ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
+    QueryErrorFormatter, sanitize_uri,
+};
 pub use history::{HistoryEntry, HistoryStore};
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,

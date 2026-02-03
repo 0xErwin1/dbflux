@@ -354,14 +354,21 @@ impl SqlQueryDocument {
         .detach();
     }
 
-    fn confirm_dangerous_query(&mut self, suppress: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_dangerous_query(
+        &mut self,
+        suppress: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pending) = self.pending_dangerous_query.take() else {
             return;
         };
 
         if suppress {
             self.app_state.update(cx, |state, _| {
-                state.dangerous_query_suppressions.set_suppressed(pending.kind);
+                state
+                    .dangerous_query_suppressions
+                    .set_suppressed(pending.kind);
             });
         }
 

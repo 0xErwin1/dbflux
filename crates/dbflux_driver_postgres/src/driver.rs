@@ -5,18 +5,19 @@ use std::time::Instant;
 
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile, ConstraintInfo,
-    ConstraintKind, CreateIndexRequest, CreateTypeRequest, CrudResult, CustomTypeInfo,
-    CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
-    RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    TableInfo, TypeDefinition, Value, ViewInfo, generate_create_table, generate_delete_template,
+    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
+    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
+    DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ForeignKeyBuilder,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, POSTGRES_FORM, PlaceholderStyle,
+    QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo,
+    TypeDefinition, Value, ViewInfo, generate_create_table, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template,
+    generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1848,103 +1849,153 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
     }
 }
 
-fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
-    let source = e.to_string();
+pub struct PostgresErrorFormatter;
 
-    let message = if source.contains("timed out") {
-        format!(
-            "Connection to {}:{} timed out. Check that the host is reachable and the port is open.",
-            host, port
-        )
-    } else if source.contains("Connection refused") {
-        format!(
-            "Connection refused at {}:{}. Verify PostgreSQL is running and accepting connections.",
-            host, port
-        )
-    } else if source.contains("password authentication failed") {
-        "Authentication failed. Check your username and password.".to_string()
-    } else if source.contains("does not exist") {
-        format!("Database or user does not exist: {}", source)
-    } else if source.contains("no pg_hba.conf entry") {
-        format!(
-            "Server rejected connection from this host. Check pg_hba.conf on {}.",
-            host
-        )
-    } else if source.contains("error connecting to server") || source.contains("could not connect")
-    {
-        format!(
-            "Could not connect to {}:{}. The server may be unreachable, behind a firewall, or requires SSH tunnel.",
-            host, port
-        )
-    } else if source.contains("Name or service not known")
-        || source.contains("nodename nor servname")
-    {
-        format!("Could not resolve hostname: {}", host)
-    } else {
-        format!("Connection error: {}", source)
-    };
+impl PostgresErrorFormatter {
+    fn format_postgres_error(e: &postgres::Error) -> FormattedError {
+        if let Some(db_err) = e.as_db_error() {
+            let mut formatted = FormattedError::new(db_err.message());
 
-    log::error!("PostgreSQL connection failed: {}", message);
-    DbError::ConnectionFailed(message)
-}
+            if let Some(detail) = db_err.detail() {
+                formatted = formatted.with_detail(detail);
+            }
 
-fn format_pg_query_error(e: &postgres::Error) -> DbError {
-    if let Some(db_err) = e.as_db_error() {
-        let mut parts = Vec::new();
-        parts.push(db_err.message().to_string());
+            if let Some(hint) = db_err.hint() {
+                formatted = formatted.with_hint(hint);
+            }
 
-        if let Some(detail) = db_err.detail() {
-            parts.push(format!("Detail: {}", detail));
-        }
-        if let Some(hint) = db_err.hint() {
-            parts.push(format!("Hint: {}", hint));
-        }
-        if let Some(column) = db_err.column() {
-            parts.push(format!("Column: {}", column));
-        }
-        if let Some(table) = db_err.table() {
-            parts.push(format!("Table: {}", table));
-        }
-        if let Some(constraint) = db_err.constraint() {
-            parts.push(format!("Constraint: {}", constraint));
-        }
+            formatted = formatted.with_code(db_err.code().code());
 
-        let message = parts.join(". ");
-        log::error!("PostgreSQL query failed: {}", message);
-        DbError::QueryFailed(message)
-    } else {
-        let message = e.to_string();
-        log::error!("PostgreSQL query failed: {}", message);
-        DbError::QueryFailed(message)
+            let has_location = db_err.table().is_some()
+                || db_err.column().is_some()
+                || db_err.constraint().is_some()
+                || db_err.schema().is_some();
+
+            if has_location {
+                let mut location = ErrorLocation::new();
+
+                if let Some(schema) = db_err.schema() {
+                    location = location.with_schema(schema);
+                }
+                if let Some(table) = db_err.table() {
+                    location = location.with_table(table);
+                }
+                if let Some(column) = db_err.column() {
+                    location = location.with_column(column);
+                }
+                if let Some(constraint) = db_err.constraint() {
+                    location = location.with_constraint(constraint);
+                }
+
+                formatted = formatted.with_location(location);
+            }
+
+            formatted
+        } else {
+            FormattedError::new(e.to_string())
+        }
+    }
+
+    fn format_connection_message(source: &str, host: &str, port: u16) -> String {
+        if source.contains("timed out") {
+            format!(
+                "Connection to {}:{} timed out. Check that the host is reachable and the port is open.",
+                host, port
+            )
+        } else if source.contains("Connection refused") {
+            format!(
+                "Connection refused at {}:{}. Verify PostgreSQL is running and accepting connections.",
+                host, port
+            )
+        } else if source.contains("password authentication failed") {
+            "Authentication failed. Check your username and password.".to_string()
+        } else if source.contains("does not exist") {
+            format!("Database or user does not exist: {}", source)
+        } else if source.contains("no pg_hba.conf entry") {
+            format!(
+                "Server rejected connection from this host. Check pg_hba.conf on {}.",
+                host
+            )
+        } else if source.contains("error connecting to server")
+            || source.contains("could not connect")
+        {
+            format!(
+                "Could not connect to {}:{}. The server may be unreachable, behind a firewall, or requires SSH tunnel.",
+                host, port
+            )
+        } else if source.contains("Name or service not known")
+            || source.contains("nodename nor servname")
+        {
+            format!("Could not resolve hostname: {}", host)
+        } else {
+            format!("Connection error: {}", source)
+        }
     }
 }
 
-fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {
-    let source = e.to_string();
-
-    let display_uri = if uri.contains('@') {
-        let parts: Vec<&str> = uri.splitn(2, '@').collect();
-        if parts.len() == 2 {
-            format!("***@{}", parts[1])
+impl QueryErrorFormatter for PostgresErrorFormatter {
+    fn format_query_error(&self, error: &(dyn std::error::Error + 'static)) -> FormattedError {
+        if let Some(pg_err) = error.downcast_ref::<postgres::Error>() {
+            Self::format_postgres_error(pg_err)
         } else {
-            "***".to_string()
+            FormattedError::new(error.to_string())
         }
-    } else {
-        uri.to_string()
-    };
+    }
+}
 
-    let message = if source.contains("password authentication failed") {
-        "Authentication failed. Check your username and password in the URI.".to_string()
-    } else if source.contains("does not exist") {
-        format!("Database or user does not exist: {}", source)
-    } else if source.contains("invalid connection string") {
-        format!("Invalid connection URI format: {}", display_uri)
-    } else {
-        format!("Connection error with URI {}: {}", display_uri, source)
-    };
+impl ConnectionErrorFormatter for PostgresErrorFormatter {
+    fn format_connection_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        host: &str,
+        port: u16,
+    ) -> FormattedError {
+        let source = error.to_string();
+        let message = Self::format_connection_message(&source, host, port);
+        FormattedError::new(message)
+    }
 
-    log::error!("PostgreSQL URI connection failed: {}", message);
-    DbError::ConnectionFailed(message)
+    fn format_uri_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        sanitized_uri: &str,
+    ) -> FormattedError {
+        let source = error.to_string();
+
+        let message = if source.contains("password authentication failed") {
+            "Authentication failed. Check your username and password in the URI.".to_string()
+        } else if source.contains("does not exist") {
+            format!("Database or user does not exist: {}", source)
+        } else if source.contains("invalid connection string") {
+            format!("Invalid connection URI format: {}", sanitized_uri)
+        } else {
+            format!("Connection error with URI {}: {}", sanitized_uri, source)
+        };
+
+        FormattedError::new(message)
+    }
+}
+
+static POSTGRES_ERROR_FORMATTER: PostgresErrorFormatter = PostgresErrorFormatter;
+
+fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
+    let formatted = POSTGRES_ERROR_FORMATTER.format_connection_error(e, host, port);
+    log::error!("PostgreSQL connection failed: {}", formatted.message);
+    formatted.into_connection_error()
+}
+
+fn format_pg_query_error(e: &postgres::Error) -> DbError {
+    let formatted = PostgresErrorFormatter::format_postgres_error(e);
+    let message = formatted.to_display_string();
+    log::error!("PostgreSQL query failed: {}", message);
+    formatted.into_query_error()
+}
+
+fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {
+    let sanitized = sanitize_uri(uri);
+    let formatted = POSTGRES_ERROR_FORMATTER.format_uri_error(e, &sanitized);
+    log::error!("PostgreSQL URI connection failed: {}", formatted.message);
+    formatted.into_connection_error()
 }
 
 fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String {

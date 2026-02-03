@@ -6,16 +6,17 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnMeta, Connection, ConnectionProfile, ConstraintInfo, ConstraintKind,
-    CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
-    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, DropForeignKeyRequest,
-    DropIndexRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, Icon, IndexInfo, MYSQL_FORM,
-    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
+    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
+    ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef,
+    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ForeignKeyBuilder, ForeignKeyInfo,
+    FormValues, FormattedError, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle, QueryCancelHandle,
+    QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
     SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template,
+    generate_truncate, generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -680,67 +681,100 @@ impl MysqlDriver {
     }
 }
 
-fn format_mysql_error(e: &mysql::Error, host: &str, port: u16) -> DbError {
-    let msg = e.to_string();
+pub struct MysqlErrorFormatter;
 
-    if msg.contains("Connection refused") {
-        DbError::ConnectionFailed(format!(
-            "Connection refused at {}:{}. Is MySQL running?",
-            host, port
-        ))
-    } else if msg.contains("Access denied") {
-        DbError::ConnectionFailed(
-            "Access denied for user. Check username and password.".to_string(),
-        )
-    } else if msg.contains("Unknown database") {
-        DbError::ConnectionFailed("Database does not exist.".to_string())
-    } else if msg.contains("caching_sha2_password")
-        || msg.contains("Authentication requires secure connection")
-    {
-        // MySQL 8+ with caching_sha2_password requires SSL for initial authentication
-        DbError::ConnectionFailed(
+impl MysqlErrorFormatter {
+    fn format_mysql_error(e: &mysql::Error) -> FormattedError {
+        match e {
+            mysql::Error::MySqlError(mysql_err) => {
+                FormattedError::new(&mysql_err.message).with_code(mysql_err.code.to_string())
+            }
+            _ => FormattedError::new(e.to_string()),
+        }
+    }
+
+    fn format_connection_message(source: &str, host: &str, port: u16) -> String {
+        if source.contains("Connection refused") {
+            format!("Connection refused at {}:{}. Is MySQL running?", host, port)
+        } else if source.contains("Access denied") {
+            "Access denied for user. Check username and password.".to_string()
+        } else if source.contains("Unknown database") {
+            "Database does not exist.".to_string()
+        } else if source.contains("caching_sha2_password")
+            || source.contains("Authentication requires secure connection")
+        {
             "Authentication failed. MySQL 8+ requires SSL for initial authentication \
              with caching_sha2_password. Try changing SSL mode to 'Require' or 'Prefer'."
-                .to_string(),
-        )
-    } else {
-        DbError::ConnectionFailed(msg)
+                .to_string()
+        } else {
+            source.to_string()
+        }
     }
 }
 
-fn format_mysql_query_error(e: &mysql::Error) -> DbError {
-    let message = match e {
-        mysql::Error::MySqlError(mysql_err) => {
-            let mut parts = Vec::new();
-            parts.push(mysql_err.message.clone());
-            parts.push(format!("Code: {}", mysql_err.code));
-
-            if !mysql_err.state.is_empty() {
-                parts.push(format!("State: {}", mysql_err.state));
-            }
-
-            parts.join(". ")
+impl QueryErrorFormatter for MysqlErrorFormatter {
+    fn format_query_error(&self, error: &(dyn std::error::Error + 'static)) -> FormattedError {
+        if let Some(mysql_err) = error.downcast_ref::<mysql::Error>() {
+            Self::format_mysql_error(mysql_err)
+        } else {
+            FormattedError::new(error.to_string())
         }
-        _ => e.to_string(),
-    };
+    }
+}
 
+impl ConnectionErrorFormatter for MysqlErrorFormatter {
+    fn format_connection_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        host: &str,
+        port: u16,
+    ) -> FormattedError {
+        let source = error.to_string();
+        let message = Self::format_connection_message(&source, host, port);
+        FormattedError::new(message)
+    }
+
+    fn format_uri_error(
+        &self,
+        error: &(dyn std::error::Error + 'static),
+        sanitized_uri: &str,
+    ) -> FormattedError {
+        let source = error.to_string();
+
+        let message = if source.contains("Access denied") {
+            "Authentication failed. Check your username and password in the URI.".to_string()
+        } else if source.contains("Unknown database") {
+            format!("Database does not exist: {}", source)
+        } else if source.contains("invalid connection string")
+            || source.contains("InvalidParamsError")
+            || source.contains("UrlError")
+        {
+            format!("Invalid connection URI format: {}", sanitized_uri)
+        } else {
+            format!("Connection error with URI {}: {}", sanitized_uri, source)
+        };
+
+        FormattedError::new(message)
+    }
+}
+
+static MYSQL_ERROR_FORMATTER: MysqlErrorFormatter = MysqlErrorFormatter;
+
+fn format_mysql_error(e: &mysql::Error, host: &str, port: u16) -> DbError {
+    let formatted = MYSQL_ERROR_FORMATTER.format_connection_error(e, host, port);
+    formatted.into_connection_error()
+}
+
+fn format_mysql_query_error(e: &mysql::Error) -> DbError {
+    let formatted = MysqlErrorFormatter::format_mysql_error(e);
+    let message = formatted.to_display_string();
     log::error!("MySQL query failed: {}", message);
-    DbError::QueryFailed(message)
+    formatted.into_query_error()
 }
 
 fn format_mysql_uri_error<E: std::fmt::Display>(e: &E, uri: &str) -> DbError {
+    let sanitized = sanitize_uri(uri);
     let source = e.to_string();
-
-    let display_uri = if uri.contains('@') {
-        let parts: Vec<&str> = uri.splitn(2, '@').collect();
-        if parts.len() == 2 {
-            format!("***@{}", parts[1])
-        } else {
-            "***".to_string()
-        }
-    } else {
-        uri.to_string()
-    };
 
     let message = if source.contains("Access denied") {
         "Authentication failed. Check your username and password in the URI.".to_string()
@@ -750,9 +784,9 @@ fn format_mysql_uri_error<E: std::fmt::Display>(e: &E, uri: &str) -> DbError {
         || source.contains("InvalidParamsError")
         || source.contains("UrlError")
     {
-        format!("Invalid connection URI format: {}", display_uri)
+        format!("Invalid connection URI format: {}", sanitized)
     } else {
-        format!("Connection error with URI {}: {}", display_uri, source)
+        format!("Connection error with URI {}: {}", sanitized, source)
     };
 
     log::error!("MySQL URI connection failed: {}", message);
