@@ -340,6 +340,34 @@ pub static SQLITE_FORM: DriverFormDef = DriverFormDef {
     }],
 };
 
+pub static MONGODB_FORM: DriverFormDef = DriverFormDef {
+    tabs: &[FormTab {
+        id: "main",
+        label: "Main",
+        sections: &[FormSection {
+            title: "Connection",
+            fields: &[
+                FormFieldDef {
+                    id: "uri",
+                    label: "Connection URI",
+                    kind: FormFieldKind::Text,
+                    placeholder: "mongodb://localhost:27017",
+                    required: true,
+                    default_value: "mongodb://localhost:27017",
+                },
+                FormFieldDef {
+                    id: "database",
+                    label: "Database",
+                    kind: FormFieldKind::Text,
+                    placeholder: "optional - leave empty to browse all",
+                    required: false,
+                    default_value: "",
+                },
+            ],
+        }],
+    }],
+};
+
 impl DriverFormDef {
     pub fn main_tab(&self) -> Option<&FormTab> {
         self.tabs.first()

@@ -24,6 +24,9 @@ use dbflux_driver_postgres::PostgresDriver;
 #[cfg(feature = "mysql")]
 use dbflux_driver_mysql::MysqlDriver;
 
+#[cfg(feature = "mongodb")]
+use dbflux_driver_mongodb::MongoDriver;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PendingOperation {
     pub profile_id: Uuid,
@@ -146,6 +149,11 @@ impl AppState {
         {
             drivers.insert(DbKind::MySQL, Arc::new(MysqlDriver::new(DbKind::MySQL)));
             drivers.insert(DbKind::MariaDB, Arc::new(MysqlDriver::new(DbKind::MariaDB)));
+        }
+
+        #[cfg(feature = "mongodb")]
+        {
+            drivers.insert(DbKind::MongoDB, Arc::new(MongoDriver::new()));
         }
 
         let (profile_store, profiles) = match ProfileStore::new() {

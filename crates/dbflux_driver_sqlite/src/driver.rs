@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dbflux_core::{
-    CodeGenScope, CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata, ForeignKeyInfo,
-    FormValues, Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
+    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
+    Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
+    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
+    DriverFormDef, DriverMetadata, DropIndexRequest, ForeignKeyInfo, FormValues, Icon, IndexInfo,
+    PlaceholderStyle, QueryCancelHandle, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
     SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_update_template,
@@ -72,6 +73,65 @@ impl SqlDialect for SqliteDialect {
 }
 
 static SQLITE_DIALECT: SqliteDialect = SqliteDialect;
+
+// =============================================================================
+// SQLite Code Generator
+// =============================================================================
+
+pub struct SqliteCodeGenerator;
+
+static SQLITE_CODE_GENERATOR: SqliteCodeGenerator = SqliteCodeGenerator;
+
+impl SqliteCodeGenerator {
+    fn quote(&self, name: &str) -> String {
+        SQLITE_DIALECT.quote_identifier(name)
+    }
+
+    fn qualified(&self, schema: Option<&str>, name: &str) -> String {
+        SQLITE_DIALECT.qualified_table(schema, name)
+    }
+}
+
+impl CodeGenerator for SqliteCodeGenerator {
+    fn capabilities(&self) -> CodeGenCapabilities {
+        CodeGenCapabilities::CRUD
+            | CodeGenCapabilities::INDEXES
+            | CodeGenCapabilities::REINDEX
+            | CodeGenCapabilities::CREATE_TABLE
+            | CodeGenCapabilities::DROP_TABLE
+    }
+
+    fn generate_create_index(&self, req: &CreateIndexRequest) -> Option<String> {
+        let unique = if req.unique { "UNIQUE " } else { "" };
+        let table = self.qualified(req.schema_name, req.table_name);
+        let cols = req
+            .columns
+            .iter()
+            .map(|c| self.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "CREATE {}INDEX {} ON {} ({});",
+            unique,
+            self.quote(req.index_name),
+            table,
+            cols
+        ))
+    }
+
+    fn generate_drop_index(&self, req: &DropIndexRequest) -> Option<String> {
+        let index = self.qualified(req.schema_name, req.index_name);
+        Some(format!("DROP INDEX {};", index))
+    }
+
+    fn generate_reindex(&self, req: &ReindexRequest) -> Option<String> {
+        let index = self.qualified(req.schema_name, req.index_name);
+        Some(format!("REINDEX {};", index))
+    }
+}
+
+// =============================================================================
 
 pub struct SqliteDriver;
 
@@ -651,6 +711,10 @@ impl Connection for SqliteConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &SQLITE_DIALECT
+    }
+
+    fn code_generator(&self) -> &dyn CodeGenerator {
+        &SQLITE_CODE_GENERATOR
     }
 }
 

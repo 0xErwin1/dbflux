@@ -9,6 +9,7 @@ pub enum DbKind {
     SQLite,
     MySQL,
     MariaDB,
+    MongoDB,
 }
 
 impl DbKind {
@@ -18,6 +19,7 @@ impl DbKind {
             DbKind::SQLite => "SQLite",
             DbKind::MySQL => "MySQL",
             DbKind::MariaDB => "MariaDB",
+            DbKind::MongoDB => "MongoDB",
         }
     }
 }
@@ -126,6 +128,14 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    MongoDB {
+        /// MongoDB connection URI (e.g., "mongodb://localhost:27017").
+        uri: String,
+        /// Optional database name. If None, user can browse all databases.
+        database: Option<String>,
+        /// Application name for MongoDB connection metadata.
+        app_name: Option<String>,
+    },
 }
 
 impl DbConfig {
@@ -138,6 +148,7 @@ impl DbConfig {
             DbConfig::Postgres { .. } => DbKind::Postgres,
             DbConfig::SQLite { .. } => DbKind::SQLite,
             DbConfig::MySQL { .. } => DbKind::MySQL,
+            DbConfig::MongoDB { .. } => DbKind::MongoDB,
         }
     }
 
@@ -168,6 +179,23 @@ impl DbConfig {
             ssl_mode: SslMode::default(),
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+        }
+    }
+
+    pub fn default_mongodb() -> Self {
+        DbConfig::MongoDB {
+            uri: "mongodb://localhost:27017".to_string(),
+            database: None,
+            app_name: Some("dbflux".to_string()),
+        }
+    }
+
+    /// Returns the SSH tunnel configuration if present.
+    pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
+        match self {
+            DbConfig::Postgres { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            DbConfig::MySQL { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            DbConfig::SQLite { .. } | DbConfig::MongoDB { .. } => None,
         }
     }
 }

@@ -18,6 +18,7 @@ use gpui_component::Disableable;
 use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use log::info;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -466,12 +467,10 @@ pub struct ConnectionManagerWindow {
     editing_profile_id: Option<uuid::Uuid>,
 
     input_name: Entity<InputState>,
-    input_host: Entity<InputState>,
-    input_port: Entity<InputState>,
-    input_user: Entity<InputState>,
+    /// Driver-specific field inputs, keyed by field ID.
+    driver_inputs: HashMap<String, Entity<InputState>>,
+    /// Password is separate due to visibility toggle and save checkbox UI.
     input_password: Entity<InputState>,
-    input_database: Entity<InputState>,
-    input_path: Entity<InputState>,
 
     ssh_enabled: bool,
     ssh_auth_method: SshAuthSelection,
@@ -529,33 +528,11 @@ impl ConnectionManagerWindow {
             .collect();
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Connection name"));
-        let input_host = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("localhost")
-                .default_value("localhost")
-        });
-        let input_port = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("5432")
-                .default_value("5432")
-        });
-        let input_user = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("postgres")
-                .default_value("postgres")
-        });
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Password")
                 .masked(true)
         });
-        let input_database = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("postgres")
-                .default_value("postgres")
-        });
-        let input_path =
-            cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/database.db"));
 
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
@@ -612,12 +589,7 @@ impl ConnectionManagerWindow {
 
         let mut subscriptions = vec![dropdown_subscription];
         subscriptions.push(subscribe_input(cx, window, &input_name));
-        subscriptions.push(subscribe_input(cx, window, &input_host));
-        subscriptions.push(subscribe_input(cx, window, &input_port));
-        subscriptions.push(subscribe_input(cx, window, &input_user));
         subscriptions.push(subscribe_input(cx, window, &input_password));
-        subscriptions.push(subscribe_input(cx, window, &input_database));
-        subscriptions.push(subscribe_input(cx, window, &input_path));
         subscriptions.push(subscribe_input(cx, window, &input_ssh_host));
         subscriptions.push(subscribe_input(cx, window, &input_ssh_port));
         subscriptions.push(subscribe_input(cx, window, &input_ssh_user));
@@ -638,12 +610,8 @@ impl ConnectionManagerWindow {
             form_save_ssh_secret: false,
             editing_profile_id: None,
             input_name,
-            input_host,
-            input_port,
-            input_user,
+            driver_inputs: HashMap::new(),
             input_password,
-            input_database,
-            input_path,
             ssh_enabled: false,
             ssh_auth_method: SshAuthSelection::PrivateKey,
             selected_ssh_tunnel_id: None,
@@ -701,152 +669,57 @@ impl ConnectionManagerWindow {
         instance.form_save_password = profile.save_password;
         instance.view = View::EditForm;
 
-        // Apply placeholders from driver form definition
         if let Some(driver) = &driver {
-            instance.apply_form_placeholders(driver.form_definition(), window, cx);
+            instance.create_driver_inputs(driver.form_definition(), window, cx);
+            let values = driver.extract_values(&profile.config);
+            instance.apply_form_values(&values, window, cx);
         }
 
         instance.input_name.update(cx, |state, cx| {
             state.set_value(&profile.name, window, cx);
         });
 
-        match &profile.config {
-            DbConfig::Postgres {
-                host,
-                port,
-                user,
-                database,
-                ssh_tunnel,
-                ..
-            } => {
-                instance.input_host.update(cx, |state, cx| {
-                    state.set_value(host, window, cx);
-                });
-                instance.input_port.update(cx, |state, cx| {
-                    state.set_value(port.to_string(), window, cx);
-                });
-                instance.input_user.update(cx, |state, cx| {
-                    state.set_value(user, window, cx);
-                });
-                instance.input_database.update(cx, |state, cx| {
-                    state.set_value(database, window, cx);
-                });
+        if let Some(ssh) = profile.config.ssh_tunnel() {
+            instance.ssh_enabled = true;
+            instance.input_ssh_host.update(cx, |state, cx| {
+                state.set_value(&ssh.host, window, cx);
+            });
+            instance.input_ssh_port.update(cx, |state, cx| {
+                state.set_value(ssh.port.to_string(), window, cx);
+            });
+            instance.input_ssh_user.update(cx, |state, cx| {
+                state.set_value(&ssh.user, window, cx);
+            });
 
-                if let Some(ssh) = ssh_tunnel {
-                    instance.ssh_enabled = true;
-                    instance.input_ssh_host.update(cx, |state, cx| {
-                        state.set_value(&ssh.host, window, cx);
-                    });
-                    instance.input_ssh_port.update(cx, |state, cx| {
-                        state.set_value(ssh.port.to_string(), window, cx);
-                    });
-                    instance.input_ssh_user.update(cx, |state, cx| {
-                        state.set_value(&ssh.user, window, cx);
-                    });
-
-                    match &ssh.auth_method {
-                        SshAuthMethod::PrivateKey { key_path } => {
-                            instance.ssh_auth_method = SshAuthSelection::PrivateKey;
-                            if let Some(path) = key_path {
-                                let path_str: String = path.to_string_lossy().into_owned();
-                                instance.input_ssh_key_path.update(cx, |state, cx| {
-                                    state.set_value(path_str, window, cx);
-                                });
-                            }
-                        }
-                        SshAuthMethod::Password => {
-                            instance.ssh_auth_method = SshAuthSelection::Password;
-                        }
-                    }
-
-                    if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
-                        match instance.ssh_auth_method {
-                            SshAuthSelection::PrivateKey => {
-                                instance.input_ssh_key_passphrase.update(cx, |state, cx| {
-                                    state.set_value(&ssh_secret, window, cx);
-                                });
-                            }
-                            SshAuthSelection::Password => {
-                                instance.input_ssh_password.update(cx, |state, cx| {
-                                    state.set_value(&ssh_secret, window, cx);
-                                });
-                            }
-                        }
-                        instance.form_save_ssh_secret = true;
+            match &ssh.auth_method {
+                SshAuthMethod::PrivateKey { key_path } => {
+                    instance.ssh_auth_method = SshAuthSelection::PrivateKey;
+                    if let Some(path) = key_path {
+                        let path_str: String = path.to_string_lossy().into_owned();
+                        instance.input_ssh_key_path.update(cx, |state, cx| {
+                            state.set_value(path_str, window, cx);
+                        });
                     }
                 }
+                SshAuthMethod::Password => {
+                    instance.ssh_auth_method = SshAuthSelection::Password;
+                }
             }
-            DbConfig::SQLite { path } => {
-                let path_str = path.to_string_lossy().to_string();
-                instance.input_path.update(cx, |state, cx| {
-                    state.set_value(&path_str, window, cx);
-                });
-            }
-            DbConfig::MySQL {
-                host,
-                port,
-                user,
-                database,
-                ssh_tunnel,
-                ..
-            } => {
-                instance.input_host.update(cx, |state, cx| {
-                    state.set_value(host, window, cx);
-                });
-                instance.input_port.update(cx, |state, cx| {
-                    state.set_value(port.to_string(), window, cx);
-                });
-                instance.input_user.update(cx, |state, cx| {
-                    state.set_value(user, window, cx);
-                });
-                let db_value = database.clone().unwrap_or_default();
-                instance.input_database.update(cx, |state, cx| {
-                    state.set_value(&db_value, window, cx);
-                });
 
-                if let Some(ssh) = ssh_tunnel {
-                    instance.ssh_enabled = true;
-                    instance.input_ssh_host.update(cx, |state, cx| {
-                        state.set_value(&ssh.host, window, cx);
-                    });
-                    instance.input_ssh_port.update(cx, |state, cx| {
-                        state.set_value(ssh.port.to_string(), window, cx);
-                    });
-                    instance.input_ssh_user.update(cx, |state, cx| {
-                        state.set_value(&ssh.user, window, cx);
-                    });
-
-                    match &ssh.auth_method {
-                        SshAuthMethod::PrivateKey { key_path } => {
-                            instance.ssh_auth_method = SshAuthSelection::PrivateKey;
-                            if let Some(path) = key_path {
-                                let path_str: String = path.to_string_lossy().into_owned();
-                                instance.input_ssh_key_path.update(cx, |state, cx| {
-                                    state.set_value(path_str, window, cx);
-                                });
-                            }
-                        }
-                        SshAuthMethod::Password => {
-                            instance.ssh_auth_method = SshAuthSelection::Password;
-                        }
+            if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
+                match instance.ssh_auth_method {
+                    SshAuthSelection::PrivateKey => {
+                        instance.input_ssh_key_passphrase.update(cx, |state, cx| {
+                            state.set_value(&ssh_secret, window, cx);
+                        });
                     }
-
-                    if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
-                        match instance.ssh_auth_method {
-                            SshAuthSelection::PrivateKey => {
-                                instance.input_ssh_key_passphrase.update(cx, |state, cx| {
-                                    state.set_value(&ssh_secret, window, cx);
-                                });
-                            }
-                            SshAuthSelection::Password => {
-                                instance.input_ssh_password.update(cx, |state, cx| {
-                                    state.set_value(&ssh_secret, window, cx);
-                                });
-                            }
-                        }
-                        instance.form_save_ssh_secret = true;
+                    SshAuthSelection::Password => {
+                        instance.input_ssh_password.update(cx, |state, cx| {
+                            state.set_value(&ssh_secret, window, cx);
+                        });
                     }
                 }
+                instance.form_save_ssh_secret = true;
             }
         }
 
@@ -870,7 +743,7 @@ impl ConnectionManagerWindow {
         });
 
         if let Some(driver) = driver {
-            self.apply_form_defaults(driver.form_definition(), window, cx);
+            self.create_driver_inputs(driver.form_definition(), window, cx);
         }
 
         self.view = View::EditForm;
@@ -880,67 +753,83 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
-    fn apply_form_placeholders(
-        &self,
+    /// Create input states from the driver's form definition.
+    fn create_driver_inputs(
+        &mut self,
         form: &dbflux_core::DriverFormDef,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let fields: &[(&str, &Entity<InputState>)] = &[
-            ("host", &self.input_host),
-            ("port", &self.input_port),
-            ("user", &self.input_user),
-            ("database", &self.input_database),
-            ("path", &self.input_path),
-            ("ssh_host", &self.input_ssh_host),
-            ("ssh_port", &self.input_ssh_port),
-            ("ssh_user", &self.input_ssh_user),
-            ("ssh_key_path", &self.input_ssh_key_path),
-            ("ssh_passphrase", &self.input_ssh_key_passphrase),
-            ("ssh_password", &self.input_ssh_password),
-        ];
+        self.driver_inputs.clear();
 
-        for (id, input) in fields {
-            if let Some(f) = form.field(id) {
+        let fields: Vec<&FormFieldDef> = form
+            .tabs
+            .iter()
+            .filter(|tab| tab.id != "ssh")
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.fields.iter())
+            .filter(|field| field.id != "password")
+            .collect();
+
+        for field in fields {
+            let placeholder = field.placeholder;
+            let default_value = field.default_value;
+            let is_masked = field.kind == FormFieldKind::Password;
+
+            let input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder(placeholder);
+                if !default_value.is_empty() {
+                    state = state.default_value(default_value);
+                }
+                if is_masked {
+                    state = state.masked(true);
+                }
+                state
+            });
+
+            let subscription = cx.subscribe_in(
+                &input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { secondary: false } => {
+                        this.exit_edit_mode(window, cx);
+                        this.focus_down(cx);
+                    }
+                    InputEvent::Blur => {
+                        this.exit_edit_mode(window, cx);
+                    }
+                    _ => {}
+                },
+            );
+            self._subscriptions.push(subscription);
+
+            self.driver_inputs.insert(field.id.to_string(), input);
+        }
+    }
+
+    fn apply_form_values(
+        &mut self,
+        values: &dbflux_core::FormValues,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for (field_id, value) in values {
+            if let Some(input) = self.driver_inputs.get(field_id) {
                 input.update(cx, |state, cx| {
-                    state.set_placeholder(f.placeholder, window, cx);
+                    state.set_value(value, window, cx);
                 });
             }
         }
     }
 
-    fn apply_form_defaults(
-        &self,
-        form: &dbflux_core::DriverFormDef,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let fields: &[(&str, &Entity<InputState>)] = &[
-            ("host", &self.input_host),
-            ("port", &self.input_port),
-            ("user", &self.input_user),
-            ("database", &self.input_database),
-            ("path", &self.input_path),
-            ("ssh_host", &self.input_ssh_host),
-            ("ssh_port", &self.input_ssh_port),
-            ("ssh_user", &self.input_ssh_user),
-            ("ssh_key_path", &self.input_ssh_key_path),
-            ("ssh_passphrase", &self.input_ssh_key_passphrase),
-            ("ssh_password", &self.input_ssh_password),
-        ];
+    fn collect_form_values(&self, cx: &Context<Self>) -> dbflux_core::FormValues {
+        let mut values = HashMap::new();
 
-        for (id, input) in fields {
-            if let Some(f) = form.field(id) {
-                input.update(cx, |state, cx| {
-                    state.set_value(f.default_value, window, cx);
-                    state.set_placeholder(f.placeholder, window, cx);
-                });
-            }
+        for (field_id, input) in &self.driver_inputs {
+            values.insert(field_id.clone(), input.read(cx).value().to_string());
         }
 
-        self.input_password.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-        });
+        values
     }
 
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1082,105 +971,60 @@ impl ConnectionManagerWindow {
                 .push("Connection name is required".to_string());
         }
 
-        let Some(kind) = self.selected_kind() else {
+        let Some(driver) = &self.selected_driver else {
             self.validation_errors
                 .push("No driver selected".to_string());
             return false;
         };
 
-        match kind {
-            DbKind::Postgres => {
-                let host = self.input_host.read(cx).value().to_string();
-                if host.trim().is_empty() {
-                    self.validation_errors.push("Host is required".to_string());
-                }
+        let form = driver.form_definition();
 
-                let port_str = self.input_port.read(cx).value().to_string();
-                if port_str.trim().is_empty() {
-                    self.validation_errors.push("Port is required".to_string());
-                } else if port_str.parse::<u16>().is_err() {
-                    self.validation_errors
-                        .push("Port must be a valid number (1-65535)".to_string());
-                }
-
-                let user = self.input_user.read(cx).value().to_string();
-                if user.trim().is_empty() {
-                    self.validation_errors.push("User is required".to_string());
-                }
-
-                let database = self.input_database.read(cx).value().to_string();
-                if database.trim().is_empty() {
-                    self.validation_errors
-                        .push("Database name is required".to_string());
-                }
-
-                if self.ssh_enabled {
-                    let ssh_host = self.input_ssh_host.read(cx).value().to_string();
-                    if ssh_host.trim().is_empty() {
-                        self.validation_errors
-                            .push("SSH Host is required when SSH is enabled".to_string());
+        for tab in form.tabs.iter().filter(|t| t.id != "ssh") {
+            for section in tab.sections {
+                for field in section.fields {
+                    if field.id == "password" {
+                        continue;
                     }
 
-                    let ssh_user = self.input_ssh_user.read(cx).value().to_string();
-                    if ssh_user.trim().is_empty() {
+                    let value = self
+                        .driver_inputs
+                        .get(field.id)
+                        .map(|input| input.read(cx).value().to_string())
+                        .unwrap_or_default();
+
+                    if field.required && value.trim().is_empty() {
                         self.validation_errors
-                            .push("SSH User is required when SSH is enabled".to_string());
+                            .push(format!("{} is required", field.label));
                     }
 
-                    let ssh_port_str = self.input_ssh_port.read(cx).value().to_string();
-                    if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
+                    if !value.trim().is_empty()
+                        && field.kind == FormFieldKind::Number
+                        && value.parse::<u16>().is_err()
+                    {
                         self.validation_errors
-                            .push("SSH Port must be a valid number".to_string());
+                            .push(format!("{} must be a valid number", field.label));
                     }
                 }
             }
-            DbKind::SQLite => {
-                let path = self.input_path.read(cx).value().to_string();
-                if path.trim().is_empty() {
-                    self.validation_errors
-                        .push("Database path is required".to_string());
-                }
+        }
+
+        if self.ssh_enabled && form.supports_ssh() {
+            let ssh_host = self.input_ssh_host.read(cx).value().to_string();
+            if ssh_host.trim().is_empty() {
+                self.validation_errors
+                    .push("SSH Host is required when SSH is enabled".to_string());
             }
-            DbKind::MySQL | DbKind::MariaDB => {
-                let host = self.input_host.read(cx).value().to_string();
-                if host.trim().is_empty() {
-                    self.validation_errors.push("Host is required".to_string());
-                }
 
-                let port_str = self.input_port.read(cx).value().to_string();
-                if port_str.trim().is_empty() {
-                    self.validation_errors.push("Port is required".to_string());
-                } else if port_str.parse::<u16>().is_err() {
-                    self.validation_errors
-                        .push("Port must be a valid number (1-65535)".to_string());
-                }
+            let ssh_user = self.input_ssh_user.read(cx).value().to_string();
+            if ssh_user.trim().is_empty() {
+                self.validation_errors
+                    .push("SSH User is required when SSH is enabled".to_string());
+            }
 
-                let user = self.input_user.read(cx).value().to_string();
-                if user.trim().is_empty() {
-                    self.validation_errors.push("User is required".to_string());
-                }
-
-                // Note: database is optional for MySQL/MariaDB
-
-                if self.ssh_enabled {
-                    let ssh_host = self.input_ssh_host.read(cx).value().to_string();
-                    if ssh_host.trim().is_empty() {
-                        self.validation_errors
-                            .push("SSH Host is required when SSH is enabled".to_string());
-                    }
-
-                    let ssh_user = self.input_ssh_user.read(cx).value().to_string();
-                    if ssh_user.trim().is_empty() {
-                        self.validation_errors
-                            .push("SSH User is required when SSH is enabled".to_string());
-                    }
-
-                    let ssh_port_str = self.input_ssh_port.read(cx).value().to_string();
-                    if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
-                        self.validation_errors
-                            .push("SSH Port must be a valid number".to_string());
-                    }
-                }
+            let ssh_port_str = self.input_ssh_port.read(cx).value().to_string();
+            if !ssh_port_str.trim().is_empty() && ssh_port_str.parse::<u16>().is_err() {
+                self.validation_errors
+                    .push("SSH Port must be a valid number".to_string());
             }
         }
 
@@ -1257,46 +1101,43 @@ impl ConnectionManagerWindow {
     }
 
     fn build_config(&self, cx: &Context<Self>) -> Option<DbConfig> {
-        let kind = self.selected_kind()?;
+        let driver = self.selected_driver.as_ref()?;
+        let values = self.collect_form_values(cx);
 
-        Some(match kind {
-            DbKind::Postgres => {
-                let port = self.input_port.read(cx).value().parse().unwrap_or(5432);
-                DbConfig::Postgres {
-                    host: self.input_host.read(cx).value().to_string(),
-                    port,
-                    user: self.input_user.read(cx).value().to_string(),
-                    database: self.input_database.read(cx).value().to_string(),
-                    ssl_mode: dbflux_core::SslMode::Prefer,
-                    ssh_tunnel: self.build_ssh_config(cx),
-                    ssh_tunnel_profile_id: self.selected_ssh_tunnel_id,
-                }
+        let mut config = match driver.build_config(&values) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("Failed to build config: {}", e);
+                return None;
             }
-            DbKind::SQLite => {
-                let path = self.input_path.read(cx).value().to_string();
-                DbConfig::SQLite {
-                    path: PathBuf::from(path),
-                }
+        };
+
+        let ssh_tunnel = self.build_ssh_config(cx);
+        let ssh_tunnel_profile_id = self.selected_ssh_tunnel_id;
+
+        match &mut config {
+            DbConfig::Postgres {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            } => {
+                *tunnel = ssh_tunnel;
+                *profile_id = ssh_tunnel_profile_id;
             }
-            DbKind::MySQL | DbKind::MariaDB => {
-                let port = self.input_port.read(cx).value().parse().unwrap_or(3306);
-                let database_str = self.input_database.read(cx).value().to_string();
-                let database = if database_str.trim().is_empty() {
-                    None
-                } else {
-                    Some(database_str)
-                };
-                DbConfig::MySQL {
-                    host: self.input_host.read(cx).value().to_string(),
-                    port,
-                    user: self.input_user.read(cx).value().to_string(),
-                    database,
-                    ssl_mode: dbflux_core::SslMode::Disable,
-                    ssh_tunnel: self.build_ssh_config(cx),
-                    ssh_tunnel_profile_id: self.selected_ssh_tunnel_id,
-                }
+            DbConfig::MySQL {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            } => {
+                *tunnel = ssh_tunnel;
+                *profile_id = ssh_tunnel_profile_id;
             }
-        })
+            DbConfig::SQLite { .. } | DbConfig::MongoDB { .. } => {
+                // No SSH tunnel support
+            }
+        }
+
+        Some(config)
     }
 
     fn build_profile(&self, cx: &Context<Self>) -> Option<ConnectionProfile> {
@@ -1461,7 +1302,6 @@ impl ConnectionManagerWindow {
         self.ssh_test_error = None;
         cx.notify();
 
-        // Build SSH tunnel config from form inputs
         let Some(ssh_config) = self.build_ssh_config(cx) else {
             self.ssh_test_status = TestStatus::Failed;
             self.ssh_test_error = Some("SSH configuration incomplete".to_string());
@@ -1469,7 +1309,6 @@ impl ConnectionManagerWindow {
             return;
         };
 
-        // Get the secret (passphrase or password)
         let ssh_secret = self.get_ssh_secret(cx);
 
         let this = cx.entity().clone();
@@ -1884,42 +1723,26 @@ impl ConnectionManagerWindow {
                     state.focus(window, cx);
                 });
             }
-            FormFocus::Host => {
-                self.edit_state = EditState::Editing;
-                self.input_host.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                });
-            }
-            FormFocus::Port => {
-                self.edit_state = EditState::Editing;
-                self.input_port.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                });
-            }
-            FormFocus::Database => {
-                self.edit_state = EditState::Editing;
-                if self.selected_kind() == Some(DbKind::SQLite) {
-                    self.input_path.update(cx, |state, cx| {
-                        state.focus(window, cx);
-                    });
-                } else {
-                    self.input_database.update(cx, |state, cx| {
+
+            // Driver-specific fields (dynamic)
+            FormFocus::Host | FormFocus::Port | FormFocus::Database | FormFocus::User => {
+                if let Some(input) = self.input_for_focus(self.form_focus).cloned() {
+                    self.edit_state = EditState::Editing;
+                    input.update(cx, |state, cx| {
                         state.focus(window, cx);
                     });
                 }
             }
-            FormFocus::User => {
-                self.edit_state = EditState::Editing;
-                self.input_user.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                });
-            }
+
+            // Password (handled separately for special UI)
             FormFocus::Password => {
                 self.edit_state = EditState::Editing;
                 self.input_password.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
             }
+
+            // SSH fields (shared across drivers)
             FormFocus::SshHost => {
                 self.edit_state = EditState::Editing;
                 self.input_ssh_host.update(cx, |state, cx| {
@@ -2379,7 +2202,6 @@ impl ConnectionManagerWindow {
                     .child("Use SSH Tunnel"),
             );
 
-        // Update SSH tunnel dropdown items and state
         let tunnel_items: Vec<DropdownItem> = ssh_tunnels
             .iter()
             .map(|t| DropdownItem::with_value(&t.name, t.id.to_string()))
@@ -3083,15 +2905,17 @@ impl ConnectionManagerWindow {
             .child(content)
     }
 
-    /// Map a field ID to its corresponding input state entity.
     fn input_state_for_field(&self, field_id: &str) -> Option<&Entity<InputState>> {
+        if let Some(input) = self.driver_inputs.get(field_id) {
+            return Some(input);
+        }
+
+        if field_id == "password" {
+            return Some(&self.input_password);
+        }
+
+        // SSH inputs are shared across all drivers
         match field_id {
-            "host" => Some(&self.input_host),
-            "port" => Some(&self.input_port),
-            "user" => Some(&self.input_user),
-            "password" => Some(&self.input_password),
-            "database" => Some(&self.input_database),
-            "path" => Some(&self.input_path),
             "ssh_host" => Some(&self.input_ssh_host),
             "ssh_port" => Some(&self.input_ssh_port),
             "ssh_user" => Some(&self.input_ssh_user),
@@ -3119,14 +2943,47 @@ impl ConnectionManagerWindow {
             }
         } else {
             match field_id {
-                "host" => Some(Host),
+                "host" | "uri" => Some(Host),
                 "port" => Some(Port),
-                "database" => Some(Database),
+                "database" | "path" => Some(Database),
                 "user" => Some(User),
                 "password" => Some(Password),
-                "path" => Some(Database),
                 _ => None,
             }
+        }
+    }
+
+    /// Map a FormFocus variant to its field ID.
+    fn focus_to_field_id(focus: FormFocus) -> Option<&'static str> {
+        use FormFocus::*;
+        match focus {
+            Host => Some("host"),
+            Port => Some("port"),
+            Database => Some("database"),
+            User => Some("user"),
+            Password => Some("password"),
+            SshHost => Some("ssh_host"),
+            SshPort => Some("ssh_port"),
+            SshUser => Some("ssh_user"),
+            SshKeyPath => Some("ssh_key_path"),
+            SshPassphrase => Some("ssh_passphrase"),
+            SshPassword => Some("ssh_password"),
+            _ => None,
+        }
+    }
+
+    fn input_for_focus(&self, focus: FormFocus) -> Option<&Entity<InputState>> {
+        if let Some(field_id) = Self::focus_to_field_id(focus)
+            && let Some(input) = self.driver_inputs.get(field_id)
+        {
+            return Some(input);
+        }
+
+        // Field name aliases (uri -> Host, path -> Database)
+        match focus {
+            FormFocus::Host => self.driver_inputs.get("uri").or_else(|| self.driver_inputs.get("host")),
+            FormFocus::Database => self.driver_inputs.get("path").or_else(|| self.driver_inputs.get("database")),
+            _ => None,
         }
     }
 
