@@ -1,0 +1,37 @@
+use super::node::NodeId;
+
+/// Direction for cursor navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeDirection {
+    Up,
+    Down,
+}
+
+/// Events emitted by the DocumentTree component.
+#[derive(Debug, Clone)]
+pub enum DocumentTreeEvent {
+    /// The tree received focus.
+    Focused,
+
+    /// Cursor moved to a different node.
+    CursorMoved(NodeId),
+
+    /// User requested to edit a field value.
+    EditRequested {
+        node_id: NodeId,
+        current_value: String,
+        is_json: bool,
+    },
+
+    /// User toggled expand/collapse on a node.
+    ExpandToggled(NodeId),
+
+    /// User requested to delete a document (root node only).
+    DeleteRequested(NodeId),
+
+    /// User requested to view/edit a full document in modal.
+    DocumentPreviewRequested {
+        doc_index: usize,
+        document_json: String,
+    },
+}

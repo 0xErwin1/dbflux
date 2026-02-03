@@ -833,16 +833,9 @@ impl Sidebar {
             });
         }
 
+        // Double-click executes; single-click selects only (chevron expands)
         if click_count == 2 {
             self.execute_item(item_id, cx);
-        } else {
-            let node_kind = TreeNodeKind::from_id(item_id);
-            if matches!(
-                node_kind,
-                TreeNodeKind::Profile | TreeNodeKind::Database | TreeNodeKind::ConnectionFolder
-            ) {
-                self.toggle_item_expansion(item_id, cx);
-            }
         }
 
         cx.notify();

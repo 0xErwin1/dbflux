@@ -33,6 +33,7 @@ fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         ui::theme::init(cx);
         ui::components::data_table::init(cx);
+        ui::components::document_tree::init(cx);
         let app_state = cx.new(|_cx| AppState::new());
 
         let window_handle = cx
