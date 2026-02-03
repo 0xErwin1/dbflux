@@ -51,7 +51,7 @@ pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
-    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DatabaseInfo, DataStructure,
+    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
     DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema,
     IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, KeyValueType,
     MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo,
@@ -66,7 +66,9 @@ pub use secrets::{
 };
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
-pub use table_browser::{OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef};
+pub use table_browser::{
+    CollectionRef, OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef,
+};
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, NoopCancelHandle, QueryCancelHandle,
@@ -74,16 +76,16 @@ pub use traits::{
 };
 pub use value::Value;
 
-pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
-pub use sql_generation::{
-    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,
-    generate_delete_template, generate_insert_template, generate_select_star, generate_sql,
-    generate_truncate, generate_update_template, generate_drop_table,
-};
-pub use sql_query_builder::SqlQueryBuilder;
 pub use schema_builder::{
     ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder,
 };
+pub use sql_dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
+pub use sql_generation::{
+    SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_sql, generate_truncate, generate_update_template,
+};
+pub use sql_query_builder::SqlQueryBuilder;
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {

@@ -144,7 +144,29 @@ impl TableRef {
             name: name.into(),
         }
     }
+}
 
+/// Reference to a collection (database + name) for document databases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionRef {
+    pub database: String,
+    pub name: String,
+}
+
+impl CollectionRef {
+    pub fn new(database: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            database: database.into(),
+            name: name.into(),
+        }
+    }
+
+    pub fn qualified_name(&self) -> String {
+        format!("{}.{}", self.database, self.name)
+    }
+}
+
+impl TableRef {
     pub fn with_schema(schema: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             schema: Some(schema.into()),

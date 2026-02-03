@@ -69,6 +69,15 @@ impl DocumentHandle {
         }
     }
 
+    pub fn is_collection(&self, collection: &dbflux_core::CollectionRef, cx: &App) -> bool {
+        match self {
+            Self::Data { entity, .. } => {
+                entity.read(cx).collection_ref(cx).as_ref() == Some(collection)
+            }
+            _ => false,
+        }
+    }
+
     /// Gets metadata snapshot (requires cx to read entity).
     pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
         match self {
@@ -88,6 +97,7 @@ impl DocumentHandle {
                 let doc = entity.read(cx);
                 let icon = match doc.source_kind() {
                     DataSourceKind::Table => DocumentIcon::Table,
+                    DataSourceKind::Collection => DocumentIcon::Collection,
                     DataSourceKind::QueryResult => DocumentIcon::Table,
                 };
                 DocumentMetaSnapshot {

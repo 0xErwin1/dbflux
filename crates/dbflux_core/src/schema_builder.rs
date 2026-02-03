@@ -26,15 +26,18 @@ impl ForeignKeyBuilder {
         on_update: Option<String>,
         on_delete: Option<String>,
     ) {
-        let entry = self.map.entry(name.clone()).or_insert_with(|| ForeignKeyInfo {
-            name,
-            columns: Vec::new(),
-            referenced_schema,
-            referenced_table,
-            referenced_columns: Vec::new(),
-            on_update,
-            on_delete,
-        });
+        let entry = self
+            .map
+            .entry(name.clone())
+            .or_insert_with(|| ForeignKeyInfo {
+                name,
+                columns: Vec::new(),
+                referenced_schema,
+                referenced_table,
+                referenced_columns: Vec::new(),
+                on_update,
+                on_delete,
+            });
 
         if !entry.columns.contains(&column) {
             entry.columns.push(column);
@@ -169,7 +172,13 @@ impl SchemaIndexBuilder {
     }
 
     /// Add a column to a schema-level index. Creates the index if it doesn't exist.
-    pub fn add_column(&mut self, table_name: String, name: String, column: String, is_unique: bool) {
+    pub fn add_column(
+        &mut self,
+        table_name: String,
+        name: String,
+        column: String,
+        is_unique: bool,
+    ) {
         let key = (table_name.clone(), name.clone());
         let entry = self.map.entry(key).or_insert_with(|| SchemaIndexInfo {
             name,

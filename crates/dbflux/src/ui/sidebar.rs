@@ -4,7 +4,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CollectionRef,
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
     CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DropForeignKeyRequest, DropIndexRequest,
     DropTypeRequest, ReindexRequest, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
@@ -28,6 +28,10 @@ pub enum SidebarEvent {
     OpenTable {
         profile_id: Uuid,
         table: TableRef,
+    },
+    OpenCollection {
+        profile_id: Uuid,
+        collection: CollectionRef,
     },
     /// Request to show SQL preview modal
     RequestSqlPreview {
@@ -61,6 +65,8 @@ enum TreeNodeKind {
     SchemaIndex,
     SchemaForeignKey,
     Constraint,
+    CollectionsFolder,
+    Collection,
     Unknown,
 }
 
@@ -90,6 +96,8 @@ impl TreeNodeKind {
             _ if id.starts_with("idx_") => Self::Index,
             _ if id.starts_with("fk_") => Self::ForeignKey,
             _ if id.starts_with("constraint_") => Self::Constraint,
+            _ if id.starts_with("collections_") => Self::CollectionsFolder,
+            _ if id.starts_with("collection_") => Self::Collection,
             _ => Self::Unknown,
         }
     }
@@ -97,7 +105,12 @@ impl TreeNodeKind {
     fn needs_click_handler(&self) -> bool {
         matches!(
             self,
-            Self::Profile | Self::Database | Self::Table | Self::View | Self::ConnectionFolder
+            Self::Profile
+                | Self::Database
+                | Self::Table
+                | Self::View
+                | Self::Collection
+                | Self::ConnectionFolder
         )
     }
 
@@ -254,6 +267,12 @@ struct ItemIdParts {
     profile_id: Uuid,
     schema_name: String,
     object_name: String,
+}
+
+struct CollectionIdParts {
+    profile_id: Uuid,
+    database_name: String,
+    collection_name: String,
 }
 
 /// Action to execute after table/type details finish loading.
@@ -724,6 +743,9 @@ impl Sidebar {
             TreeNodeKind::Table | TreeNodeKind::View => {
                 self.browse_table(item_id, cx);
             }
+            TreeNodeKind::Collection => {
+                self.browse_collection(item_id, cx);
+            }
             TreeNodeKind::Profile => {
                 if let Some(profile_id_str) = item_id.strip_prefix("profile_")
                     && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
@@ -805,6 +827,16 @@ impl Sidebar {
             cx.emit(SidebarEvent::OpenTable {
                 profile_id: parts.profile_id,
                 table,
+            });
+        }
+    }
+
+    fn browse_collection(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(parts) = Self::parse_collection_id(item_id) {
+            let collection = CollectionRef::new(&parts.database_name, &parts.collection_name);
+            cx.emit(SidebarEvent::OpenCollection {
+                profile_id: parts.profile_id,
+                collection,
             });
         }
     }
@@ -1377,7 +1409,16 @@ impl Sidebar {
 
         let sql = match action {
             ForeignKeySqlAction::AddConstraint => {
-                if let Some((table_name, columns, ref_schema, ref_table, ref_columns, on_delete, on_update)) = &fk_info {
+                if let Some((
+                    table_name,
+                    columns,
+                    ref_schema,
+                    ref_table,
+                    ref_columns,
+                    on_delete,
+                    on_update,
+                )) = &fk_info
+                {
                     let request = AddForeignKeyRequest {
                         constraint_name: &fk_name,
                         table_name,
@@ -1409,7 +1450,10 @@ impl Sidebar {
             }
 
             ForeignKeySqlAction::DropConstraint => {
-                let table_name = fk_info.as_ref().map(|(t, ..)| t.as_str()).unwrap_or("table_name");
+                let table_name = fk_info
+                    .as_ref()
+                    .map(|(t, ..)| t.as_str())
+                    .unwrap_or("table_name");
                 let request = DropForeignKeyRequest {
                     constraint_name: &fk_name,
                     table_name,
@@ -2511,6 +2555,32 @@ impl Sidebar {
             profile_id,
             schema_name: schema_name.to_string(),
             object_name: object_name.to_string(),
+        })
+    }
+
+    /// Format: `collection_{uuid}__{database}__{name}`
+    fn parse_collection_id(item_id: &str) -> Option<CollectionIdParts> {
+        let rest = item_id.strip_prefix("collection_")?;
+
+        if rest.len() < 38 {
+            return None;
+        }
+
+        let uuid_str = rest.get(..36)?;
+        let profile_id = Uuid::parse_str(uuid_str).ok()?;
+
+        let after_uuid = rest.get(36..)?;
+        let after_uuid = after_uuid.strip_prefix("__")?;
+        let (database_name, collection_name) = after_uuid.rsplit_once("__")?;
+
+        if database_name.is_empty() || collection_name.is_empty() {
+            return None;
+        }
+
+        Some(CollectionIdParts {
+            profile_id,
+            database_name: database_name.to_string(),
+            collection_name: collection_name.to_string(),
         })
     }
 
@@ -3818,6 +3888,7 @@ impl Sidebar {
             let mut profile_children = Vec::new();
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
+            let is_document_db = schema.is_document();
 
             if !schema.databases().is_empty() {
                 for db in schema.databases() {
@@ -3826,15 +3897,19 @@ impl Sidebar {
 
                     let db_children = if uses_lazy_loading {
                         if let Some(db_schema) = connected.database_schemas.get(&db.name) {
-                            Self::build_db_schema_content(
-                                profile_id,
-                                &db.name,
-                                db_schema,
-                                &connected.table_details,
-                                &connected.schema_types,
-                                &connected.schema_indexes,
-                                &connected.schema_foreign_keys,
-                            )
+                            if is_document_db {
+                                Self::build_document_db_content(profile_id, &db.name, db_schema)
+                            } else {
+                                Self::build_db_schema_content(
+                                    profile_id,
+                                    &db.name,
+                                    db_schema,
+                                    &connected.table_details,
+                                    &connected.schema_types,
+                                    &connected.schema_indexes,
+                                    &connected.schema_foreign_keys,
+                                )
+                            }
                         } else if is_pending {
                             vec![TreeItem::new(
                                 format!("loading_{}_{}", profile_id, db.name),
@@ -3974,6 +4049,41 @@ impl Sidebar {
         }
 
         children
+    }
+
+    fn build_document_db_content(
+        profile_id: Uuid,
+        database_name: &str,
+        db_schema: &dbflux_core::DbSchemaInfo,
+    ) -> Vec<TreeItem> {
+        let mut content = Vec::new();
+
+        if !db_schema.tables.is_empty() {
+            let collection_children: Vec<TreeItem> = db_schema
+                .tables
+                .iter()
+                .map(|coll| {
+                    TreeItem::new(
+                        format!(
+                            "collection_{}__{}__{}",
+                            profile_id, database_name, coll.name
+                        ),
+                        coll.name.clone(),
+                    )
+                })
+                .collect();
+
+            content.push(
+                TreeItem::new(
+                    format!("collections_{}_{}", profile_id, database_name),
+                    format!("Collections ({})", db_schema.tables.len()),
+                )
+                .expanded(true)
+                .children(collection_children),
+            );
+        }
+
+        content
     }
 
     fn build_db_schema_content(
@@ -5071,6 +5181,10 @@ impl Render for Sidebar {
                                     (Some(AppIcon::KeyRound), "", color_orange)
                                 }
                                 TreeNodeKind::Constraint => (Some(AppIcon::Lock), "", color_yellow),
+                                TreeNodeKind::CollectionsFolder => {
+                                    (Some(AppIcon::Folder), "", color_teal)
+                                }
+                                TreeNodeKind::Collection => (Some(AppIcon::Box), "", color_teal),
                                 TreeNodeKind::Unknown => (None, "", theme.muted_foreground),
                             };
 
@@ -5097,11 +5211,15 @@ impl Render for Sidebar {
                                     color_orange
                                 }
                                 TreeNodeKind::Constraint => color_yellow,
+                                TreeNodeKind::CollectionsFolder => color_gray,
+                                TreeNodeKind::Collection => color_teal,
                                 TreeNodeKind::Unknown => theme.muted_foreground,
                             };
 
-                            let is_table_or_view =
-                                matches!(node_kind, TreeNodeKind::Table | TreeNodeKind::View);
+                            let is_table_or_view = matches!(
+                                node_kind,
+                                TreeNodeKind::Table | TreeNodeKind::View | TreeNodeKind::Collection
+                            );
 
                             let sidebar_for_mousedown = sidebar_entity.clone();
                             let item_id_for_mousedown = item_id.clone();

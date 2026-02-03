@@ -1407,10 +1407,7 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(
-                insert.columns.clone(),
-                insert.values.clone(),
-            );
+            let identity = RecordIdentity::composite(insert.columns.clone(), insert.values.clone());
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?

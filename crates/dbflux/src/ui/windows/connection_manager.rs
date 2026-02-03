@@ -820,20 +820,19 @@ impl ConnectionManagerWindow {
                 state
             });
 
-            let subscription = cx.subscribe_in(
-                &input,
-                window,
-                |this, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::PressEnter { secondary: false } => {
-                        this.exit_edit_mode(window, cx);
-                        this.focus_down(cx);
+            let subscription =
+                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { secondary: false } => {
+                            this.exit_edit_mode(window, cx);
+                            this.focus_down(cx);
+                        }
+                        InputEvent::Blur => {
+                            this.exit_edit_mode(window, cx);
+                        }
+                        _ => {}
                     }
-                    InputEvent::Blur => {
-                        this.exit_edit_mode(window, cx);
-                    }
-                    _ => {}
-                },
-            );
+                });
             self._subscriptions.push(subscription);
 
             self.driver_inputs.insert(field.id.to_string(), input);
@@ -852,7 +851,8 @@ impl ConnectionManagerWindow {
                 for field in section.fields {
                     if field.kind == FormFieldKind::Checkbox {
                         let is_checked = values.get(field.id).map(|v| v == "true").unwrap_or(false);
-                        self.checkbox_states.insert(field.id.to_string(), is_checked);
+                        self.checkbox_states
+                            .insert(field.id.to_string(), is_checked);
                     }
                 }
             }
@@ -867,17 +867,26 @@ impl ConnectionManagerWindow {
         }
     }
 
-    fn collect_form_values(&self, form: &DriverFormDef, cx: &Context<Self>) -> dbflux_core::FormValues {
+    fn collect_form_values(
+        &self,
+        form: &DriverFormDef,
+        cx: &Context<Self>,
+    ) -> dbflux_core::FormValues {
         let mut values = HashMap::new();
 
         for tab in form.tabs {
             for section in tab.sections {
                 for field in section.fields {
                     if field.kind == FormFieldKind::Checkbox {
-                        let is_checked = self.checkbox_states.get(field.id).copied().unwrap_or(false);
+                        let is_checked =
+                            self.checkbox_states.get(field.id).copied().unwrap_or(false);
                         values.insert(
                             field.id.to_string(),
-                            if is_checked { "true".to_string() } else { String::new() },
+                            if is_checked {
+                                "true".to_string()
+                            } else {
+                                String::new()
+                            },
                         );
                     }
                 }
@@ -3011,14 +3020,22 @@ impl ConnectionManagerWindow {
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
         if let Some(checkbox_id) = field.enabled_when_checked {
-            let is_checked = self.checkbox_states.get(checkbox_id).copied().unwrap_or(false);
+            let is_checked = self
+                .checkbox_states
+                .get(checkbox_id)
+                .copied()
+                .unwrap_or(false);
             if !is_checked {
                 return false;
             }
         }
 
         if let Some(checkbox_id) = field.enabled_when_unchecked {
-            let is_checked = self.checkbox_states.get(checkbox_id).copied().unwrap_or(false);
+            let is_checked = self
+                .checkbox_states
+                .get(checkbox_id)
+                .copied()
+                .unwrap_or(false);
             if is_checked {
                 return false;
             }
@@ -3083,8 +3100,14 @@ impl ConnectionManagerWindow {
 
         // Field name aliases (uri -> Host, path -> Database)
         match focus {
-            FormFocus::Host => self.driver_inputs.get("uri").or_else(|| self.driver_inputs.get("host")),
-            FormFocus::Database => self.driver_inputs.get("path").or_else(|| self.driver_inputs.get("database")),
+            FormFocus::Host => self
+                .driver_inputs
+                .get("uri")
+                .or_else(|| self.driver_inputs.get("host")),
+            FormFocus::Database => self
+                .driver_inputs
+                .get("path")
+                .or_else(|| self.driver_inputs.get("database")),
             _ => None,
         }
     }

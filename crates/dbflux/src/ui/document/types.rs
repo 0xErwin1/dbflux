@@ -42,6 +42,7 @@ pub enum DataSourceKind {
     /// Table browser (server-side pagination).
     #[default]
     Table,
+    Collection,
     /// Promoted query result (static data).
     QueryResult,
 }

@@ -2,7 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
-use dbflux_core::{QueryResult, TableRef, Value};
+use dbflux_core::{CollectionRef, QueryResult, TableRef, Value};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -90,6 +90,58 @@ impl DataDocument {
         }
     }
 
+    pub fn new_for_collection(
+        profile_id: Uuid,
+        collection: CollectionRef,
+        app_state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = collection.qualified_name();
+        let data_grid = cx.new(|cx| {
+            DataGridPanel::new_for_collection(profile_id, collection, app_state, window, cx)
+        });
+
+        let subscription =
+            cx.subscribe(
+                &data_grid,
+                |_this, _grid, event: &DataGridEvent, cx| match event {
+                    DataGridEvent::Focused => {
+                        cx.emit(DataDocumentEvent::RequestFocus);
+                    }
+                    DataGridEvent::RequestSqlPreview {
+                        profile_id,
+                        schema_name,
+                        table_name,
+                        column_names,
+                        row_values,
+                        pk_indices,
+                        generation_type,
+                    } => {
+                        cx.emit(DataDocumentEvent::RequestSqlPreview {
+                            profile_id: *profile_id,
+                            schema_name: schema_name.clone(),
+                            table_name: table_name.clone(),
+                            column_names: column_names.clone(),
+                            row_values: row_values.clone(),
+                            pk_indices: pk_indices.clone(),
+                            generation_type: *generation_type,
+                        });
+                    }
+                    _ => {}
+                },
+            );
+
+        Self {
+            id: DocumentId::new(),
+            title,
+            source_kind: DataSourceKind::Collection,
+            data_grid,
+            focus_handle: cx.focus_handle(),
+            _subscription: subscription,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn new_for_result(
         result: Arc<QueryResult>,
@@ -171,6 +223,7 @@ impl DataDocument {
     pub fn connection_id(&self, cx: &App) -> Option<Uuid> {
         match self.data_grid.read(cx).source() {
             DataSource::Table { profile_id, .. } => Some(*profile_id),
+            DataSource::Collection { profile_id, .. } => Some(*profile_id),
             DataSource::QueryResult { .. } => None,
         }
     }
@@ -178,6 +231,10 @@ impl DataDocument {
     /// Returns the table reference if this is a table document.
     pub fn table_ref(&self, cx: &App) -> Option<TableRef> {
         self.data_grid.read(cx).source().table_ref().cloned()
+    }
+
+    pub fn collection_ref(&self, cx: &App) -> Option<CollectionRef> {
+        self.data_grid.read(cx).source().collection_ref().cloned()
     }
 
     /// Returns the active context for keyboard handling.

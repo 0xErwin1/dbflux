@@ -1,6 +1,6 @@
+use crate::Value;
 use crate::crud::{RecordIdentity, RowDelete, RowInsert, RowPatch};
 use crate::sql_dialect::SqlDialect;
-use crate::Value;
 
 /// Builds CRUD SQL statements using a specific dialect.
 pub struct SqlQueryBuilder<'a> {
@@ -196,10 +196,7 @@ mod tests {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
 
-        let identity = RecordIdentity::composite(
-            vec!["id".to_string()],
-            vec![Value::Int(42)],
-        );
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(42)]);
 
         let where_clause = builder.build_where_clause(&identity).unwrap();
         assert_eq!(where_clause, "\"id\" = 42");
@@ -210,10 +207,7 @@ mod tests {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
 
-        let identity = RecordIdentity::composite(
-            vec!["status".to_string()],
-            vec![Value::Null],
-        );
+        let identity = RecordIdentity::composite(vec!["status".to_string()], vec![Value::Null]);
 
         let where_clause = builder.build_where_clause(&identity).unwrap();
         assert_eq!(where_clause, "\"status\" IS NULL");
@@ -305,10 +299,7 @@ mod tests {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
 
-        let identity = RecordIdentity::composite(
-            vec!["id".to_string()],
-            vec![Value::Int(42)],
-        );
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(42)]);
 
         let sql = builder
             .build_select_by_identity(Some("public"), "users", &identity)
