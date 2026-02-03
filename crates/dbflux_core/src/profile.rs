@@ -105,6 +105,10 @@ impl SshTunnelProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DbConfig {
     Postgres {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
         host: String,
         port: u16,
         user: String,
@@ -118,10 +122,13 @@ pub enum DbConfig {
         path: PathBuf,
     },
     MySQL {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
         host: String,
         port: u16,
         user: String,
-        /// Optional database name. If None, user can browse all databases.
         database: Option<String>,
         ssl_mode: SslMode,
         ssh_tunnel: Option<SshTunnelConfig>,
@@ -129,12 +136,21 @@ pub enum DbConfig {
         ssh_tunnel_profile_id: Option<Uuid>,
     },
     MongoDB {
-        /// MongoDB connection URI (e.g., "mongodb://localhost:27017").
-        uri: String,
-        /// Optional database name. If None, user can browse all databases.
+        /// When true, use `uri` field directly. When false, construct URI from host/port.
+        #[serde(default)]
+        use_uri: bool,
+        /// Raw connection URI (used when use_uri=true).
+        #[serde(default)]
+        uri: Option<String>,
+        /// Host (used when use_uri=false).
+        host: String,
+        /// Port (used when use_uri=false).
+        port: u16,
+        user: Option<String>,
         database: Option<String>,
-        /// Application name for MongoDB connection metadata.
-        app_name: Option<String>,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
     },
 }
 
@@ -154,6 +170,8 @@ impl DbConfig {
 
     pub fn default_postgres() -> Self {
         DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
             host: "localhost".to_string(),
             port: 5432,
             user: "postgres".to_string(),
@@ -172,6 +190,8 @@ impl DbConfig {
 
     pub fn default_mysql() -> Self {
         DbConfig::MySQL {
+            use_uri: false,
+            uri: None,
             host: "localhost".to_string(),
             port: 3306,
             user: "root".to_string(),
@@ -184,18 +204,23 @@ impl DbConfig {
 
     pub fn default_mongodb() -> Self {
         DbConfig::MongoDB {
-            uri: "mongodb://localhost:27017".to_string(),
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 27017,
+            user: None,
             database: None,
-            app_name: Some("dbflux".to_string()),
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
         }
     }
 
-    /// Returns the SSH tunnel configuration if present.
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
-            DbConfig::Postgres { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::MySQL { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } | DbConfig::MongoDB { .. } => None,
+            DbConfig::Postgres { ssh_tunnel, .. }
+            | DbConfig::MySQL { ssh_tunnel, .. }
+            | DbConfig::MongoDB { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            DbConfig::SQLite { .. } => None,
         }
     }
 }

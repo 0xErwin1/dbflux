@@ -254,6 +254,10 @@ impl DbDriver for PostgresDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_postgres_config(&profile.config)?;
 
+        if config.use_uri {
+            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
+        }
+
         if let Some(tunnel_config) = &config.ssh_tunnel {
             self.connect_via_ssh_tunnel(
                 tunnel_config,
@@ -287,6 +291,29 @@ impl DbDriver for PostgresDriver {
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
+        let use_uri = values.get("use_uri").map(|s| s == "true").unwrap_or(false);
+        let uri = values.get("uri").filter(|s| !s.is_empty()).cloned();
+
+        if use_uri {
+            if uri.is_none() {
+                return Err(DbError::InvalidProfile(
+                    "Connection URI is required when using URI mode".to_string(),
+                ));
+            }
+
+            return Ok(DbConfig::Postgres {
+                use_uri: true,
+                uri,
+                host: String::new(),
+                port: 5432,
+                user: String::new(),
+                database: String::new(),
+                ssl_mode: SslMode::Prefer,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            });
+        }
+
         let host = values
             .get("host")
             .filter(|s| !s.is_empty())
@@ -313,6 +340,8 @@ impl DbDriver for PostgresDriver {
             .clone();
 
         Ok(DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
             host,
             port,
             user,
@@ -327,6 +356,8 @@ impl DbDriver for PostgresDriver {
         let mut values = HashMap::new();
 
         if let DbConfig::Postgres {
+            use_uri,
+            uri,
             host,
             port,
             user,
@@ -334,6 +365,11 @@ impl DbDriver for PostgresDriver {
             ..
         } = config
         {
+            values.insert(
+                "use_uri".to_string(),
+                if *use_uri { "true" } else { "" }.to_string(),
+            );
+            values.insert("uri".to_string(), uri.clone().unwrap_or_default());
             values.insert("host".to_string(), host.clone());
             values.insert("port".to_string(), port.to_string());
             values.insert("user".to_string(), user.clone());
@@ -345,6 +381,8 @@ impl DbDriver for PostgresDriver {
 }
 
 struct ExtractedPostgresConfig {
+    use_uri: bool,
+    uri: Option<String>,
     host: String,
     port: u16,
     user: String,
@@ -356,6 +394,8 @@ struct ExtractedPostgresConfig {
 fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig, DbError> {
     match config {
         DbConfig::Postgres {
+            use_uri,
+            uri,
             host,
             port,
             user,
@@ -364,6 +404,8 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             ssh_tunnel,
             ..
         } => Ok(ExtractedPostgresConfig {
+            use_uri: *use_uri,
+            uri: uri.clone(),
             host: host.clone(),
             port: *port,
             user: user.clone(),
@@ -417,6 +459,39 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 }
 
 impl PostgresDriver {
+    fn connect_with_uri(
+        &self,
+        base_uri: &str,
+        password: Option<&str>,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        let uri = inject_password_into_pg_uri(base_uri, password);
+
+        let connector = TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
+
+        let tls = MakeTlsConnector::new(connector);
+
+        let client = match Client::connect(&uri, tls) {
+            Ok(c) => c,
+            Err(_) => {
+                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?
+            }
+        };
+
+        let cancel_token = client.cancel_token();
+        log::info!("[CONNECT] PostgreSQL connection established via URI");
+
+        Ok(Box::new(PostgresConnection {
+            client: Mutex::new(client),
+            ssh_tunnel: None,
+            cancel_token,
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }))
+    }
+
     fn connect_direct(
         &self,
         host: &str,
@@ -1840,6 +1915,73 @@ fn format_pg_query_error(e: &postgres::Error) -> DbError {
         log::error!("PostgreSQL query failed: {}", message);
         DbError::QueryFailed(message)
     }
+}
+
+fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {
+    let source = e.to_string();
+
+    let display_uri = if uri.contains('@') {
+        let parts: Vec<&str> = uri.splitn(2, '@').collect();
+        if parts.len() == 2 {
+            format!("***@{}", parts[1])
+        } else {
+            "***".to_string()
+        }
+    } else {
+        uri.to_string()
+    };
+
+    let message = if source.contains("password authentication failed") {
+        "Authentication failed. Check your username and password in the URI.".to_string()
+    } else if source.contains("does not exist") {
+        format!("Database or user does not exist: {}", source)
+    } else if source.contains("invalid connection string") {
+        format!("Invalid connection URI format: {}", display_uri)
+    } else {
+        format!("Connection error with URI {}: {}", display_uri, source)
+    };
+
+    log::error!("PostgreSQL URI connection failed: {}", message);
+    DbError::ConnectionFailed(message)
+}
+
+fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String {
+    let password = match password {
+        Some(p) if !p.is_empty() => p,
+        _ => return base_uri.to_string(),
+    };
+
+    if !base_uri.starts_with("postgresql://") && !base_uri.starts_with("postgres://") {
+        return base_uri.to_string();
+    }
+
+    let prefix_end = if base_uri.starts_with("postgresql://") {
+        13
+    } else {
+        11
+    };
+
+    let rest = &base_uri[prefix_end..];
+    let prefix = &base_uri[..prefix_end];
+
+    if let Some(at_pos) = rest.find('@') {
+        let user_pass = &rest[..at_pos];
+        let after_at = &rest[at_pos..];
+
+        if let Some(colon_pos) = user_pass.find(':') {
+            if user_pass[colon_pos + 1..].is_empty() {
+                let user = &user_pass[..colon_pos];
+                let encoded_password = urlencoding::encode(password);
+                return format!("{}{}:{}{}", prefix, user, encoded_password, after_at);
+            }
+            return base_uri.to_string();
+        } else {
+            let encoded_password = urlencoding::encode(password);
+            return format!("{}{}:{}{}", prefix, user_pass, encoded_password, after_at);
+        }
+    }
+
+    base_uri.to_string()
 }
 
 fn pg_quote_ident(ident: &str) -> String {

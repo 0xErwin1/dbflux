@@ -3,8 +3,8 @@ use crate::keymap::{Command, ContextId, KeyChord, KeymapStack};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbKind, FormFieldDef, FormFieldKind, FormTab,
-    SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
+    ConnectionProfile, DbConfig, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
+    FormTab, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -46,6 +46,7 @@ impl DriverFocus {
 enum FormFocus {
     // Main tab fields
     Name,
+    UseUri,
     Host,
     Port,
     Database,
@@ -98,8 +99,21 @@ impl FormFocus {
                 Save => Name,
                 _ => Name,
             }
+        } else if state.has_uri_option {
+            // Server-based with URI option: Name -> UseUri -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
+            match self {
+                Name => UseUri,
+                UseUri => Host,
+                Host | Port => Database,
+                Database => User,
+                User => Password,
+                Password | PasswordSave => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
         } else {
-            // Server-based (PostgreSQL, MySQL, MariaDB): Name -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
+            // Server-based without URI option: Name -> Host -> Database -> User -> Password -> TestConnection -> Save -> Name
             match self {
                 Name => Host,
                 Host | Port => Database,
@@ -125,8 +139,21 @@ impl FormFocus {
                 Save => TestConnection,
                 _ => Save,
             }
+        } else if state.has_uri_option {
+            // Server-based with URI option
+            match self {
+                Name => Save,
+                UseUri => Name,
+                Host | Port => UseUri,
+                Database => Host,
+                User => Database,
+                Password | PasswordSave => User,
+                TestConnection => Password,
+                Save => TestConnection,
+                _ => Save,
+            }
         } else {
-            // Server-based (PostgreSQL, MySQL, MariaDB)
+            // Server-based without URI option
             match self {
                 Name => Save,
                 Host | Port => Name,
@@ -410,6 +437,8 @@ impl SshNavState {
 struct MainNavState {
     /// True for file-based databases (SQLite), false for server-based (PostgreSQL, MySQL, MariaDB)
     uses_file_form: bool,
+    /// True if the driver has a "Use Connection URI" checkbox option
+    has_uri_option: bool,
 }
 
 /// Edit state within the form - determines how keyboard input is handled
@@ -474,6 +503,8 @@ pub struct ConnectionManagerWindow {
 
     ssh_enabled: bool,
     ssh_auth_method: SshAuthSelection,
+    /// Checkbox states keyed by field ID (e.g., "use_uri" -> true).
+    checkbox_states: HashMap<String, bool>,
     selected_ssh_tunnel_id: Option<Uuid>,
     ssh_tunnel_dropdown: Entity<crate::ui::dropdown::Dropdown>,
     input_ssh_host: Entity<InputState>,
@@ -614,6 +645,7 @@ impl ConnectionManagerWindow {
             input_password,
             ssh_enabled: false,
             ssh_auth_method: SshAuthSelection::PrivateKey,
+            checkbox_states: HashMap::new(),
             selected_ssh_tunnel_id: None,
             ssh_tunnel_dropdown,
             input_ssh_host,
@@ -670,9 +702,10 @@ impl ConnectionManagerWindow {
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
-            instance.create_driver_inputs(driver.form_definition(), window, cx);
+            let form = driver.form_definition();
+            instance.create_driver_inputs(form, window, cx);
             let values = driver.extract_values(&profile.config);
-            instance.apply_form_values(&values, window, cx);
+            instance.apply_form_values(&values, form, window, cx);
         }
 
         instance.input_name.update(cx, |state, cx| {
@@ -810,9 +843,21 @@ impl ConnectionManagerWindow {
     fn apply_form_values(
         &mut self,
         values: &dbflux_core::FormValues,
+        form: &DriverFormDef,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        for tab in form.tabs {
+            for section in tab.sections {
+                for field in section.fields {
+                    if field.kind == FormFieldKind::Checkbox {
+                        let is_checked = values.get(field.id).map(|v| v == "true").unwrap_or(false);
+                        self.checkbox_states.insert(field.id.to_string(), is_checked);
+                    }
+                }
+            }
+        }
+
         for (field_id, value) in values {
             if let Some(input) = self.driver_inputs.get(field_id) {
                 input.update(cx, |state, cx| {
@@ -822,11 +867,27 @@ impl ConnectionManagerWindow {
         }
     }
 
-    fn collect_form_values(&self, cx: &Context<Self>) -> dbflux_core::FormValues {
+    fn collect_form_values(&self, form: &DriverFormDef, cx: &Context<Self>) -> dbflux_core::FormValues {
         let mut values = HashMap::new();
 
+        for tab in form.tabs {
+            for section in tab.sections {
+                for field in section.fields {
+                    if field.kind == FormFieldKind::Checkbox {
+                        let is_checked = self.checkbox_states.get(field.id).copied().unwrap_or(false);
+                        values.insert(
+                            field.id.to_string(),
+                            if is_checked { "true".to_string() } else { String::new() },
+                        );
+                    }
+                }
+            }
+        }
+
         for (field_id, input) in &self.driver_inputs {
-            values.insert(field_id.clone(), input.read(cx).value().to_string());
+            if !values.contains_key(field_id) {
+                values.insert(field_id.clone(), input.read(cx).value().to_string());
+            }
         }
 
         values
@@ -962,13 +1023,15 @@ impl ConnectionManagerWindow {
         driver.form_definition().supports_ssh()
     }
 
-    fn validate_form(&mut self, cx: &mut Context<Self>) -> bool {
+    fn validate_form(&mut self, require_name: bool, cx: &mut Context<Self>) -> bool {
         self.validation_errors.clear();
 
-        let name = self.input_name.read(cx).value().to_string();
-        if name.trim().is_empty() {
-            self.validation_errors
-                .push("Connection name is required".to_string());
+        if require_name {
+            let name = self.input_name.read(cx).value().to_string();
+            if name.trim().is_empty() {
+                self.validation_errors
+                    .push("Connection name is required".to_string());
+            }
         }
 
         let Some(driver) = &self.selected_driver else {
@@ -982,7 +1045,12 @@ impl ConnectionManagerWindow {
         for tab in form.tabs.iter().filter(|t| t.id != "ssh") {
             for section in tab.sections {
                 for field in section.fields {
-                    if field.id == "password" {
+                    if field.id == "password" || field.kind == FormFieldKind::Checkbox {
+                        continue;
+                    }
+
+                    let field_enabled = self.is_field_enabled(field);
+                    if !field_enabled {
                         continue;
                     }
 
@@ -1102,7 +1170,7 @@ impl ConnectionManagerWindow {
 
     fn build_config(&self, cx: &Context<Self>) -> Option<DbConfig> {
         let driver = self.selected_driver.as_ref()?;
-        let values = self.collect_form_values(cx);
+        let values = self.collect_form_values(driver.form_definition(), cx);
 
         let mut config = match driver.build_config(&values) {
             Ok(config) => config,
@@ -1120,11 +1188,13 @@ impl ConnectionManagerWindow {
                 ssh_tunnel: tunnel,
                 ssh_tunnel_profile_id: profile_id,
                 ..
-            } => {
-                *tunnel = ssh_tunnel;
-                *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::MySQL {
+            | DbConfig::MySQL {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::MongoDB {
                 ssh_tunnel: tunnel,
                 ssh_tunnel_profile_id: profile_id,
                 ..
@@ -1132,9 +1202,7 @@ impl ConnectionManagerWindow {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::SQLite { .. } | DbConfig::MongoDB { .. } => {
-                // No SSH tunnel support
-            }
+            DbConfig::SQLite { .. } => {}
         }
 
         Some(config)
@@ -1177,7 +1245,7 @@ impl ConnectionManagerWindow {
     }
 
     fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.validate_form(cx) {
+        if !self.validate_form(true, cx) {
             cx.notify();
             return;
         }
@@ -1231,7 +1299,7 @@ impl ConnectionManagerWindow {
     }
 
     fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.validate_form(cx) {
+        if !self.validate_form(false, cx) {
             cx.notify();
             return;
         }
@@ -1607,8 +1675,15 @@ impl ConnectionManagerWindow {
     }
 
     fn main_nav_state(&self) -> MainNavState {
+        let has_uri_option = self
+            .selected_driver
+            .as_ref()
+            .and_then(|d| d.form_definition().field("use_uri"))
+            .is_some();
+
         MainNavState {
             uses_file_form: self.uses_file_form(),
+            has_uri_option,
         }
     }
 
@@ -1618,8 +1693,8 @@ impl ConnectionManagerWindow {
         use FormFocus::*;
         match self.active_tab {
             ActiveTab::Main => match self.form_focus {
-                // Section 0: Server (Host, Port, Database)
-                Host | Port | Database => 0,
+                // Section 0: Server (UseUri, Host, Port, Database)
+                UseUri | Host | Port | Database => 0,
                 // Section 1: Authentication (User, Password)
                 User | Password | PasswordSave => 1,
                 // Footer buttons are outside scroll area
@@ -1786,6 +1861,14 @@ impl ConnectionManagerWindow {
             }
 
             // Toggles - just toggle the value, stay in Navigating mode
+            FormFocus::UseUri => {
+                let current = self
+                    .checkbox_states
+                    .get("use_uri")
+                    .copied()
+                    .unwrap_or(false);
+                self.checkbox_states.insert("use_uri".to_string(), !current);
+            }
             FormFocus::PasswordSave => {
                 self.form_save_password = !self.form_save_password;
             }
@@ -2914,7 +2997,6 @@ impl ConnectionManagerWindow {
             return Some(&self.input_password);
         }
 
-        // SSH inputs are shared across all drivers
         match field_id {
             "ssh_host" => Some(&self.input_ssh_host),
             "ssh_port" => Some(&self.input_ssh_port),
@@ -2924,6 +3006,25 @@ impl ConnectionManagerWindow {
             "ssh_password" => Some(&self.input_ssh_password),
             _ => None,
         }
+    }
+
+    /// Check if a field is enabled based on its conditional dependencies.
+    fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
+        if let Some(checkbox_id) = field.enabled_when_checked {
+            let is_checked = self.checkbox_states.get(checkbox_id).copied().unwrap_or(false);
+            if !is_checked {
+                return false;
+            }
+        }
+
+        if let Some(checkbox_id) = field.enabled_when_unchecked {
+            let is_checked = self.checkbox_states.get(checkbox_id).copied().unwrap_or(false);
+            if is_checked {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Map a field ID to its FormFocus variant.
@@ -2943,6 +3044,7 @@ impl ConnectionManagerWindow {
             }
         } else {
             match field_id {
+                "use_uri" => Some(UseUri),
                 "host" | "uri" => Some(Host),
                 "port" => Some(Port),
                 "database" | "path" => Some(Database),
@@ -3215,20 +3317,25 @@ impl ConnectionManagerWindow {
                     return div().into_any_element();
                 };
 
+                let field_enabled = self.is_field_enabled(field_def);
+
                 div()
                     .rounded(px(4.0))
                     .border_2()
                     .when(focused, |d| d.border_color(ring_color))
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
                     .p(px(2.0))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            if let Some(field) = field_focus {
-                                this.enter_edit_mode_for_field(field, window, cx);
-                            }
-                        }),
-                    )
+                    .when(!field_enabled, |d| d.opacity(0.5))
+                    .when(field_enabled, |d| {
+                        d.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                if let Some(field) = field_focus {
+                                    this.enter_edit_mode_for_field(field, window, cx);
+                                }
+                            }),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
@@ -3241,11 +3348,11 @@ impl ConnectionManagerWindow {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(field_def.label),
                             )
-                            .when(field_def.required, |d| {
+                            .when(field_def.required && field_enabled, |d| {
                                 d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
                             }),
                     )
-                    .child(Input::new(input_state))
+                    .child(Input::new(input_state).disabled(!field_enabled))
                     .into_any_element()
             }
 
@@ -3254,19 +3361,29 @@ impl ConnectionManagerWindow {
                 let is_checked = if field_id == "ssh_enabled" {
                     self.ssh_enabled
                 } else {
-                    false
+                    self.checkbox_states.get(field_id).copied().unwrap_or(false)
                 };
 
-                Checkbox::new(field_id)
-                    .checked(is_checked)
-                    .label(field_def.label)
-                    .on_click(cx.listener(move |this, checked: &bool, window, cx| {
-                        if field_id == "ssh_enabled" {
-                            this.ssh_enabled = *checked;
-                            window.focus(&this.focus_handle);
-                        }
-                        cx.notify();
-                    }))
+                div()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(focused, |d| d.border_color(ring_color))
+                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
+                    .p(px(2.0))
+                    .child(
+                        Checkbox::new(field_id)
+                            .checked(is_checked)
+                            .label(field_def.label)
+                            .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                                if field_id == "ssh_enabled" {
+                                    this.ssh_enabled = *checked;
+                                } else {
+                                    this.checkbox_states.insert(field_id.to_string(), *checked);
+                                }
+                                window.focus(&this.focus_handle);
+                                cx.notify();
+                            })),
+                    )
                     .into_any_element()
             }
 
@@ -3362,7 +3479,7 @@ impl ConnectionManagerWindow {
         let mut sections: Vec<AnyElement> = Vec::new();
 
         for section in tab.sections {
-            let field_elements: Vec<AnyElement> = section
+            let fields: Vec<&FormFieldDef> = section
                 .fields
                 .iter()
                 .filter(|field| {
@@ -3370,15 +3487,45 @@ impl ConnectionManagerWindow {
                     // with visibility toggle and save checkbox
                     field.id != "password" || is_ssh_tab
                 })
-                .map(|field| {
-                    self.render_form_field(field, is_ssh_tab, show_focus, ring_color, cx)
-                        .into_any_element()
-                })
                 .collect();
 
             // Don't render empty sections
-            if field_elements.is_empty() {
+            if fields.is_empty() {
                 continue;
+            }
+
+            // Build field elements, grouping host+port on same row
+            let mut field_elements: Vec<AnyElement> = Vec::new();
+            let mut i = 0;
+            while i < fields.len() {
+                let field = fields[i];
+
+                // Check if this is host followed by port - render them in a row
+                if field.id == "host" && i + 1 < fields.len() && fields[i + 1].id == "port" {
+                    let port_field = fields[i + 1];
+                    let host_element = self
+                        .render_form_field(field, is_ssh_tab, show_focus, ring_color, cx)
+                        .into_any_element();
+                    let port_element = self
+                        .render_form_field(port_field, is_ssh_tab, show_focus, ring_color, cx)
+                        .into_any_element();
+
+                    field_elements.push(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(div().flex_1().child(host_element))
+                            .child(div().w(px(100.0)).child(port_element))
+                            .into_any_element(),
+                    );
+                    i += 2;
+                } else {
+                    field_elements.push(
+                        self.render_form_field(field, is_ssh_tab, show_focus, ring_color, cx)
+                            .into_any_element(),
+                    );
+                    i += 1;
+                }
             }
 
             sections.push(
@@ -3556,6 +3703,16 @@ impl Render for ConnectionManagerWindow {
             .id("connection-manager")
             .key_context(ContextId::ConnectionManager.as_gpui_context())
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // Restore keyboard focus when clicking anywhere on the window
+                    if this.edit_state == EditState::Navigating {
+                        window.focus(&this.focus_handle);
+                        cx.notify();
+                    }
+                }),
+            )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.handle_key_event(event, window, cx) {
                     cx.stop_propagation();
