@@ -2,9 +2,10 @@ use bitflags::bitflags;
 
 use crate::{
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, QueryHandle, QueryRequest,
-    QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SqlDialect, SqlGenerationRequest, TableInfo, ViewInfo,
+    DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverMetadata, FormValues, KeyDelete, KeySet, QueryHandle, QueryRequest, QueryResult,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    SqlDialect, SqlGenerationRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -440,6 +441,49 @@ pub trait Connection: Send + Sync {
     fn delete_row(&self, _delete: &RowDelete) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Row deletes not supported by this driver".to_string(),
+        ))
+    }
+
+    // =========================================================================
+    // Document Operations (MongoDB-style)
+    // =========================================================================
+
+    /// Update documents matching a filter.
+    fn update_document(&self, _update: &DocumentUpdate) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document updates not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Insert one or more documents.
+    fn insert_document(&self, _insert: &DocumentInsert) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document inserts not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Delete documents matching a filter.
+    fn delete_document(&self, _delete: &DocumentDelete) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document deletes not supported by this driver".to_string(),
+        ))
+    }
+
+    // =========================================================================
+    // Key-Value Operations (Redis-style)
+    // =========================================================================
+
+    /// Set a key-value pair.
+    fn set_key(&self, _set: &KeySet) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value SET not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Delete one or more keys.
+    fn delete_key(&self, _delete: &KeyDelete) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value DELETE not supported by this driver".to_string(),
         ))
     }
 

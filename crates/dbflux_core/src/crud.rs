@@ -279,3 +279,318 @@ impl CrudResult {
         }
     }
 }
+
+// =============================================================================
+// Document Database Mutations (MongoDB-style)
+// =============================================================================
+
+/// Filter criteria for document operations.
+#[derive(Debug, Clone)]
+pub struct DocumentFilter {
+    /// JSON-style filter document (e.g., `{"status": "active"}`).
+    pub filter: serde_json::Value,
+}
+
+impl DocumentFilter {
+    pub fn new(filter: serde_json::Value) -> Self {
+        Self { filter }
+    }
+
+    pub fn by_id(id: &str) -> Self {
+        Self {
+            filter: serde_json::json!({"_id": id}),
+        }
+    }
+}
+
+/// Update operation for document databases.
+#[derive(Debug, Clone)]
+pub struct DocumentUpdate {
+    /// Collection name.
+    pub collection: String,
+
+    /// Database name (optional, uses current if None).
+    pub database: Option<String>,
+
+    /// Filter to select documents to update.
+    pub filter: DocumentFilter,
+
+    /// Update operations (e.g., `{"$set": {"field": "value"}}`).
+    pub update: serde_json::Value,
+
+    /// Update all matching documents (updateMany) vs first match (updateOne).
+    pub many: bool,
+
+    /// Insert if no document matches (upsert).
+    pub upsert: bool,
+}
+
+impl DocumentUpdate {
+    pub fn new(collection: String, filter: DocumentFilter, update: serde_json::Value) -> Self {
+        Self {
+            collection,
+            database: None,
+            filter,
+            update,
+            many: false,
+            upsert: false,
+        }
+    }
+
+    pub fn with_database(mut self, database: String) -> Self {
+        self.database = Some(database);
+        self
+    }
+
+    pub fn many(mut self) -> Self {
+        self.many = true;
+        self
+    }
+
+    pub fn upsert(mut self) -> Self {
+        self.upsert = true;
+        self
+    }
+}
+
+/// Insert operation for document databases.
+#[derive(Debug, Clone)]
+pub struct DocumentInsert {
+    /// Collection name.
+    pub collection: String,
+
+    /// Database name (optional, uses current if None).
+    pub database: Option<String>,
+
+    /// Documents to insert.
+    pub documents: Vec<serde_json::Value>,
+}
+
+impl DocumentInsert {
+    pub fn one(collection: String, document: serde_json::Value) -> Self {
+        Self {
+            collection,
+            database: None,
+            documents: vec![document],
+        }
+    }
+
+    pub fn many(collection: String, documents: Vec<serde_json::Value>) -> Self {
+        Self {
+            collection,
+            database: None,
+            documents,
+        }
+    }
+
+    pub fn with_database(mut self, database: String) -> Self {
+        self.database = Some(database);
+        self
+    }
+}
+
+/// Delete operation for document databases.
+#[derive(Debug, Clone)]
+pub struct DocumentDelete {
+    /// Collection name.
+    pub collection: String,
+
+    /// Database name (optional, uses current if None).
+    pub database: Option<String>,
+
+    /// Filter to select documents to delete.
+    pub filter: DocumentFilter,
+
+    /// Delete all matching documents (deleteMany) vs first match (deleteOne).
+    pub many: bool,
+}
+
+impl DocumentDelete {
+    pub fn new(collection: String, filter: DocumentFilter) -> Self {
+        Self {
+            collection,
+            database: None,
+            filter,
+            many: false,
+        }
+    }
+
+    pub fn with_database(mut self, database: String) -> Self {
+        self.database = Some(database);
+        self
+    }
+
+    pub fn many(mut self) -> Self {
+        self.many = true;
+        self
+    }
+}
+
+// =============================================================================
+// Key-Value Store Mutations (Redis-style)
+// =============================================================================
+
+/// SET operation for key-value stores.
+#[derive(Debug, Clone)]
+pub struct KeySet {
+    /// The key to set.
+    pub key: String,
+
+    /// The value to store.
+    pub value: Value,
+
+    /// Keyspace/database index (Redis: 0-15).
+    pub keyspace: Option<u32>,
+
+    /// Time-to-live in seconds (None = no expiry).
+    pub ttl_seconds: Option<u64>,
+
+    /// Only set if key doesn't exist (NX).
+    pub if_not_exists: bool,
+
+    /// Only set if key exists (XX).
+    pub if_exists: bool,
+}
+
+impl KeySet {
+    pub fn new(key: String, value: Value) -> Self {
+        Self {
+            key,
+            value,
+            keyspace: None,
+            ttl_seconds: None,
+            if_not_exists: false,
+            if_exists: false,
+        }
+    }
+
+    pub fn with_keyspace(mut self, keyspace: u32) -> Self {
+        self.keyspace = Some(keyspace);
+        self
+    }
+
+    pub fn with_ttl(mut self, seconds: u64) -> Self {
+        self.ttl_seconds = Some(seconds);
+        self
+    }
+
+    pub fn nx(mut self) -> Self {
+        self.if_not_exists = true;
+        self.if_exists = false;
+        self
+    }
+
+    pub fn xx(mut self) -> Self {
+        self.if_exists = true;
+        self.if_not_exists = false;
+        self
+    }
+}
+
+/// DELETE operation for key-value stores.
+#[derive(Debug, Clone)]
+pub struct KeyDelete {
+    /// Keys to delete.
+    pub keys: Vec<String>,
+
+    /// Keyspace/database index (Redis: 0-15).
+    pub keyspace: Option<u32>,
+}
+
+impl KeyDelete {
+    pub fn one(key: String) -> Self {
+        Self {
+            keys: vec![key],
+            keyspace: None,
+        }
+    }
+
+    pub fn many(keys: Vec<String>) -> Self {
+        Self {
+            keys,
+            keyspace: None,
+        }
+    }
+
+    pub fn with_keyspace(mut self, keyspace: u32) -> Self {
+        self.keyspace = Some(keyspace);
+        self
+    }
+}
+
+// =============================================================================
+// Unified Mutation Request
+// =============================================================================
+
+/// Unified mutation request that can represent operations across database paradigms.
+#[derive(Debug, Clone)]
+pub enum MutationRequest {
+    // SQL mutations (relational databases)
+    SqlUpdate(RowPatch),
+    SqlInsert(RowInsert),
+    SqlDelete(RowDelete),
+
+    // Document mutations (MongoDB-style)
+    DocumentUpdate(DocumentUpdate),
+    DocumentInsert(DocumentInsert),
+    DocumentDelete(DocumentDelete),
+
+    // Key-value mutations (Redis-style)
+    KeySet(KeySet),
+    KeyDelete(KeyDelete),
+}
+
+impl MutationRequest {
+    pub fn sql_update(patch: RowPatch) -> Self {
+        Self::SqlUpdate(patch)
+    }
+
+    pub fn sql_insert(insert: RowInsert) -> Self {
+        Self::SqlInsert(insert)
+    }
+
+    pub fn sql_delete(delete: RowDelete) -> Self {
+        Self::SqlDelete(delete)
+    }
+
+    pub fn document_update(update: DocumentUpdate) -> Self {
+        Self::DocumentUpdate(update)
+    }
+
+    pub fn document_insert(insert: DocumentInsert) -> Self {
+        Self::DocumentInsert(insert)
+    }
+
+    pub fn document_delete(delete: DocumentDelete) -> Self {
+        Self::DocumentDelete(delete)
+    }
+
+    pub fn key_set(set: KeySet) -> Self {
+        Self::KeySet(set)
+    }
+
+    pub fn key_delete(delete: KeyDelete) -> Self {
+        Self::KeyDelete(delete)
+    }
+
+    /// Returns true if this is a SQL mutation.
+    pub fn is_sql(&self) -> bool {
+        matches!(
+            self,
+            Self::SqlUpdate(_) | Self::SqlInsert(_) | Self::SqlDelete(_)
+        )
+    }
+
+    /// Returns true if this is a document mutation.
+    pub fn is_document(&self) -> bool {
+        matches!(
+            self,
+            Self::DocumentUpdate(_) | Self::DocumentInsert(_) | Self::DocumentDelete(_)
+        )
+    }
+
+    /// Returns true if this is a key-value mutation.
+    pub fn is_key_value(&self) -> bool {
+        matches!(self, Self::KeySet(_) | Self::KeyDelete(_))
+    }
+}
