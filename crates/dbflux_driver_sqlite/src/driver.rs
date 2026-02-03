@@ -1041,7 +1041,21 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
 }
 
 fn format_sqlite_query_error(e: &rusqlite::Error) -> DbError {
-    let message = e.to_string();
+    let message = match e {
+        rusqlite::Error::SqliteFailure(err, msg) => {
+            let mut parts = Vec::new();
+
+            if let Some(m) = msg {
+                parts.push(m.clone());
+            }
+
+            parts.push(format!("Code: {:?} ({})", err.code, err.extended_code));
+
+            parts.join(". ")
+        }
+        _ => e.to_string(),
+    };
+
     log::error!("SQLite query failed: {}", message);
     DbError::QueryFailed(message)
 }
