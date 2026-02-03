@@ -1541,61 +1541,109 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
         }
     }
 
-    // Handle DATETIME and TIMESTAMP types - parse from string representation
+    // Handle DATETIME and TIMESTAMP types using mysql's binary Date value
     if matches!(
         col_type,
         ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_TIMESTAMP
     ) {
-        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
-            match val {
-                Ok(Some(s)) => {
-                    // Parse "YYYY-MM-DD HH:MM:SS" format
-                    if let Ok(naive) =
-                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+        if let Some(mysql_val) = row.as_ref(idx) {
+            match mysql_val {
+                mysql::Value::Date(year, month, day, hour, min, sec, micro) => {
+                    if let Some(naive_date) =
+                        chrono::NaiveDate::from_ymd_opt(*year as i32, *month as u32, *day as u32)
                     {
-                        let utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                            naive,
-                            chrono::Utc,
-                        );
-                        return Value::DateTime(utc);
+                        if let Some(naive_time) = chrono::NaiveTime::from_hms_micro_opt(
+                            *hour as u32,
+                            *min as u32,
+                            *sec as u32,
+                            *micro,
+                        ) {
+                            let naive_dt = chrono::NaiveDateTime::new(naive_date, naive_time);
+                            let utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                                naive_dt,
+                                chrono::Utc,
+                            );
+                            return Value::DateTime(utc);
+                        }
                     }
-                    // Fall back to text if parsing fails
-                    return Value::Text(s);
+                    // Fallback: format as text
+                    return Value::Text(format!(
+                        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                        year, month, day, hour, min, sec
+                    ));
                 }
-                Ok(None) => return Value::Null,
-                Err(_) => {}
+                mysql::Value::NULL => return Value::Null,
+                mysql::Value::Bytes(bytes) => {
+                    // Some drivers return datetime as string bytes
+                    if let Ok(s) = String::from_utf8(bytes.clone()) {
+                        if let Ok(naive) =
+                            chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                        {
+                            let utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                                naive,
+                                chrono::Utc,
+                            );
+                            return Value::DateTime(utc);
+                        }
+                        return Value::Text(s);
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    // Handle DATE type - parse from string representation
+    // Handle DATE type using mysql's binary Date value
     if col_type == ColumnType::MYSQL_TYPE_DATE {
-        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
-            match val {
-                Ok(Some(s)) => {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+        if let Some(mysql_val) = row.as_ref(idx) {
+            match mysql_val {
+                mysql::Value::Date(year, month, day, _, _, _, _) => {
+                    if let Some(date) =
+                        chrono::NaiveDate::from_ymd_opt(*year as i32, *month as u32, *day as u32)
+                    {
                         return Value::Date(date);
                     }
-                    return Value::Text(s);
+                    return Value::Text(format!("{:04}-{:02}-{:02}", year, month, day));
                 }
-                Ok(None) => return Value::Null,
-                Err(_) => {}
+                mysql::Value::NULL => return Value::Null,
+                mysql::Value::Bytes(bytes) => {
+                    if let Ok(s) = String::from_utf8(bytes.clone()) {
+                        if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                            return Value::Date(date);
+                        }
+                        return Value::Text(s);
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    // Handle TIME type - parse from string representation
+    // Handle TIME type using mysql's binary Time value
     if col_type == ColumnType::MYSQL_TYPE_TIME {
-        if let Some(val) = row.get_opt::<Option<String>, _>(idx) {
-            match val {
-                Ok(Some(s)) => {
-                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+        if let Some(mysql_val) = row.as_ref(idx) {
+            match mysql_val {
+                mysql::Value::Time(_is_neg, _days, hours, mins, secs, micros) => {
+                    if let Some(time) = chrono::NaiveTime::from_hms_micro_opt(
+                        *hours as u32,
+                        *mins as u32,
+                        *secs as u32,
+                        *micros,
+                    ) {
                         return Value::Time(time);
                     }
-                    return Value::Text(s);
+                    return Value::Text(format!("{:02}:{:02}:{:02}", hours, mins, secs));
                 }
-                Ok(None) => return Value::Null,
-                Err(_) => {}
+                mysql::Value::NULL => return Value::Null,
+                mysql::Value::Bytes(bytes) => {
+                    if let Ok(s) = String::from_utf8(bytes.clone()) {
+                        if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+                            return Value::Time(time);
+                        }
+                        return Value::Text(s);
+                    }
+                }
+                _ => {}
             }
         }
     }
