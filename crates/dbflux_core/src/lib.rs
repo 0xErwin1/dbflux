@@ -1,6 +1,7 @@
 mod connection_tree;
 mod connection_tree_store;
 mod crud;
+mod data_view;
 mod driver_capabilities;
 mod driver_form;
 mod error;
@@ -27,6 +28,7 @@ pub use crud::{
     CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, KeyDelete, KeySet,
     MutationRequest, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
 };
+pub use data_view::DataViewKind;
 pub use driver_capabilities::{
     DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
 };
@@ -42,11 +44,15 @@ pub use profile::{
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
-    CollectionIndexInfo, CollectionInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo,
-    CustomTypeInfo, CustomTypeKind, DatabaseInfo, DataStructure, DbSchemaInfo, DocumentSchema,
-    FieldInfo, ForeignKeyInfo, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema,
-    KeyValueType, RelationalSchema, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    TableInfo, ViewInfo,
+    CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
+    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DatabaseInfo, DataStructure,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, KeyValueType,
+    MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo,
+    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
+    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
+    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
