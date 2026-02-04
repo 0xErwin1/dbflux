@@ -1,4 +1,4 @@
-# AGENTS.md — DBFlux
+# CLAUDE.md — DBFlux
 
 Guidelines for AI agents working in this Rust/GPUI codebase.
 
@@ -7,13 +7,15 @@ Guidelines for AI agents working in this Rust/GPUI codebase.
 DBFlux is a keyboard-first database client built with Rust and GPUI (Zed's UI framework).
 
 **Workspace structure:**
+
 ```
 crates/
 ├── dbflux/                    # App + UI (GPUI)
-├── dbflux_core/               # Traits, types, errors (stable API)
+├── dbflux_core/               # Traits, types, errors, driver capabilities (stable API)
 ├── dbflux_driver_postgres/    # PostgreSQL driver
 ├── dbflux_driver_sqlite/      # SQLite driver
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
+├── dbflux_driver_mongodb/     # MongoDB driver
 ├── dbflux_ssh/                # SSH tunnel support
 └── dbflux_export/             # CSV export
 ```
@@ -22,9 +24,9 @@ crates/
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb    # Run app
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
@@ -66,6 +68,7 @@ nix run                              # Run directly
 ### Async Patterns
 
 Use variable shadowing to scope clones in async contexts:
+
 ```rust
 executor.spawn({
     let task_ran = task_ran.clone();
@@ -78,6 +81,7 @@ executor.spawn({
 ### Performance Patterns
 
 **Pre-compute expensive operations**: Move string formatting and allocation into constructors rather than during rendering:
+
 ```rust
 // Good: Format once during construction
 CellValue::Text { display: format!("{}", value), ... }
@@ -87,12 +91,13 @@ fn render(&self) { format!("{}", self.value) }
 ```
 
 **Lazy loading for large datasets**: Drivers should return shallow metadata initially and fetch details on-demand:
+
 ```rust
 fn get_tables(&self) -> Vec<TableInfo> // Names only
 fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 ```
 
-**Driver error formatting**: Each driver has a `format_*_query_error` function that extracts detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. Use these instead of raw `format!("{:?}", e)`.
+**Driver error formatting**: Drivers implement the `ErrorFormatter` trait from `dbflux_core/src/error_formatter.rs` to extract detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. MongoDB extracts error codes and labels. Use structured error formatting instead of raw `format!("{:?}", e)`.
 
 ## GPUI Guidelines
 
@@ -106,6 +111,7 @@ fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 ### Entity Operations
 
 With `thing: Entity<T>`:
+
 - `thing.read(cx)` → `&T`
 - `thing.update(cx, |thing, cx| ...)` → mutate with `Context<T>`
 - `thing.update_in(cx, |thing, window, cx| ...)` → also provides `Window`
@@ -134,6 +140,7 @@ cx.spawn(async move |_this, cx| {
 ```
 
 Task handling:
+
 - Await in another async context
 - `task.detach()` or `task.detach_and_log_err(cx)` for fire-and-forget
 - Store in a field if work should cancel when struct drops
@@ -141,6 +148,7 @@ Task handling:
 ### Rendering
 
 Types implement `Render` for element trees with flexbox layout:
+
 ```rust
 impl Render for MyComponent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -156,6 +164,7 @@ impl Render for MyComponent {
 ### Entity Updates in Render
 
 Use `pending_*` fields with `.take()` to safely update other entities or open modals:
+
 ```rust
 fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     if let Some(data) = self.pending_data.take() {
@@ -180,6 +189,7 @@ Actions defined with `actions!(namespace, [SomeAction])` macro or `#[derive(Acti
 ### Keyboard & Mouse Patterns
 
 **Focus tracking**: Use `.track_focus(&focus_handle)` on container elements to receive key events:
+
 ```rust
 div()
     .track_focus(&self.focus_handle)
@@ -188,6 +198,7 @@ div()
 ```
 
 **Mouse/keyboard sync**: When a component supports both mouse and keyboard navigation, sync state on mouse events:
+
 ```rust
 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
     this.focus_mode = FocusMode::SomeMode;
@@ -197,6 +208,7 @@ div()
 ```
 
 **Input blur race condition**: When switching between inputs via click, the old input's `Blur` event fires after the new input's `mousedown`. Use a flag to prevent focus theft:
+
 ```rust
 // In mousedown handler
 this.switching_input = true;
@@ -209,6 +221,7 @@ if self.switching_input {
 ```
 
 **Focus state machines**: For complex focus scenarios (e.g., toolbar with editable inputs), use explicit state enums:
+
 ```rust
 enum FocusMode { Table, Toolbar }
 enum EditState { Navigating, Editing }
@@ -219,6 +232,7 @@ enum EditState { Navigating, Editing }
 ```rust
 cx.subscribe(other_entity, |this, other_entity, event, cx| ...)
 ```
+
 Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 ### Deprecated Types (NEVER use)
@@ -232,16 +246,62 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 ### Crate Boundaries
 
-- `dbflux_core`: Pure types/traits, no DB-specific code
-- `dbflux_driver_*`: Implement `DbDriver` and `Connection` traits
+- `dbflux_core`: Pure types/traits, driver capabilities, SQL generation, no DB-specific code
+- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter` traits
 - `dbflux`: UI only, drivers via feature flags
+
+### Driver/UI Decoupling
+
+**Never add driver-specific logic in UI code.** The UI must remain agnostic to specific database implementations.
+
+Instead of:
+
+```rust
+// BAD: Driver-specific conditional in UI
+if driver_id == "mongodb" {
+    show_document_view();
+} else {
+    show_table_view();
+}
+```
+
+Use abstractions from `DriverMetadata`:
+
+```rust
+// GOOD: Use capability flags and metadata
+match metadata.category {
+    DatabaseCategory::Document => show_document_view(),
+    DatabaseCategory::Relational => show_table_view(),
+    _ => show_generic_view(),
+}
+
+// GOOD: Use query language for editor behavior
+let placeholder = metadata.query_language.placeholder();
+let editor_mode = metadata.query_language.editor_mode();
+```
+
+Key abstractions for UI adaptation:
+
+- `DatabaseCategory`: Determines view mode (table vs document tree), terminology (rows vs documents)
+- `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
+- `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
 
 ### Adding a New Driver
 
 1. Create `crates/dbflux_driver_<name>/`
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
-3. Add feature flag in `crates/dbflux/Cargo.toml`
-4. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
+4. Implement `ErrorFormatter` for driver-specific error messages
+5. Add feature flag in `crates/dbflux/Cargo.toml`
+6. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+
+### Driver Capabilities
+
+Drivers declare their capabilities via `DriverMetadata`:
+
+- `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
+- `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
+- `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
 
 ### Document System Pattern
 
@@ -264,20 +324,29 @@ Documents follow a consistent pattern for tab-based UI:
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `crates/dbflux/src/app.rs` | AppState, driver registry |
-| `crates/dbflux/src/ui/workspace.rs` | Main layout, command dispatch |
-| `crates/dbflux/src/ui/dock/sidebar_dock.rs` | Collapsible, resizable sidebar |
-| `crates/dbflux/src/ui/sidebar.rs` | Schema tree with lazy loading |
-| `crates/dbflux/src/ui/document/mod.rs` | Document system exports |
-| `crates/dbflux/src/ui/document/sql_query.rs` | SQL query document with multiple result tabs |
-| `crates/dbflux/src/ui/document/tab_manager.rs` | MRU tab ordering |
-| `crates/dbflux/src/ui/toast.rs` | Toast notification system |
-| `crates/dbflux/src/ui/cell_editor_modal.rs` | Modal editor for JSON/long text |
-| `crates/dbflux/src/ui/components/data_table/table.rs` | Virtualized data table with column resize |
-| `crates/dbflux/src/keymap/defaults.rs` | Key bindings per context |
-| `crates/dbflux/src/keymap/command.rs` | Command enum and dispatch |
-| `crates/dbflux/src/keymap/focus.rs` | FocusTarget (Document/Sidebar/BackgroundTasks) |
-| `crates/dbflux_core/src/traits.rs` | `DbDriver`, `Connection` traits |
-| `crates/dbflux_core/src/schema.rs` | Schema types with lazy loading support |
+| File                                                     | Purpose                                             |
+| -------------------------------------------------------- | --------------------------------------------------- |
+| `crates/dbflux/src/app.rs`                               | AppState, driver registry                           |
+| `crates/dbflux/src/ui/workspace.rs`                      | Main layout, command dispatch                       |
+| `crates/dbflux/src/ui/dock/sidebar_dock.rs`              | Collapsible, resizable sidebar                      |
+| `crates/dbflux/src/ui/sidebar.rs`                        | Schema tree with lazy loading                       |
+| `crates/dbflux/src/ui/document/mod.rs`                   | Document system exports                             |
+| `crates/dbflux/src/ui/document/sql_query.rs`             | Language-aware query editor (SQL/MongoDB/etc)       |
+| `crates/dbflux/src/ui/document/data_grid_panel.rs`       | Data grid with table/document view modes            |
+| `crates/dbflux/src/ui/document/tab_manager.rs`           | MRU tab ordering                                    |
+| `crates/dbflux/src/ui/dangerous_query.rs`                | Query safety analysis and confirmation              |
+| `crates/dbflux/src/ui/toast.rs`                          | Toast notification system                           |
+| `crates/dbflux/src/ui/cell_editor_modal.rs`              | Modal editor for JSON/long text                     |
+| `crates/dbflux/src/ui/components/data_table/table.rs`    | Virtualized data table with column resize           |
+| `crates/dbflux/src/ui/components/document_tree/state.rs` | Document tree state (cursor, search, expansion)     |
+| `crates/dbflux/src/keymap/defaults.rs`                   | Key bindings per context                            |
+| `crates/dbflux/src/keymap/command.rs`                    | Command enum and dispatch                           |
+| `crates/dbflux/src/keymap/focus.rs`                      | FocusTarget (Document/Sidebar/BackgroundTasks)      |
+| `crates/dbflux_core/src/traits.rs`                       | `DbDriver`, `Connection` traits                     |
+| `crates/dbflux_core/src/driver_capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
+| `crates/dbflux_core/src/error_formatter.rs`              | ErrorFormatter trait for driver errors              |
+| `crates/dbflux_core/src/schema.rs`                       | Schema types with lazy loading support              |
+| `crates/dbflux_core/src/crud.rs`                         | CRUD mutation types for all database paradigms      |
+| `crates/dbflux_core/src/sql_dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
+| `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
+| `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |
