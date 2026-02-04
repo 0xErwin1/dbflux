@@ -838,7 +838,11 @@ impl DataGridPanel {
                         cx.notify();
                     }
                 }
-                DocumentTreeEvent::CursorMoved | DocumentTreeEvent::ExpandToggled => {}
+                DocumentTreeEvent::CursorMoved
+                | DocumentTreeEvent::ExpandToggled
+                | DocumentTreeEvent::ViewModeToggled
+                | DocumentTreeEvent::SearchOpened
+                | DocumentTreeEvent::SearchClosed => {}
             },
         );
 

@@ -6,6 +6,16 @@ use gpui::{Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandl
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
 
+/// View mode for the document tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DocumentViewMode {
+    /// Tree view with collapsible nodes.
+    #[default]
+    Tree,
+    /// Raw JSON view.
+    Raw,
+}
+
 /// State for the DocumentTree component.
 pub struct DocumentTreeState {
     /// Root nodes (one per document in the result set).
@@ -31,6 +41,27 @@ pub struct DocumentTreeState {
 
     /// Dirty flag to rebuild visible_nodes.
     needs_rebuild: bool,
+
+    /// Current view mode (Tree or Raw JSON).
+    view_mode: DocumentViewMode,
+
+    /// Cached raw JSON string for the Raw view mode.
+    raw_json_cache: Option<String>,
+
+    /// Set of node IDs whose values are expanded inline.
+    expanded_values: HashSet<NodeId>,
+
+    /// Current search query (None if search is not active).
+    search_query: Option<String>,
+
+    /// Node IDs that match the current search.
+    search_matches: Vec<NodeId>,
+
+    /// Index of the currently focused match.
+    current_match_index: Option<usize>,
+
+    /// Whether search input is visible.
+    search_visible: bool,
 }
 
 impl DocumentTreeState {
@@ -44,6 +75,13 @@ impl DocumentTreeState {
             vertical_scroll: UniformListScrollHandle::new(),
             visible_nodes: Vec::new(),
             needs_rebuild: true,
+            view_mode: DocumentViewMode::default(),
+            raw_json_cache: None,
+            expanded_values: HashSet::new(),
+            search_query: None,
+            search_matches: Vec::new(),
+            current_match_index: None,
+            search_visible: false,
         }
     }
 
@@ -52,8 +90,14 @@ impl DocumentTreeState {
         self.documents.clear();
         self.raw_documents.clear();
         self.expanded.clear();
+        self.expanded_values.clear();
         self.cursor = None;
         self.needs_rebuild = true;
+        self.raw_json_cache = None;
+        self.search_query = None;
+        self.search_matches.clear();
+        self.current_match_index = None;
+        self.search_visible = false;
 
         // For document databases, each row is a single document stored in the first column
         // The _id column is typically the first, and the full document is in a "_document" column
@@ -142,6 +186,234 @@ impl DocumentTreeState {
 
     pub fn scroll_handle(&self) -> &UniformListScrollHandle {
         &self.vertical_scroll
+    }
+
+    // === View Mode ===
+
+    pub fn view_mode(&self) -> DocumentViewMode {
+        self.view_mode
+    }
+
+    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        self.view_mode = match self.view_mode {
+            DocumentViewMode::Tree => DocumentViewMode::Raw,
+            DocumentViewMode::Raw => DocumentViewMode::Tree,
+        };
+        cx.emit(DocumentTreeEvent::ViewModeToggled);
+        cx.notify();
+    }
+
+    pub fn raw_json(&mut self) -> &str {
+        if self.raw_json_cache.is_none() {
+            let json_values: Vec<serde_json::Value> =
+                self.raw_documents.iter().map(value_to_json).collect();
+
+            let json_str = if json_values.len() == 1 {
+                serde_json::to_string_pretty(&json_values[0]).unwrap_or_default()
+            } else {
+                serde_json::to_string_pretty(&json_values).unwrap_or_default()
+            };
+
+            self.raw_json_cache = Some(json_str);
+        }
+
+        self.raw_json_cache.as_deref().unwrap_or("")
+    }
+
+    // === Value Expansion ===
+
+    pub fn is_value_expanded(&self, id: &NodeId) -> bool {
+        self.expanded_values.contains(id)
+    }
+
+    pub fn toggle_value_expand(&mut self, id: &NodeId, cx: &mut Context<Self>) {
+        if self.expanded_values.contains(id) {
+            self.expanded_values.remove(id);
+        } else {
+            self.expanded_values.insert(id.clone());
+        }
+        cx.notify();
+    }
+
+    // === Search ===
+
+    pub fn is_search_visible(&self) -> bool {
+        self.search_visible
+    }
+
+    #[allow(dead_code)]
+    pub fn search_query(&self) -> Option<&str> {
+        self.search_query.as_deref()
+    }
+
+    pub fn search_match_count(&self) -> usize {
+        self.search_matches.len()
+    }
+
+    pub fn current_match_index(&self) -> Option<usize> {
+        self.current_match_index
+    }
+
+    pub fn is_search_match(&self, id: &NodeId) -> bool {
+        self.search_matches.contains(id)
+    }
+
+    pub fn is_current_match(&self, id: &NodeId) -> bool {
+        self.current_match_index
+            .and_then(|idx| self.search_matches.get(idx))
+            .map(|m| m == id)
+            .unwrap_or(false)
+    }
+
+    pub fn open_search(&mut self, cx: &mut Context<Self>) {
+        self.search_visible = true;
+        cx.emit(DocumentTreeEvent::SearchOpened);
+        cx.notify();
+    }
+
+    pub fn close_search(&mut self, cx: &mut Context<Self>) {
+        self.search_visible = false;
+        self.search_query = None;
+        self.search_matches.clear();
+        self.current_match_index = None;
+        cx.emit(DocumentTreeEvent::SearchClosed);
+        cx.notify();
+    }
+
+    pub fn set_search(&mut self, query: &str, cx: &mut Context<Self>) {
+        if query.is_empty() {
+            self.search_query = None;
+            self.search_matches.clear();
+            self.current_match_index = None;
+            cx.notify();
+            return;
+        }
+
+        self.search_query = Some(query.to_string());
+        self.perform_search(cx);
+
+        // Jump to first match
+        if !self.search_matches.is_empty() {
+            self.current_match_index = Some(0);
+            self.jump_to_current_match(cx);
+        } else {
+            self.current_match_index = None;
+        }
+
+        cx.notify();
+    }
+
+    pub fn next_match(&mut self, cx: &mut Context<Self>) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+
+        let next = match self.current_match_index {
+            Some(idx) => (idx + 1) % self.search_matches.len(),
+            None => 0,
+        };
+
+        self.current_match_index = Some(next);
+        self.jump_to_current_match(cx);
+        cx.notify();
+    }
+
+    pub fn prev_match(&mut self, cx: &mut Context<Self>) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+
+        let prev = match self.current_match_index {
+            Some(idx) => {
+                if idx == 0 {
+                    self.search_matches.len() - 1
+                } else {
+                    idx - 1
+                }
+            }
+            None => self.search_matches.len() - 1,
+        };
+
+        self.current_match_index = Some(prev);
+        self.jump_to_current_match(cx);
+        cx.notify();
+    }
+
+    fn perform_search(&mut self, cx: &mut Context<Self>) {
+        self.search_matches.clear();
+
+        let Some(query) = &self.search_query else {
+            return;
+        };
+
+        let query_lower = query.to_lowercase();
+
+        // Ensure visible nodes are up to date
+        if self.needs_rebuild {
+            self.rebuild_visible_nodes();
+        }
+
+        // Search through all documents recursively (not just visible nodes)
+        for doc in &self.documents.clone() {
+            self.search_node_recursive(doc, &query_lower, cx);
+        }
+    }
+
+    fn search_node_recursive(&mut self, node: &TreeNode, query: &str, cx: &mut Context<Self>) {
+        // Check if key matches
+        let key_matches = node.key.to_lowercase().contains(query);
+
+        // Check if value matches
+        let value_matches = node.value.preview().to_lowercase().contains(query);
+
+        if key_matches || value_matches {
+            self.search_matches.push(node.id.clone());
+
+            // Auto-expand parents so the match is visible
+            self.expand_ancestors(&node.id, cx);
+        }
+
+        // Recursively search children
+        for child in node.children() {
+            self.search_node_recursive(&child, query, cx);
+        }
+    }
+
+    fn expand_ancestors(&mut self, id: &NodeId, _cx: &mut Context<Self>) {
+        let mut current = id.parent();
+        while let Some(parent_id) = current {
+            if !self.expanded.contains(&parent_id) {
+                self.expanded.insert(parent_id.clone());
+                self.needs_rebuild = true;
+            }
+            current = parent_id.parent();
+        }
+    }
+
+    fn jump_to_current_match(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.current_match_index else {
+            return;
+        };
+
+        let Some(match_id) = self.search_matches.get(idx).cloned() else {
+            return;
+        };
+
+        // Set cursor to the match
+        self.cursor = Some(match_id.clone());
+
+        // Ensure visible nodes are rebuilt to include the match
+        if self.needs_rebuild {
+            self.rebuild_visible_nodes();
+        }
+
+        // Scroll to the match
+        if let Some(visible_idx) = self.visible_nodes.iter().position(|n| n.id == match_id) {
+            self.vertical_scroll
+                .scroll_to_item(visible_idx, gpui::ScrollStrategy::Center);
+        }
+
+        cx.emit(DocumentTreeEvent::CursorMoved);
     }
 
     // === Expand/Collapse ===

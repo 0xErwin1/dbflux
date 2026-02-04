@@ -81,6 +81,8 @@ pub use traits::{
 };
 pub use value::Value;
 
+pub use chrono;
+
 pub use schema_builder::{
     ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder,
 };

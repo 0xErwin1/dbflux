@@ -1,4 +1,5 @@
 use dbflux_core::Value;
+use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -76,9 +77,26 @@ impl NodeValue {
     /// Get a preview string for the value (truncated for display).
     pub fn preview(&self) -> Arc<str> {
         match self {
-            NodeValue::Scalar(v) => format_value_preview(v).into(),
+            NodeValue::Scalar(v) => format_value_preview(v, true).into(),
             NodeValue::Document(fields) => format!("{{{} fields}}", fields.len()).into(),
             NodeValue::Array(items) => format!("[{} items]", items.len()).into(),
+        }
+    }
+
+    /// Get the full value string (not truncated).
+    pub fn full_preview(&self) -> Arc<str> {
+        match self {
+            NodeValue::Scalar(v) => format_value_preview(v, false).into(),
+            NodeValue::Document(fields) => format!("{{{} fields}}", fields.len()).into(),
+            NodeValue::Array(items) => format!("[{} items]", items.len()).into(),
+        }
+    }
+
+    /// Check if the value is truncated in preview.
+    pub fn is_truncated(&self) -> bool {
+        match self {
+            NodeValue::Scalar(v) => is_value_truncated(v),
+            NodeValue::Document(_) | NodeValue::Array(_) => false,
         }
     }
 
@@ -161,9 +179,9 @@ impl TreeNode {
     }
 }
 
-fn format_value_preview(value: &Value) -> String {
-    const MAX_LEN: usize = 80;
+const MAX_PREVIEW_LEN: usize = 80;
 
+fn format_value_preview(value: &Value, truncate: bool) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
@@ -184,29 +202,84 @@ fn format_value_preview(value: &Value) -> String {
                     '\t' => vec!['\\', 't'],
                     c => vec![c],
                 })
-                .take(MAX_LEN + 1)
                 .collect();
 
-            if escaped.len() > MAX_LEN || s.len() > MAX_LEN {
-                format!("\"{}...\"", &escaped[..MAX_LEN.min(escaped.len())])
+            if truncate && (escaped.len() > MAX_PREVIEW_LEN || s.len() > MAX_PREVIEW_LEN) {
+                format!("\"{}...\"", &escaped[..MAX_PREVIEW_LEN.min(escaped.len())])
             } else {
                 format!("\"{}\"", escaped)
             }
         }
         Value::ObjectId(id) => format!("ObjectId(\"{}\")", id),
-        Value::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-        Value::Date(d) => d.format("%Y-%m-%d").to_string(),
+        Value::DateTime(dt) => format_datetime_relative(dt),
+        Value::Date(d) => format_date_relative(d),
         Value::Time(t) => t.format("%H:%M:%S").to_string(),
         Value::Bytes(b) => format!("<{} bytes>", b.len()),
         Value::Decimal(d) => d.to_string(),
         Value::Json(j) => {
-            if j.len() > MAX_LEN {
-                format!("{}...", &j[..MAX_LEN])
+            if truncate && j.len() > MAX_PREVIEW_LEN {
+                format!("{}...", &j[..MAX_PREVIEW_LEN])
             } else {
                 j.to_string()
             }
         }
         Value::Document(fields) => format!("{{{} fields}}", fields.len()),
         Value::Array(items) => format!("[{} items]", items.len()),
+    }
+}
+
+fn is_value_truncated(value: &Value) -> bool {
+    match value {
+        Value::Text(s) => s.len() > MAX_PREVIEW_LEN,
+        Value::Json(j) => j.len() > MAX_PREVIEW_LEN,
+        _ => false,
+    }
+}
+
+/// Format a datetime with relative format for recent dates.
+fn format_datetime_relative(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let diff = now.signed_duration_since(*dt);
+
+    // For dates in the future or very far in the past, use absolute format
+    if diff.num_seconds() < 0 || diff.num_days() > 30 {
+        return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+
+    let seconds = diff.num_seconds();
+    let minutes = diff.num_minutes();
+    let hours = diff.num_hours();
+    let days = diff.num_days();
+
+    if seconds < 60 {
+        "just now".to_string()
+    } else if minutes < 60 {
+        format!("{} min ago", minutes)
+    } else if hours < 24 {
+        format!("{} hr ago", hours)
+    } else if days == 1 {
+        "yesterday".to_string()
+    } else {
+        format!("{} days ago", days)
+    }
+}
+
+/// Format a date with relative format for recent dates.
+fn format_date_relative(d: &NaiveDate) -> String {
+    let today = Utc::now().date_naive();
+    let diff = today.signed_duration_since(*d);
+    let days = diff.num_days();
+
+    // For dates in the future or very far in the past, use absolute format
+    if !(0..=30).contains(&days) {
+        return d.format("%Y-%m-%d").to_string();
+    }
+
+    if days == 0 {
+        "today".to_string()
+    } else if days == 1 {
+        "yesterday".to_string()
+    } else {
+        format!("{} days ago", days)
     }
 }

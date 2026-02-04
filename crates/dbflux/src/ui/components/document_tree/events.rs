@@ -34,4 +34,13 @@ pub enum DocumentTreeEvent {
         doc_index: usize,
         document_json: String,
     },
+
+    /// User toggled between Tree and Raw JSON view modes.
+    ViewModeToggled,
+
+    /// Search mode was opened.
+    SearchOpened,
+
+    /// Search mode was closed.
+    SearchClosed,
 }

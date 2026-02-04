@@ -1,13 +1,15 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
-use super::state::DocumentTreeState;
+use super::state::{DocumentTreeState, DocumentViewMode};
 
 /// Height of each row in the tree.
 pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
@@ -30,6 +32,11 @@ actions!(
         StartEdit,
         OpenPreview,
         DeleteDocument,
+        ToggleViewMode,
+        OpenSearch,
+        NextMatch,
+        PrevMatch,
+        CloseSearch,
     ]
 );
 
@@ -61,6 +68,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("e", OpenPreview, Some(CONTEXT)),
         KeyBinding::new("d d", DeleteDocument, Some(CONTEXT)),
         KeyBinding::new("delete", DeleteDocument, Some(CONTEXT)),
+        KeyBinding::new("r", ToggleViewMode, Some(CONTEXT)),
+        KeyBinding::new("ctrl-f", OpenSearch, Some(CONTEXT)),
+        KeyBinding::new("/", OpenSearch, Some(CONTEXT)),
+        KeyBinding::new("n", NextMatch, Some(CONTEXT)),
+        KeyBinding::new("shift-n", PrevMatch, Some(CONTEXT)),
+        KeyBinding::new("escape", CloseSearch, Some(CONTEXT)),
     ]);
 }
 
@@ -68,6 +81,9 @@ pub fn init(cx: &mut App) {
 pub struct DocumentTree {
     id: ElementId,
     state: Entity<DocumentTreeState>,
+    raw_json_input: Option<Entity<InputState>>,
+    search_input: Option<Entity<InputState>>,
+    _search_subscription: Option<Subscription>,
 }
 
 impl DocumentTree {
@@ -79,15 +95,94 @@ impl DocumentTree {
         Self {
             id: id.into(),
             state,
+            raw_json_input: None,
+            search_input: None,
+            _search_subscription: None,
         }
+    }
+
+    fn ensure_raw_json_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.raw_json_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("json")
+                .line_number(true)
+                .soft_wrap(true)
+        });
+
+        self.raw_json_input = Some(input.clone());
+        input
+    }
+
+    fn ensure_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.search_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+
+        let state = self.state.clone();
+        let subscription = cx.subscribe(&input, move |_this, input, event, cx| {
+            if let InputEvent::Change = event {
+                let value = input.read(cx).value().to_string();
+                state.update(cx, |s, cx| s.set_search(&value, cx));
+            }
+        });
+
+        self.search_input = Some(input.clone());
+        self._search_subscription = Some(subscription);
+        input
     }
 }
 
 impl Render for DocumentTree {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.state.clone();
+        let state_ref = self.state.read(cx);
+        let view_mode = state_ref.view_mode();
+        let is_tree_mode = view_mode == DocumentViewMode::Tree;
+        let is_search_visible = state_ref.is_search_visible();
+        let search_match_count = state_ref.search_match_count();
+        let current_match_index = state_ref.current_match_index();
 
-        // Read state to get visible nodes count (needs mutable access first)
+        // Lazily initialize and update raw JSON input when in Raw mode
+        let raw_json_input = if !is_tree_mode {
+            let input = self.ensure_raw_json_input(window, cx);
+            let raw_json = self.state.update(cx, |s, _| s.raw_json().to_string());
+            let current_value = input.read(cx).value().to_string();
+            if current_value != raw_json {
+                input.update(cx, |input_state, cx| {
+                    input_state.set_value(&raw_json, window, cx);
+                });
+            }
+            Some(input)
+        } else {
+            self.raw_json_input.clone()
+        };
+
+        // Lazily initialize search input when search is visible
+        let search_input = if is_search_visible {
+            let input = self.ensure_search_input(window, cx);
+            // Focus the search input when search opens
+            input.update(cx, |input_state, cx| {
+                input_state.focus(window, cx);
+            });
+            Some(input)
+        } else {
+            self.search_input.clone()
+        };
+
         let node_count = self.state.update(cx, |s, _| s.visible_node_count());
         let focus_handle = self.state.read(cx).focus_handle(cx);
         let scroll_handle = self.state.read(cx).scroll_handle().clone();
@@ -100,6 +195,8 @@ impl Render for DocumentTree {
             .size_full()
             .bg(theme.background)
             .overflow_hidden()
+            .flex()
+            .flex_col()
             .on_action({
                 let state = self.state.clone();
                 move |_: &MoveUp, _window, cx| {
@@ -175,65 +272,281 @@ impl Render for DocumentTree {
                     state.update(cx, |s, cx| s.request_delete(cx));
                 }
             })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &ToggleViewMode, _window, cx| {
+                    state.update(cx, |s, cx| s.toggle_view_mode(cx));
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &OpenSearch, _window, cx| {
+                    state.update(cx, |s, cx| s.open_search(cx));
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &NextMatch, _window, cx| {
+                    state.update(cx, |s, cx| s.next_match(cx));
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &PrevMatch, _window, cx| {
+                    state.update(cx, |s, cx| s.prev_match(cx));
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &CloseSearch, _window, cx| {
+                    state.update(cx, |s, cx| s.close_search(cx));
+                }
+            })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.state.update(cx, |s, _| s.focus(window));
                 cx.emit(DocumentTreeEvent::Focused);
             }))
+            // Toolbar
+            .child(render_toolbar(view_mode, theme.clone(), state.clone()))
+            // Search bar
+            .when_some(search_input.filter(|_| is_search_visible), |d, input| {
+                d.child(render_search_bar(
+                    input,
+                    search_match_count,
+                    current_match_index,
+                    theme.clone(),
+                    state.clone(),
+                ))
+            })
+            // Content: Tree view or Raw JSON
             .child(
-                uniform_list("document-tree-list", node_count, {
-                    let state = state.clone();
-                    move |range, _window, cx| {
-                        let visible_nodes: Vec<TreeNode> =
-                            state.update(cx, |s, _| s.visible_nodes().to_vec());
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .when(is_tree_mode, |d| {
+                        d.child(
+                            uniform_list("document-tree-list", node_count, {
+                                let state = state.clone();
+                                move |range, _window, cx| {
+                                    let visible_nodes: Vec<TreeNode> =
+                                        state.update(cx, |s, _| s.visible_nodes().to_vec());
 
-                        let cursor = state.read(cx).cursor().cloned();
-                        let theme = cx.theme().clone();
+                                    let cursor = state.read(cx).cursor().cloned();
+                                    let theme = cx.theme().clone();
 
-                        let expanded_set: std::collections::HashSet<NodeId> = visible_nodes
-                            .iter()
-                            .filter(|n| state.read(cx).is_expanded(&n.id))
-                            .map(|n| n.id.clone())
-                            .collect();
+                                    let state_ref = state.read(cx);
 
-                        range
-                            .filter_map(|ix| visible_nodes.get(ix).cloned())
-                            .map(|node| {
-                                let is_cursor = cursor.as_ref() == Some(&node.id);
-                                let is_expanded = expanded_set.contains(&node.id);
-                                let state_clone = state.clone();
-                                let node_id = node.id.clone();
+                                    let expanded_set: std::collections::HashSet<NodeId> =
+                                        visible_nodes
+                                            .iter()
+                                            .filter(|n| state_ref.is_expanded(&n.id))
+                                            .map(|n| n.id.clone())
+                                            .collect();
 
-                                render_tree_row(
-                                    node,
-                                    is_cursor,
-                                    is_expanded,
-                                    theme.clone(),
-                                    state_clone,
-                                    node_id,
-                                )
+                                    let expanded_values_set: std::collections::HashSet<NodeId> =
+                                        visible_nodes
+                                            .iter()
+                                            .filter(|n| state_ref.is_value_expanded(&n.id))
+                                            .map(|n| n.id.clone())
+                                            .collect();
+
+                                    let search_matches_set: std::collections::HashSet<NodeId> =
+                                        visible_nodes
+                                            .iter()
+                                            .filter(|n| state_ref.is_search_match(&n.id))
+                                            .map(|n| n.id.clone())
+                                            .collect();
+
+                                    let current_match: Option<NodeId> = visible_nodes
+                                        .iter()
+                                        .find(|n| state_ref.is_current_match(&n.id))
+                                        .map(|n| n.id.clone());
+
+                                    range
+                                        .filter_map(|ix| visible_nodes.get(ix).cloned())
+                                        .map(|node| {
+                                            let is_cursor = cursor.as_ref() == Some(&node.id);
+                                            let is_expanded = expanded_set.contains(&node.id);
+                                            let is_value_expanded =
+                                                expanded_values_set.contains(&node.id);
+                                            let is_search_match =
+                                                search_matches_set.contains(&node.id);
+                                            let is_current_match =
+                                                current_match.as_ref() == Some(&node.id);
+                                            let state_clone = state.clone();
+                                            let node_id = node.id.clone();
+
+                                            render_tree_row(
+                                                node,
+                                                is_cursor,
+                                                is_expanded,
+                                                is_value_expanded,
+                                                is_search_match,
+                                                is_current_match,
+                                                theme.clone(),
+                                                state_clone,
+                                                node_id,
+                                            )
+                                        })
+                                        .collect()
+                                }
                             })
-                            .collect()
-                    }
-                })
-                .track_scroll(scroll_handle)
-                .size_full()
-                .with_sizing_behavior(ListSizingBehavior::Infer),
+                            .track_scroll(scroll_handle)
+                            .size_full()
+                            .with_sizing_behavior(ListSizingBehavior::Infer),
+                        )
+                    })
+                    .when_some(raw_json_input.filter(|_| !is_tree_mode), |d, input| {
+                        d.child(
+                            div()
+                                .size_full()
+                                .p(Spacing::SM)
+                                .child(Input::new(&input).w_full().h_full()),
+                        )
+                    }),
             )
     }
 }
 
 impl EventEmitter<DocumentTreeEvent> for DocumentTree {}
 
+fn render_toolbar(
+    view_mode: DocumentViewMode,
+    theme: gpui_component::Theme,
+    state: Entity<DocumentTreeState>,
+) -> Div {
+    let is_tree_mode = view_mode == DocumentViewMode::Tree;
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(Spacing::SM)
+        .py(Spacing::XS)
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.secondary.opacity(0.3))
+        .child(
+            div()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child(if is_tree_mode {
+                    "Tree View"
+                } else {
+                    "Raw JSON"
+                }),
+        )
+        .child(
+            div()
+                .id("view-mode-toggle")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(Heights::ICON_SM)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .bg(if is_tree_mode {
+                    theme.transparent
+                } else {
+                    theme.selection
+                })
+                .hover(|d| d.bg(theme.secondary))
+                .on_click({
+                    move |_, _, cx| {
+                        state.update(cx, |s, cx| s.toggle_view_mode(cx));
+                    }
+                })
+                .child(
+                    svg()
+                        .path(if is_tree_mode {
+                            AppIcon::Braces.path()
+                        } else {
+                            AppIcon::Rows3.path()
+                        })
+                        .size_4()
+                        .text_color(theme.muted_foreground),
+                ),
+        )
+}
+
+fn render_search_bar(
+    input: Entity<InputState>,
+    match_count: usize,
+    current_match: Option<usize>,
+    theme: gpui_component::Theme,
+    state: Entity<DocumentTreeState>,
+) -> Div {
+    let match_text = if match_count > 0 {
+        format!(
+            "{}/{}",
+            current_match.map(|i| i + 1).unwrap_or(0),
+            match_count
+        )
+    } else {
+        "No matches".to_string()
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(Spacing::SM)
+        .py(Spacing::XS)
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.secondary.opacity(0.3))
+        .child(
+            svg()
+                .path(AppIcon::Search.path())
+                .size_4()
+                .text_color(theme.muted_foreground),
+        )
+        .child(div().flex_1().child(Input::new(&input).small().w_full()))
+        .child(
+            div()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child(match_text),
+        )
+        .child(
+            div()
+                .id("close-search")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(Heights::ICON_SM)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .hover(|d| d.bg(theme.secondary))
+                .on_click({
+                    move |_, _, cx| {
+                        state.update(cx, |s, cx| s.close_search(cx));
+                    }
+                })
+                .child(
+                    svg()
+                        .path(AppIcon::X.path())
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                ),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_tree_row(
     node: TreeNode,
     is_cursor: bool,
     is_expanded: bool,
+    is_value_expanded: bool,
+    is_search_match: bool,
+    is_current_match: bool,
     theme: gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
 ) -> Stateful<Div> {
     let indent = INDENT_WIDTH * node.depth as f32;
     let is_expandable = node.is_expandable();
+    let is_truncated = node.value.is_truncated();
 
     let chevron_state = state.clone();
     let chevron_node_id = node_id.clone();
@@ -241,10 +554,25 @@ fn render_tree_row(
     let row_state = state.clone();
     let row_node_id = node_id.clone();
 
+    let value_state = state.clone();
+    let value_node_id = node_id.clone();
+
     let selection_color = theme.selection;
     let secondary_color = theme.secondary;
     let primary_color = theme.primary;
     let muted_color = theme.muted_foreground;
+    let warning_color = theme.warning;
+
+    // Determine background color based on state
+    let bg_color = if is_cursor {
+        selection_color
+    } else if is_current_match {
+        warning_color.opacity(0.4)
+    } else if is_search_match {
+        warning_color.opacity(0.2)
+    } else {
+        Hsla::transparent_black()
+    };
 
     div()
         .id(ElementId::Name(
@@ -256,10 +584,14 @@ fn render_tree_row(
         .items_center()
         .pl(indent)
         .pr(Spacing::SM)
-        .when(is_cursor, |d| d.bg(selection_color))
+        .bg(bg_color)
         .hover(move |d| {
             d.bg(if is_cursor {
                 selection_color
+            } else if is_current_match {
+                warning_color.opacity(0.5)
+            } else if is_search_match {
+                warning_color.opacity(0.3)
             } else {
                 secondary_color.opacity(0.5)
             })
@@ -310,23 +642,25 @@ fn render_tree_row(
                 ),
         )
         // Value preview
-        .child(
-            div()
-                .flex_1()
-                .overflow_x_hidden()
-                .ml(Spacing::XS)
-                .child(render_value_preview(&node.value, &theme)),
-        )
-        // Type badge
-        .child(
+        .child(render_value_preview_with_expand(
+            &node.value,
+            is_value_expanded,
+            is_truncated,
+            &theme,
+            value_state,
+            value_node_id,
+        ))
+        // Type badge with type-colored background
+        .child({
+            let type_color = get_type_color(&node.value, &theme);
             div()
                 .text_size(FontSizes::XS)
-                .text_color(muted_color.opacity(0.7))
+                .text_color(type_color)
                 .px(Spacing::XS)
                 .rounded(Radii::SM)
-                .bg(secondary_color.opacity(0.3))
-                .child(node.value.type_label()),
-        )
+                .bg(type_color.opacity(0.15))
+                .child(node.value.type_label())
+        })
 }
 
 fn render_chevron(
@@ -362,29 +696,73 @@ fn render_chevron(
     }
 }
 
-fn render_value_preview(value: &NodeValue, theme: &gpui_component::Theme) -> impl IntoElement {
-    let (text, color) = match value {
-        NodeValue::Scalar(v) => {
-            let color = match v {
-                dbflux_core::Value::Null => theme.muted_foreground,
-                dbflux_core::Value::Bool(_) => theme.warning,
-                dbflux_core::Value::Int(_) | dbflux_core::Value::Float(_) => theme.success,
-                dbflux_core::Value::Text(_) => theme.foreground,
-                dbflux_core::Value::ObjectId(_) => theme.primary,
-                _ => theme.foreground,
-            };
-            (value.preview().to_string(), color)
-        }
-        NodeValue::Document(_) | NodeValue::Array(_) => {
-            (value.preview().to_string(), theme.muted_foreground)
-        }
+fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
+    match value {
+        NodeValue::Scalar(v) => match v {
+            dbflux_core::Value::Null => theme.muted_foreground,
+            dbflux_core::Value::Bool(_) => hsla(280.0 / 360.0, 0.6, 0.6, 1.0),
+            dbflux_core::Value::Int(_) => hsla(120.0 / 360.0, 0.5, 0.5, 1.0),
+            dbflux_core::Value::Float(_) | dbflux_core::Value::Decimal(_) => {
+                hsla(150.0 / 360.0, 0.5, 0.5, 1.0)
+            }
+            dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0),
+            dbflux_core::Value::ObjectId(_) => theme.primary,
+            dbflux_core::Value::DateTime(_)
+            | dbflux_core::Value::Date(_)
+            | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0),
+            dbflux_core::Value::Bytes(_) => theme.warning,
+            dbflux_core::Value::Json(_) => theme.muted_foreground,
+            _ => theme.foreground,
+        },
+        NodeValue::Document(_) | NodeValue::Array(_) => theme.muted_foreground,
+    }
+}
+
+fn render_value_preview_with_expand(
+    value: &NodeValue,
+    is_expanded: bool,
+    is_truncated: bool,
+    theme: &gpui_component::Theme,
+    state: Entity<DocumentTreeState>,
+    node_id: NodeId,
+) -> Stateful<Div> {
+    let color = get_type_color(value, theme);
+
+    let text = if is_expanded {
+        value.full_preview().to_string()
+    } else {
+        value.preview().to_string()
     };
 
-    div()
-        .text_size(FontSizes::SM)
-        .text_color(color)
+    let base = div()
+        .id(ElementId::Name(format!("value-{:?}", node_id.path).into()))
+        .flex_1()
         .overflow_x_hidden()
-        .text_ellipsis()
-        .whitespace_nowrap()
-        .child(text)
+        .ml(Spacing::XS)
+        .text_size(FontSizes::SM)
+        .text_color(color);
+
+    if is_expanded {
+        base.max_h(px(120.0))
+            .overflow_y_scroll()
+            .child(text)
+            .when(is_truncated, |d| {
+                d.cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        cx.stop_propagation();
+                        state.update(cx, |s, cx| s.toggle_value_expand(&node_id, cx));
+                    })
+            })
+    } else {
+        base.text_ellipsis()
+            .whitespace_nowrap()
+            .child(text)
+            .when(is_truncated, |d| {
+                d.cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        cx.stop_propagation();
+                        state.update(cx, |s, cx| s.toggle_value_expand(&node_id, cx));
+                    })
+            })
+    }
 }
