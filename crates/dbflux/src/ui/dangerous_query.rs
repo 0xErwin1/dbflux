@@ -1,12 +1,13 @@
-//! Detection of potentially dangerous SQL queries.
+//! Detection of potentially dangerous SQL and MongoDB queries.
 //!
 //! This module provides heuristic detection of queries that may cause
-//! unintended data loss or structural changes. It is NOT a SQL parser -
+//! unintended data loss or structural changes. It is NOT a full parser -
 //! it uses simple pattern matching that may have false positives/negatives.
 
 /// Categories of dangerous queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DangerousQueryKind {
+    // SQL patterns
     DeleteNoWhere,
     UpdateNoWhere,
     Truncate,
@@ -14,6 +15,16 @@ pub enum DangerousQueryKind {
     Alter,
     /// Multi-statement script containing at least one dangerous query.
     Script,
+
+    // MongoDB patterns
+    /// deleteMany with empty or missing filter ({} or no arguments)
+    MongoDeleteMany,
+    /// updateMany with empty filter
+    MongoUpdateMany,
+    /// db.collection.drop()
+    MongoDropCollection,
+    /// db.dropDatabase()
+    MongoDropDatabase,
 }
 
 impl DangerousQueryKind {
@@ -25,20 +36,31 @@ impl DangerousQueryKind {
             Self::Drop => "DROP will permanently remove the object",
             Self::Alter => "ALTER will modify the structure",
             Self::Script => "This script contains potentially destructive statements",
+            Self::MongoDeleteMany => "deleteMany with empty filter will delete all documents",
+            Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
+            Self::MongoDropCollection => "drop() will permanently remove the collection",
+            Self::MongoDropDatabase => "dropDatabase() will permanently remove the entire database",
         }
     }
 }
 
-/// Detect if SQL contains dangerous statements.
+/// Detect if a query contains dangerous statements.
 ///
-/// For multi-statement scripts (containing `;`), returns `Script` kind
+/// Automatically detects MongoDB shell syntax (db.collection.method) vs SQL.
+/// For multi-statement SQL scripts (containing `;`), returns `Script` kind
 /// if any statement is dangerous.
-pub fn detect_dangerous_query(sql: &str) -> Option<DangerousQueryKind> {
-    let clean = strip_leading_comments(sql);
+pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
+    let clean = strip_leading_comments(query);
     if clean.is_empty() {
         return None;
     }
 
+    // Check for MongoDB shell syntax
+    if clean.trim().starts_with("db.") {
+        return detect_dangerous_mongo_query(clean);
+    }
+
+    // SQL detection
     let statements: Vec<&str> = clean
         .split(';')
         .map(strip_leading_comments)
@@ -59,6 +81,64 @@ pub fn detect_dangerous_query(sql: &str) -> Option<DangerousQueryKind> {
     }
 
     detect_dangerous_single(statements[0])
+}
+
+/// Detect dangerous MongoDB shell commands.
+fn detect_dangerous_mongo_query(query: &str) -> Option<DangerousQueryKind> {
+    let normalized = query.trim().to_lowercase();
+
+    // db.dropDatabase()
+    if normalized.contains(".dropdatabase(") {
+        return Some(DangerousQueryKind::MongoDropDatabase);
+    }
+
+    // db.collection.drop()
+    if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
+        return Some(DangerousQueryKind::MongoDropCollection);
+    }
+
+    // deleteMany with empty or no filter
+    if let Some(pos) = normalized.find(".deletemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return Some(DangerousQueryKind::MongoDeleteMany);
+        }
+    }
+
+    // updateMany with empty filter
+    if let Some(pos) = normalized.find(".updatemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return Some(DangerousQueryKind::MongoUpdateMany);
+        }
+    }
+
+    None
+}
+
+/// Check if the first argument to a MongoDB method is an empty filter.
+fn is_empty_filter(args_start: &str) -> bool {
+    let trimmed = args_start.trim();
+
+    // Empty call: deleteMany()
+    if trimmed.starts_with(')') {
+        return true;
+    }
+
+    // Empty object: deleteMany({})
+    if trimmed.starts_with("{}") {
+        return true;
+    }
+
+    // Empty object with whitespace: deleteMany({ })
+    if let Some(brace_end) = trimmed.find('}') {
+        let inside = &trimmed[1..brace_end];
+        if inside.trim().is_empty() {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Detect if a single statement (no `;`) is dangerous.
@@ -572,5 +652,120 @@ mod tests {
         assert!(!DangerousQueryKind::Drop.message().is_empty());
         assert!(!DangerousQueryKind::Alter.message().is_empty());
         assert!(!DangerousQueryKind::Script.message().is_empty());
+        assert!(!DangerousQueryKind::MongoDeleteMany.message().is_empty());
+        assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
+        assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
+        assert!(!DangerousQueryKind::MongoDropDatabase.message().is_empty());
+    }
+
+    // ==================== MongoDB tests ====================
+
+    #[test]
+    fn mongo_delete_many_empty_filter_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_query("db.users.deleteMany({})"),
+            Some(DangerousQueryKind::MongoDeleteMany)
+        );
+    }
+
+    #[test]
+    fn mongo_delete_many_no_args_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_query("db.users.deleteMany()"),
+            Some(DangerousQueryKind::MongoDeleteMany)
+        );
+    }
+
+    #[test]
+    fn mongo_delete_many_with_filter_is_safe() {
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.deleteMany({"archived": true})"#),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_update_many_empty_filter_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.updateMany({}, {"$set": {"active": false}})"#),
+            Some(DangerousQueryKind::MongoUpdateMany)
+        );
+    }
+
+    #[test]
+    fn mongo_update_many_with_filter_is_safe() {
+        assert_eq!(
+            detect_dangerous_query(
+                r#"db.users.updateMany({"status": "old"}, {"$set": {"archived": true}})"#
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_drop_collection_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_query("db.temp_collection.drop()"),
+            Some(DangerousQueryKind::MongoDropCollection)
+        );
+    }
+
+    #[test]
+    fn mongo_drop_database_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_query("db.dropDatabase()"),
+            Some(DangerousQueryKind::MongoDropDatabase)
+        );
+    }
+
+    #[test]
+    fn mongo_find_is_safe() {
+        assert_eq!(detect_dangerous_query("db.users.find()"), None);
+        assert_eq!(detect_dangerous_query("db.users.find({})"), None);
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.find({"name": "John"})"#),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_delete_one_is_safe() {
+        // deleteOne only affects one document, not considered mass-dangerous
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.deleteOne({"_id": "123"})"#),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_insert_is_safe() {
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.insertOne({"name": "Alice"})"#),
+            None
+        );
+        assert_eq!(
+            detect_dangerous_query(r#"db.users.insertMany([{"name": "A"}, {"name": "B"}])"#),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_aggregate_is_safe() {
+        assert_eq!(
+            detect_dangerous_query(r#"db.orders.aggregate([{"$match": {"status": "active"}}])"#),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_case_insensitive() {
+        assert_eq!(
+            detect_dangerous_query("db.users.DELETEMANY({})"),
+            Some(DangerousQueryKind::MongoDeleteMany)
+        );
+        assert_eq!(
+            detect_dangerous_query("db.users.DeleteMany({})"),
+            Some(DangerousQueryKind::MongoDeleteMany)
+        );
     }
 }

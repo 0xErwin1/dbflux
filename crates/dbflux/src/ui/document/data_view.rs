@@ -17,7 +17,13 @@ impl DataViewMode {
         match source {
             DataSource::Table { .. } => DataViewMode::Table,
             DataSource::Collection { .. } => DataViewMode::Document,
-            DataSource::QueryResult { .. } => DataViewMode::Table,
+            DataSource::QueryResult { result, .. } => {
+                if result.is_document_result {
+                    DataViewMode::Document
+                } else {
+                    DataViewMode::Table
+                }
+            }
         }
     }
 
@@ -26,7 +32,13 @@ impl DataViewMode {
         match source {
             DataSource::Table { .. } => vec![DataViewMode::Table],
             DataSource::Collection { .. } => vec![DataViewMode::Table, DataViewMode::Document],
-            DataSource::QueryResult { .. } => vec![DataViewMode::Table],
+            DataSource::QueryResult { result, .. } => {
+                if result.is_document_result {
+                    vec![DataViewMode::Table, DataViewMode::Document]
+                } else {
+                    vec![DataViewMode::Table]
+                }
+            }
         }
     }
 

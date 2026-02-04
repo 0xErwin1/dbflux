@@ -400,6 +400,7 @@ impl Connection for SqliteConnection {
             rows,
             affected_rows: None,
             execution_time: start.elapsed(),
+            is_document_result: false,
         })
     }
 

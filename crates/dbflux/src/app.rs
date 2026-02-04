@@ -61,6 +61,10 @@ pub struct DangerousQuerySuppressions {
     drop: bool,
     alter: bool,
     script: bool,
+    mongo_delete_many: bool,
+    mongo_update_many: bool,
+    mongo_drop_collection: bool,
+    mongo_drop_database: bool,
 }
 
 impl DangerousQuerySuppressions {
@@ -73,6 +77,10 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::Drop => self.drop,
             DangerousQueryKind::Alter => self.alter,
             DangerousQueryKind::Script => self.script,
+            DangerousQueryKind::MongoDeleteMany => self.mongo_delete_many,
+            DangerousQueryKind::MongoUpdateMany => self.mongo_update_many,
+            DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection,
+            DangerousQueryKind::MongoDropDatabase => self.mongo_drop_database,
         }
     }
 
@@ -85,6 +93,10 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::Drop => self.drop = true,
             DangerousQueryKind::Alter => self.alter = true,
             DangerousQueryKind::Script => self.script = true,
+            DangerousQueryKind::MongoDeleteMany => self.mongo_delete_many = true,
+            DangerousQueryKind::MongoUpdateMany => self.mongo_update_many = true,
+            DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection = true,
+            DangerousQueryKind::MongoDropDatabase => self.mongo_drop_database = true,
         }
     }
 }

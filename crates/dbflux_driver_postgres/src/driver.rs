@@ -817,6 +817,7 @@ impl Connection for PostgresConnection {
             rows: result_rows,
             affected_rows: None,
             execution_time: total_time,
+            is_document_result: false,
         })
     }
 

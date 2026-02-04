@@ -84,6 +84,9 @@ pub struct QueryResult {
 
     /// Wall-clock time taken to execute the query.
     pub execution_time: Duration,
+
+    /// True when result contains document data (from MongoDB/document DBs).
+    pub is_document_result: bool,
 }
 
 impl QueryResult {
@@ -93,6 +96,7 @@ impl QueryResult {
             rows: Vec::new(),
             affected_rows: None,
             execution_time: Duration::ZERO,
+            is_document_result: false,
         }
     }
 

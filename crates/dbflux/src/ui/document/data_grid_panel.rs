@@ -785,8 +785,11 @@ impl DataGridPanel {
         self.data_table = Some(data_table);
         self.table_subscription = Some(subscription);
 
-        // Also rebuild document tree for collections
-        if self.source.is_collection() {
+        // Build document tree for collections OR document query results
+        let should_build_tree = self.source.is_collection()
+            || matches!(&self.source, DataSource::QueryResult { result, .. } if result.is_document_result);
+
+        if should_build_tree {
             self.rebuild_document_tree(cx);
         }
     }

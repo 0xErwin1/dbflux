@@ -153,6 +153,9 @@ impl Render for DocumentPreviewModal {
             .justify_center()
             .items_start()
             .pt(px(60.0))
+            .on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {

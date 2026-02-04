@@ -7,7 +7,7 @@ use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, CrudResult,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, FormValues, FormattedError, Icon, MONGODB_FORM,
+    DriverFormDef, DriverMetadata, FormValues, FormattedError, Icon, IndexInfo, MONGODB_FORM,
     PlaceholderStyle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, Value,
     ViewInfo, sanitize_uri,
@@ -548,8 +548,8 @@ impl Connection for MongoConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
 
-        // Parse the JSON query
-        let query: MongoQuery = parse_mongo_query(&req.sql)?;
+        // Parse the query (supports both shell syntax and JSON format)
+        let query: MongoQuery = crate::query_parser::parse_query(&req.sql)?;
 
         // Determine database to use
         let db_name = query
@@ -576,6 +576,7 @@ impl Connection for MongoConnection {
             rows: result.rows,
             affected_rows: result.affected_rows,
             execution_time: query_time,
+            is_document_result: true,
         })
     }
 
@@ -639,16 +640,19 @@ impl Connection for MongoConnection {
             database
         );
 
-        // Map collections to TableInfo (using tables field for now)
+        // Map collections to TableInfo with stats and indexes
         let tables: Vec<TableInfo> = collection_names
             .into_iter()
-            .map(|name| TableInfo {
-                name,
-                schema: Some(database.to_string()),
-                columns: None,
-                indexes: None,
-                foreign_keys: None,
-                constraints: None,
+            .map(|name| {
+                let indexes = fetch_collection_indexes(&db, &name);
+                TableInfo {
+                    name,
+                    schema: Some(database.to_string()),
+                    columns: None,
+                    indexes,
+                    foreign_keys: None,
+                    constraints: None,
+                }
             })
             .collect();
 
@@ -883,15 +887,15 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Parsed MongoDB query from JSON input.
-struct MongoQuery {
-    database: Option<String>,
-    collection: String,
-    operation: MongoOperation,
+/// Parsed MongoDB query from JSON input or shell syntax.
+pub struct MongoQuery {
+    pub database: Option<String>,
+    pub collection: String,
+    pub operation: MongoOperation,
 }
 
 #[allow(clippy::large_enum_variant)]
-enum MongoOperation {
+pub enum MongoOperation {
     Find {
         filter: Document,
         projection: Option<Document>,
@@ -905,77 +909,37 @@ enum MongoOperation {
     Count {
         filter: Document,
     },
+    InsertOne {
+        document: Document,
+    },
+    InsertMany {
+        documents: Vec<Document>,
+    },
+    UpdateOne {
+        filter: Document,
+        update: Document,
+        upsert: bool,
+    },
+    UpdateMany {
+        filter: Document,
+        update: Document,
+        upsert: bool,
+    },
+    DeleteOne {
+        filter: Document,
+    },
+    DeleteMany {
+        filter: Document,
+    },
+    ReplaceOne {
+        filter: Document,
+        replacement: Document,
+        upsert: bool,
+    },
+    Drop,
 }
 
-/// Parse a JSON string into a MongoQuery.
-fn parse_mongo_query(json_str: &str) -> Result<MongoQuery, DbError> {
-    let json: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| DbError::QueryFailed(format!("Invalid JSON: {}", e)))?;
-
-    let obj = json
-        .as_object()
-        .ok_or_else(|| DbError::QueryFailed("Query must be a JSON object".to_string()))?;
-
-    let database = obj
-        .get("database")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
-    let collection = obj
-        .get("collection")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DbError::QueryFailed("Missing 'collection' field".to_string()))?
-        .to_string();
-
-    // Determine operation type
-    let operation = if obj.contains_key("aggregate") || obj.contains_key("pipeline") {
-        let pipeline_val = obj
-            .get("aggregate")
-            .or_else(|| obj.get("pipeline"))
-            .ok_or_else(|| DbError::QueryFailed("Missing pipeline for aggregate".to_string()))?;
-
-        let pipeline = json_array_to_bson_docs(pipeline_val)?;
-
-        MongoOperation::Aggregate { pipeline }
-    } else if obj.contains_key("count") {
-        let filter = obj
-            .get("count")
-            .and_then(|v| json_to_bson_doc(v).ok())
-            .unwrap_or_default();
-
-        MongoOperation::Count { filter }
-    } else {
-        // Default to find operation
-        let filter = obj
-            .get("filter")
-            .and_then(|v| json_to_bson_doc(v).ok())
-            .unwrap_or_default();
-
-        let projection = obj.get("projection").and_then(|v| json_to_bson_doc(v).ok());
-
-        let sort = obj.get("sort").and_then(|v| json_to_bson_doc(v).ok());
-
-        let limit = obj.get("limit").and_then(|v| v.as_i64());
-
-        let skip = obj.get("skip").and_then(|v| v.as_u64());
-
-        MongoOperation::Find {
-            filter,
-            projection,
-            sort,
-            limit,
-            skip,
-        }
-    };
-
-    Ok(MongoQuery {
-        database,
-        collection,
-        operation,
-    })
-}
-
-fn json_to_bson_doc(val: &serde_json::Value) -> Result<Document, DbError> {
+pub fn json_to_bson_doc(val: &serde_json::Value) -> Result<Document, DbError> {
     let bson = json_to_bson(val)?;
     match bson {
         Bson::Document(doc) => Ok(doc),
@@ -983,7 +947,7 @@ fn json_to_bson_doc(val: &serde_json::Value) -> Result<Document, DbError> {
     }
 }
 
-fn json_array_to_bson_docs(val: &serde_json::Value) -> Result<Vec<Document>, DbError> {
+pub fn json_array_to_bson_docs(val: &serde_json::Value) -> Result<Vec<Document>, DbError> {
     let arr = val
         .as_array()
         .ok_or_else(|| DbError::QueryFailed("Expected array".to_string()))?;
@@ -1102,6 +1066,234 @@ fn execute_mongo_query(db: &Database, query: &MongoQuery) -> Result<QueryResultI
                 affected_rows: None,
             })
         }
+
+        MongoOperation::InsertOne { document } => {
+            let result = collection
+                .insert_one(document.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let inserted_id = bson_to_value(&result.inserted_id);
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "insertedId".to_string(),
+                    type_name: "ObjectId".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![inserted_id]],
+                affected_rows: Some(1),
+            })
+        }
+
+        MongoOperation::InsertMany { documents } => {
+            let result = collection
+                .insert_many(documents.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let count = result.inserted_ids.len() as u64;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "insertedCount".to_string(),
+                    type_name: "Int64".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Int(count as i64)]],
+                affected_rows: Some(count),
+            })
+        }
+
+        MongoOperation::UpdateOne {
+            filter,
+            update,
+            upsert,
+        } => {
+            let mut options = mongodb::options::UpdateOptions::default();
+            options.upsert = Some(*upsert);
+
+            let result = collection
+                .update_one(filter.clone(), update.clone())
+                .with_options(options)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let matched = result.matched_count;
+            let modified = result.modified_count;
+            let upserted = result.upserted_id.is_some();
+
+            Ok(QueryResultInternal {
+                columns: vec![
+                    ColumnMeta {
+                        name: "matchedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "modifiedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "upserted".to_string(),
+                        type_name: "Bool".to_string(),
+                        nullable: false,
+                    },
+                ],
+                rows: vec![vec![
+                    Value::Int(matched as i64),
+                    Value::Int(modified as i64),
+                    Value::Bool(upserted),
+                ]],
+                affected_rows: Some(modified + if upserted { 1 } else { 0 }),
+            })
+        }
+
+        MongoOperation::UpdateMany {
+            filter,
+            update,
+            upsert,
+        } => {
+            let mut options = mongodb::options::UpdateOptions::default();
+            options.upsert = Some(*upsert);
+
+            let result = collection
+                .update_many(filter.clone(), update.clone())
+                .with_options(options)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let matched = result.matched_count;
+            let modified = result.modified_count;
+            let upserted = result.upserted_id.is_some();
+
+            Ok(QueryResultInternal {
+                columns: vec![
+                    ColumnMeta {
+                        name: "matchedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "modifiedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "upserted".to_string(),
+                        type_name: "Bool".to_string(),
+                        nullable: false,
+                    },
+                ],
+                rows: vec![vec![
+                    Value::Int(matched as i64),
+                    Value::Int(modified as i64),
+                    Value::Bool(upserted),
+                ]],
+                affected_rows: Some(modified + if upserted { 1 } else { 0 }),
+            })
+        }
+
+        MongoOperation::DeleteOne { filter } => {
+            let result = collection
+                .delete_one(filter.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let deleted = result.deleted_count;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "deletedCount".to_string(),
+                    type_name: "Int64".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Int(deleted as i64)]],
+                affected_rows: Some(deleted),
+            })
+        }
+
+        MongoOperation::DeleteMany { filter } => {
+            let result = collection
+                .delete_many(filter.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let deleted = result.deleted_count;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "deletedCount".to_string(),
+                    type_name: "Int64".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Int(deleted as i64)]],
+                affected_rows: Some(deleted),
+            })
+        }
+
+        MongoOperation::ReplaceOne {
+            filter,
+            replacement,
+            upsert,
+        } => {
+            let mut options = mongodb::options::ReplaceOptions::default();
+            options.upsert = Some(*upsert);
+
+            let result = collection
+                .replace_one(filter.clone(), replacement.clone())
+                .with_options(options)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let matched = result.matched_count;
+            let modified = result.modified_count;
+            let upserted = result.upserted_id.is_some();
+
+            Ok(QueryResultInternal {
+                columns: vec![
+                    ColumnMeta {
+                        name: "matchedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "modifiedCount".to_string(),
+                        type_name: "Int64".to_string(),
+                        nullable: false,
+                    },
+                    ColumnMeta {
+                        name: "upserted".to_string(),
+                        type_name: "Bool".to_string(),
+                        nullable: false,
+                    },
+                ],
+                rows: vec![vec![
+                    Value::Int(matched as i64),
+                    Value::Int(modified as i64),
+                    Value::Bool(upserted),
+                ]],
+                affected_rows: Some(modified + if upserted { 1 } else { 0 }),
+            })
+        }
+
+        MongoOperation::Drop => {
+            collection
+                .drop()
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "result".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Text("Collection dropped".to_string())]],
+                affected_rows: None,
+            })
+        }
     }
 }
 
@@ -1204,14 +1396,73 @@ fn bson_to_value(bson: &Bson) -> Value {
     }
 }
 
+/// Fetch indexes for a collection. Returns None if fetching fails (non-blocking).
+fn fetch_collection_indexes(db: &Database, collection_name: &str) -> Option<Vec<IndexInfo>> {
+    let collection = db.collection::<Document>(collection_name);
+
+    let indexes_result = collection.list_indexes().run();
+    let cursor = match indexes_result {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "[SCHEMA] Failed to fetch indexes for {}: {}",
+                collection_name,
+                e
+            );
+            return None;
+        }
+    };
+
+    let indexes: Vec<IndexInfo> = cursor
+        .filter_map(|result| {
+            let index_model = result.ok()?;
+            let keys = index_model.keys;
+
+            // Extract column names from the key document
+            let columns: Vec<String> = keys.keys().cloned().collect();
+
+            // Get index name
+            let name = index_model
+                .options
+                .as_ref()
+                .and_then(|opts| opts.name.clone())
+                .unwrap_or_else(|| columns.join("_"));
+
+            // Check if unique
+            let is_unique = index_model
+                .options
+                .as_ref()
+                .and_then(|opts| opts.unique)
+                .unwrap_or(false);
+
+            // Check if this is the _id index (primary)
+            let is_primary = columns.len() == 1 && columns[0] == "_id";
+
+            Some(IndexInfo {
+                name,
+                columns,
+                is_unique,
+                is_primary,
+            })
+        })
+        .collect();
+
+    if indexes.is_empty() {
+        None
+    } else {
+        Some(indexes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query_parser::parse_query;
 
     #[test]
     fn test_parse_find_query() {
         let json = r#"{"collection": "users", "filter": {"name": "John"}}"#;
-        let query = parse_mongo_query(json).unwrap();
+        let query = parse_query(json).unwrap();
         assert_eq!(query.collection, "users");
         assert!(matches!(query.operation, MongoOperation::Find { .. }));
     }
@@ -1219,7 +1470,7 @@ mod tests {
     #[test]
     fn test_parse_aggregate_query() {
         let json = r#"{"collection": "orders", "aggregate": [{"$match": {"status": "active"}}]}"#;
-        let query = parse_mongo_query(json).unwrap();
+        let query = parse_query(json).unwrap();
         assert_eq!(query.collection, "orders");
         assert!(matches!(query.operation, MongoOperation::Aggregate { .. }));
     }
@@ -1227,7 +1478,7 @@ mod tests {
     #[test]
     fn test_parse_count_query() {
         let json = r#"{"collection": "products", "count": {}}"#;
-        let query = parse_mongo_query(json).unwrap();
+        let query = parse_query(json).unwrap();
         assert_eq!(query.collection, "products");
         assert!(matches!(query.operation, MongoOperation::Count { .. }));
     }

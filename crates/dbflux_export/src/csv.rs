@@ -81,6 +81,7 @@ mod tests {
             rows,
             affected_rows: None,
             execution_time: Duration::from_millis(10),
+            is_document_result: false,
         }
     }
 

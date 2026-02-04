@@ -8,7 +8,7 @@ use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{CancelToken, DbError, HistoryEntry, QueryRequest, QueryResult};
+use dbflux_core::{CancelToken, DbError, DbKind, HistoryEntry, QueryRequest, QueryResult};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -260,6 +260,34 @@ impl SqlQueryDocument {
                     in_new_tab,
                 });
                 cx.notify();
+                return;
+            }
+        }
+
+        // For MongoDB connections, validate before execution
+        if let Some(conn_id) = self.connection_id
+            && let Some(connected) = self.app_state.read(cx).connections.get(&conn_id)
+            && connected.connection.kind() == DbKind::MongoDB
+        {
+            let trimmed = query.trim().to_lowercase();
+
+            // Detect SQL syntax on MongoDB connection
+            if trimmed.starts_with("select ")
+                || trimmed.starts_with("insert into")
+                || trimmed.starts_with("update ")
+                || trimmed.starts_with("delete from")
+            {
+                cx.toast_error(
+                    "SQL syntax not supported for MongoDB. Use db.collection.method() syntax.",
+                    window,
+                );
+                return;
+            }
+
+            // Validate MongoDB syntax
+            #[cfg(feature = "mongodb")]
+            if let Err(e) = dbflux_driver_mongodb::validate_query(&query) {
+                cx.toast_error(format!("Invalid MongoDB query: {}", e), window);
                 return;
             }
         }
@@ -1220,6 +1248,10 @@ impl SqlQueryDocument {
                     DangerousQueryKind::Drop => "DROP",
                     DangerousQueryKind::Alter => "ALTER",
                     DangerousQueryKind::Script => "Dangerous Script",
+                    DangerousQueryKind::MongoDeleteMany => "deleteMany with empty filter",
+                    DangerousQueryKind::MongoUpdateMany => "updateMany with empty filter",
+                    DangerousQueryKind::MongoDropCollection => "drop() collection",
+                    DangerousQueryKind::MongoDropDatabase => "dropDatabase()",
                 };
                 (title, p.kind.message())
             })

@@ -1045,6 +1045,7 @@ impl Connection for MysqlConnection {
                             rows: Vec::new(),
                             affected_rows: None,
                             execution_time: query_time,
+                            is_document_result: false,
                         });
                     } else {
                         // Non-SELECT query, get affected rows from conn
@@ -1059,6 +1060,7 @@ impl Connection for MysqlConnection {
                             rows: Vec::new(),
                             affected_rows: Some(affected),
                             execution_time: query_time,
+                            is_document_result: false,
                         });
                     }
                 }
@@ -1085,6 +1087,7 @@ impl Connection for MysqlConnection {
                     rows: result_rows,
                     affected_rows: None,
                     execution_time: query_time,
+                    is_document_result: false,
                 })
             }
             Err(e) => {

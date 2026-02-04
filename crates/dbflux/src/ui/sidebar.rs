@@ -4097,15 +4097,7 @@ impl Sidebar {
             let collection_children: Vec<TreeItem> = db_schema
                 .tables
                 .iter()
-                .map(|coll| {
-                    TreeItem::new(
-                        format!(
-                            "collection_{}__{}__{}",
-                            profile_id, database_name, coll.name
-                        ),
-                        coll.name.clone(),
-                    )
-                })
+                .map(|coll| Self::build_collection_item(profile_id, database_name, coll))
                 .collect();
 
             content.push(
@@ -4119,6 +4111,63 @@ impl Sidebar {
         }
 
         content
+    }
+
+    fn build_collection_item(
+        profile_id: Uuid,
+        database_name: &str,
+        collection: &dbflux_core::TableInfo,
+    ) -> TreeItem {
+        let coll_name = &collection.name;
+        let mut collection_children = Vec::new();
+
+        if let Some(ref indexes) = collection.indexes
+            && !indexes.is_empty()
+        {
+            let index_children: Vec<TreeItem> = indexes
+                .iter()
+                .map(|idx| {
+                    let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+                    let pk_marker = if idx.is_primary { " PK" } else { "" };
+                    let cols = idx.columns.join(", ");
+                    let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
+
+                    TreeItem::new(
+                        format!("idx_{}_{}_{}", profile_id, coll_name, idx.name),
+                        label,
+                    )
+                })
+                .collect();
+
+            collection_children.push(
+                TreeItem::new(
+                    format!("indexes_{}_{}_{}", profile_id, database_name, coll_name),
+                    format!("Indexes ({})", indexes.len()),
+                )
+                .expanded(false)
+                .children(index_children),
+            );
+        }
+
+        if collection_children.is_empty() {
+            TreeItem::new(
+                format!(
+                    "collection_{}__{}__{}",
+                    profile_id, database_name, coll_name
+                ),
+                coll_name.clone(),
+            )
+        } else {
+            TreeItem::new(
+                format!(
+                    "collection_{}__{}__{}",
+                    profile_id, database_name, coll_name
+                ),
+                coll_name.clone(),
+            )
+            .expanded(false)
+            .children(collection_children)
+        }
     }
 
     fn build_db_schema_content(
