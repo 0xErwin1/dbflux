@@ -346,6 +346,41 @@ impl QueryLanguage {
             QueryLanguage::Custom(_) => "txt",
         }
     }
+
+    /// Returns the syntax highlighting mode for code editors.
+    pub fn editor_mode(&self) -> &'static str {
+        match self {
+            QueryLanguage::Sql | QueryLanguage::Cql => "sql",
+            QueryLanguage::MongoQuery => "javascript",
+            QueryLanguage::RedisCommands => "plaintext",
+            QueryLanguage::Cypher => "cypher",
+            QueryLanguage::InfluxQuery => "sql",
+            QueryLanguage::Custom(_) => "plaintext",
+        }
+    }
+
+    /// Returns the placeholder text for the query editor.
+    pub fn placeholder(&self) -> &'static str {
+        match self {
+            QueryLanguage::Sql => "-- Enter SQL here...",
+            QueryLanguage::MongoQuery => "// db.collection.find({})",
+            QueryLanguage::RedisCommands => "# Enter Redis command...",
+            QueryLanguage::Cypher => "// Enter Cypher query...",
+            QueryLanguage::InfluxQuery => "-- Enter InfluxQL...",
+            QueryLanguage::Cql => "-- Enter CQL...",
+            QueryLanguage::Custom(_) => "Enter query...",
+        }
+    }
+
+    /// Returns the comment prefix for this query language.
+    pub fn comment_prefix(&self) -> &'static str {
+        match self {
+            QueryLanguage::Sql | QueryLanguage::InfluxQuery | QueryLanguage::Cql => "--",
+            QueryLanguage::MongoQuery | QueryLanguage::Cypher => "//",
+            QueryLanguage::RedisCommands => "#",
+            QueryLanguage::Custom(_) => "#",
+        }
+    }
 }
 
 /// Static metadata that a driver provides about itself.

@@ -111,15 +111,24 @@ pub struct ExecutionRecord {
 
 impl SqlQueryDocument {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let connection_id = app_state.read(cx).active_connection_id;
+
+        // Get query language from the active connection, default to SQL
+        let query_language = connection_id
+            .and_then(|id| app_state.read(cx).connections.get(&id))
+            .map(|conn| conn.connection.metadata().query_language)
+            .unwrap_or(dbflux_core::QueryLanguage::Sql);
+
+        let editor_mode = query_language.editor_mode();
+        let placeholder = query_language.placeholder();
+
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor("sql")
+                .code_editor(editor_mode)
                 .line_number(true)
                 .soft_wrap(false)
-                .placeholder("-- Enter SQL here...")
+                .placeholder(placeholder)
         });
-
-        let connection_id = app_state.read(cx).active_connection_id;
 
         // Create history modal
         let history_modal = cx.new(|cx| HistoryModal::new(app_state.clone(), window, cx));

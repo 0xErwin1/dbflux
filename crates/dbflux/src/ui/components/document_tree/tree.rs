@@ -554,6 +554,9 @@ fn render_tree_row(
     let row_state = state.clone();
     let row_node_id = node_id.clone();
 
+    let context_menu_state = state.clone();
+    let context_menu_node_id = node_id.clone();
+
     let value_state = state.clone();
     let value_node_id = node_id.clone();
 
@@ -610,6 +613,17 @@ fn render_tree_row(
                         // Double click: execute action (expand, edit, or preview)
                         s.execute_node(&row_node_id, cx);
                     }
+                });
+            }
+        })
+        .on_mouse_down(MouseButton::Right, {
+            move |event, window, cx| {
+                cx.stop_propagation();
+                let position = event.position;
+                context_menu_state.update(cx, |s, cx| {
+                    s.focus(window);
+                    s.set_cursor(&context_menu_node_id, cx);
+                    s.request_context_menu(position, cx);
                 });
             }
         })

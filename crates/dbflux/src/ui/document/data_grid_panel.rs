@@ -230,9 +230,9 @@ struct PendingDocumentPreview {
 
 /// Context menu state for right-click operations.
 struct TableContextMenu {
-    /// Row index of the clicked cell.
+    /// Row index of the clicked cell (or document index in document view).
     row: usize,
-    /// Column index of the clicked cell.
+    /// Column index of the clicked cell (unused in document view).
     col: usize,
     /// Screen position where the menu should appear.
     position: Point<Pixels>,
@@ -242,6 +242,8 @@ struct TableContextMenu {
     selected_index: usize,
     /// Selected index within the SQL submenu (0-3).
     submenu_selected_index: usize,
+    /// Whether this is a document view context menu (different items shown).
+    is_document_view: bool,
 }
 
 /// A single item in the context menu.
@@ -739,6 +741,7 @@ impl DataGridPanel {
                             sql_submenu_open: false,
                             selected_index: 0,
                             submenu_selected_index: 0,
+                            is_document_view: false,
                         });
                         cx.notify();
                     }
@@ -840,6 +843,19 @@ impl DataGridPanel {
                         });
                         cx.notify();
                     }
+                }
+                DocumentTreeEvent::ContextMenuRequested { doc_index, position } => {
+                    // Set context menu state directly (same pattern as DataTableEvent::ContextMenuRequested)
+                    this.context_menu = Some(TableContextMenu {
+                        row: *doc_index,
+                        col: 0,
+                        position: *position,
+                        sql_submenu_open: false,
+                        selected_index: 0,
+                        submenu_selected_index: 0,
+                        is_document_view: true,
+                    });
+                    cx.notify();
                 }
                 DocumentTreeEvent::CursorMoved
                 | DocumentTreeEvent::ExpandToggled
@@ -2785,7 +2801,12 @@ impl DataGridPanel {
                 true
             }
             Command::OpenContextMenu => {
-                self.open_context_menu_at_selection(window, cx);
+                use super::data_view::DataViewMode;
+                if self.view_config.mode == DataViewMode::Document {
+                    self.open_document_context_menu_at_cursor(window, cx);
+                } else {
+                    self.open_context_menu_at_selection(window, cx);
+                }
                 true
             }
             _ => false,
@@ -2831,9 +2852,66 @@ impl DataGridPanel {
             sql_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
+            is_document_view: false,
         });
 
         // Focus the context menu to receive keyboard events
+        self.context_menu_focus.focus(window);
+        cx.notify();
+    }
+
+    /// Opens context menu for document view at the specified position.
+    #[allow(dead_code)]
+    fn open_document_context_menu(
+        &mut self,
+        doc_index: usize,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_menu = Some(TableContextMenu {
+            row: doc_index,
+            col: 0,
+            position,
+            sql_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+            is_document_view: true,
+        });
+
+        self.context_menu_focus.focus(window);
+        cx.notify();
+    }
+
+    /// Opens context menu for document view at the current cursor position (keyboard triggered).
+    fn open_document_context_menu_at_cursor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        let cursor_info = tree_state.read(cx).cursor().and_then(|id| id.doc_index());
+        let doc_index = cursor_info.unwrap_or(0);
+
+        // Use panel origin with some offset for keyboard-triggered menu
+        let position = Point {
+            x: self.panel_origin.x + px(100.0),
+            y: self.panel_origin.y + px(100.0),
+        };
+
+        self.context_menu = Some(TableContextMenu {
+            row: doc_index,
+            col: 0,
+            position,
+            sql_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+            is_document_view: true,
+        });
+
         self.context_menu_focus.focus(window);
         cx.notify();
     }
@@ -2870,11 +2948,30 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let is_editable = self.check_is_editable(cx);
+        let is_document_view = self
+            .context_menu
+            .as_ref()
+            .map(|m| m.is_document_view)
+            .unwrap_or(false);
 
-        // Build the menu items list to know the count
-        // Items: Copy, Paste*, Edit*, EditModal*, sep, SetDefault*, SetNull*, sep, AddRow*, DupRow*, DelRow*, sep, GenSQL
-        // * = requires editable
-        let menu_items: Vec<Option<ContextMenuAction>> = if is_editable {
+        // Build the menu items list based on view mode
+        let menu_items: Vec<Option<ContextMenuAction>> = if is_document_view {
+            // Document view: Copy, View Document, [sep, Delete Document if editable]
+            if is_editable {
+                vec![
+                    Some(ContextMenuAction::Copy),
+                    Some(ContextMenuAction::EditInModal),
+                    None, // separator
+                    Some(ContextMenuAction::DeleteRow),
+                ]
+            } else {
+                vec![
+                    Some(ContextMenuAction::Copy),
+                    Some(ContextMenuAction::EditInModal),
+                ]
+            }
+        } else if is_editable {
+            // Table view (editable): Copy, Paste, Edit, EditModal, sep, SetDefault, SetNull, sep, AddRow, DupRow, DelRow, sep, GenSQL
             vec![
                 Some(ContextMenuAction::Copy),
                 Some(ContextMenuAction::Paste),
@@ -2891,6 +2988,7 @@ impl DataGridPanel {
                 None, // Generate SQL trigger (special handling)
             ]
         } else {
+            // Table view (read-only): Copy, sep, GenSQL
             vec![
                 Some(ContextMenuAction::Copy),
                 None, // separator (before Generate SQL)
@@ -2900,11 +2998,12 @@ impl DataGridPanel {
 
         let item_count = menu_items.len();
         let submenu_count = 4; // SELECT WHERE, INSERT, UPDATE, DELETE
+        let has_generate_sql = !is_document_view;
 
         match cmd {
             Command::MenuDown => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open {
+                    if menu.sql_submenu_open && has_generate_sql {
                         menu.submenu_selected_index =
                             (menu.submenu_selected_index + 1) % submenu_count;
                     } else {
@@ -2912,7 +3011,7 @@ impl DataGridPanel {
                         // Skip separators
                         while menu.selected_index < item_count
                             && menu_items[menu.selected_index].is_none()
-                            && menu.selected_index != item_count - 1
+                            && (has_generate_sql || menu.selected_index != item_count - 1)
                         {
                             menu.selected_index = (menu.selected_index + 1) % item_count;
                         }
@@ -2923,7 +3022,7 @@ impl DataGridPanel {
             }
             Command::MenuUp => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open {
+                    if menu.sql_submenu_open && has_generate_sql {
                         menu.submenu_selected_index = if menu.submenu_selected_index == 0 {
                             submenu_count - 1
                         } else {
@@ -2938,7 +3037,7 @@ impl DataGridPanel {
                         // Skip separators (going backwards)
                         while menu.selected_index > 0
                             && menu_items[menu.selected_index].is_none()
-                            && menu.selected_index != item_count - 1
+                            && (has_generate_sql || menu.selected_index != item_count - 1)
                         {
                             menu.selected_index = if menu.selected_index == 0 {
                                 item_count - 1
@@ -2953,7 +3052,7 @@ impl DataGridPanel {
             }
             Command::MenuSelect => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open {
+                    if menu.sql_submenu_open && has_generate_sql {
                         // Execute submenu action
                         let action = match menu.submenu_selected_index {
                             0 => ContextMenuAction::GenerateSelectWhere,
@@ -2962,8 +3061,8 @@ impl DataGridPanel {
                             _ => ContextMenuAction::GenerateDelete,
                         };
                         self.handle_context_menu_action(action, window, cx);
-                    } else if menu.selected_index == item_count - 1 {
-                        // Last item is Generate SQL - open submenu
+                    } else if has_generate_sql && menu.selected_index == item_count - 1 {
+                        // Last item is Generate SQL - open submenu (only for table view)
                         menu.sql_submenu_open = true;
                         menu.submenu_selected_index = 0;
                         cx.notify();
@@ -4281,8 +4380,50 @@ impl DataGridPanel {
             )
     }
 
-    /// Builds the list of visible context menu items based on editability.
-    fn build_context_menu_items(is_editable: bool) -> Vec<ContextMenuItem> {
+    /// Builds the list of visible context menu items based on editability and view mode.
+    fn build_context_menu_items(is_editable: bool, is_document_view: bool) -> Vec<ContextMenuItem> {
+        if is_document_view {
+            // Document view menu: Copy, View/Edit Document, Delete Document
+            let mut items = vec![
+                ContextMenuItem {
+                    label: "Copy",
+                    action: Some(ContextMenuAction::Copy),
+                    icon: Some(AppIcon::Layers),
+                    is_separator: false,
+                    is_danger: false,
+                },
+                ContextMenuItem {
+                    label: "View Document",
+                    action: Some(ContextMenuAction::EditInModal),
+                    icon: Some(AppIcon::Maximize2),
+                    is_separator: false,
+                    is_danger: false,
+                },
+            ];
+
+            if is_editable {
+                items.extend([
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Delete Document",
+                        action: Some(ContextMenuAction::DeleteRow),
+                        icon: Some(AppIcon::Delete),
+                        is_separator: false,
+                        is_danger: true,
+                    },
+                ]);
+            }
+
+            return items;
+        }
+
+        // Table view menu
         let mut items = vec![ContextMenuItem {
             label: "Copy",
             action: Some(ContextMenuAction::Copy),
@@ -4370,12 +4511,17 @@ impl DataGridPanel {
     }
 
     /// Returns the total number of navigable items in the context menu.
-    /// This includes all visible items plus the Generate SQL trigger.
+    /// This includes all visible items plus the Generate SQL trigger (for table view).
     #[allow(dead_code)]
-    fn context_menu_item_count(is_editable: bool) -> usize {
-        let base_items = Self::build_context_menu_items(is_editable);
-        // Count non-separator items + 1 for Generate SQL
-        base_items.iter().filter(|i| !i.is_separator).count() + 1
+    fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_count = base_items.iter().filter(|i| !i.is_separator).count();
+        // Add 1 for Generate SQL only in table view
+        if is_document_view {
+            base_count
+        } else {
+            base_count + 1
+        }
     }
 
     fn render_delete_confirm_modal(
@@ -4513,8 +4659,9 @@ impl DataGridPanel {
         let menu_y = menu.position.y - self.panel_origin.y;
 
         // Build visible menu items list for keyboard navigation
-        let visible_items = Self::build_context_menu_items(is_editable);
+        let visible_items = Self::build_context_menu_items(is_editable, menu.is_document_view);
         let selected_index = menu.selected_index;
+        let is_document_view = menu.is_document_view;
 
         // Build menu items with selection highlighting
         let mut menu_items: Vec<AnyElement> = Vec::new();
@@ -4611,18 +4758,20 @@ impl DataGridPanel {
             visual_index += 1;
         }
 
-        // Add separator before "Generate SQL"
-        menu_items.push(
-            div()
-                .h(px(1.0))
-                .mx(Spacing::SM)
-                .my(Spacing::XS)
-                .bg(theme.border)
-                .into_any_element(),
-        );
-        visual_index += 1; // Separator takes an index slot
+        // "Generate SQL" submenu (only for table view, not document view)
+        if !is_document_view {
+            // Add separator before "Generate SQL"
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1; // Separator takes an index slot
 
-        // "Generate SQL" submenu trigger
+            // "Generate SQL" submenu trigger
         let sql_submenu_open = menu.sql_submenu_open;
         let submenu_bg = theme.popover;
         let submenu_border = theme.border;
@@ -4775,7 +4924,8 @@ impl DataGridPanel {
                     )
                 })
                 .into_any_element(),
-        );
+            );
+        }
 
         // Use deferred() to render at window level for correct positioning
         deferred(
@@ -4849,17 +4999,37 @@ impl DataGridPanel {
         };
 
         match action {
-            ContextMenuAction::Copy => self.handle_copy(window, cx),
+            ContextMenuAction::Copy => {
+                if menu.is_document_view {
+                    self.handle_copy_document(menu.row, cx);
+                } else {
+                    self.handle_copy(window, cx);
+                }
+            }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
             ContextMenuAction::EditInModal => {
-                self.handle_edit_in_modal(menu.row, menu.col, cx);
+                if menu.is_document_view {
+                    self.handle_view_document(menu.row, cx);
+                } else {
+                    self.handle_edit_in_modal(menu.row, menu.col, cx);
+                }
             }
             ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
             ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
             ContextMenuAction::AddRow => self.handle_add_row(menu.row, cx),
             ContextMenuAction::DuplicateRow => self.handle_duplicate_row(menu.row, cx),
-            ContextMenuAction::DeleteRow => self.handle_delete_row(menu.row, cx),
+            ContextMenuAction::DeleteRow => {
+                if menu.is_document_view {
+                    self.pending_delete_confirm = Some(PendingDeleteConfirm {
+                        row_idx: menu.row,
+                        is_table: false,
+                    });
+                    cx.notify();
+                } else {
+                    self.handle_delete_row(menu.row, cx);
+                }
+            }
             ContextMenuAction::GenerateSelectWhere => {
                 self.handle_generate_sql(menu.row, SqlGenerateKind::SelectWhere, cx)
             }
@@ -4885,6 +5055,39 @@ impl DataGridPanel {
             if let Some(text) = text {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
+        }
+    }
+
+    /// Copy entire document as JSON (for document view).
+    fn handle_copy_document(&self, doc_index: usize, cx: &mut Context<Self>) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        if let Some(raw_doc) = tree_state.read(cx).get_raw_document(doc_index) {
+            let json_value = value_to_json(raw_doc);
+            if let Ok(json_str) = serde_json::to_string_pretty(&json_value) {
+                cx.write_to_clipboard(ClipboardItem::new_string(json_str));
+            }
+        }
+    }
+
+    /// Open document preview modal for viewing/editing (for document view).
+    fn handle_view_document(&mut self, doc_index: usize, cx: &mut Context<Self>) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        if let Some(raw_doc) = tree_state.read(cx).get_raw_document(doc_index) {
+            let json_value = value_to_json(raw_doc);
+            let json_str =
+                serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
+
+            self.pending_document_preview = Some(PendingDocumentPreview {
+                doc_index,
+                document_json: json_str,
+            });
+            cx.notify();
         }
     }
 

@@ -172,6 +172,11 @@ impl DocumentTreeState {
         self.cursor.as_ref()
     }
 
+    /// Get raw document value by index (for copy/preview operations).
+    pub fn get_raw_document(&self, doc_index: usize) -> Option<&Value> {
+        self.raw_documents.get(doc_index)
+    }
+
     pub fn set_cursor(&mut self, id: &NodeId, cx: &mut Context<Self>) {
         if self.cursor.as_ref() != Some(id) {
             self.cursor = Some(id.clone());
@@ -703,6 +708,20 @@ impl DocumentTreeState {
         if cursor.is_root() {
             cx.emit(DocumentTreeEvent::DeleteRequested(cursor.clone()));
         }
+    }
+
+    /// Request context menu at the given position for the current cursor node.
+    pub fn request_context_menu(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cursor) = &self.cursor else {
+            return;
+        };
+
+        let doc_index = cursor.doc_index().unwrap_or(0);
+        cx.emit(DocumentTreeEvent::ContextMenuRequested { doc_index, position });
     }
 
     /// Double-click action: preview (root), expand (container), or edit (scalar).
