@@ -43,4 +43,10 @@ pub enum DocumentTreeEvent {
 
     /// Search mode was closed.
     SearchClosed,
+
+    /// User requested context menu on a document.
+    ContextMenuRequested {
+        doc_index: usize,
+        position: gpui::Point<gpui::Pixels>,
+    },
 }
