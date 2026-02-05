@@ -4,3 +4,4 @@ thoughts/
 scripts/src
 scripts/pkg
 scripts/dbflux*
+.logs
