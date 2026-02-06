@@ -667,22 +667,28 @@ mod tests {
     fn test_parse_find_with_projection() {
         let query = parse_query(r#"db.users.find({"active": true}, {"name": 1})"#).unwrap();
         assert_eq!(query.collection, "users");
-        if let MongoOperation::Find { projection, .. } = query.operation {
-            assert!(projection.is_some());
-        } else {
-            panic!("Expected Find operation");
-        }
+        assert!(
+            matches!(
+                query.operation,
+                MongoOperation::Find {
+                    projection: Some(_),
+                    ..
+                }
+            ),
+            "Expected Find operation with projection, got: {:?}",
+            query.operation
+        );
     }
 
     #[test]
     fn test_parse_find_one() {
         let query = parse_query(r#"db.users.findOne({"_id": "123"})"#).unwrap();
         assert_eq!(query.collection, "users");
-        if let MongoOperation::Find { limit, .. } = query.operation {
-            assert_eq!(limit, Some(1));
-        } else {
-            panic!("Expected Find operation");
-        }
+        assert!(
+            matches!(query.operation, MongoOperation::Find { limit: Some(1), .. }),
+            "Expected Find operation with limit=1, got: {:?}",
+            query.operation
+        );
     }
 
     #[test]
@@ -718,10 +724,10 @@ mod tests {
     fn test_parse_insert_many() {
         let query = parse_query(r#"db.users.insertMany([{"name": "A"}, {"name": "B"}])"#).unwrap();
         assert_eq!(query.collection, "users");
-        if let MongoOperation::InsertMany { documents } = query.operation {
+        if let MongoOperation::InsertMany { documents } = &query.operation {
             assert_eq!(documents.len(), 2);
         } else {
-            panic!("Expected InsertMany operation");
+            panic!("Expected InsertMany operation, got: {:?}", query.operation);
         }
     }
 

@@ -894,6 +894,7 @@ pub struct MongoQuery {
     pub operation: MongoOperation,
 }
 
+#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum MongoOperation {
     Find {

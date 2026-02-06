@@ -3050,9 +3050,10 @@ impl Sidebar {
             let delay = std::time::Duration::from_millis(600);
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(delay).await;
-                let _ = this.update(cx, |this, cx| {
+                this.update(cx, |this, cx| {
                     this.check_auto_expand_folder(cx);
-                });
+                })
+                .ok();
             })
             .detach();
         }

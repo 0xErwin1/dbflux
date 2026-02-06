@@ -1350,14 +1350,15 @@ impl Render for Workspace {
                 let menu_item_height = px(32.0);
                 let menu_container_padding = px(4.0);
 
-                let in_submenu = !menu.parent_stack.is_empty();
+                let parent_entry = menu.parent_stack.last();
 
-                let submenu_y_offset = if in_submenu {
-                    let (_, parent_selected) = menu.parent_stack.last().unwrap();
+                let submenu_y_offset = if let Some((_, parent_selected)) = parent_entry {
                     menu_container_padding + (menu_item_height * (*parent_selected as f32))
                 } else {
                     px(0.0)
                 };
+
+                let in_submenu = parent_entry.is_some();
 
                 this
                     // Full-screen overlay to capture clicks outside
@@ -1376,8 +1377,7 @@ impl Render for Workspace {
                             }),
                     )
                     // Parent menu (shown when in submenu, at original position)
-                    .when(in_submenu, |d| {
-                        let (parent_items, parent_selected) = menu.parent_stack.last().unwrap();
+                    .when_some(parent_entry, |d, (parent_items, parent_selected)| {
                         d.child(
                             div()
                                 .absolute()
