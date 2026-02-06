@@ -5,19 +5,19 @@ use std::time::Instant;
 use std::collections::HashMap;
 
 use dbflux_core::{
-    DescribeRequest, ExplainRequest,
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ForeignKeyBuilder, ForeignKeyInfo,
-    FormValues, FormattedError, Icon, IndexInfo, MYSQL_FORM, PlaceholderStyle, QueryCancelHandle,
-    QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, sanitize_uri,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
+    DriverFormDef, DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest,
+    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, MYSQL_FORM,
+    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1549,7 +1549,6 @@ impl Connection for MysqlConnection {
         let sql = format!("DESCRIBE {}", request.table.quoted_with(self.dialect()));
         self.execute(&QueryRequest::new(sql))
     }
-
 
     fn dialect(&self) -> &dyn SqlDialect {
         &MYSQL_DIALECT

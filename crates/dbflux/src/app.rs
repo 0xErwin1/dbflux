@@ -25,9 +25,9 @@ use dbflux_driver_mysql::MysqlDriver;
 use dbflux_driver_mongodb::MongoDriver;
 
 pub use dbflux_core::{
-    ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions,
-    FetchDatabaseSchemaParams, FetchSchemaForeignKeysParams, FetchSchemaIndexesParams,
-    FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
+    ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
+    FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
+    FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
 pub struct AppState {
@@ -324,9 +324,12 @@ impl AppState {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
-        self.facade
-            .connections
-            .apply_switch_database(profile_id, original_profile, connection, schema);
+        self.facade.connections.apply_switch_database(
+            profile_id,
+            original_profile,
+            connection,
+            schema,
+        );
     }
 
     pub fn prepare_fetch_database_schema(

@@ -7,14 +7,14 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
-    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
-    DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo, FormValues, FormattedError,
-    Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
-    RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlQueryBuilder, TableInfo, Value, ViewInfo,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_update_template,
+    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest,
+    DriverCapabilities, DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, PlaceholderStyle,
+    QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -710,7 +710,6 @@ impl Connection for SqliteConnection {
 
         Ok(CrudResult::new(affected as u64, returning_row))
     }
-
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
         let query = match &request.query {

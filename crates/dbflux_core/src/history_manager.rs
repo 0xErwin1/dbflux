@@ -23,10 +23,7 @@ impl HistoryManager {
     }
 
     pub fn entries(&self) -> &[HistoryEntry] {
-        self.store
-            .as_ref()
-            .map(|s| s.entries())
-            .unwrap_or(&[])
+        self.store.as_ref().map(|s| s.entries()).unwrap_or(&[])
     }
 
     pub fn add(&mut self, entry: HistoryEntry) {

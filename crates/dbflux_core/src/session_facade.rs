@@ -1,7 +1,3 @@
-use crate::{
-    ConnectionProfile, DangerousQueryKind, DbDriver, DbKind, ShutdownCoordinator, ShutdownPhase,
-    TaskManager, create_secret_store,
-};
 use crate::connection_manager::ConnectionManager;
 use crate::connection_tree_manager::ConnectionTreeManager;
 use crate::history_manager::HistoryManager;
@@ -9,6 +5,10 @@ use crate::profile_manager::ProfileManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::secret_manager::SecretManager;
 use crate::ssh_tunnel_manager::SshTunnelManager;
+use crate::{
+    ConnectionProfile, DangerousQueryKind, DbDriver, DbKind, ShutdownCoordinator, ShutdownPhase,
+    TaskManager, create_secret_store,
+};
 use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;

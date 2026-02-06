@@ -178,9 +178,7 @@ impl SecretManager {
 
         // If using a saved tunnel profile, get secret from there
         if let Some(tunnel_profile_id) = ssh_tunnel_profile_id {
-            let tunnel = ssh_tunnels
-                .iter()
-                .find(|t| t.id == tunnel_profile_id)?;
+            let tunnel = ssh_tunnels.iter().find(|t| t.id == tunnel_profile_id)?;
 
             if !tunnel.save_secret {
                 return None;
