@@ -6,7 +6,7 @@ use bson::{Bson, Document, doc};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DocumentDelete,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic, DocumentDelete,
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
     DriverMetadata, FormValues, FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM,
     PlaceholderStyle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
@@ -518,7 +518,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         client
             .database("admin")
@@ -547,7 +547,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         // Parse the query (supports both shell syntax and JSON format)
         let query: MongoQuery = crate::query_parser::parse_query(&req.sql)?;
@@ -558,7 +558,7 @@ impl Connection for MongoConnection {
             .as_ref()
             .or(req.database.as_ref())
             .or(self.default_database.as_ref())
-            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
 
         let db = client.database(db_name);
 
@@ -603,7 +603,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_names = client
             .list_database_names()
@@ -626,7 +626,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db = client.database(database);
 
@@ -712,13 +712,13 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_name = update
             .database
             .as_ref()
             .or(self.default_database.as_ref())
-            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
 
         let db = client.database(db_name);
         let collection = db.collection::<Document>(&update.collection);
@@ -752,13 +752,13 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_name = insert
             .database
             .as_ref()
             .or(self.default_database.as_ref())
-            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
 
         let db = client.database(db_name);
         let collection = db.collection::<Document>(&insert.collection);
@@ -798,13 +798,13 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_name = delete
             .database
             .as_ref()
             .or(self.default_database.as_ref())
-            .ok_or_else(|| DbError::QueryFailed("No database specified".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
 
         let db = client.database(db_name);
         let collection = db.collection::<Document>(&delete.collection);
@@ -835,7 +835,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_name = request.collection.database.as_str();
         let db = client.database(db_name);
@@ -884,7 +884,7 @@ impl Connection for MongoConnection {
         let client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let db_name = request.collection.database.as_str();
         let db = client.database(db_name);
@@ -939,7 +939,10 @@ impl LanguageService for MongoLanguageService {
 
         match crate::query_parser::validate_query(query) {
             Ok(_) => ValidationResult::Valid,
-            Err(e) => ValidationResult::SyntaxError(format!("Invalid MongoDB query: {}", e)),
+            Err(e) => ValidationResult::SyntaxError(
+                Diagnostic::error(format!("Invalid MongoDB query: {}", e))
+                    .with_hint("Use db.collection.method() syntax"),
+            ),
         }
     }
 
@@ -1062,14 +1065,14 @@ pub fn json_to_bson_doc(val: &serde_json::Value) -> Result<Document, DbError> {
     let bson = json_to_bson(val)?;
     match bson {
         Bson::Document(doc) => Ok(doc),
-        _ => Err(DbError::QueryFailed("Expected BSON document".to_string())),
+        _ => Err(DbError::query_failed("Expected BSON document".to_string())),
     }
 }
 
 pub fn json_array_to_bson_docs(val: &serde_json::Value) -> Result<Vec<Document>, DbError> {
     let arr = val
         .as_array()
-        .ok_or_else(|| DbError::QueryFailed("Expected array".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Expected array".to_string()))?;
 
     arr.iter().map(json_to_bson_doc).collect()
 }
@@ -1084,7 +1087,7 @@ fn json_to_bson(val: &serde_json::Value) -> Result<Bson, DbError> {
             } else if let Some(f) = n.as_f64() {
                 Ok(Bson::Double(f))
             } else {
-                Err(DbError::QueryFailed("Invalid number".to_string()))
+                Err(DbError::query_failed("Invalid number".to_string()))
             }
         }
         serde_json::Value::String(s) => {
@@ -1107,7 +1110,7 @@ fn json_to_bson(val: &serde_json::Value) -> Result<Bson, DbError> {
                 && let Some(oid_str) = oid_val.as_str()
             {
                 let oid = bson::oid::ObjectId::parse_str(oid_str)
-                    .map_err(|e| DbError::QueryFailed(format!("Invalid ObjectId: {}", e)))?;
+                    .map_err(|e| DbError::query_failed(format!("Invalid ObjectId: {}", e)))?;
                 return Ok(Bson::ObjectId(oid));
             }
 

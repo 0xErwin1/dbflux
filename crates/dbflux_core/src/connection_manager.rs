@@ -9,22 +9,237 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
+/// Typed cache key for schema-level data (types, indexes, foreign keys).
+///
+/// Replaces the previous untyped string-based approach. Drivers and UI code
+/// construct these to look up cached schema metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CacheKey {
+    DatabaseSchema {
+        database: String,
+    },
+    TableDetails {
+        database: String,
+        table: String,
+    },
+    SchemaTypes {
+        database: String,
+        schema: Option<String>,
+    },
+    SchemaIndexes {
+        database: String,
+        schema: Option<String>,
+    },
+    SchemaForeignKeys {
+        database: String,
+        schema: Option<String>,
+    },
+}
+
+impl CacheKey {
+    pub fn database_schema(database: impl Into<String>) -> Self {
+        Self::DatabaseSchema {
+            database: database.into(),
+        }
+    }
+
+    pub fn table_details(database: impl Into<String>, table: impl Into<String>) -> Self {
+        Self::TableDetails {
+            database: database.into(),
+            table: table.into(),
+        }
+    }
+
+    pub fn schema_types(
+        database: impl Into<String>,
+        schema: Option<impl Into<String>>,
+    ) -> Self {
+        Self::SchemaTypes {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
+
+    pub fn schema_indexes(
+        database: impl Into<String>,
+        schema: Option<impl Into<String>>,
+    ) -> Self {
+        Self::SchemaIndexes {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
+
+    pub fn schema_foreign_keys(
+        database: impl Into<String>,
+        schema: Option<impl Into<String>>,
+    ) -> Self {
+        Self::SchemaForeignKeys {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
+}
+
+/// Borrowed reference to a cached value, returned by `ConnectedProfile::cache_get`.
+#[derive(Debug)]
+pub enum CacheEntry<'a> {
+    DatabaseSchema(&'a DbSchemaInfo),
+    TableDetails(&'a TableInfo),
+    SchemaTypes(&'a Vec<CustomTypeInfo>),
+    SchemaIndexes(&'a Vec<SchemaIndexInfo>),
+    SchemaForeignKeys(&'a Vec<SchemaForeignKeyInfo>),
+}
+
+/// Owned cache value for inserting into the cache via `ConnectedProfile::cache_set`.
+pub enum OwnedCacheEntry {
+    DatabaseSchema {
+        database: String,
+        schema: DbSchemaInfo,
+    },
+    TableDetails {
+        database: String,
+        table: String,
+        details: TableInfo,
+    },
+    SchemaTypes {
+        database: String,
+        schema: Option<String>,
+        types: Vec<CustomTypeInfo>,
+    },
+    SchemaIndexes {
+        database: String,
+        schema: Option<String>,
+        indexes: Vec<SchemaIndexInfo>,
+    },
+    SchemaForeignKeys {
+        database: String,
+        schema: Option<String>,
+        foreign_keys: Vec<SchemaForeignKeyInfo>,
+    },
+}
+
+/// Backward-compatible alias for code that still uses `SchemaCacheKey`.
+///
+/// Wraps a database + optional schema pair, mapping to the appropriate
+/// `CacheKey` variant depending on context.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SchemaCacheKey {
+    pub database: String,
+    pub schema: Option<String>,
+}
+
+impl SchemaCacheKey {
+    pub fn new(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
+        Self {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
-    #[allow(dead_code)]
     pub table_details: HashMap<(String, String), TableInfo>,
-    /// Lazy-loaded custom types per schema (key: "database__schema" or just "schema").
-    pub schema_types: HashMap<String, Vec<CustomTypeInfo>>,
-    /// Lazy-loaded indexes per schema (key: "database__schema" or just "schema").
-    pub schema_indexes: HashMap<String, Vec<SchemaIndexInfo>>,
-    /// Lazy-loaded foreign keys per schema (key: "database__schema" or just "schema").
-    pub schema_foreign_keys: HashMap<String, Vec<SchemaForeignKeyInfo>>,
+    pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+    pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+    pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
+}
+
+impl ConnectedProfile {
+    /// Look up any cached value by typed `CacheKey`.
+    ///
+    /// Returns a `CacheEntry` reference if the key is present, `None` otherwise.
+    pub fn cache_get(&self, key: &CacheKey) -> Option<CacheEntry<'_>> {
+        match key {
+            CacheKey::DatabaseSchema { database } => self
+                .database_schemas
+                .get(database.as_str())
+                .map(CacheEntry::DatabaseSchema),
+
+            CacheKey::TableDetails { database, table } => self
+                .table_details
+                .get(&(database.clone(), table.clone()))
+                .map(CacheEntry::TableDetails),
+
+            CacheKey::SchemaTypes { database, schema } => {
+                let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
+                self.schema_types.get(&sk).map(CacheEntry::SchemaTypes)
+            }
+
+            CacheKey::SchemaIndexes { database, schema } => {
+                let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
+                self.schema_indexes.get(&sk).map(CacheEntry::SchemaIndexes)
+            }
+
+            CacheKey::SchemaForeignKeys { database, schema } => {
+                let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
+                self.schema_foreign_keys
+                    .get(&sk)
+                    .map(CacheEntry::SchemaForeignKeys)
+            }
+        }
+    }
+
+    /// Check whether a given cache key is populated.
+    pub fn cache_contains(&self, key: &CacheKey) -> bool {
+        self.cache_get(key).is_some()
+    }
+
+    /// Insert a value into the cache using a typed `CacheKey`.
+    pub fn cache_set(&mut self, entry: OwnedCacheEntry) {
+        match entry {
+            OwnedCacheEntry::DatabaseSchema { database, schema } => {
+                self.database_schemas.insert(database, schema);
+            }
+
+            OwnedCacheEntry::TableDetails {
+                database,
+                table,
+                details,
+            } => {
+                self.table_details.insert((database, table), details);
+            }
+
+            OwnedCacheEntry::SchemaTypes {
+                database,
+                schema,
+                types,
+            } => {
+                let sk = SchemaCacheKey::new(database, schema);
+                self.schema_types.insert(sk, types);
+            }
+
+            OwnedCacheEntry::SchemaIndexes {
+                database,
+                schema,
+                indexes,
+            } => {
+                let sk = SchemaCacheKey::new(database, schema);
+                self.schema_indexes.insert(sk, indexes);
+            }
+
+            OwnedCacheEntry::SchemaForeignKeys {
+                database,
+                schema,
+                foreign_keys,
+            } => {
+                let sk = SchemaCacheKey::new(database, schema);
+                self.schema_foreign_keys.insert(sk, foreign_keys);
+            }
+        }
+    }
+
+    /// Remove a database schema from the cache, returning it if present.
+    pub fn invalidate_database_schema(&mut self, database: &str) -> Option<DbSchemaInfo> {
+        self.database_schemas.remove(database)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -151,14 +366,15 @@ impl ConnectionManager {
         schema: DbSchemaInfo,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.database_schemas.insert(database, schema);
+            connected.cache_set(OwnedCacheEntry::DatabaseSchema { database, schema });
         }
     }
 
     pub fn needs_database_schema(&self, profile_id: Uuid, database: &str) -> bool {
+        let key = CacheKey::database_schema(database);
         self.connections
             .get(&profile_id)
-            .is_some_and(|c| !c.database_schemas.contains_key(database))
+            .is_some_and(|c| !c.cache_contains(&key))
     }
 
     #[allow(dead_code)]
@@ -174,7 +390,6 @@ impl ConnectionManager {
         })
     }
 
-    #[allow(dead_code)]
     pub fn set_table_details(
         &mut self,
         profile_id: Uuid,
@@ -183,23 +398,19 @@ impl ConnectionManager {
         details: TableInfo,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.table_details.insert((database, table), details);
+            connected.cache_set(OwnedCacheEntry::TableDetails {
+                database,
+                table,
+                details,
+            });
         }
     }
 
-    #[allow(dead_code)]
     pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
-        self.connections.get(&profile_id).is_some_and(|c| {
-            !c.table_details
-                .contains_key(&(database.to_string(), table.to_string()))
-        })
-    }
-
-    fn schema_cache_key(database: &str, schema: Option<&str>) -> String {
-        match schema {
-            Some(s) => format!("{}__{}", database, s),
-            None => database.to_string(),
-        }
+        let key = CacheKey::table_details(database, table);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.cache_contains(&key))
     }
 
     #[allow(dead_code)]
@@ -209,7 +420,7 @@ impl ConnectionManager {
         database: &str,
         schema: Option<&str>,
     ) -> Option<&Vec<CustomTypeInfo>> {
-        let key = Self::schema_cache_key(database, schema);
+        let key = SchemaCacheKey::new(database, schema);
         self.connections
             .get(&profile_id)
             .and_then(|c| c.schema_types.get(&key))
@@ -222,9 +433,12 @@ impl ConnectionManager {
         schema: Option<String>,
         types: Vec<CustomTypeInfo>,
     ) {
-        let key = Self::schema_cache_key(&database, schema.as_deref());
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.schema_types.insert(key, types);
+            connected.cache_set(OwnedCacheEntry::SchemaTypes {
+                database,
+                schema,
+                types,
+            });
         }
     }
 
@@ -234,10 +448,10 @@ impl ConnectionManager {
         database: &str,
         schema: Option<&str>,
     ) -> bool {
-        let key = Self::schema_cache_key(database, schema);
+        let key = CacheKey::schema_types(database, schema);
         self.connections
             .get(&profile_id)
-            .is_some_and(|c| !c.schema_types.contains_key(&key))
+            .is_some_and(|c| !c.cache_contains(&key))
     }
 
     pub fn set_schema_indexes(
@@ -247,9 +461,12 @@ impl ConnectionManager {
         schema: Option<String>,
         indexes: Vec<SchemaIndexInfo>,
     ) {
-        let key = Self::schema_cache_key(&database, schema.as_deref());
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.schema_indexes.insert(key, indexes);
+            connected.cache_set(OwnedCacheEntry::SchemaIndexes {
+                database,
+                schema,
+                indexes,
+            });
         }
     }
 
@@ -259,10 +476,10 @@ impl ConnectionManager {
         database: &str,
         schema: Option<&str>,
     ) -> bool {
-        let key = Self::schema_cache_key(database, schema);
+        let key = CacheKey::schema_indexes(database, schema);
         self.connections
             .get(&profile_id)
-            .is_some_and(|c| !c.schema_indexes.contains_key(&key))
+            .is_some_and(|c| !c.cache_contains(&key))
     }
 
     pub fn set_schema_foreign_keys(
@@ -272,9 +489,12 @@ impl ConnectionManager {
         schema: Option<String>,
         foreign_keys: Vec<SchemaForeignKeyInfo>,
     ) {
-        let key = Self::schema_cache_key(&database, schema.as_deref());
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.schema_foreign_keys.insert(key, foreign_keys);
+            connected.cache_set(OwnedCacheEntry::SchemaForeignKeys {
+                database,
+                schema,
+                foreign_keys,
+            });
         }
     }
 
@@ -284,10 +504,10 @@ impl ConnectionManager {
         database: &str,
         schema: Option<&str>,
     ) -> bool {
-        let key = Self::schema_cache_key(database, schema);
+        let key = CacheKey::schema_foreign_keys(database, schema);
         self.connections
             .get(&profile_id)
-            .is_some_and(|c| !c.schema_foreign_keys.contains_key(&key))
+            .is_some_and(|c| !c.cache_contains(&key))
     }
 
     #[allow(dead_code)]
@@ -469,7 +689,8 @@ impl ConnectionManager {
             ));
         }
 
-        if connected.database_schemas.contains_key(database) {
+        let key = CacheKey::database_schema(database);
+        if connected.cache_contains(&key) {
             return Err("Schema already cached".to_string());
         }
 
@@ -492,8 +713,8 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let key = (database.to_string(), table.to_string());
-        if connected.table_details.contains_key(&key) {
+        let key = CacheKey::table_details(database, table);
+        if connected.cache_contains(&key) {
             return Err("Table details already cached".to_string());
         }
 
@@ -516,8 +737,8 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let key = Self::schema_cache_key(database, schema);
-        if connected.schema_types.contains_key(&key) {
+        let key = CacheKey::schema_types(database, schema);
+        if connected.cache_contains(&key) {
             return Err("Schema types already cached".to_string());
         }
 
@@ -540,8 +761,8 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let key = Self::schema_cache_key(database, schema);
-        if connected.schema_indexes.contains_key(&key) {
+        let key = CacheKey::schema_indexes(database, schema);
+        if connected.cache_contains(&key) {
             return Err("Schema indexes already cached".to_string());
         }
 
@@ -564,8 +785,8 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let key = Self::schema_cache_key(database, schema);
-        if connected.schema_foreign_keys.contains_key(&key) {
+        let key = CacheKey::schema_foreign_keys(database, schema);
+        if connected.cache_contains(&key) {
             return Err("Schema foreign keys already cached".to_string());
         }
 

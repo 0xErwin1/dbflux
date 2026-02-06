@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 mod code_generation;
 mod connection_tree;
 mod connection_tree_store;
@@ -5,8 +7,8 @@ mod crud;
 mod data_view;
 mod driver_capabilities;
 mod driver_form;
-mod error;
 mod error_formatter;
+mod error;
 mod history;
 mod language_service;
 mod profile;
@@ -14,6 +16,7 @@ mod query;
 mod saved_query;
 mod schema;
 mod schema_builder;
+pub mod schema_node_id;
 mod secrets;
 mod shutdown;
 mod sql_dialect;
@@ -55,9 +58,9 @@ pub use driver_form::{
 };
 pub use error::DbError;
 pub use language_service::{
-    DangerousQueryKind, LanguageService, SqlLanguageService, ValidationResult,
-    detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_sql,
-    strip_leading_comments,
+    DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,
+    TextRange, ValidationResult, detect_dangerous_mongo, detect_dangerous_query,
+    detect_dangerous_sql, strip_leading_comments,
 };
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
@@ -84,11 +87,13 @@ pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
     ssh_tunnel_secret_ref,
 };
+pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
-    SortDirection, TableBrowseRequest, TableCountRequest, TableRef,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DescribeRequest,
+    ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
+    TableCountRequest, TableRef,
 };
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
@@ -111,11 +116,12 @@ pub use sql_generation::{
 pub use sql_query_builder::SqlQueryBuilder;
 
 pub use connection_manager::{
-    ConnectProfileParams, ConnectProfileResult, ConnectedProfile, ConnectionManager,
-    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
-    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
-    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
-    FetchTableDetailsResult, PendingOperation, SwitchDatabaseParams, SwitchDatabaseResult,
+    CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
+    ConnectionManager, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
+    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
+    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
+    FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,
+    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;

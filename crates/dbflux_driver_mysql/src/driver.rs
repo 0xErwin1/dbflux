@@ -5,6 +5,7 @@ use std::time::Instant;
 use std::collections::HashMap;
 
 use dbflux_core::{
+    DescribeRequest, ExplainRequest,
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
@@ -790,7 +791,7 @@ fn format_mysql_uri_error<E: std::fmt::Display>(e: &E, uri: &str) -> DbError {
     };
 
     log::error!("MySQL URI connection failed: {}", message);
-    DbError::ConnectionFailed(message)
+    DbError::connection_failed(message)
 }
 
 fn inject_password_into_mysql_uri(base_uri: &str, password: Option<&str>) -> String {
@@ -867,7 +868,7 @@ impl QueryCancelHandle for MysqlCancelHandle {
 
         // Open a separate connection to send KILL QUERY
         let mut kill_conn = Conn::new(self.kill_opts.clone())
-            .map_err(|e| DbError::QueryFailed(format!("Failed to open kill connection: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Failed to open kill connection: {}", e)))?;
 
         // Try KILL QUERY first (just cancels the query)
         let kill_query = format!("KILL QUERY {}", self.query_connection_id);
@@ -885,7 +886,7 @@ impl QueryCancelHandle for MysqlCancelHandle {
                 let kill_conn_cmd = format!("KILL {}", self.query_connection_id);
                 kill_conn.query_drop(&kill_conn_cmd).map_err(|e2| {
                     log::error!("[CANCEL] Both KILL QUERY and KILL failed: {}", e2);
-                    DbError::QueryFailed(format!(
+                    DbError::query_failed(format!(
                         "Permission denied to cancel query. KILL QUERY: {}, KILL: {}",
                         e, e2
                     ))
@@ -963,7 +964,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         conn.query_drop("SELECT 1")
             .map_err(|e| format_mysql_query_error(&e))
@@ -1001,7 +1002,7 @@ impl Connection for MysqlConnection {
             state
                 .conn
                 .query_drop(format!("USE `{}`", db))
-                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
 
@@ -1139,7 +1140,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         // Fetch tables (shallow - without columns/indexes)
         let tables = fetch_tables_shallow(&mut conn, database)?;
@@ -1172,7 +1173,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let columns = fetch_columns(&mut conn, database, table)?;
         let indexes = fetch_indexes(&mut conn, database, table)?;
@@ -1218,7 +1219,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let databases: Vec<String> = conn
             .query("SHOW DATABASES")
@@ -1272,7 +1273,7 @@ impl Connection for MysqlConnection {
         let mut state = self
             .query_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         // Skip if already on the same database
         if state.current_database.as_deref() == database {
@@ -1284,7 +1285,7 @@ impl Connection for MysqlConnection {
             state
                 .conn
                 .query_drop(format!("USE `{}`", db))
-                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
         }
 
         state.current_database = database.map(|s| s.to_string());
@@ -1306,7 +1307,7 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         fetch_schema_indexes(&mut conn, database)
     }
@@ -1319,27 +1320,27 @@ impl Connection for MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         fetch_schema_foreign_keys(&mut conn, database)
     }
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         if !patch.identity.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot update row: invalid row identity (missing primary key)".to_string(),
             ));
         }
 
         if !patch.has_changes() {
-            return Err(DbError::QueryFailed("No changes to save".to_string()));
+            return Err(DbError::query_failed("No changes to save".to_string()));
         }
 
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
 
         let update_sql = builder
             .build_update(patch, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
         let update_sql = format!("{} LIMIT 1", update_sql);
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
@@ -1347,7 +1348,7 @@ impl Connection for MysqlConnection {
         let mut state = self
             .query_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         if let Some(ref db) = patch.schema
             && state.current_database.as_ref() != Some(db)
@@ -1356,7 +1357,7 @@ impl Connection for MysqlConnection {
             state
                 .conn
                 .query_drop(format!("USE `{}`", db))
-                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
 
@@ -1373,7 +1374,7 @@ impl Connection for MysqlConnection {
 
         let select_sql = builder
             .build_select_by_identity(patch.schema.as_deref(), &patch.table, &patch.identity)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[UPDATE] Re-querying: {}", select_sql);
 
@@ -1395,7 +1396,7 @@ impl Connection for MysqlConnection {
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
         if !insert.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot insert row: no columns specified".to_string(),
             ));
         }
@@ -1404,14 +1405,14 @@ impl Connection for MysqlConnection {
 
         let insert_sql = builder
             .build_insert(insert, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
         let mut state = self
             .query_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         if let Some(ref db) = insert.schema
             && state.current_database.as_ref() != Some(db)
@@ -1420,7 +1421,7 @@ impl Connection for MysqlConnection {
             state
                 .conn
                 .query_drop(format!("USE `{}`", db))
-                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
 
@@ -1447,7 +1448,7 @@ impl Connection for MysqlConnection {
             let identity = RecordIdentity::composite(insert.columns.clone(), insert.values.clone());
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
-                .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?
+                .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
         };
 
         log::debug!("[INSERT] Re-querying: {}", select_sql);
@@ -1470,7 +1471,7 @@ impl Connection for MysqlConnection {
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
         if !delete.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot delete row: invalid row identity (missing primary key)".to_string(),
             ));
         }
@@ -1479,14 +1480,14 @@ impl Connection for MysqlConnection {
 
         let select_sql = builder
             .build_select_by_identity(delete.schema.as_deref(), &delete.table, &delete.identity)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[DELETE] Fetching row: {}", select_sql);
 
         let mut state = self
             .query_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         if let Some(ref db) = delete.schema
             && state.current_database.as_ref() != Some(db)
@@ -1495,7 +1496,7 @@ impl Connection for MysqlConnection {
             state
                 .conn
                 .query_drop(format!("USE `{}`", db))
-                .map_err(|e| DbError::QueryFailed(format!("USE database failed: {}", e)))?;
+                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
 
@@ -1513,7 +1514,7 @@ impl Connection for MysqlConnection {
 
         let delete_sql = builder
             .build_delete(delete, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
         let delete_sql = format!("{} LIMIT 1", delete_sql);
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
@@ -1531,6 +1532,24 @@ impl Connection for MysqlConnection {
 
         Ok(CrudResult::new(affected, returning_row))
     }
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let query = match &request.query {
+            Some(q) => q.clone(),
+            None => format!(
+                "SELECT * FROM {} LIMIT 100",
+                request.table.quoted_with(self.dialect())
+            ),
+        };
+
+        let sql = format!("EXPLAIN FORMAT=JSON {}", query);
+        self.execute(&QueryRequest::new(sql))
+    }
+
+    fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        let sql = format!("DESCRIBE {}", request.table.quoted_with(self.dialect()));
+        self.execute(&QueryRequest::new(sql))
+    }
+
 
     fn dialect(&self) -> &dyn SqlDialect {
         &MYSQL_DIALECT
@@ -1927,7 +1946,7 @@ impl MysqlConnection {
         let mut conn = self
             .catalog_conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let table_ref = MysqlDialect.qualified_table(table.schema.as_deref(), &table.name);
         let query = format!("SHOW CREATE TABLE {}", table_ref);
@@ -1938,7 +1957,7 @@ impl MysqlConnection {
 
         match result {
             Some((_, create_statement)) => Ok(format!("{};\n", create_statement)),
-            None => Err(DbError::QueryFailed(format!(
+            None => Err(DbError::query_failed(format!(
                 "Could not get CREATE TABLE for {}",
                 table_ref
             ))),

@@ -1,4 +1,4 @@
-use crate::DbKind;
+use crate::{DbKind, SqlDialect};
 
 /// Sort direction for ORDER BY clauses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -196,6 +196,11 @@ impl TableRef {
         }
     }
 
+    /// Quote using a `SqlDialect`, delegating to `dialect.qualified_table()`.
+    pub fn quoted_with(&self, dialect: &dyn SqlDialect) -> String {
+        dialect.qualified_table(self.schema.as_deref(), &self.name)
+    }
+
     /// Quote identifier using the appropriate syntax for the database kind.
     /// - PostgreSQL/SQLite: double quotes ("schema"."table")
     /// - MySQL/MariaDB: backticks (`schema`.`table`)
@@ -254,6 +259,43 @@ impl TableBrowseRequest {
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
         self
+    }
+
+    /// Build the SQL query using a `SqlDialect` for identifier quoting.
+    pub fn build_sql_with(&self, dialect: &dyn SqlDialect) -> String {
+        let mut sql = format!("SELECT * FROM {}", self.table.quoted_with(dialect));
+
+        if let Some(ref filter) = self.filter {
+            let trimmed = filter.trim();
+            if !trimmed.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(trimmed);
+            }
+        }
+
+        if !self.order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let quoted_cols: Vec<String> = self
+                .order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", dialect.quote_identifier(&col.name), dir)
+                })
+                .collect();
+            sql.push_str(&quoted_cols.join(", "));
+        }
+
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            self.pagination.limit(),
+            self.pagination.offset()
+        ));
+
+        sql
     }
 
     /// Build the SQL query for this browse request (PostgreSQL syntax).
@@ -382,9 +424,50 @@ impl CollectionCountRequest {
     }
 }
 
+/// Request for explaining a query execution plan.
+///
+/// Drivers translate this into their native EXPLAIN syntax:
+/// - PostgreSQL: `EXPLAIN (FORMAT JSON, ANALYZE) ...`
+/// - MySQL: `EXPLAIN FORMAT=JSON ...`
+/// - SQLite: `EXPLAIN QUERY PLAN ...`
+#[derive(Debug, Clone)]
+pub struct ExplainRequest {
+    pub table: TableRef,
+    pub query: Option<String>,
+}
+
+impl ExplainRequest {
+    pub fn new(table: TableRef) -> Self {
+        Self { table, query: None }
+    }
+
+    pub fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = Some(query.into());
+        self
+    }
+}
+
+/// Request for describing a table's structure.
+///
+/// Drivers translate this into their native DESCRIBE syntax:
+/// - PostgreSQL: `information_schema.columns` query
+/// - MySQL: `DESCRIBE table`
+/// - SQLite: `PRAGMA table_info(...)`
+#[derive(Debug, Clone)]
+pub struct DescribeRequest {
+    pub table: TableRef,
+}
+
+impl DescribeRequest {
+    pub fn new(table: TableRef) -> Self {
+        Self { table }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DefaultSqlDialect;
 
     #[test]
     fn test_pagination_next_prev() {
@@ -464,5 +547,44 @@ mod tests {
             req.build_sql_for_kind(DbKind::MySQL),
             "SELECT * FROM `my``table` ORDER BY `col``name` ASC LIMIT 100 OFFSET 0"
         );
+    }
+
+    #[test]
+    fn test_build_sql_with_dialect() {
+        let dialect = DefaultSqlDialect;
+        let req = TableBrowseRequest::new(TableRef::from_qualified("public.users"))
+            .with_pagination(Pagination::Offset {
+                limit: 50,
+                offset: 100,
+            })
+            .with_order_by(vec![OrderByColumn::asc("id")]);
+
+        assert_eq!(
+            req.build_sql_with(&dialect),
+            "SELECT * FROM \"public\".\"users\" ORDER BY \"id\" ASC LIMIT 50 OFFSET 100"
+        );
+    }
+
+    #[test]
+    fn test_build_sql_with_dialect_filter() {
+        let dialect = DefaultSqlDialect;
+        let req = TableBrowseRequest::new(TableRef::new("orders"))
+            .with_filter("status = 'active'")
+            .with_order_by(vec![OrderByColumn::desc("created_at")]);
+
+        assert_eq!(
+            req.build_sql_with(&dialect),
+            "SELECT * FROM \"orders\" WHERE status = 'active' ORDER BY \"created_at\" DESC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn test_quoted_with_dialect() {
+        let dialect = DefaultSqlDialect;
+        let t = TableRef::from_qualified("public.users");
+        assert_eq!(t.quoted_with(&dialect), "\"public\".\"users\"");
+
+        let t2 = TableRef::new("simple");
+        assert_eq!(t2.quoted_with(&dialect), "\"simple\"");
     }
 }

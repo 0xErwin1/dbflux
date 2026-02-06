@@ -6,10 +6,10 @@ use std::time::Instant;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, DescribeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ForeignKeyBuilder,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
     ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, POSTGRES_FORM, PlaceholderStyle,
     QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
@@ -443,7 +443,7 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
             let connector = TlsConnector::builder()
                 .danger_accept_invalid_certs(params.ssl_mode == SslMode::Prefer)
                 .build()
-                .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
+                .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
 
             let tls = MakeTlsConnector::new(connector);
 
@@ -470,7 +470,7 @@ impl PostgresDriver {
         let connector = TlsConnector::builder()
             .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
+            .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
 
         let tls = MakeTlsConnector::new(connector);
 
@@ -630,7 +630,7 @@ impl QueryCancelHandle for PostgresCancelHandle {
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
-            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e).into())
         })?;
 
         log::info!("[CANCEL] PostgreSQL cancel request sent");
@@ -703,7 +703,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
         client
             .simple_query("SELECT 1")
             .map_err(|e| format_pg_query_error(&e))?;
@@ -724,7 +724,7 @@ impl Connection for PostgresConnection {
             let mut active = self
                 .active_query
                 .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
             *active = Some(query_id);
         }
 
@@ -786,7 +786,7 @@ impl Connection for PostgresConnection {
             let mut active = self
                 .active_query
                 .write()
-                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+                .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
             *active = None;
         }
 
@@ -825,11 +825,11 @@ impl Connection for PostgresConnection {
         let active = self
             .active_query
             .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         if *active != Some(handle.id) {
             return Err(DbError::QueryFailed(
-                "No matching active query to cancel".to_string(),
+                "No matching active query to cancel".to_string().into(),
             ));
         }
 
@@ -839,7 +839,7 @@ impl Connection for PostgresConnection {
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
-            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e).into())
         })?;
 
         log::info!("[CANCEL] Cancel request sent successfully");
@@ -852,7 +852,7 @@ impl Connection for PostgresConnection {
         let active = self
             .active_query
             .read()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let query_id = match *active {
             Some(id) => id,
@@ -871,7 +871,7 @@ impl Connection for PostgresConnection {
 
         self.cancel_token.cancel_query(NoTls).map_err(|e| {
             log::error!("[CANCEL] Failed to cancel query: {}", e);
-            DbError::QueryFailed(format!("Failed to cancel query: {}", e))
+            DbError::QueryFailed(format!("Failed to cancel query: {}", e).into())
         })?;
 
         log::info!("[CANCEL] Cancel request sent successfully");
@@ -895,7 +895,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         if let Err(e) = client.simple_query("ROLLBACK") {
             log::warn!(
@@ -917,7 +917,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let phase_start = Instant::now();
         let databases = get_databases(&mut client)?;
@@ -964,7 +964,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_databases(&mut client)
     }
@@ -993,7 +993,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let columns = get_columns(&mut client, schema_name, table)?;
         let indexes = get_indexes(&mut client, schema_name, table)?;
@@ -1037,7 +1037,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_custom_types(&mut client, schema_name)
     }
@@ -1052,7 +1052,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_schema_indexes(&mut client, schema_name)
     }
@@ -1067,7 +1067,7 @@ impl Connection for PostgresConnection {
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_schema_foreign_keys(&mut client, schema_name)
     }
@@ -1095,25 +1095,25 @@ impl Connection for PostgresConnection {
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         if !patch.identity.is_valid() {
             return Err(DbError::QueryFailed(
-                "Cannot update row: invalid row identity (missing primary key)".to_string(),
+                "Cannot update row: invalid row identity (missing primary key)".to_string().into(),
             ));
         }
 
         if !patch.has_changes() {
-            return Err(DbError::QueryFailed("No changes to save".to_string()));
+            return Err(DbError::QueryFailed("No changes to save".to_string().into()));
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
         let sql = builder
             .build_update(patch, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
+            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string().into()))?;
 
         log::debug!("[UPDATE] Executing: {}", sql);
 
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let rows = client
             .query(&sql, &[])
@@ -1134,21 +1134,21 @@ impl Connection for PostgresConnection {
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
         if !insert.is_valid() {
             return Err(DbError::QueryFailed(
-                "Cannot insert row: no columns specified".to_string(),
+                "Cannot insert row: no columns specified".to_string().into(),
             ));
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
         let sql = builder
             .build_insert(insert, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
+            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string().into()))?;
 
         log::debug!("[INSERT] Executing: {}", sql);
 
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let rows = client
             .query(&sql, &[])
@@ -1169,21 +1169,21 @@ impl Connection for PostgresConnection {
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
         if !delete.is_valid() {
             return Err(DbError::QueryFailed(
-                "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+                "Cannot delete row: invalid row identity (missing primary key)".to_string().into(),
             ));
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
         let sql = builder
             .build_delete(delete, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
+            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string().into()))?;
 
         log::debug!("[DELETE] Executing: {}", sql);
 
         let mut client = self
             .client
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         let rows = client
             .query(&sql, &[])
@@ -1199,6 +1199,37 @@ impl Connection for PostgresConnection {
             .collect();
 
         Ok(CrudResult::success(returning_row))
+    }
+
+
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let query = match &request.query {
+            Some(q) => q.clone(),
+            None => format!(
+                "SELECT * FROM {} LIMIT 100",
+                request.table.quoted_with(self.dialect())
+            ),
+        };
+
+        let sql = format!("EXPLAIN (FORMAT JSON, ANALYZE) {}", query);
+        self.execute(&QueryRequest::new(sql))
+    }
+
+    fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        let schema = request.table.schema.as_deref().unwrap_or("public");
+        let escaped_schema = schema.replace('\'', "''");
+        let escaped_table = request.table.name.replace('\'', "''");
+
+        let sql = format!(
+            "SELECT column_name, data_type, is_nullable, column_default, \
+             character_maximum_length \
+             FROM information_schema.columns \
+             WHERE table_schema = '{}' AND table_name = '{}' \
+             ORDER BY ordinal_position",
+            escaped_schema, escaped_table
+        );
+
+        self.execute(&QueryRequest::new(sql))
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

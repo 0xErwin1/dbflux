@@ -282,7 +282,11 @@ impl SqlQueryDocument {
             let lang = connected.connection.language_service();
             match lang.validate(&query) {
                 ValidationResult::Valid => {}
-                ValidationResult::SyntaxError(msg) => {
+                ValidationResult::SyntaxError(diag) => {
+                    let msg = match diag.hint {
+                        Some(ref hint) => format!("{}\nHint: {}", diag.message, hint),
+                        None => diag.message,
+                    };
                     cx.toast_error(msg, window);
                     return;
                 }

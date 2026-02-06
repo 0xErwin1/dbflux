@@ -37,7 +37,7 @@ fn parse_shell_syntax(input: &str) -> Result<MongoQuery, DbError> {
     // Strip "db." prefix
     let rest = input
         .strip_prefix("db.")
-        .ok_or_else(|| DbError::QueryFailed("Expected 'db.' prefix".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Expected 'db.' prefix".to_string()))?;
 
     // Find the first '.' after collection name to get collection and method
     let (collection, method_call) = split_collection_and_method(rest)?;
@@ -62,18 +62,18 @@ fn split_collection_and_method(input: &str) -> Result<(&str, &str), DbError> {
     // Find the opening parenthesis
     let paren_pos = input
         .find('(')
-        .ok_or_else(|| DbError::QueryFailed("Expected method call with ()".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Expected method call with ()".to_string()))?;
 
     // Find the last '.' before the parenthesis
     let method_dot = input[..paren_pos]
         .rfind('.')
-        .ok_or_else(|| DbError::QueryFailed("Expected collection.method format".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Expected collection.method format".to_string()))?;
 
     let collection = &input[..method_dot];
     let method_call = &input[method_dot + 1..];
 
     if collection.is_empty() {
-        return Err(DbError::QueryFailed(
+        return Err(DbError::query_failed(
             "Collection name cannot be empty".to_string(),
         ));
     }
@@ -85,7 +85,7 @@ fn split_collection_and_method(input: &str) -> Result<(&str, &str), DbError> {
 fn parse_method_call(input: &str) -> Result<(&str, &str), DbError> {
     let paren_pos = input
         .find('(')
-        .ok_or_else(|| DbError::QueryFailed("Expected '(' in method call".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Expected '(' in method call".to_string()))?;
 
     let method_name = &input[..paren_pos];
 
@@ -143,7 +143,7 @@ fn find_matching_paren(input: &str, open_pos: usize) -> Result<usize, DbError> {
         }
     }
 
-    Err(DbError::QueryFailed("Unmatched parenthesis".to_string()))
+    Err(DbError::query_failed("Unmatched parenthesis".to_string()))
 }
 
 /// Parse operation from method name and arguments
@@ -161,7 +161,7 @@ fn parse_operation(method_name: &str, args_str: &str) -> Result<MongoOperation, 
         "deleteOne" => parse_delete_one_operation(args_str),
         "deleteMany" => parse_delete_many_operation(args_str),
         "drop" => Ok(MongoOperation::Drop),
-        _ => Err(DbError::QueryFailed(format!(
+        _ => Err(DbError::query_failed(format!(
             "Unsupported method: {}. Supported: find, findOne, aggregate, count, countDocuments, \
              insertOne, insertMany, updateOne, updateMany, replaceOne, deleteOne, deleteMany, drop",
             method_name
@@ -217,10 +217,10 @@ fn parse_aggregate_operation(args_str: &str) -> Result<MongoOperation, DbError> 
 
     let pipeline_str = args
         .first()
-        .ok_or_else(|| DbError::QueryFailed("aggregate requires a pipeline array".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("aggregate requires a pipeline array".to_string()))?;
 
     let pipeline_json: serde_json::Value = serde_json::from_str(pipeline_str)
-        .map_err(|e| DbError::QueryFailed(format!("Invalid pipeline JSON: {}", e)))?;
+        .map_err(|e| DbError::query_failed(format!("Invalid pipeline JSON: {}", e)))?;
 
     let pipeline = json_array_to_bson_docs(&pipeline_json)?;
 
@@ -247,7 +247,7 @@ fn parse_insert_one_operation(args_str: &str) -> Result<MongoOperation, DbError>
 
     let document_str = args
         .first()
-        .ok_or_else(|| DbError::QueryFailed("insertOne requires a document".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("insertOne requires a document".to_string()))?;
 
     let document = parse_relaxed_json(document_str)?;
 
@@ -259,11 +259,11 @@ fn parse_insert_many_operation(args_str: &str) -> Result<MongoOperation, DbError
     let args = parse_arguments(args_str)?;
 
     let array_str = args.first().ok_or_else(|| {
-        DbError::QueryFailed("insertMany requires an array of documents".to_string())
+        DbError::query_failed("insertMany requires an array of documents".to_string())
     })?;
 
     let array_json: serde_json::Value = serde_json::from_str(array_str)
-        .map_err(|e| DbError::QueryFailed(format!("Invalid documents array: {}", e)))?;
+        .map_err(|e| DbError::query_failed(format!("Invalid documents array: {}", e)))?;
 
     let documents = json_array_to_bson_docs(&array_json)?;
 
@@ -285,7 +285,7 @@ fn parse_update_operation(args_str: &str, many: bool) -> Result<MongoOperation, 
     let args = parse_arguments(args_str)?;
 
     if args.len() < 2 {
-        return Err(DbError::QueryFailed(
+        return Err(DbError::query_failed(
             "update requires filter and update documents".to_string(),
         ));
     }
@@ -347,7 +347,7 @@ fn parse_replace_one_operation(args_str: &str) -> Result<MongoOperation, DbError
     let args = parse_arguments(args_str)?;
 
     if args.len() < 2 {
-        return Err(DbError::QueryFailed(
+        return Err(DbError::query_failed(
             "replaceOne requires filter and replacement documents".to_string(),
         ));
     }
@@ -459,7 +459,7 @@ fn parse_relaxed_json(input: &str) -> Result<Document, DbError> {
     let normalized = normalize_relaxed_json(trimmed);
 
     let json: serde_json::Value = serde_json::from_str(&normalized)
-        .map_err(|e| DbError::QueryFailed(format!("Invalid JSON: {}", e)))?;
+        .map_err(|e| DbError::query_failed(format!("Invalid JSON: {}", e)))?;
 
     json_to_bson_doc(&json)
 }
@@ -558,11 +558,11 @@ fn is_key_char(ch: char) -> bool {
 /// Parse JSON format (backward compatibility)
 fn parse_json_format(input: &str) -> Result<MongoQuery, DbError> {
     let json: serde_json::Value = serde_json::from_str(input)
-        .map_err(|e| DbError::QueryFailed(format!("Invalid JSON: {}", e)))?;
+        .map_err(|e| DbError::query_failed(format!("Invalid JSON: {}", e)))?;
 
     let obj = json
         .as_object()
-        .ok_or_else(|| DbError::QueryFailed("Query must be a JSON object".to_string()))?;
+        .ok_or_else(|| DbError::query_failed("Query must be a JSON object".to_string()))?;
 
     let database = obj
         .get("database")
@@ -572,7 +572,7 @@ fn parse_json_format(input: &str) -> Result<MongoQuery, DbError> {
     let collection = obj
         .get("collection")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| DbError::QueryFailed("Missing 'collection' field".to_string()))?
+        .ok_or_else(|| DbError::query_failed("Missing 'collection' field".to_string()))?
         .to_string();
 
     // Determine operation type
@@ -580,7 +580,7 @@ fn parse_json_format(input: &str) -> Result<MongoQuery, DbError> {
         let pipeline_val = obj
             .get("aggregate")
             .or_else(|| obj.get("pipeline"))
-            .ok_or_else(|| DbError::QueryFailed("Missing pipeline for aggregate".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Missing pipeline for aggregate".to_string()))?;
 
         let pipeline = json_array_to_bson_docs(pipeline_val)?;
         MongoOperation::Aggregate { pipeline }
@@ -594,16 +594,16 @@ fn parse_json_format(input: &str) -> Result<MongoQuery, DbError> {
         let replace_obj = obj
             .get("replace")
             .and_then(|v| v.as_object())
-            .ok_or_else(|| DbError::QueryFailed("replace must be an object".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("replace must be an object".to_string()))?;
 
         let filter = replace_obj
             .get("filter")
-            .ok_or_else(|| DbError::QueryFailed("replace.filter is required".to_string()))
+            .ok_or_else(|| DbError::query_failed("replace.filter is required".to_string()))
             .and_then(json_to_bson_doc)?;
 
         let replacement = replace_obj
             .get("replacement")
-            .ok_or_else(|| DbError::QueryFailed("replace.replacement is required".to_string()))
+            .ok_or_else(|| DbError::query_failed("replace.replacement is required".to_string()))
             .and_then(json_to_bson_doc)?;
 
         let upsert = replace_obj
