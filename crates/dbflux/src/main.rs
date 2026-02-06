@@ -193,7 +193,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
     info!("Shutdown phase: Flushing logs...");
     let _ = cx.update(|cx| {
         app_state.update(cx, |state, _| {
-            state.shutdown.advance_phase(
+            state.shutdown().advance_phase(
                 ShutdownPhase::ClosingConnections,
                 ShutdownPhase::FlushingLogs,
             );

@@ -309,6 +309,79 @@ impl TableBrowseRequest {
     }
 }
 
+/// Request for browsing a document collection with pagination and optional filter.
+///
+/// This is the document-database equivalent of `TableBrowseRequest`.
+/// Drivers translate this into their native query syntax internally.
+#[derive(Debug, Clone)]
+pub struct CollectionBrowseRequest {
+    pub collection: CollectionRef,
+    pub pagination: Pagination,
+    pub filter: Option<serde_json::Value>,
+}
+
+impl CollectionBrowseRequest {
+    pub fn new(collection: CollectionRef) -> Self {
+        Self {
+            collection,
+            pagination: Pagination::default(),
+            filter: None,
+        }
+    }
+
+    pub fn with_pagination(mut self, pagination: Pagination) -> Self {
+        self.pagination = pagination;
+        self
+    }
+
+    pub fn with_filter(mut self, filter: serde_json::Value) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+}
+
+/// Request for counting rows in a table with an optional filter.
+#[derive(Debug, Clone)]
+pub struct TableCountRequest {
+    pub table: TableRef,
+    pub filter: Option<String>,
+}
+
+impl TableCountRequest {
+    pub fn new(table: TableRef) -> Self {
+        Self {
+            table,
+            filter: None,
+        }
+    }
+
+    pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.filter = Some(filter.into());
+        self
+    }
+}
+
+/// Request for counting documents in a collection with an optional filter.
+#[derive(Debug, Clone)]
+pub struct CollectionCountRequest {
+    pub collection: CollectionRef,
+    pub filter: Option<serde_json::Value>,
+}
+
+impl CollectionCountRequest {
+    pub fn new(collection: CollectionRef) -> Self {
+        Self {
+            collection,
+            filter: None,
+        }
+    }
+
+    pub fn with_filter(mut self, filter: serde_json::Value) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

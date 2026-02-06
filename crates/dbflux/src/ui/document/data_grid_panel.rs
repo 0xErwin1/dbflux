@@ -11,9 +11,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, CollectionRef, DbKind, DocumentFilter, DocumentUpdate, OrderByColumn, Pagination,
-    QueryRequest, QueryResult, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
-    SortDirection, TableBrowseRequest, TableRef, TaskId, TaskKind, Value,
+    CancelToken, CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DocumentFilter,
+    DocumentUpdate, OrderByColumn, Pagination, QueryRequest, QueryResult, RowDelete, RowIdentity,
+    RowInsert, RowPatch, RowState, SortDirection, TableBrowseRequest, TableCountRequest, TableRef,
+    TaskId, TaskKind, Value,
 };
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
@@ -399,7 +400,7 @@ impl DataGridPanel {
         let database = {
             let state = self.app_state.read(cx);
             state
-                .connections
+                .connections()
                 .get(&profile_id)
                 .and_then(|c| c.active_database.clone())
                 .unwrap_or_else(|| "default".to_string())
@@ -963,14 +964,10 @@ impl DataGridPanel {
             request = request.with_filter(f.clone());
         }
 
-        let (conn, db_kind, active_database) = {
+        let (conn, active_database) = {
             let state = self.app_state.read(cx);
-            match state.connections.get(&profile_id) {
-                Some(c) => (
-                    Some(c.connection.clone()),
-                    c.connection.kind(),
-                    c.active_database.clone(),
-                ),
+            match state.connections().get(&profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
                 None => {
                     cx.toast_error("Connection not found", window);
                     return;
@@ -983,8 +980,15 @@ impl DataGridPanel {
             return;
         };
 
-        let sql = request.build_sql_for_kind(db_kind);
-        info!("Running table query: {}", sql);
+        // Use the database from the active connection if the table doesn't have a schema set
+        let mut browse_request = request.clone();
+        if browse_request.table.schema.is_none()
+            && let Some(ref db) = active_database
+        {
+            browse_request.table.schema = Some(db.clone());
+        }
+
+        info!("Running table browse: {:?}", browse_request.table.qualified_name());
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
             state.start_task(
@@ -1000,19 +1004,17 @@ impl DataGridPanel {
         self.state = GridState::Loading;
         cx.notify();
 
-        let query_request = QueryRequest::new(sql).with_database(active_database);
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
         let conn_for_cleanup = conn.clone();
 
-        // Clone for use in spawn closure
         let table_for_spawn = table.clone();
         let pagination_for_spawn = pagination.clone();
         let order_by_for_spawn = order_by.clone();
 
         let task = cx
             .background_executor()
-            .spawn(async move { conn.execute(&query_request) });
+            .spawn(async move { conn.browse_table(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1078,7 +1080,7 @@ impl DataGridPanel {
 
         // Fetch total count if not known
         if total_rows.is_none() {
-            self.fetch_total_count(profile_id, table, filter, db_kind, cx);
+            self.fetch_total_count(profile_id, table, filter, cx);
         }
     }
 
@@ -1112,10 +1114,10 @@ impl DataGridPanel {
             Err(_) => pagination,
         };
 
-        let (conn, active_database) = {
+        let conn = {
             let state = self.app_state.read(cx);
-            match state.connections.get(&profile_id) {
-                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+            match state.connections().get(&profile_id) {
+                Some(c) => Some(c.connection.clone()),
                 None => {
                     cx.toast_error("Connection not found", window);
                     return;
@@ -1130,11 +1132,11 @@ impl DataGridPanel {
 
         let filter_value = self.filter_input.read(cx).value();
         let filter_str = filter_value.trim();
-        let filter: serde_json::Value = if filter_str.is_empty() {
-            serde_json::json!({})
+        let filter: Option<serde_json::Value> = if filter_str.is_empty() {
+            None
         } else {
             match serde_json::from_str(filter_str) {
-                Ok(v) => v,
+                Ok(v) => Some(v),
                 Err(e) => {
                     cx.toast_error(format!("Invalid JSON filter: {}", e), window);
                     return;
@@ -1144,16 +1146,16 @@ impl DataGridPanel {
 
         let filter_for_count = filter.clone();
 
-        let json_query = serde_json::json!({
-            "database": collection.database,
-            "collection": collection.name,
-            "filter": filter,
-            "limit": pagination.limit(),
-            "skip": pagination.offset()
-        });
+        let mut browse_request =
+            CollectionBrowseRequest::new(collection.clone()).with_pagination(pagination.clone());
+        if let Some(f) = filter {
+            browse_request = browse_request.with_filter(f);
+        }
 
-        let sql = json_query.to_string();
-        info!("Running collection query: {}", sql);
+        info!(
+            "Running collection browse: {}.{}",
+            collection.database, collection.name
+        );
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
             state.start_task(
@@ -1169,7 +1171,6 @@ impl DataGridPanel {
         self.state = GridState::Loading;
         cx.notify();
 
-        let query_request = QueryRequest::new(sql).with_database(active_database);
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
         let conn_for_cleanup = conn.clone();
@@ -1178,7 +1179,7 @@ impl DataGridPanel {
 
         let task = cx
             .background_executor()
-            .spawn(async move { conn.execute(&query_request) });
+            .spawn(async move { conn.browse_collection(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1321,50 +1322,37 @@ impl DataGridPanel {
         profile_id: Uuid,
         table: TableRef,
         filter: Option<String>,
-        db_kind: DbKind,
         cx: &mut Context<Self>,
     ) {
-        let (conn, active_database) = {
+        let conn = {
             let state = self.app_state.read(cx);
-            match state.connections.get(&profile_id) {
-                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
-                None => (None, None),
-            }
+            state
+                .connections()
+                .get(&profile_id)
+                .map(|c| c.connection.clone())
         };
 
         let Some(conn) = conn else {
             return;
         };
 
-        let quoted_table = table.quoted_for_kind(db_kind);
-        let sql = if let Some(ref f) = filter {
-            let trimmed = f.trim();
-            if trimmed.is_empty() {
-                format!("SELECT COUNT(*) FROM {}", quoted_table)
-            } else {
-                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, trimmed)
-            }
-        } else {
-            format!("SELECT COUNT(*) FROM {}", quoted_table)
-        };
+        let mut count_request = TableCountRequest::new(table.clone());
+        if let Some(f) = filter {
+            count_request = count_request.with_filter(f);
+        }
 
-        let request = QueryRequest::new(sql).with_database(active_database);
         let entity = cx.entity().clone();
         let qualified = table.qualified_name();
 
         let task = cx
             .background_executor()
-            .spawn(async move { conn.execute(&request) });
+            .spawn(async move { conn.count_table(&count_request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
             cx.update(|cx| {
-                if let Ok(query_result) = result
-                    && let Some(row) = query_result.rows.first()
-                    && let Some(dbflux_core::Value::Int(count)) = row.first()
-                {
-                    let total = *count as u64;
+                if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
                         panel.pending_total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
@@ -1403,45 +1391,38 @@ impl DataGridPanel {
         &mut self,
         profile_id: Uuid,
         collection: CollectionRef,
-        filter: serde_json::Value,
+        filter: Option<serde_json::Value>,
         cx: &mut Context<Self>,
     ) {
-        let (conn, active_database) = {
+        let conn = {
             let state = self.app_state.read(cx);
-            match state.connections.get(&profile_id) {
-                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
-                None => (None, None),
-            }
+            state
+                .connections()
+                .get(&profile_id)
+                .map(|c| c.connection.clone())
         };
 
         let Some(conn) = conn else {
             return;
         };
 
-        // MongoDB count query format with filter
-        let json_query = serde_json::json!({
-            "database": collection.database,
-            "collection": collection.name,
-            "count": filter
-        });
+        let mut count_request = CollectionCountRequest::new(collection.clone());
+        if let Some(f) = filter {
+            count_request = count_request.with_filter(f);
+        }
 
-        let request = QueryRequest::new(json_query.to_string()).with_database(active_database);
         let entity = cx.entity().clone();
         let qualified = collection.qualified_name();
 
         let task = cx
             .background_executor()
-            .spawn(async move { conn.execute(&request) });
+            .spawn(async move { conn.count_collection(&count_request) });
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
             cx.update(|cx| {
-                if let Ok(query_result) = result
-                    && let Some(row) = query_result.rows.first()
-                    && let Some(dbflux_core::Value::Int(count)) = row.first()
-                {
-                    let total = *count as u64;
+                if let Ok(total) = result {
                     entity.update(cx, |panel, cx| {
                         panel.pending_total_count = Some(PendingTotalCount {
                             source_qualified: qualified,
@@ -1569,7 +1550,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -1677,7 +1658,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -1822,7 +1803,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -1942,7 +1923,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -2089,7 +2070,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -2203,7 +2184,7 @@ impl DataGridPanel {
                 .update(|cx| {
                     app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
@@ -3174,7 +3155,7 @@ impl DataGridPanel {
         cx: &Context<Self>,
     ) -> Vec<OrderByColumn> {
         let state = app_state.read(cx);
-        let Some(connected) = state.connections.get(&profile_id) else {
+        let Some(connected) = state.connections().get(&profile_id) else {
             return Vec::new();
         };
 
@@ -5355,7 +5336,7 @@ impl DataGridPanel {
 
         let (conn, active_database) = {
             let state = self.app_state.read(cx);
-            match state.connections.get(profile_id) {
+            match state.connections().get(profile_id) {
                 Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
                 None => (None, None),
             }
@@ -5663,7 +5644,7 @@ impl DataGridPanel {
 
         // Get column info including primary keys
         let state = self.app_state.read(cx);
-        let connected = match state.connections.get(&profile_id) {
+        let connected = match state.connections().get(&profile_id) {
             Some(c) => c,
             None => return,
         };
@@ -5787,7 +5768,7 @@ impl DataGridPanel {
         let col_name = self.result.columns.get(col)?.name.clone();
 
         let state = self.app_state.read(cx);
-        let connected = state.connections.get(&profile_id)?;
+        let connected = state.connections().get(&profile_id)?;
         let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (database.to_string(), table_ref.name.clone());
         let table_info = connected.table_details.get(&cache_key)?;
@@ -5815,7 +5796,7 @@ impl DataGridPanel {
         };
 
         let state = self.app_state.read(cx);
-        let connected = match state.connections.get(&profile_id) {
+        let connected = match state.connections().get(&profile_id) {
             Some(c) => c,
             None => return vec![None; self.result.columns.len()],
         };

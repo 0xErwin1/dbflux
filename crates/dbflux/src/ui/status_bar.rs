@@ -43,7 +43,7 @@ impl StatusBar {
             let should_notify = cx
                 .update(|cx| {
                     this.upgrade()
-                        .map(|entity| entity.read(cx).app_state.read(cx).tasks.has_running_tasks())
+                        .map(|entity| entity.read(cx).app_state.read(cx).tasks().has_running_tasks())
                         .unwrap_or(false)
                 })
                 .unwrap_or(false);
@@ -97,12 +97,12 @@ impl Render for StatusBar {
             .map(|c| c.profile.name.clone())
             .unwrap_or_else(|| "No connection".to_string());
 
-        let running_tasks = app_state.tasks.running_tasks();
+        let running_tasks = app_state.tasks().running_tasks();
         let running_count = running_tasks.len();
         let current_task = running_tasks.first();
 
         let last_completed = if current_task.is_none() {
-            app_state.tasks.last_completed_task()
+            app_state.tasks().last_completed_task()
         } else {
             None
         };

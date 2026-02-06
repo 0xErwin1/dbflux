@@ -1,12 +1,13 @@
 use bitflags::bitflags;
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, ConnectionProfile, CrudResult, CustomTypeInfo,
-    DatabaseInfo, DbError, DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, KeyDelete, KeySet,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
-    TableInfo, ViewInfo,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
+    DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverMetadata, FormValues, KeyDelete, KeySet, LanguageService, NoOpCodeGenerator, QueryHandle,
+    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
+    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -401,6 +402,79 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    // =========================================================================
+    // Browse Operations (semantic queries, no raw SQL/JSON from UI)
+    // =========================================================================
+
+    /// Browse a table with pagination, ordering, and optional filter.
+    ///
+    /// The driver translates the request into its native query syntax.
+    /// The default implementation builds SQL using `TableBrowseRequest::build_sql_for_kind`.
+    fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
+        let sql = request.build_sql_for_kind(self.kind());
+        let mut query_request = QueryRequest::new(sql);
+
+        if let Some(ref schema) = request.table.schema {
+            query_request = query_request.with_database(Some(schema.clone()));
+        }
+
+        self.execute(&query_request)
+    }
+
+    /// Count rows in a table with an optional filter.
+    ///
+    /// The default implementation builds a `SELECT COUNT(*)` query.
+    fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
+        let quoted_table = request.table.quoted_for_kind(self.kind());
+        let sql = if let Some(ref f) = request.filter {
+            let trimmed = f.trim();
+            if trimmed.is_empty() {
+                format!("SELECT COUNT(*) FROM {}", quoted_table)
+            } else {
+                format!("SELECT COUNT(*) FROM {} WHERE {}", quoted_table, trimmed)
+            }
+        } else {
+            format!("SELECT COUNT(*) FROM {}", quoted_table)
+        };
+
+        let query_request = QueryRequest::new(sql);
+        let result = self.execute(&query_request)?;
+
+        let count = result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|val| match val {
+                crate::Value::Int(i) => Some(*i as u64),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        Ok(count)
+    }
+
+    /// Browse a document collection with pagination and optional filter.
+    ///
+    /// The default implementation returns `NotSupported`. Document drivers
+    /// override this to translate the request into their native query format.
+    fn browse_collection(
+        &self,
+        _request: &CollectionBrowseRequest,
+    ) -> Result<QueryResult, DbError> {
+        Err(DbError::NotSupported(
+            "Collection browsing not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Count documents in a collection with an optional filter.
+    ///
+    /// The default implementation returns `NotSupported`.
+    fn count_collection(&self, _request: &CollectionCountRequest) -> Result<u64, DbError> {
+        Err(DbError::NotSupported(
+            "Collection counting not supported by this driver".to_string(),
+        ))
+    }
+
     /// Returns available code generators for this connection.
     fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
         &[]
@@ -486,6 +560,14 @@ pub trait Connection: Send + Sync {
         Err(DbError::NotSupported(
             "Key-value DELETE not supported by this driver".to_string(),
         ))
+    }
+
+    /// Returns the language service for this connection.
+    ///
+    /// Provides validation and dangerous-query detection for the connection's
+    /// query language. The UI calls this instead of doing its own syntax checks.
+    fn language_service(&self) -> &dyn LanguageService {
+        &SqlLanguageService
     }
 
     /// Returns the SQL dialect for this connection.

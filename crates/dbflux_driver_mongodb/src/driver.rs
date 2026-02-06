@@ -4,13 +4,14 @@ use std::time::Instant;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, CrudResult,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, FormValues, FormattedError, Icon, IndexInfo, MONGODB_FORM,
+    CollectionBrowseRequest, CollectionCountRequest, ColumnMeta, Connection,
+    ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DocumentDelete,
+    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverMetadata, FormValues, FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM,
     PlaceholderStyle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, Value,
-    ViewInfo, sanitize_uri,
+    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
+    ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -825,8 +826,125 @@ impl Connection for MongoConnection {
         Ok(CrudResult::new(result.deleted_count, None))
     }
 
+    fn browse_collection(
+        &self,
+        request: &CollectionBrowseRequest,
+    ) -> Result<QueryResult, DbError> {
+        let start = Instant::now();
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let db_name = request.collection.database.as_str();
+        let db = client.database(db_name);
+
+        let filter = request
+            .filter
+            .as_ref()
+            .map(json_to_bson_doc)
+            .transpose()?
+            .unwrap_or_default();
+
+        let collection = db.collection::<Document>(&request.collection.name);
+
+        let cursor = collection
+            .find(filter)
+            .skip(request.pagination.offset())
+            .limit(request.pagination.limit() as i64)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        let docs: Vec<Document> = cursor
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        let internal = documents_to_result(docs)?;
+        let query_time = start.elapsed();
+
+        log::debug!(
+            "[BROWSE] Collection {}.{}: {} documents in {:.2}ms",
+            db_name,
+            request.collection.name,
+            internal.rows.len(),
+            query_time.as_secs_f64() * 1000.0,
+        );
+
+        Ok(QueryResult {
+            columns: internal.columns,
+            rows: internal.rows,
+            affected_rows: internal.affected_rows,
+            execution_time: query_time,
+            is_document_result: true,
+        })
+    }
+
+    fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+
+        let db_name = request.collection.database.as_str();
+        let db = client.database(db_name);
+        let collection = db.collection::<Document>(&request.collection.name);
+
+        let filter = request
+            .filter
+            .as_ref()
+            .map(json_to_bson_doc)
+            .transpose()?
+            .unwrap_or_default();
+
+        let count = collection
+            .count_documents(filter)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        Ok(count)
+    }
+
+    fn language_service(&self) -> &dyn LanguageService {
+        &MongoLanguageService
+    }
+
     fn dialect(&self) -> &dyn SqlDialect {
         &MongoDialect
+    }
+}
+
+/// MongoDB language service that validates shell syntax and detects dangerous operations.
+struct MongoLanguageService;
+
+impl LanguageService for MongoLanguageService {
+    fn validate(&self, query: &str) -> ValidationResult {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return ValidationResult::Valid;
+        }
+
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("select ")
+            || lower.starts_with("insert into")
+            || lower.starts_with("update ")
+            || lower.starts_with("delete from")
+        {
+            return ValidationResult::WrongLanguage {
+                expected: QueryLanguage::MongoQuery,
+                message: "SQL syntax not supported for MongoDB. Use db.collection.method() syntax."
+                    .to_string(),
+            };
+        }
+
+        match crate::query_parser::validate_query(query) {
+            Ok(_) => ValidationResult::Valid,
+            Err(e) => ValidationResult::SyntaxError(format!("Invalid MongoDB query: {}", e)),
+        }
+    }
+
+    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        detect_dangerous_mongo(query)
     }
 }
 

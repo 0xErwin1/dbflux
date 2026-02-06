@@ -8,6 +8,7 @@ mod driver_form;
 mod error;
 mod error_formatter;
 mod history;
+mod language_service;
 mod profile;
 mod query;
 mod saved_query;
@@ -23,6 +24,15 @@ mod table_browser;
 mod task;
 mod traits;
 mod value;
+
+pub mod connection_manager;
+pub mod connection_tree_manager;
+pub mod history_manager;
+pub mod profile_manager;
+pub mod saved_query_manager;
+pub mod secret_manager;
+pub mod session_facade;
+pub mod ssh_tunnel_manager;
 
 pub use code_generation::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
@@ -44,6 +54,11 @@ pub use driver_form::{
     MYSQL_FORM, POSTGRES_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
+pub use language_service::{
+    DangerousQueryKind, LanguageService, SqlLanguageService, ValidationResult,
+    detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_sql,
+    strip_leading_comments,
+};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
@@ -72,7 +87,8 @@ pub use secrets::{
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{
-    CollectionRef, OrderByColumn, Pagination, SortDirection, TableBrowseRequest, TableRef,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
+    SortDirection, TableBrowseRequest, TableCountRequest, TableRef,
 };
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
@@ -93,6 +109,21 @@ pub use sql_generation::{
     generate_sql, generate_truncate, generate_update_template,
 };
 pub use sql_query_builder::SqlQueryBuilder;
+
+pub use connection_manager::{
+    ConnectProfileParams, ConnectProfileResult, ConnectedProfile, ConnectionManager,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
+    FetchTableDetailsResult, PendingOperation, SwitchDatabaseParams, SwitchDatabaseResult,
+};
+pub use connection_tree_manager::ConnectionTreeManager;
+pub use history_manager::HistoryManager;
+pub use profile_manager::ProfileManager;
+pub use saved_query_manager::SavedQueryManager;
+pub use secret_manager::SecretManager;
+pub use session_facade::{DangerousQuerySuppressions, SessionFacade};
+pub use ssh_tunnel_manager::SshTunnelManager;
 
 /// Safely truncate a string at a character boundary, appending "..." if truncated.
 pub fn truncate_string_safe(s: &str, max_len: usize) -> String {

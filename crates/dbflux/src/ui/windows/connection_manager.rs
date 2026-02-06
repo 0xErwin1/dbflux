@@ -548,7 +548,7 @@ impl ConnectionManagerWindow {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let available_drivers: Vec<DriverInfo> = app_state
             .read(cx)
-            .drivers
+            .drivers()
             .values()
             .map(|driver| DriverInfo {
                 kind: driver.kind(),
@@ -696,7 +696,7 @@ impl ConnectionManagerWindow {
         let mut instance = Self::new(app_state.clone(), window, cx);
         instance.editing_profile_id = Some(profile.id);
 
-        let driver = app_state.read(cx).drivers.get(&profile.kind()).cloned();
+        let driver = app_state.read(cx).drivers().get(&profile.kind()).cloned();
         instance.selected_driver = driver.clone();
         instance.form_save_password = profile.save_password;
         instance.view = View::EditForm;
@@ -766,7 +766,7 @@ impl ConnectionManagerWindow {
     }
 
     fn select_driver(&mut self, kind: DbKind, window: &mut Window, cx: &mut Context<Self>) {
-        let driver = self.app_state.read(cx).drivers.get(&kind).cloned();
+        let driver = self.app_state.read(cx).drivers().get(&kind).cloned();
         self.selected_driver = driver.clone();
         self.form_save_password = false;
         self.ssh_enabled = false;
@@ -1679,7 +1679,7 @@ impl ConnectionManagerWindow {
     }
 
     fn ssh_nav_state(&self, cx: &Context<Self>) -> SshNavState {
-        let has_tunnels = !self.app_state.read(cx).ssh_tunnels.is_empty();
+        let has_tunnels = !self.app_state.read(cx).ssh_tunnels().is_empty();
         let has_selected_tunnel = self.selected_ssh_tunnel_id.is_some();
         let can_save_tunnel = self.selected_ssh_tunnel_id.is_none();
         SshNavState::new(
@@ -1898,7 +1898,7 @@ impl ConnectionManagerWindow {
 
             FormFocus::SshTunnelSelector => {
                 // Ensure items are populated before opening (items are normally set in render)
-                let ssh_tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+                let ssh_tunnels = self.app_state.read(cx).ssh_tunnels().to_vec();
                 let tunnel_items: Vec<DropdownItem> = ssh_tunnels
                     .iter()
                     .map(|t| DropdownItem::with_value(&t.name, t.id.to_string()))
@@ -2265,7 +2265,7 @@ impl ConnectionManagerWindow {
         let ssh_auth_method = self.ssh_auth_method;
         let keyring_available = self.app_state.read(cx).secret_store_available();
         let save_ssh_secret = self.form_save_ssh_secret;
-        let ssh_tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+        let ssh_tunnels = self.app_state.read(cx).ssh_tunnels().to_vec();
         let selected_tunnel_id = self.selected_ssh_tunnel_id;
 
         let show_focus =
@@ -3702,7 +3702,7 @@ impl Render for ConnectionManagerWindow {
             let tunnel = self
                 .app_state
                 .read(cx)
-                .ssh_tunnels
+                .ssh_tunnels()
                 .iter()
                 .find(|t| t.id == tunnel_id)
                 .cloned();

@@ -42,7 +42,7 @@ impl TasksPanel {
             let should_notify = cx
                 .update(|cx| {
                     this.upgrade()
-                        .map(|entity| entity.read(cx).app_state.read(cx).tasks.has_running_tasks())
+                        .map(|entity| entity.read(cx).app_state.read(cx).tasks().has_running_tasks())
                         .unwrap_or(false)
                 })
                 .unwrap_or(false);
@@ -61,7 +61,7 @@ impl TasksPanel {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |panel, cx| {
                             panel.app_state.update(cx, |state, _| {
-                                state.tasks.cleanup_completed(60);
+                                state.tasks_mut().cleanup_completed(60);
                             });
                         });
                     }
@@ -90,7 +90,7 @@ impl TasksPanel {
         }
 
         self.app_state.update(cx, |state, cx| {
-            state.tasks.cancel(task_id);
+            state.tasks_mut().cancel(task_id);
             cx.emit(AppStateChanged);
         });
 
@@ -191,11 +191,11 @@ impl Render for TasksPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.app_state.read(cx);
 
-        let running_tasks = state.tasks.running_tasks();
+        let running_tasks = state.tasks().running_tasks();
         let running_ids: HashSet<TaskId> = running_tasks.iter().map(|t| t.id).collect();
 
         let recent_tasks: Vec<TaskSnapshot> = state
-            .tasks
+            .tasks()
             .recent_tasks(10)
             .into_iter()
             .filter(|t| !running_ids.contains(&t.id))
