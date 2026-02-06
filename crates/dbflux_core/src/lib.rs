@@ -7,8 +7,8 @@ mod crud;
 mod data_view;
 mod driver_capabilities;
 mod driver_form;
-mod error_formatter;
 mod error;
+mod error_formatter;
 mod history;
 mod language_service;
 mod profile;
@@ -57,16 +57,16 @@ pub use driver_form::{
     MYSQL_FORM, POSTGRES_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
-pub use language_service::{
-    DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,
-    TextRange, ValidationResult, detect_dangerous_mongo, detect_dangerous_query,
-    detect_dangerous_sql, strip_leading_comments,
-};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
 };
 pub use history::{HistoryEntry, HistoryStore};
+pub use language_service::{
+    DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,
+    TextRange, ValidationResult, detect_dangerous_mongo, detect_dangerous_query,
+    detect_dangerous_sql, strip_leading_comments,
+};
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
@@ -83,11 +83,11 @@ pub use schema::{
     TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
+pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
     ssh_tunnel_secret_ref,
 };
-pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{

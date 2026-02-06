@@ -34,10 +34,7 @@ impl SavedQueryManager {
     }
 
     pub fn queries(&self) -> &[SavedQuery] {
-        self.store
-            .as_ref()
-            .map(|s| s.get_all())
-            .unwrap_or(&[])
+        self.store.as_ref().map(|s| s.get_all()).unwrap_or(&[])
     }
 
     pub fn add(&mut self, query: SavedQuery) {

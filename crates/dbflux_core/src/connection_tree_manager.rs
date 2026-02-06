@@ -50,10 +50,7 @@ impl ConnectionTreeManager {
         if let Err(e) = store.save(&self.tree) {
             error!("Failed to save connection tree: {:?}", e);
         } else {
-            info!(
-                "Saved connection tree with {} nodes",
-                self.tree.nodes.len()
-            );
+            info!("Saved connection tree with {} nodes", self.tree.nodes.len());
         }
     }
 
@@ -93,9 +90,7 @@ impl ConnectionTreeManager {
     }
 
     pub fn delete_folder(&mut self, folder_id: Uuid) -> Vec<Uuid> {
-        let moved = self
-            .tree
-            .delete_folder_and_reparent_children(folder_id);
+        let moved = self.tree.delete_folder_and_reparent_children(folder_id);
 
         if !moved.is_empty() || self.tree.find_by_id(folder_id).is_none() {
             self.save();

@@ -351,7 +351,10 @@ impl fmt::Display for SchemaNodeId {
             Self::Database { profile_id, name } => {
                 write!(f, "{}|{}|{}", P_DATABASE, profile_id, name)
             }
-            Self::Loading { profile_id, database } => {
+            Self::Loading {
+                profile_id,
+                database,
+            } => {
                 write!(f, "{}|{}|{}", P_LOADING, profile_id, database)
             }
             Self::Schema { profile_id, name } => {
@@ -368,14 +371,22 @@ impl fmt::Display for SchemaNodeId {
                 database,
                 schema,
             } => {
-                write!(f, "{}|{}|{}|{}", P_TYPES_FOLDER, profile_id, database, schema)
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_TYPES_FOLDER, profile_id, database, schema
+                )
             }
             Self::TypesLoadingFolder {
                 profile_id,
                 database,
                 schema,
             } => {
-                write!(f, "{}|{}|{}|{}", P_TYPES_LOADING, profile_id, database, schema)
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_TYPES_LOADING, profile_id, database, schema
+                )
             }
             Self::SchemaIndexesFolder {
                 profile_id,
@@ -383,7 +394,8 @@ impl fmt::Display for SchemaNodeId {
                 schema,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}",
                     P_SCHEMA_IDX_FOLDER, profile_id, database, schema
                 )
             }
@@ -393,7 +405,8 @@ impl fmt::Display for SchemaNodeId {
                 schema,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}",
                     P_SCHEMA_IDX_LOADING, profile_id, database, schema
                 )
             }
@@ -403,7 +416,8 @@ impl fmt::Display for SchemaNodeId {
                 schema,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}",
                     P_SCHEMA_FK_FOLDER, profile_id, database, schema
                 )
             }
@@ -413,7 +427,8 @@ impl fmt::Display for SchemaNodeId {
                 schema,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}",
                     P_SCHEMA_FK_LOADING, profile_id, database, schema
                 )
             }
@@ -456,14 +471,22 @@ impl fmt::Display for SchemaNodeId {
                 schema,
                 table,
             } => {
-                write!(f, "{}|{}|{}|{}", P_COLUMNS_FOLDER, profile_id, schema, table)
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_COLUMNS_FOLDER, profile_id, schema, table
+                )
             }
             Self::IndexesFolder {
                 profile_id,
                 schema,
                 table,
             } => {
-                write!(f, "{}|{}|{}|{}", P_INDEXES_FOLDER, profile_id, schema, table)
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_INDEXES_FOLDER, profile_id, schema, table
+                )
             }
             Self::ForeignKeysFolder {
                 profile_id,
@@ -477,7 +500,11 @@ impl fmt::Display for SchemaNodeId {
                 schema,
                 table,
             } => {
-                write!(f, "{}|{}|{}|{}", P_CONSTRAINTS_FOLDER, profile_id, schema, table)
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_CONSTRAINTS_FOLDER, profile_id, schema, table
+                )
             }
             Self::Column {
                 profile_id,
@@ -527,7 +554,8 @@ impl fmt::Display for SchemaNodeId {
                 collection,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}",
                     P_COLL_IDX_FOLDER, profile_id, database, collection
                 )
             }
@@ -545,7 +573,8 @@ impl fmt::Display for SchemaNodeId {
                 value,
             } => {
                 write!(
-                    f, "{}|{}|{}|{}|{}",
+                    f,
+                    "{}|{}|{}|{}|{}",
                     P_ENUM_VALUE, profile_id, schema, type_name, value
                 )
             }

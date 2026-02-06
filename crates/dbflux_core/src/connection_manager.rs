@@ -50,20 +50,14 @@ impl CacheKey {
         }
     }
 
-    pub fn schema_types(
-        database: impl Into<String>,
-        schema: Option<impl Into<String>>,
-    ) -> Self {
+    pub fn schema_types(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
         Self::SchemaTypes {
             database: database.into(),
             schema: schema.map(|s| s.into()),
         }
     }
 
-    pub fn schema_indexes(
-        database: impl Into<String>,
-        schema: Option<impl Into<String>>,
-    ) -> Self {
+    pub fn schema_indexes(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
         Self::SchemaIndexes {
             database: database.into(),
             schema: schema.map(|s| s.into()),

@@ -988,7 +988,10 @@ impl DataGridPanel {
             browse_request.table.schema = Some(db.clone());
         }
 
-        info!("Running table browse: {:?}", browse_request.table.qualified_name());
+        info!(
+            "Running table browse: {:?}",
+            browse_request.table.qualified_name()
+        );
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
             state.start_task(

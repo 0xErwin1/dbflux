@@ -826,10 +826,7 @@ impl Connection for MongoConnection {
         Ok(CrudResult::new(result.deleted_count, None))
     }
 
-    fn browse_collection(
-        &self,
-        request: &CollectionBrowseRequest,
-    ) -> Result<QueryResult, DbError> {
+    fn browse_collection(&self, request: &CollectionBrowseRequest) -> Result<QueryResult, DbError> {
         let start = Instant::now();
 
         let client = self

@@ -6,18 +6,18 @@ use std::time::Instant;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest, DescribeRequest,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DriverCapabilities, DriverFormDef, DriverMetadata,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, POSTGRES_FORM, PlaceholderStyle,
-    QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo,
-    TypeDefinition, Value, ViewInfo, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, sanitize_uri,
+    DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
+    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
+    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo,
+    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
+    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder,
+    SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -443,7 +443,9 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
             let connector = TlsConnector::builder()
                 .danger_accept_invalid_certs(params.ssl_mode == SslMode::Prefer)
                 .build()
-                .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
 
             let tls = MakeTlsConnector::new(connector);
 
@@ -1095,18 +1097,22 @@ impl Connection for PostgresConnection {
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         if !patch.identity.is_valid() {
             return Err(DbError::QueryFailed(
-                "Cannot update row: invalid row identity (missing primary key)".to_string().into(),
+                "Cannot update row: invalid row identity (missing primary key)"
+                    .to_string()
+                    .into(),
             ));
         }
 
         if !patch.has_changes() {
-            return Err(DbError::QueryFailed("No changes to save".to_string().into()));
+            return Err(DbError::QueryFailed(
+                "No changes to save".to_string().into(),
+            ));
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder
-            .build_update(patch, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string().into()))?;
+        let sql = builder.build_update(patch, true).ok_or_else(|| {
+            DbError::QueryFailed("Failed to build UPDATE query".to_string().into())
+        })?;
 
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -1139,9 +1145,9 @@ impl Connection for PostgresConnection {
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder
-            .build_insert(insert, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string().into()))?;
+        let sql = builder.build_insert(insert, true).ok_or_else(|| {
+            DbError::QueryFailed("Failed to build INSERT query".to_string().into())
+        })?;
 
         log::debug!("[INSERT] Executing: {}", sql);
 
@@ -1169,14 +1175,16 @@ impl Connection for PostgresConnection {
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
         if !delete.is_valid() {
             return Err(DbError::QueryFailed(
-                "Cannot delete row: invalid row identity (missing primary key)".to_string().into(),
+                "Cannot delete row: invalid row identity (missing primary key)"
+                    .to_string()
+                    .into(),
             ));
         }
 
         let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder
-            .build_delete(delete, true)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string().into()))?;
+        let sql = builder.build_delete(delete, true).ok_or_else(|| {
+            DbError::QueryFailed("Failed to build DELETE query".to_string().into())
+        })?;
 
         log::debug!("[DELETE] Executing: {}", sql);
 
@@ -1200,7 +1208,6 @@ impl Connection for PostgresConnection {
 
         Ok(CrudResult::success(returning_row))
     }
-
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
         let query = match &request.query {
