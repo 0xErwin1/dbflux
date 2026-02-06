@@ -53,6 +53,7 @@
 - Do call `cx.notify()` after state changes that should re-render (AGENTS.md, crates/dbflux/src/ui/workspace.rs).
 - Do use `background_executor().spawn()` for DB operations to avoid blocking UI (AGENTS.md).
 - Do propagate or log errors; do not silently discard fallible results (AGENTS.md).
+- Do refactor and modularize functions that grow beyond ~100 lines; treat this as a design smell.
 - Do use abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt UI behavior instead of driver-specific conditionals.
 - Don't create `mod.rs` files; declare modules directly in `src/*.rs` (AGENTS.md).
 - Don't use deprecated GPUI types (`Model<T>`, `View<T>`, etc.) (AGENTS.md).
