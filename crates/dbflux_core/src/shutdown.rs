@@ -111,17 +111,21 @@ impl ShutdownCoordinator {
     /// Returns `true` if the transition succeeded, `false` if the current phase
     /// didn't match the expected phase.
     pub fn advance_phase(&self, expected: ShutdownPhase, next: ShutdownPhase) -> bool {
-        let current = self.phase.load(Ordering::SeqCst);
-        if current == expected as u8 {
-            self.phase.store(next as u8, Ordering::SeqCst);
-            true
-        } else {
-            log::warn!(
-                "Invalid phase transition: expected {:?}, was {:?}",
-                expected,
-                ShutdownPhase::from_u8(current)
-            );
-            false
+        match self.phase.compare_exchange(
+            expected as u8,
+            next as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(actual) => {
+                log::warn!(
+                    "Invalid phase transition: expected {:?}, was {:?}",
+                    expected,
+                    ShutdownPhase::from_u8(actual)
+                );
+                false
+            }
         }
     }
 

@@ -505,13 +505,13 @@ impl Workspace {
     fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::toast::ToastExt;
 
-        let profile_id = self.app_state.read(cx).active_connection_id;
+        let profile_id = self.app_state.read(cx).active_connection_id();
 
         if let Some(id) = profile_id {
             let name = self
                 .app_state
                 .read(cx)
-                .connections
+                .connections()
                 .get(&id)
                 .map(|c| c.profile.name.clone());
 
@@ -548,7 +548,7 @@ impl Workspace {
             cx.update(|cx| match result {
                 Ok(schema) => {
                     app_state.update(cx, |state, cx| {
-                        if let Some(connected) = state.connections.get_mut(&profile_id) {
+                        if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
                             connected.schema = Some(schema);
                         }
                         cx.emit(AppStateChanged);
@@ -580,7 +580,7 @@ impl Workspace {
         if !self
             .app_state
             .read(cx)
-            .connections
+            .connections()
             .contains_key(&profile_id)
         {
             cx.toast_error("No active connection for this table", window);
@@ -640,7 +640,7 @@ impl Workspace {
         if !self
             .app_state
             .read(cx)
-            .connections
+            .connections()
             .contains_key(&profile_id)
         {
             cx.toast_error("No active connection for this collection", window);

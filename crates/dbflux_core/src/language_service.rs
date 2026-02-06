@@ -1,10 +1,10 @@
-//! Detection of potentially dangerous SQL and MongoDB queries.
-//!
-//! This module provides heuristic detection of queries that may cause
-//! unintended data loss or structural changes. It is NOT a full parser -
-//! it uses simple pattern matching that may have false positives/negatives.
+use crate::QueryLanguage;
 
-/// Categories of dangerous queries.
+/// Categories of potentially dangerous queries that require user confirmation.
+///
+/// Each variant maps to a destructive pattern detected by heuristic analysis.
+/// Both SQL and document-database patterns are represented here so the core
+/// owns the full definition and the UI never needs to know query syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DangerousQueryKind {
     // SQL patterns
@@ -44,23 +44,67 @@ impl DangerousQueryKind {
     }
 }
 
-/// Detect if a query contains dangerous statements.
+/// Result of validating a query before execution.
+#[derive(Debug, Clone)]
+pub enum ValidationResult {
+    /// Query is valid and ready to execute.
+    Valid,
+
+    /// Query has a syntax error.
+    SyntaxError(String),
+
+    /// Query uses syntax from the wrong language (e.g., SQL on a MongoDB connection).
+    WrongLanguage {
+        expected: QueryLanguage,
+        message: String,
+    },
+}
+
+/// Language-specific services provided by a database driver.
 ///
-/// Automatically detects MongoDB shell syntax (db.collection.method) vs SQL.
-/// For multi-statement SQL scripts (containing `;`), returns `Script` kind
-/// if any statement is dangerous.
-pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
+/// The core resolves the appropriate `LanguageService` for a session based on
+/// the driver's `QueryLanguage`. The UI/editor calls these methods without
+/// knowing which database engine is behind them.
+pub trait LanguageService: Send + Sync {
+    /// Validate a query string before execution.
+    ///
+    /// Returns `Valid` if the query can be executed, or an error describing
+    /// what is wrong. This is a lightweight check (no server round-trip).
+    fn validate(&self, query: &str) -> ValidationResult;
+
+    /// Detect if a query is potentially dangerous and requires confirmation.
+    ///
+    /// Returns `None` for safe queries. The UI shows a confirmation dialog
+    /// for dangerous queries without needing to understand the syntax.
+    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind>;
+}
+
+/// Default SQL language service that handles standard SQL dangerous-query detection.
+///
+/// This is used by relational drivers (Postgres, MySQL, SQLite) that share
+/// common SQL patterns for destructive operations.
+pub struct SqlLanguageService;
+
+impl LanguageService for SqlLanguageService {
+    fn validate(&self, _query: &str) -> ValidationResult {
+        ValidationResult::Valid
+    }
+
+    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        detect_dangerous_sql(query)
+    }
+}
+
+/// Detect dangerous SQL queries using heuristic pattern matching.
+///
+/// For multi-statement scripts (containing `;`), returns `Script` if any
+/// statement is dangerous. Not a full parser — may have false positives.
+pub fn detect_dangerous_sql(query: &str) -> Option<DangerousQueryKind> {
     let clean = strip_leading_comments(query);
     if clean.is_empty() {
         return None;
     }
 
-    // Check for MongoDB shell syntax
-    if clean.trim().starts_with("db.") {
-        return detect_dangerous_mongo_query(clean);
-    }
-
-    // SQL detection
     let statements: Vec<&str> = clean
         .split(';')
         .map(strip_leading_comments)
@@ -83,21 +127,18 @@ pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
     detect_dangerous_single(statements[0])
 }
 
-/// Detect dangerous MongoDB shell commands.
-fn detect_dangerous_mongo_query(query: &str) -> Option<DangerousQueryKind> {
+/// Detect dangerous MongoDB shell commands using heuristic pattern matching.
+pub fn detect_dangerous_mongo(query: &str) -> Option<DangerousQueryKind> {
     let normalized = query.trim().to_lowercase();
 
-    // db.dropDatabase()
     if normalized.contains(".dropdatabase(") {
         return Some(DangerousQueryKind::MongoDropDatabase);
     }
 
-    // db.collection.drop()
     if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
         return Some(DangerousQueryKind::MongoDropCollection);
     }
 
-    // deleteMany with empty or no filter
     if let Some(pos) = normalized.find(".deletemany(") {
         let after_paren = &normalized[pos + 12..];
         if is_empty_filter(after_paren) {
@@ -105,7 +146,6 @@ fn detect_dangerous_mongo_query(query: &str) -> Option<DangerousQueryKind> {
         }
     }
 
-    // updateMany with empty filter
     if let Some(pos) = normalized.find(".updatemany(") {
         let after_paren = &normalized[pos + 12..];
         if is_empty_filter(after_paren) {
@@ -116,32 +156,22 @@ fn detect_dangerous_mongo_query(query: &str) -> Option<DangerousQueryKind> {
     None
 }
 
-/// Check if the first argument to a MongoDB method is an empty filter.
-fn is_empty_filter(args_start: &str) -> bool {
-    let trimmed = args_start.trim();
-
-    // Empty call: deleteMany()
-    if trimmed.starts_with(')') {
-        return true;
+/// Unified entry point: auto-detects language and checks for dangerous patterns.
+///
+/// Detects MongoDB shell syntax (`db.`) vs SQL automatically.
+pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
+    let clean = strip_leading_comments(query);
+    if clean.is_empty() {
+        return None;
     }
 
-    // Empty object: deleteMany({})
-    if trimmed.starts_with("{}") {
-        return true;
+    if clean.trim().starts_with("db.") {
+        return detect_dangerous_mongo(clean);
     }
 
-    // Empty object with whitespace: deleteMany({ })
-    if let Some(brace_end) = trimmed.find('}') {
-        let inside = &trimmed[1..brace_end];
-        if inside.trim().is_empty() {
-            return true;
-        }
-    }
-
-    false
+    detect_dangerous_sql(query)
 }
 
-/// Detect if a single statement (no `;`) is dangerous.
 fn detect_dangerous_single(sql: &str) -> Option<DangerousQueryKind> {
     let normalized = sql.trim().to_lowercase();
     let main_stmt = skip_cte_prefix(&normalized);
@@ -169,13 +199,11 @@ fn detect_dangerous_single(sql: &str) -> Option<DangerousQueryKind> {
     None
 }
 
-/// Skip CTE prefix (WITH ... AS (...)) to find the main statement.
 fn skip_cte_prefix(sql: &str) -> &str {
     if !sql.starts_with("with ") {
         return sql;
     }
 
-    // Find last ) followed by a DML keyword (handles any whitespace between)
     for (i, _) in sql.rmatch_indices(')') {
         let after = sql[i + 1..].trim_start();
         for keyword in ["delete", "update", "insert", "select", "truncate"] {
@@ -188,9 +216,29 @@ fn skip_cte_prefix(sql: &str) -> &str {
     sql
 }
 
-/// Check if SQL contains a WHERE clause.
 fn contains_where_clause(normalized_sql: &str) -> bool {
     normalized_sql.contains(" where ")
+}
+
+fn is_empty_filter(args_start: &str) -> bool {
+    let trimmed = args_start.trim();
+
+    if trimmed.starts_with(')') {
+        return true;
+    }
+
+    if trimmed.starts_with("{}") {
+        return true;
+    }
+
+    if let Some(brace_end) = trimmed.find('}') {
+        let inside = &trimmed[1..brace_end];
+        if inside.trim().is_empty() {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Strip leading SQL comments (line and block).
@@ -255,9 +303,6 @@ mod tests {
 
     #[test]
     fn delete_with_where_in_subquery_but_no_outer_where() {
-        // This has WHERE in a subquery but no outer WHERE - still dangerous
-        // Our simple heuristic will see " where " and pass it though
-        // This is a known limitation - we accept false negatives here
         let sql = "DELETE FROM users WHERE id IN (SELECT id FROM temp WHERE active = 1)";
         assert_eq!(detect_dangerous_query(sql), None);
     }
@@ -530,8 +575,6 @@ mod tests {
 
     #[test]
     fn where_in_string_literal_not_detected() {
-        // Our simple heuristic sees " where " even in strings
-        // This is a known limitation - false negative
         let sql = "DELETE FROM users WHERE name = 'test'";
         assert_eq!(detect_dangerous_query(sql), None);
     }
@@ -730,7 +773,6 @@ mod tests {
 
     #[test]
     fn mongo_delete_one_is_safe() {
-        // deleteOne only affects one document, not considered mass-dangerous
         assert_eq!(
             detect_dangerous_query(r#"db.users.deleteOne({"_id": "123"})"#),
             None

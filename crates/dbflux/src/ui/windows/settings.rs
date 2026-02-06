@@ -443,7 +443,7 @@ impl SettingsWindow {
         };
 
         let deleted_idx = self.app_state.update(cx, |state, cx| {
-            let idx = state.ssh_tunnels.iter().position(|t| t.id == tunnel_id);
+            let idx = state.ssh_tunnels().iter().position(|t| t.id == tunnel_id);
             if let Some(i) = idx {
                 state.remove_ssh_tunnel(i);
             }
@@ -1022,9 +1022,11 @@ impl SettingsWindow {
 
     fn render_ssh_tunnels_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+        let (tunnels, keyring_available) = {
+            let state = self.app_state.read(cx);
+            (state.ssh_tunnels().to_vec(), state.secret_store_available())
+        };
         let editing_id = self.editing_tunnel_id;
-        let keyring_available = self.app_state.read(cx).secret_store_available();
 
         div()
             .flex_1()
@@ -1064,7 +1066,7 @@ impl SettingsWindow {
         tunnels: &[SshTunnelProfile],
         editing_id: Option<Uuid>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let is_list_focused =
             self.focus_area == SettingsFocus::Content && self.ssh_focus == SshFocus::ProfileList;
@@ -2035,7 +2037,7 @@ impl SettingsWindow {
     }
 
     fn ssh_tunnel_count(&self, cx: &Context<Self>) -> usize {
-        self.app_state.read(cx).ssh_tunnels.len()
+        self.app_state.read(cx).ssh_tunnels().len()
     }
 
     fn ssh_move_next_profile(&mut self, cx: &Context<Self>) {
@@ -2067,7 +2069,10 @@ impl SettingsWindow {
     }
 
     fn ssh_load_selected_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+        let tunnels = {
+            let state = self.app_state.read(cx);
+            state.ssh_tunnels().to_vec()
+        };
 
         if let Some(idx) = self.ssh_selected_idx
             && idx >= tunnels.len()
@@ -2408,7 +2413,10 @@ impl SettingsWindow {
                     }
                     ("d", m) if m == Modifiers::none() => {
                         if let Some(idx) = self.ssh_selected_idx {
-                            let tunnels = self.app_state.read(cx).ssh_tunnels.clone();
+                            let tunnels = {
+                                let state = self.app_state.read(cx);
+                                state.ssh_tunnels().to_vec()
+                            };
                             if let Some(tunnel) = tunnels.get(idx) {
                                 self.request_delete_tunnel(tunnel.id, cx);
                             }
@@ -2621,7 +2629,7 @@ impl Render for SettingsWindow {
             .and_then(|id| {
                 self.app_state
                     .read(cx)
-                    .ssh_tunnels
+                    .ssh_tunnels()
                     .iter()
                     .find(|t| t.id == id)
                     .map(|t| t.name.clone())

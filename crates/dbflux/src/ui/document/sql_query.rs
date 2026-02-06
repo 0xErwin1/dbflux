@@ -3,12 +3,14 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
-use crate::ui::dangerous_query::{DangerousQueryKind, detect_dangerous_query};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{CancelToken, DbError, DbKind, HistoryEntry, QueryRequest, QueryResult};
+use dbflux_core::{
+    CancelToken, DangerousQueryKind, DbError, HistoryEntry, QueryRequest, QueryResult,
+    ValidationResult, detect_dangerous_query,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -111,11 +113,11 @@ pub struct ExecutionRecord {
 
 impl SqlQueryDocument {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let connection_id = app_state.read(cx).active_connection_id;
+        let connection_id = app_state.read(cx).active_connection_id();
 
         // Get query language from the active connection, default to SQL
         let query_language = connection_id
-            .and_then(|id| app_state.read(cx).connections.get(&id))
+            .and_then(|id| app_state.read(cx).connections().get(&id))
             .map(|conn| conn.connection.metadata().query_language)
             .unwrap_or(dbflux_core::QueryLanguage::Sql);
 
@@ -259,7 +261,7 @@ impl SqlQueryDocument {
             let is_suppressed = self
                 .app_state
                 .read(cx)
-                .dangerous_query_suppressions
+                .dangerous_query_suppressions()
                 .is_suppressed(kind);
 
             if !is_suppressed {
@@ -273,31 +275,21 @@ impl SqlQueryDocument {
             }
         }
 
-        // For MongoDB connections, validate before execution
+        // Validate query using the connection's language service
         if let Some(conn_id) = self.connection_id
-            && let Some(connected) = self.app_state.read(cx).connections.get(&conn_id)
-            && connected.connection.kind() == DbKind::MongoDB
+            && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
         {
-            let trimmed = query.trim().to_lowercase();
-
-            // Detect SQL syntax on MongoDB connection
-            if trimmed.starts_with("select ")
-                || trimmed.starts_with("insert into")
-                || trimmed.starts_with("update ")
-                || trimmed.starts_with("delete from")
-            {
-                cx.toast_error(
-                    "SQL syntax not supported for MongoDB. Use db.collection.method() syntax.",
-                    window,
-                );
-                return;
-            }
-
-            // Validate MongoDB syntax
-            #[cfg(feature = "mongodb")]
-            if let Err(e) = dbflux_driver_mongodb::validate_query(&query) {
-                cx.toast_error(format!("Invalid MongoDB query: {}", e), window);
-                return;
+            let lang = connected.connection.language_service();
+            match lang.validate(&query) {
+                ValidationResult::Valid => {}
+                ValidationResult::SyntaxError(msg) => {
+                    cx.toast_error(msg, window);
+                    return;
+                }
+                ValidationResult::WrongLanguage { message, .. } => {
+                    cx.toast_error(message, window);
+                    return;
+                }
             }
         }
 
@@ -319,7 +311,7 @@ impl SqlQueryDocument {
         let connection = self
             .app_state
             .read(cx)
-            .connections
+            .connections()
             .get(&conn_id)
             .map(|c| c.connection.clone());
 
@@ -357,7 +349,7 @@ impl SqlQueryDocument {
         let active_database = self
             .app_state
             .read(cx)
-            .connections
+            .connections()
             .get(&conn_id)
             .and_then(|c| c.active_database.clone());
 
@@ -402,7 +394,7 @@ impl SqlQueryDocument {
         if suppress {
             self.app_state.update(cx, |state, _| {
                 state
-                    .dangerous_query_suppressions
+                    .dangerous_query_suppressions_mut()
                     .set_suppressed(pending.kind);
             });
         }
@@ -470,7 +462,7 @@ impl SqlQueryDocument {
                 // Add to global history
                 let (database, connection_name) = self
                     .connection_id
-                    .and_then(|id| self.app_state.read(cx).connections.get(&id))
+                    .and_then(|id| self.app_state.read(cx).connections().get(&id))
                     .map(|c| (c.active_database.clone(), Some(c.profile.name.clone())))
                     .unwrap_or((None, None));
 

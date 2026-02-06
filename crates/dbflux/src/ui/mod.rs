@@ -1,7 +1,6 @@
 pub mod cell_editor_modal;
 pub mod command_palette;
 pub mod components;
-pub mod dangerous_query;
 pub mod dock;
 pub mod document;
 pub mod document_preview_modal;

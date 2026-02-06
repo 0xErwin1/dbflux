@@ -111,6 +111,37 @@ impl TreeNodeKind {
                 | Self::View
                 | Self::Collection
                 | Self::ConnectionFolder
+                | Self::Schema
+                | Self::TablesFolder
+                | Self::ViewsFolder
+                | Self::TypesFolder
+                | Self::ColumnsFolder
+                | Self::IndexesFolder
+                | Self::ForeignKeysFolder
+                | Self::ConstraintsFolder
+                | Self::SchemaIndexesFolder
+                | Self::SchemaForeignKeysFolder
+                | Self::CollectionsFolder
+                | Self::CustomType
+        )
+    }
+
+    fn is_expandable_folder(&self) -> bool {
+        matches!(
+            self,
+            Self::ConnectionFolder
+                | Self::Schema
+                | Self::TablesFolder
+                | Self::ViewsFolder
+                | Self::TypesFolder
+                | Self::ColumnsFolder
+                | Self::IndexesFolder
+                | Self::ForeignKeysFolder
+                | Self::ConstraintsFolder
+                | Self::SchemaIndexesFolder
+                | Self::SchemaForeignKeysFolder
+                | Self::CollectionsFolder
+                | Self::CustomType
         )
     }
 
@@ -759,7 +790,7 @@ impl Sidebar {
                     let is_connected = self
                         .app_state
                         .read(cx)
-                        .connections
+                        .connections()
                         .contains_key(&profile_id);
                     if is_connected {
                         self.app_state.update(cx, |state, cx| {
@@ -773,9 +804,6 @@ impl Sidebar {
             }
             TreeNodeKind::Database => {
                 self.handle_database_click(item_id, cx);
-            }
-            TreeNodeKind::ConnectionFolder => {
-                self.toggle_item_expansion(item_id, cx);
             }
             _ => {}
         }
@@ -812,8 +840,11 @@ impl Sidebar {
             });
         }
 
-        // Double-click executes; single-click selects only (chevron expands)
-        if click_count == 2 {
+        let node_kind = TreeNodeKind::from_id(item_id);
+
+        if click_count == 1 && node_kind.is_expandable_folder() {
+            self.toggle_item_expansion(item_id, cx);
+        } else if click_count == 2 {
             self.execute_item(item_id, cx);
         }
 
@@ -869,7 +900,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&parts.profile_id) else {
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
             return vec![];
         };
 
@@ -947,7 +978,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&parts.profile_id) else {
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
             return;
         };
 
@@ -999,7 +1030,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&parts.profile_id) else {
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
             return;
         };
 
@@ -1097,7 +1128,7 @@ impl Sidebar {
             return CodeGenCapabilities::empty();
         };
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&profile_id) else {
+        let Some(conn) = state.connections().get(&profile_id) else {
             return CodeGenCapabilities::empty();
         };
         conn.connection.code_gen_capabilities()
@@ -1133,7 +1164,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&profile_id) else {
+        let Some(conn) = state.connections().get(&profile_id) else {
             return false;
         };
 
@@ -1270,7 +1301,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&profile_id) else {
+        let Some(conn) = state.connections().get(&profile_id) else {
             return;
         };
 
@@ -1362,7 +1393,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&profile_id) else {
+        let Some(conn) = state.connections().get(&profile_id) else {
             return;
         };
 
@@ -1474,7 +1505,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&profile_id) else {
+        let Some(conn) = state.connections().get(&profile_id) else {
             return;
         };
 
@@ -1587,7 +1618,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections.get(&parts.profile_id) else {
+        let Some(conn) = state.connections().get(&parts.profile_id) else {
             return TableDetailsStatus::NotFound;
         };
 
@@ -2018,7 +2049,7 @@ impl Sidebar {
                     if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
                         self.app_state
                             .read(cx)
-                            .connections
+                            .connections()
                             .contains_key(&profile_id)
                     } else {
                         false
@@ -2234,12 +2265,12 @@ impl Sidebar {
             item_id.strip_prefix("profile_")
             && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
         {
-            let node = state.connection_tree.find_by_profile(profile_id);
+            let node = state.connection_tree().find_by_profile(profile_id);
             (node.and_then(|n| n.parent_id), node.map(|n| n.id))
         } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
             && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
         {
-            let node = state.connection_tree.find_by_id(folder_id);
+            let node = state.connection_tree().find_by_id(folder_id);
             (node.and_then(|n| n.parent_id), Some(folder_id))
         } else {
             (None, None)
@@ -2255,10 +2286,10 @@ impl Sidebar {
 
         // Add all folders (except self and descendants for folders)
         let descendants = current_node_id
-            .map(|id| state.connection_tree.get_descendants(id))
+            .map(|id| state.connection_tree().get_descendants(id))
             .unwrap_or_default();
 
-        for folder in state.connection_tree.folders() {
+        for folder in state.connection_tree().folders() {
             // Skip if this is the current parent
             if Some(folder.id) == current_parent {
                 continue;
@@ -2295,7 +2326,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        if let Some(conn) = state.connections.get(&profile_id) {
+        if let Some(conn) = state.connections().get(&profile_id) {
             conn.database_schemas.contains_key(db_name)
         } else {
             false
@@ -2315,7 +2346,7 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        if let Some(conn) = state.connections.get(&profile_id) {
+        if let Some(conn) = state.connections().get(&profile_id) {
             conn.connection.schema_loading_strategy() == SchemaLoadingStrategy::LazyPerDatabase
         } else {
             false
@@ -2615,7 +2646,7 @@ impl Sidebar {
         let strategy = self
             .app_state
             .read(cx)
-            .connections
+            .connections()
             .get(&profile_id)
             .map(|c| c.connection.schema_loading_strategy());
 
@@ -2649,7 +2680,7 @@ impl Sidebar {
         };
 
         self.app_state.update(cx, |state, cx| {
-            if let Some(conn) = state.connections.get_mut(&profile_id) {
+            if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 // Remove the database schema
                 conn.database_schemas.remove(db_name);
 
@@ -2735,7 +2766,7 @@ impl Sidebar {
             let current_name = self
                 .app_state
                 .read(cx)
-                .connection_tree
+                .connection_tree()
                 .find_by_id(folder_id)
                 .map(|f| f.name.clone())
                 .unwrap_or_default();
@@ -2757,7 +2788,7 @@ impl Sidebar {
             let current_name = self
                 .app_state
                 .read(cx)
-                .profiles
+                .profiles()
                 .iter()
                 .find(|p| p.id == profile_id)
                 .map(|p| p.name.clone())
@@ -2797,7 +2828,7 @@ impl Sidebar {
         {
             self.app_state
                 .read(cx)
-                .connection_tree
+                .connection_tree()
                 .find_by_profile(profile_id)
                 .map(|n| n.id)
         } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
@@ -2838,7 +2869,7 @@ impl Sidebar {
                 if state.rename_folder(id, &new_name) {
                     cx.emit(AppStateChanged);
                 }
-            } else if let Some(profile) = state.profiles.iter_mut().find(|p| p.id == id) {
+            } else if let Some(profile) = state.profiles_mut().iter_mut().find(|p| p.id == id) {
                 profile.name = new_name;
                 state.save_profiles();
                 cx.emit(AppStateChanged);
@@ -2870,10 +2901,10 @@ impl Sidebar {
             all_node_ids
                 .iter()
                 .filter_map(|&node_id| {
-                    if state.connection_tree.find_by_id(node_id).is_some() {
+                    if state.connection_tree().find_by_id(node_id).is_some() {
                         Some(node_id)
                     } else {
-                        state.connection_tree.find_by_profile(node_id).map(|n| n.id)
+                        state.connection_tree().find_by_profile(node_id).map(|n| n.id)
                     }
                 })
                 .collect()
@@ -2884,7 +2915,7 @@ impl Sidebar {
             let would_cycle = self
                 .app_state
                 .read(cx)
-                .connection_tree
+                .connection_tree()
                 .would_create_cycle(tree_node_id, target_parent_id);
 
             if would_cycle {
@@ -2920,10 +2951,10 @@ impl Sidebar {
             all_node_ids
                 .iter()
                 .filter_map(|&node_id| {
-                    if state.connection_tree.find_by_id(node_id).is_some() {
+                    if state.connection_tree().find_by_id(node_id).is_some() {
                         Some(node_id)
                     } else {
-                        state.connection_tree.find_by_profile(node_id).map(|n| n.id)
+                        state.connection_tree().find_by_profile(node_id).map(|n| n.id)
                     }
                 })
                 .collect()
@@ -2942,7 +2973,7 @@ impl Sidebar {
             let would_cycle = self
                 .app_state
                 .read(cx)
-                .connection_tree
+                .connection_tree()
                 .would_create_cycle(tree_node_id, target_parent_id);
 
             if would_cycle {
@@ -2983,7 +3014,7 @@ impl Sidebar {
             } else if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
                 let profile_id = Uuid::parse_str(profile_id_str).ok();
                 let node_id = profile_id
-                    .and_then(|pid| state.connection_tree.find_by_profile(pid).map(|n| n.id));
+                    .and_then(|pid| state.connection_tree().find_by_profile(pid).map(|n| n.id));
                 (node_id, false)
             } else {
                 (None, false)
@@ -2993,7 +3024,7 @@ impl Sidebar {
             return (None, None);
         };
 
-        let target_node = state.connection_tree.find_by_id(target_node_id);
+        let target_node = state.connection_tree().find_by_id(target_node_id);
         let target_parent_id = target_node.and_then(|n| n.parent_id);
 
         match position {
@@ -3004,9 +3035,9 @@ impl Sidebar {
             DropPosition::Before => {
                 // Drop before: same parent, find the sibling before target
                 let siblings = if let Some(pid) = target_parent_id {
-                    state.connection_tree.children_of(pid)
+                    state.connection_tree().children_of(pid)
                 } else {
-                    state.connection_tree.root_nodes()
+                    state.connection_tree().root_nodes()
                 };
                 let pos = siblings.iter().position(|n| n.id == target_node_id);
                 let after_id = pos.and_then(|p| {
@@ -3084,7 +3115,7 @@ impl Sidebar {
             let is_collapsed = self
                 .app_state
                 .read(cx)
-                .connection_tree
+                .connection_tree()
                 .find_by_id(folder_id)
                 .map(|n| n.collapsed)
                 .unwrap_or(false);
@@ -3270,7 +3301,7 @@ impl Sidebar {
             TreeNodeKind::ConnectionFolder => {
                 if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
                     && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-                    && let Some(node) = state.connection_tree.find_by_id(folder_id)
+                    && let Some(node) = state.connection_tree().find_by_id(folder_id)
                 {
                     (node.name.clone(), true)
                 } else {
@@ -3280,7 +3311,7 @@ impl Sidebar {
             TreeNodeKind::Profile => {
                 if let Some(profile_id_str) = item_id.strip_prefix("profile_")
                     && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                    && let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id)
+                    && let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id)
                 {
                     (profile.name.clone(), false)
                 } else {
@@ -3398,8 +3429,8 @@ impl Sidebar {
         let mut nodes_to_move: Vec<(Uuid, i32)> = Vec::new();
 
         for item_id in &self.multi_selection {
-            if let Some(node_id) = self.item_id_to_node_id(item_id, &state.connection_tree)
-                && let Some(node) = state.connection_tree.find_by_id(node_id)
+            if let Some(node_id) = self.item_id_to_node_id(item_id, state.connection_tree())
+                && let Some(node) = state.connection_tree().find_by_id(node_id)
             {
                 nodes_to_move.push((node_id, node.sort_index));
             }
@@ -3437,7 +3468,7 @@ impl Sidebar {
 
     fn move_single_node(&mut self, node_id: Uuid, direction: i32, cx: &mut Context<Self>) -> bool {
         let state = self.app_state.read(cx);
-        let tree = &state.connection_tree;
+        let tree = &state.connection_tree();
 
         let node = match tree.find_by_id(node_id) {
             Some(n) => n.clone(),
@@ -3479,10 +3510,10 @@ impl Sidebar {
 
         // Swap sort indices
         self.app_state.update(cx, |state, _cx| {
-            if let Some(n) = state.connection_tree.find_by_id_mut(node_id) {
+            if let Some(n) = state.connection_tree_mut().find_by_id_mut(node_id) {
                 n.sort_index = swap_sort_index;
             }
-            if let Some(n) = state.connection_tree.find_by_id_mut(swap_with) {
+            if let Some(n) = state.connection_tree_mut().find_by_id_mut(swap_with) {
                 n.sort_index = node_sort_index;
             }
             state.save_connection_tree();
@@ -3821,7 +3852,7 @@ impl Sidebar {
     /// Extracts active database for each connection from AppState.
     fn extract_active_databases(state: &AppState) -> HashMap<Uuid, String> {
         state
-            .connections
+            .connections()
             .iter()
             .filter_map(|(profile_id, connected)| {
                 connected
@@ -3862,7 +3893,7 @@ impl Sidebar {
     }
 
     fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
-        let root_nodes = state.connection_tree.root_nodes();
+        let root_nodes = state.connection_tree().root_nodes();
         Self::build_tree_nodes_recursive(&root_nodes, state)
     }
 
@@ -3875,7 +3906,7 @@ impl Sidebar {
         for node in nodes {
             match node.kind {
                 ConnectionTreeNodeKind::Folder => {
-                    let children_nodes = state.connection_tree.children_of(node.id);
+                    let children_nodes = state.connection_tree().children_of(node.id);
                     let children_refs: Vec<&ConnectionTreeNode> =
                         children_nodes.into_iter().collect();
                     let children = Self::build_tree_nodes_recursive(&children_refs, state);
@@ -3890,7 +3921,7 @@ impl Sidebar {
 
                 ConnectionTreeNodeKind::ConnectionRef => {
                     if let Some(profile_id) = node.profile_id
-                        && let Some(profile) = state.profiles.iter().find(|p| p.id == profile_id)
+                        && let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id)
                     {
                         let profile_item = Self::build_profile_item(profile, state);
                         items.push(profile_item);
@@ -3904,8 +3935,8 @@ impl Sidebar {
 
     fn build_profile_item(profile: &dbflux_core::ConnectionProfile, state: &AppState) -> TreeItem {
         let profile_id = profile.id;
-        let is_connected = state.connections.contains_key(&profile_id);
-        let is_active = state.active_connection_id == Some(profile_id);
+        let is_connected = state.connections().contains_key(&profile_id);
+        let is_active = state.active_connection_id() == Some(profile_id);
         let is_connecting = state.is_operation_pending(profile_id, None);
 
         let profile_label = if is_connecting {
@@ -3917,7 +3948,7 @@ impl Sidebar {
         let mut profile_item = TreeItem::new(format!("profile_{}", profile_id), profile_label);
 
         if is_connected
-            && let Some(connected) = state.connections.get(&profile_id)
+            && let Some(connected) = state.connections().get(&profile_id)
             && let Some(ref schema) = connected.schema
         {
             let mut profile_children = Vec::new();
@@ -4720,7 +4751,7 @@ impl Sidebar {
 
     fn delete_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
-            if let Some(idx) = state.profiles.iter().position(|p| p.id == profile_id)
+            if let Some(idx) = state.profiles().iter().position(|p| p.id == profile_id)
                 && let Some(removed) = state.remove_profile(idx)
             {
                 log::info!("Deleted profile: {}", removed.name);
@@ -4733,7 +4764,7 @@ impl Sidebar {
         let profile = self
             .app_state
             .read(cx)
-            .profiles
+            .profiles()
             .iter()
             .find(|p| p.id == profile_id)
             .cloned();
@@ -4939,17 +4970,17 @@ impl Render for Sidebar {
 
         let theme = cx.theme();
         let state = self.app_state.read(cx);
-        let active_id = state.active_connection_id;
-        let connections = state.connections.keys().copied().collect::<Vec<_>>();
+        let active_id = state.active_connection_id();
+        let connections = state.connections().keys().copied().collect::<Vec<_>>();
 
         // Pre-compute profile_id -> Icon map for use in the tree closure
         // (closure requires 'static, so we can't borrow state inside it)
         let profile_icons: HashMap<Uuid, dbflux_core::Icon> = state
-            .profiles
+            .profiles()
             .iter()
             .filter_map(|p| {
                 state
-                    .drivers
+                    .drivers()
                     .get(&p.kind())
                     .map(|driver| (p.id, driver.metadata().icon))
             })
@@ -5382,6 +5413,15 @@ impl Render for Sidebar {
                                                 },
                                             )
                                         })
+                                        // Intercept mouse_down for non-table folder items
+                                        // to prevent TreeState from independently toggling
+                                        // expansion. The sidebar owns expansion state via
+                                        // expansion_overrides.
+                                        .when(!is_table_or_view && is_folder, |el| {
+                                            el.on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
+                                        })
                                         .child(
                                             div()
                                                 .id(SharedString::from(format!(
@@ -5776,6 +5816,7 @@ impl Render for Sidebar {
                             if !is_table_or_view && node_kind.needs_click_handler() {
                                 let item_id_for_click = item_id.clone();
                                 let sidebar = sidebar_entity.clone();
+
                                 list_item = list_item.on_click(move |event, _window, cx| {
                                     cx.stop_propagation();
                                     let click_count = event.click_count();
@@ -5788,32 +5829,6 @@ impl Render for Sidebar {
                                             with_ctrl,
                                             cx,
                                         );
-                                    });
-                                });
-                            }
-
-                            let is_other_folder = is_folder
-                                && matches!(
-                                    node_kind,
-                                    TreeNodeKind::Schema
-                                        | TreeNodeKind::TablesFolder
-                                        | TreeNodeKind::ViewsFolder
-                                        | TreeNodeKind::TypesFolder
-                                        | TreeNodeKind::ColumnsFolder
-                                        | TreeNodeKind::IndexesFolder
-                                        | TreeNodeKind::ForeignKeysFolder
-                                        | TreeNodeKind::ConstraintsFolder
-                                        | TreeNodeKind::SchemaIndexesFolder
-                                        | TreeNodeKind::SchemaForeignKeysFolder
-                                        | TreeNodeKind::CustomType
-                                );
-                            if is_other_folder {
-                                let item_id_for_folder = item_id.clone();
-                                let sidebar_for_folder = sidebar_entity.clone();
-                                list_item = list_item.on_click(move |_, _window, cx| {
-                                    cx.stop_propagation();
-                                    sidebar_for_folder.update(cx, |this, cx| {
-                                        this.toggle_item_expansion(&item_id_for_folder, cx);
                                     });
                                 });
                             }
