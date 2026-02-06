@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 //! SSH tunneling support for DBFlux database drivers.
 //!
 //! This crate provides SSH tunnel functionality that can be shared across
@@ -44,7 +46,7 @@ impl SshTunnel {
         let test_channel = session
             .channel_direct_tcpip(&remote_host, remote_port, None)
             .map_err(|e| {
-                DbError::ConnectionFailed(format!(
+                DbError::connection_failed(format!(
                     "SSH tunnel test failed - cannot reach {}:{} through SSH server: {}",
                     remote_host, remote_port, e
                 ))
@@ -55,18 +57,18 @@ impl SshTunnel {
         log::info!("[SSH] Tunnel connectivity verified");
 
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
-            DbError::ConnectionFailed(format!("Failed to bind local tunnel port: {}", e))
+            DbError::connection_failed(format!("Failed to bind local tunnel port: {}", e))
         })?;
 
         let local_port = listener
             .local_addr()
             .map_err(|e| {
-                DbError::ConnectionFailed(format!("Failed to get local tunnel address: {}", e))
+                DbError::connection_failed(format!("Failed to get local tunnel address: {}", e))
             })?
             .port();
 
         listener.set_nonblocking(true).map_err(|e| {
-            DbError::ConnectionFailed(format!("Failed to set listener non-blocking: {}", e))
+            DbError::connection_failed(format!("Failed to set listener non-blocking: {}", e))
         })?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -112,7 +114,7 @@ pub fn establish_session(
     let phase_start = std::time::Instant::now();
 
     let tcp = TcpStream::connect((&*config.host, config.port)).map_err(|e| {
-        DbError::ConnectionFailed(format!(
+        DbError::connection_failed(format!(
             "Failed to connect to SSH server {}:{}: {}",
             config.host, config.port, e
         ))
@@ -133,14 +135,14 @@ pub fn establish_session(
     let phase_start = std::time::Instant::now();
 
     let mut session = Session::new()
-        .map_err(|e| DbError::ConnectionFailed(format!("Failed to create SSH session: {}", e)))?;
+        .map_err(|e| DbError::connection_failed(format!("Failed to create SSH session: {}", e)))?;
 
     session.set_tcp_stream(tcp);
     session.set_timeout(30000);
 
     session
         .handshake()
-        .map_err(|e| DbError::ConnectionFailed(format!("SSH handshake failed: {}", e)))?;
+        .map_err(|e| DbError::connection_failed(format!("SSH handshake failed: {}", e)))?;
 
     log::info!(
         "[SSH] Phase 2/3: Handshake completed in {:.2}ms",
@@ -156,18 +158,18 @@ pub fn establish_session(
         }
         SshAuthMethod::Password => {
             let password = secret.ok_or_else(|| {
-                DbError::ConnectionFailed("SSH password required but not provided".to_string())
+                DbError::connection_failed("SSH password required but not provided".to_string())
             })?;
             session
                 .userauth_password(&config.user, password)
                 .map_err(|e| {
-                    DbError::ConnectionFailed(format!("SSH password authentication failed: {}", e))
+                    DbError::connection_failed(format!("SSH password authentication failed: {}", e))
                 })?;
         }
     }
 
     if !session.authenticated() {
-        return Err(DbError::ConnectionFailed(
+        return Err(DbError::connection_failed(
             "SSH authentication failed".to_string(),
         ));
     }
@@ -290,7 +292,7 @@ fn authenticate_with_key(
     }
 
     let error_detail = last_error.unwrap_or_else(|| "No valid SSH keys found".to_string());
-    Err(DbError::ConnectionFailed(format!(
+    Err(DbError::connection_failed(format!(
         "SSH key authentication failed: {}",
         error_detail
     )))

@@ -7,8 +7,9 @@ use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CollectionRef,
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
     CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, ReindexRequest, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
+    DropTypeRequest, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
+    TaskKind, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -41,116 +42,24 @@ pub enum SidebarEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TreeNodeKind {
-    ConnectionFolder,
-    Profile,
-    Database,
-    Schema,
-    TablesFolder,
-    ViewsFolder,
-    TypesFolder,
-    SchemaIndexesFolder,
-    SchemaForeignKeysFolder,
-    Table,
-    View,
-    CustomType,
-    ColumnsFolder,
-    IndexesFolder,
-    ForeignKeysFolder,
-    ConstraintsFolder,
-    Column,
-    Index,
-    ForeignKey,
-    SchemaIndex,
-    SchemaForeignKey,
-    Constraint,
-    CollectionsFolder,
-    Collection,
-    Unknown,
+/// Sentinel value for IDs that don't correspond to schema tree nodes
+/// (e.g., UI element IDs like "settings-btn" or "row-0").
+const NODE_KIND_NONE: SchemaNodeKind = SchemaNodeKind::Placeholder;
+
+/// Parse a tree item ID string into its typed `SchemaNodeKind`.
+///
+/// Returns `NODE_KIND_NONE` for IDs that can't be parsed (UI element IDs etc.).
+/// This avoids pervasive `Option` unwrapping at every call site.
+fn parse_node_kind(id: &str) -> SchemaNodeKind {
+    id.parse::<SchemaNodeId>()
+        .ok()
+        .map(|n| n.kind())
+        .unwrap_or(NODE_KIND_NONE)
 }
 
-impl TreeNodeKind {
-    fn from_id(id: &str) -> Self {
-        match id {
-            _ if id.starts_with("conn_folder_") => Self::ConnectionFolder,
-            _ if id.starts_with("profile_") => Self::Profile,
-            _ if id.starts_with("db_") => Self::Database,
-            // schema_indexes_ and schema_fks_ must be checked before schema_
-            _ if id.starts_with("schema_indexes_") => Self::SchemaIndexesFolder,
-            _ if id.starts_with("schema_fks_") => Self::SchemaForeignKeysFolder,
-            _ if id.starts_with("schema_") => Self::Schema,
-            _ if id.starts_with("tables_") => Self::TablesFolder,
-            _ if id.starts_with("views_") => Self::ViewsFolder,
-            _ if id.starts_with("types_") => Self::TypesFolder,
-            _ if id.starts_with("table_") => Self::Table,
-            _ if id.starts_with("view_") => Self::View,
-            _ if id.starts_with("customtype_") => Self::CustomType,
-            _ if id.starts_with("columns_") => Self::ColumnsFolder,
-            _ if id.starts_with("indexes_") => Self::IndexesFolder,
-            _ if id.starts_with("fks_") => Self::ForeignKeysFolder,
-            _ if id.starts_with("constraints_") => Self::ConstraintsFolder,
-            _ if id.starts_with("col_") => Self::Column,
-            _ if id.starts_with("sidx_") => Self::SchemaIndex,
-            _ if id.starts_with("sfk_") => Self::SchemaForeignKey,
-            _ if id.starts_with("idx_") => Self::Index,
-            _ if id.starts_with("fk_") => Self::ForeignKey,
-            _ if id.starts_with("constraint_") => Self::Constraint,
-            _ if id.starts_with("collections_") => Self::CollectionsFolder,
-            _ if id.starts_with("collection_") => Self::Collection,
-            _ => Self::Unknown,
-        }
-    }
-
-    fn needs_click_handler(&self) -> bool {
-        matches!(
-            self,
-            Self::Profile
-                | Self::Database
-                | Self::Table
-                | Self::View
-                | Self::Collection
-                | Self::ConnectionFolder
-                | Self::Schema
-                | Self::TablesFolder
-                | Self::ViewsFolder
-                | Self::TypesFolder
-                | Self::ColumnsFolder
-                | Self::IndexesFolder
-                | Self::ForeignKeysFolder
-                | Self::ConstraintsFolder
-                | Self::SchemaIndexesFolder
-                | Self::SchemaForeignKeysFolder
-                | Self::CollectionsFolder
-                | Self::CustomType
-        )
-    }
-
-    fn is_expandable_folder(&self) -> bool {
-        matches!(
-            self,
-            Self::ConnectionFolder
-                | Self::Schema
-                | Self::TablesFolder
-                | Self::ViewsFolder
-                | Self::TypesFolder
-                | Self::ColumnsFolder
-                | Self::IndexesFolder
-                | Self::ForeignKeysFolder
-                | Self::ConstraintsFolder
-                | Self::SchemaIndexesFolder
-                | Self::SchemaForeignKeysFolder
-                | Self::CollectionsFolder
-                | Self::CustomType
-        )
-    }
-
-    fn shows_pointer_cursor(&self) -> bool {
-        matches!(
-            self,
-            Self::Profile | Self::Database | Self::ConnectionFolder
-        )
-    }
+/// Parse a tree item ID string into its full typed `SchemaNodeId`.
+fn parse_node_id(id: &str) -> Option<SchemaNodeId> {
+    id.parse().ok()
 }
 
 #[derive(Clone)]
@@ -300,10 +209,26 @@ struct ItemIdParts {
     object_name: String,
 }
 
-struct CollectionIdParts {
-    profile_id: Uuid,
-    database_name: String,
-    collection_name: String,
+impl ItemIdParts {
+    fn from_node_id(node_id: &SchemaNodeId) -> Option<Self> {
+        match node_id {
+            SchemaNodeId::Table {
+                profile_id,
+                schema,
+                name,
+            }
+            | SchemaNodeId::View {
+                profile_id,
+                schema,
+                name,
+            } => Some(Self {
+                profile_id: *profile_id,
+                schema_name: schema.clone(),
+                object_name: name.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Action to execute after table/type details finish loading.
@@ -630,9 +555,8 @@ impl Sidebar {
 
         // When expanding a Data Types folder, check if types need to be loaded
         if expanded
-            && item_id.starts_with("types_")
-            && let Some((profile_id, database, schema)) =
-                Self::parse_schema_folder_id(item_id, "types_")
+            && let Some(SchemaNodeId::TypesFolder { profile_id, database, schema }) =
+                parse_node_id(item_id)
         {
             let needs_fetch =
                 self.app_state
@@ -650,9 +574,8 @@ impl Sidebar {
 
         // When expanding schema-level Indexes folder, check if indexes need to be loaded
         if expanded
-            && item_id.starts_with("schema_indexes_")
-            && let Some((profile_id, database, schema)) =
-                Self::parse_schema_folder_id(item_id, "schema_indexes_")
+            && let Some(SchemaNodeId::SchemaIndexesFolder { profile_id, database, schema }) =
+                parse_node_id(item_id)
         {
             let needs_fetch =
                 self.app_state
@@ -670,9 +593,8 @@ impl Sidebar {
 
         // When expanding schema-level Foreign Keys folder, check if FKs need to be loaded
         if expanded
-            && item_id.starts_with("schema_fks_")
-            && let Some((profile_id, database, schema)) =
-                Self::parse_schema_folder_id(item_id, "schema_fks_")
+            && let Some(SchemaNodeId::SchemaForeignKeysFolder { profile_id, database, schema }) =
+                parse_node_id(item_id)
         {
             let needs_fetch = self.app_state.read(cx).needs_schema_foreign_keys(
                 profile_id,
@@ -716,38 +638,6 @@ impl Sidebar {
         self.rebuild_tree_with_overrides(cx);
     }
 
-    /// Parse a schema-level folder ID to extract (profile_id, database, schema).
-    ///
-    /// Format: `{prefix}{uuid}_{database}_{schema}` where prefix is "types_", "schema_indexes_", etc.
-    fn parse_schema_folder_id(item_id: &str, prefix: &str) -> Option<(Uuid, String, String)> {
-        let rest = item_id.strip_prefix(prefix)?;
-
-        // UUID is 36 chars, followed by "_"
-        if rest.len() < 37 {
-            return None;
-        }
-
-        let uuid_str = rest.get(..36)?;
-        let profile_id = Uuid::parse_str(uuid_str).ok()?;
-
-        // After UUID, we have _{database}_{schema}
-        let remainder = rest.get(37..)?.to_string();
-        if remainder.is_empty() {
-            return None;
-        }
-
-        // remainder is "database_schema"
-        if let Some(underscore_pos) = remainder.find('_') {
-            let database = remainder[..underscore_pos].to_string();
-            let schema = remainder[underscore_pos + 1..].to_string();
-            if !database.is_empty() && !schema.is_empty() {
-                return Some((profile_id, database, schema));
-            }
-        }
-
-        None
-    }
-
     fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
@@ -774,35 +664,33 @@ impl Sidebar {
     }
 
     fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let node_kind = TreeNodeKind::from_id(item_id);
+        let Some(node_id) = parse_node_id(item_id) else {
+            return;
+        };
 
-        match node_kind {
-            TreeNodeKind::Table | TreeNodeKind::View => {
+        match node_id {
+            SchemaNodeId::Table { .. } | SchemaNodeId::View { .. } => {
                 self.browse_table(item_id, cx);
             }
-            TreeNodeKind::Collection => {
+            SchemaNodeId::Collection { .. } => {
                 self.browse_collection(item_id, cx);
             }
-            TreeNodeKind::Profile => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
-                    let is_connected = self
-                        .app_state
-                        .read(cx)
-                        .connections()
-                        .contains_key(&profile_id);
-                    if is_connected {
-                        self.app_state.update(cx, |state, cx| {
-                            state.set_active_connection(profile_id);
-                            cx.notify();
-                        });
-                    } else {
-                        self.connect_to_profile(profile_id, cx);
-                    }
+            SchemaNodeId::Profile { profile_id } => {
+                let is_connected = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .contains_key(&profile_id);
+                if is_connected {
+                    self.app_state.update(cx, |state, cx| {
+                        state.set_active_connection(profile_id);
+                        cx.notify();
+                    });
+                } else {
+                    self.connect_to_profile(profile_id, cx);
                 }
             }
-            TreeNodeKind::Database => {
+            SchemaNodeId::Database { .. } => {
                 self.handle_database_click(item_id, cx);
             }
             _ => {}
@@ -840,7 +728,7 @@ impl Sidebar {
             });
         }
 
-        let node_kind = TreeNodeKind::from_id(item_id);
+        let node_kind = parse_node_kind(item_id);
 
         if click_count == 1 && node_kind.is_expandable_folder() {
             self.toggle_item_expansion(item_id, cx);
@@ -852,20 +740,34 @@ impl Sidebar {
     }
 
     fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(parts) = Self::parse_table_or_view_id(item_id) {
-            let table = TableRef::with_schema(&parts.schema_name, &parts.object_name);
-            cx.emit(SidebarEvent::OpenTable {
-                profile_id: parts.profile_id,
-                table,
-            });
+        match parse_node_id(item_id) {
+            Some(SchemaNodeId::Table {
+                profile_id,
+                schema,
+                name,
+            })
+            | Some(SchemaNodeId::View {
+                profile_id,
+                schema,
+                name,
+            }) => {
+                let table = TableRef::with_schema(&schema, &name);
+                cx.emit(SidebarEvent::OpenTable { profile_id, table });
+            }
+            _ => {}
         }
     }
 
     fn browse_collection(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(parts) = Self::parse_collection_id(item_id) {
-            let collection = CollectionRef::new(&parts.database_name, &parts.collection_name);
+        if let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        {
+            let collection = CollectionRef::new(&database, &name);
             cx.emit(SidebarEvent::OpenCollection {
-                profile_id: parts.profile_id,
+                profile_id,
                 collection,
             });
         }
@@ -892,10 +794,10 @@ impl Sidebar {
     fn get_code_generators_for_item(
         &self,
         item_id: &str,
-        node_kind: TreeNodeKind,
+        node_kind: SchemaNodeKind,
         cx: &App,
     ) -> Vec<ContextMenuItem> {
-        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+        let Some(parts) = parse_node_id(item_id).as_ref().and_then(ItemIdParts::from_node_id) else {
             return vec![];
         };
 
@@ -905,10 +807,10 @@ impl Sidebar {
         };
 
         let scope_filter = match node_kind {
-            TreeNodeKind::Table => {
+            SchemaNodeKind::Table => {
                 |s: CodeGenScope| matches!(s, CodeGenScope::Table | CodeGenScope::TableOrView)
             }
-            TreeNodeKind::View => {
+            SchemaNodeKind::View => {
                 |s: CodeGenScope| matches!(s, CodeGenScope::View | CodeGenScope::TableOrView)
             }
             _ => return vec![],
@@ -973,7 +875,7 @@ impl Sidebar {
         generator_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+        let Some(parts) = parse_node_id(item_id).as_ref().and_then(ItemIdParts::from_node_id) else {
             return;
         };
 
@@ -1025,7 +927,7 @@ impl Sidebar {
     fn generate_code_impl(&mut self, item_id: &str, generator_id: &str, cx: &mut Context<Self>) {
         use crate::ui::sql_preview_modal::SqlGenerationType;
 
-        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+        let Some(parts) = parse_node_id(item_id).as_ref().and_then(ItemIdParts::from_node_id) else {
             return;
         };
 
@@ -1159,7 +1061,12 @@ impl Sidebar {
     }
 
     fn is_enum_type(&self, item_id: &str, cx: &App) -> bool {
-        let Some((profile_id, schema_name, type_name)) = Self::parse_custom_type_id(item_id) else {
+        let Some(SchemaNodeId::CustomType {
+            profile_id,
+            schema: schema_name,
+            name: type_name,
+        }) = parse_node_id(item_id)
+        else {
             return false;
         };
 
@@ -1169,7 +1076,7 @@ impl Sidebar {
         };
 
         let current_db = Self::get_current_database(conn);
-        let cache_key = format!("{}__{}", current_db, schema_name);
+        let cache_key = SchemaCacheKey::new(current_db, Some(schema_name));
         if let Some(types) = conn.schema_types.get(&cache_key) {
             return types
                 .iter()
@@ -1179,125 +1086,27 @@ impl Sidebar {
         false
     }
 
-    fn parse_custom_type_id(item_id: &str) -> Option<(Uuid, String, String)> {
-        let rest = item_id.strip_prefix("customtype_")?;
-        if rest.len() < 36 {
-            return None;
-        }
-
-        let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
-        let remainder = rest.get(38..)?;
-
-        let mut parts = remainder.splitn(2, "__");
-        let schema_name = parts.next()?.to_string();
-        let type_name = parts.next()?.to_string();
-
-        if type_name.is_empty() {
-            return None;
-        }
-
-        Some((profile_id, schema_name, type_name))
-    }
-
-    fn parse_index_id(item_id: &str) -> Option<(Uuid, String, String, bool)> {
-        // Table-level: idx_{profile_id}__{table_name}__{index_name}
-        if let Some(rest) = item_id.strip_prefix("idx_") {
-            if rest.len() < 36 {
-                return None;
-            }
-
-            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
-            let remainder = rest.get(38..)?;
-
-            let mut parts = remainder.splitn(2, "__");
-            let table_name = parts.next()?.to_string();
-            let index_name = parts.next()?.to_string();
-
-            if index_name.is_empty() {
-                return None;
-            }
-
-            return Some((profile_id, table_name, index_name, false));
-        }
-
-        // Schema-level: sidx_{profile_id}__{schema_name}__{index_name}
-        if let Some(rest) = item_id.strip_prefix("sidx_") {
-            if rest.len() < 36 {
-                return None;
-            }
-
-            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
-            let remainder = rest.get(38..)?;
-
-            let mut parts = remainder.splitn(2, "__");
-            let schema_name = parts.next()?.to_string();
-            let index_name = parts.next()?.to_string();
-
-            if index_name.is_empty() {
-                return None;
-            }
-
-            return Some((profile_id, schema_name, index_name, true));
-        }
-
-        None
-    }
-
-    fn parse_foreign_key_id(item_id: &str) -> Option<(Uuid, String, String, bool)> {
-        // Table-level: fk_{profile_id}__{table_name}__{fk_name}
-        if let Some(rest) = item_id.strip_prefix("fk_") {
-            if rest.len() < 36 {
-                return None;
-            }
-
-            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
-            let remainder = rest.get(38..)?;
-
-            let mut parts = remainder.splitn(2, "__");
-            let table_name = parts.next()?.to_string();
-            let fk_name = parts.next()?.to_string();
-
-            if fk_name.is_empty() {
-                return None;
-            }
-
-            return Some((profile_id, table_name, fk_name, false));
-        }
-
-        // Schema-level: sfk_{profile_id}__{schema_name}__{fk_name}
-        if let Some(rest) = item_id.strip_prefix("sfk_") {
-            if rest.len() < 36 {
-                return None;
-            }
-
-            let profile_id = Uuid::parse_str(&rest[..36]).ok()?;
-            let remainder = rest.get(38..)?;
-
-            let mut parts = remainder.splitn(2, "__");
-            let schema_name = parts.next()?.to_string();
-            let fk_name = parts.next()?.to_string();
-
-            if fk_name.is_empty() {
-                return None;
-            }
-
-            return Some((profile_id, schema_name, fk_name, true));
-        }
-
-        None
-    }
-
     fn generate_index_sql(
         &mut self,
         item_id: &str,
         action: IndexSqlAction,
         cx: &mut Context<Self>,
     ) {
-        let Some((profile_id, context_name, index_name, is_schema_level)) =
-            Self::parse_index_id(item_id)
-        else {
-            log::warn!("Failed to parse index id: {}", item_id);
-            return;
+        let (profile_id, context_name, index_name, is_schema_level) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Index {
+                profile_id,
+                table,
+                name,
+            }) => (profile_id, table, name, false),
+            Some(SchemaNodeId::SchemaIndex {
+                profile_id,
+                schema,
+                name,
+            }) => (profile_id, schema, name, true),
+            _ => {
+                log::warn!("Failed to parse index id: {}", item_id);
+                return;
+            }
         };
 
         let state = self.app_state.read(cx);
@@ -1310,7 +1119,7 @@ impl Sidebar {
 
         // Find the index info
         let index_info = if is_schema_level {
-            let cache_key = format!("{}__{}", current_db, context_name);
+            let cache_key = SchemaCacheKey::new(&current_db, Some(&context_name));
             conn.schema_indexes.get(&cache_key).and_then(|indexes| {
                 indexes
                     .iter()
@@ -1385,11 +1194,21 @@ impl Sidebar {
         action: ForeignKeySqlAction,
         cx: &mut Context<Self>,
     ) {
-        let Some((profile_id, context_name, fk_name, is_schema_level)) =
-            Self::parse_foreign_key_id(item_id)
-        else {
-            log::warn!("Failed to parse foreign key id: {}", item_id);
-            return;
+        let (profile_id, context_name, fk_name, is_schema_level) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::ForeignKey {
+                profile_id,
+                table,
+                name,
+            }) => (profile_id, table, name, false),
+            Some(SchemaNodeId::SchemaForeignKey {
+                profile_id,
+                schema,
+                name,
+            }) => (profile_id, schema, name, true),
+            _ => {
+                log::warn!("Failed to parse foreign key id: {}", item_id);
+                return;
+            }
         };
 
         let state = self.app_state.read(cx);
@@ -1402,7 +1221,7 @@ impl Sidebar {
 
         // Find the FK info
         let fk_info = if is_schema_level {
-            let cache_key = format!("{}__{}", current_db, context_name);
+            let cache_key = SchemaCacheKey::new(&current_db, Some(&context_name));
             conn.schema_foreign_keys.get(&cache_key).and_then(|fks| {
                 fks.iter().find(|fk| fk.name == fk_name).map(|fk| {
                     (
@@ -1499,7 +1318,12 @@ impl Sidebar {
     }
 
     fn generate_type_sql(&mut self, item_id: &str, action: TypeSqlAction, cx: &mut Context<Self>) {
-        let Some((profile_id, schema_name, type_name)) = Self::parse_custom_type_id(item_id) else {
+        let Some(SchemaNodeId::CustomType {
+            profile_id,
+            schema: schema_name,
+            name: type_name,
+        }) = parse_node_id(item_id)
+        else {
             log::warn!("Failed to parse custom type id: {}", item_id);
             return;
         };
@@ -1512,7 +1336,7 @@ impl Sidebar {
         let code_gen = conn.connection.code_generator();
         let current_db = Self::get_current_database(conn);
 
-        let cache_key = format!("{}__{}", current_db, schema_name);
+        let cache_key = SchemaCacheKey::new(current_db, Some(&schema_name));
         let type_info = conn
             .schema_types
             .get(&cache_key)
@@ -1613,7 +1437,7 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> TableDetailsStatus {
-        let Some(parts) = Self::parse_table_or_view_id(item_id) else {
+        let Some(parts) = parse_node_id(item_id).as_ref().and_then(ItemIdParts::from_node_id) else {
             return TableDetailsStatus::NotFound;
         };
 
@@ -1991,7 +1815,7 @@ impl Sidebar {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let node_kind = TreeNodeKind::from_id(item_id);
+        let node_kind = parse_node_kind(item_id);
         let items = self.build_context_menu_items(node_kind, item_id, cx);
 
         if items.is_empty() {
@@ -2010,12 +1834,12 @@ impl Sidebar {
 
     fn build_context_menu_items(
         &self,
-        node_kind: TreeNodeKind,
+        node_kind: SchemaNodeKind,
         item_id: &str,
         cx: &App,
     ) -> Vec<ContextMenuItem> {
         match node_kind {
-            TreeNodeKind::Table | TreeNodeKind::View => {
+            SchemaNodeKind::Table | SchemaNodeKind::View => {
                 let mut items = vec![
                     ContextMenuItem {
                         label: "Open".into(),
@@ -2038,25 +1862,22 @@ impl Sidebar {
 
                 items
             }
-            TreeNodeKind::Collection => {
+            SchemaNodeKind::Collection => {
                 vec![ContextMenuItem {
                     label: "Open".into(),
                     action: ContextMenuAction::Open,
                 }]
             }
-            TreeNodeKind::Profile => {
-                let is_connected = if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
-                    if let Ok(profile_id) = Uuid::parse_str(profile_id_str) {
+            SchemaNodeKind::Profile => {
+                let is_connected =
+                    if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
                         self.app_state
                             .read(cx)
                             .connections()
                             .contains_key(&profile_id)
                     } else {
                         false
-                    }
-                } else {
-                    false
-                };
+                    };
 
                 let mut items = vec![];
                 if is_connected {
@@ -2098,7 +1919,7 @@ impl Sidebar {
 
                 items
             }
-            TreeNodeKind::Database => {
+            SchemaNodeKind::Database => {
                 let is_loaded = self.is_database_schema_loaded(item_id, cx);
                 if is_loaded {
                     // Only show Close for databases that support it (MySQL/MariaDB)
@@ -2117,7 +1938,7 @@ impl Sidebar {
                     }]
                 }
             }
-            TreeNodeKind::ConnectionFolder => {
+            SchemaNodeKind::ConnectionFolder => {
                 let mut items = vec![
                     ContextMenuItem {
                         label: "New Connection".into(),
@@ -2148,7 +1969,7 @@ impl Sidebar {
                 items
             }
 
-            TreeNodeKind::Index | TreeNodeKind::SchemaIndex => {
+            SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => {
                 let caps = self.get_capabilities_for_item(item_id, cx);
                 let mut submenu = Vec::new();
 
@@ -2183,7 +2004,7 @@ impl Sidebar {
                 }
             }
 
-            TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+            SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => {
                 let caps = self.get_capabilities_for_item(item_id, cx);
                 let mut submenu = Vec::new();
 
@@ -2215,7 +2036,7 @@ impl Sidebar {
                 }
             }
 
-            TreeNodeKind::CustomType => {
+            SchemaNodeKind::CustomType => {
                 let caps = self.get_capabilities_for_item(item_id, cx);
                 let mut submenu = Vec::new();
 
@@ -2261,19 +2082,16 @@ impl Sidebar {
         let mut items = Vec::new();
 
         // Determine current node info (works for both profiles and folders)
-        let (current_parent, current_node_id) = if let Some(profile_id_str) =
-            item_id.strip_prefix("profile_")
-            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-        {
-            let node = state.connection_tree().find_by_profile(profile_id);
-            (node.and_then(|n| n.parent_id), node.map(|n| n.id))
-        } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-        {
-            let node = state.connection_tree().find_by_id(folder_id);
-            (node.and_then(|n| n.parent_id), Some(folder_id))
-        } else {
-            (None, None)
+        let (current_parent, current_node_id) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let node = state.connection_tree().find_by_profile(profile_id);
+                (node.and_then(|n| n.parent_id), node.map(|n| n.id))
+            }
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+                let node = state.connection_tree().find_by_id(node_id);
+                (node.and_then(|n| n.parent_id), Some(node_id))
+            }
+            _ => (None, None),
         };
 
         // Add "Root" option if not already at root
@@ -2313,35 +2131,20 @@ impl Sidebar {
     }
 
     fn is_database_schema_loaded(&self, item_id: &str, cx: &App) -> bool {
-        let Some(rest) = item_id.strip_prefix("db_") else {
-            return false;
-        };
-        if rest.len() < 37 {
-            return false;
-        }
-        let profile_id_str = &rest[..36];
-        let db_name = &rest[37..];
-        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
             return false;
         };
 
         let state = self.app_state.read(cx);
         if let Some(conn) = state.connections().get(&profile_id) {
-            conn.database_schemas.contains_key(db_name)
+            conn.database_schemas.contains_key(&name)
         } else {
             false
         }
     }
 
     fn database_supports_close(&self, item_id: &str, cx: &App) -> bool {
-        let Some(rest) = item_id.strip_prefix("db_") else {
-            return false;
-        };
-        if rest.len() < 37 {
-            return false;
-        }
-        let profile_id_str = &rest[..36];
-        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+        let Some(SchemaNodeId::Database { profile_id, .. }) = parse_node_id(item_id) else {
             return false;
         };
 
@@ -2413,8 +2216,8 @@ impl Sidebar {
                 return;
             }
             ContextMenuAction::Open => {
-                let node_kind = TreeNodeKind::from_id(&item_id);
-                if node_kind == TreeNodeKind::Collection {
+                let node_kind = parse_node_kind(&item_id);
+                if node_kind == SchemaNodeKind::Collection {
                     self.browse_collection(&item_id, cx);
                 } else {
                     self.browse_table(&item_id, cx);
@@ -2427,30 +2230,22 @@ impl Sidebar {
                 self.generate_code(&item_id, &generator_id, cx);
             }
             ContextMenuAction::Connect => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
             ContextMenuAction::Disconnect => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.disconnect_profile(profile_id, cx);
                 }
             }
             ContextMenuAction::Refresh => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.refresh_connection(profile_id, cx);
                 }
             }
             ContextMenuAction::Edit => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.edit_profile(profile_id, cx);
                 }
             }
@@ -2564,82 +2359,12 @@ impl Sidebar {
         Point::new(menu_x, y)
     }
 
-    /// Parse a table/view item ID into its components.
-    ///
-    /// Format: `{prefix}_{uuid}__{schema}__{name}` where prefix is "table" or "view".
-    /// Uses `__` as separator to allow underscores in schema/table names.
-    ///
-    /// Uses `rsplit_once("__")` to handle table names containing `__`.
-    /// Ambiguous if both schema and table contain `__` (rare).
-    fn parse_table_or_view_id(item_id: &str) -> Option<ItemIdParts> {
-        let rest = item_id
-            .strip_prefix("table_")
-            .or_else(|| item_id.strip_prefix("view_"))?;
-
-        // UUID is 36 chars, followed by "__"
-        if rest.len() < 38 {
-            return None;
-        }
-
-        let uuid_str = rest.get(..36)?;
-        let profile_id = Uuid::parse_str(uuid_str).ok()?;
-
-        let after_uuid = rest.get(36..)?;
-        let after_uuid = after_uuid.strip_prefix("__")?;
-        let (schema_name, object_name) = after_uuid.rsplit_once("__")?;
-
-        if schema_name.is_empty() || object_name.is_empty() {
-            return None;
-        }
-
-        Some(ItemIdParts {
-            profile_id,
-            schema_name: schema_name.to_string(),
-            object_name: object_name.to_string(),
-        })
-    }
-
-    /// Format: `collection_{uuid}__{database}__{name}`
-    fn parse_collection_id(item_id: &str) -> Option<CollectionIdParts> {
-        let rest = item_id.strip_prefix("collection_")?;
-
-        if rest.len() < 38 {
-            return None;
-        }
-
-        let uuid_str = rest.get(..36)?;
-        let profile_id = Uuid::parse_str(uuid_str).ok()?;
-
-        let after_uuid = rest.get(36..)?;
-        let after_uuid = after_uuid.strip_prefix("__")?;
-        let (database_name, collection_name) = after_uuid.rsplit_once("__")?;
-
-        if database_name.is_empty() || collection_name.is_empty() {
-            return None;
-        }
-
-        Some(CollectionIdParts {
-            profile_id,
-            database_name: database_name.to_string(),
-            collection_name: collection_name.to_string(),
-        })
-    }
-
     fn handle_database_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let Some(rest) = item_id.strip_prefix("db_") else {
-            return;
-        };
-
-        // UUID is 36 chars (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-        // Format: db_{uuid}_{dbname} where dbname may contain underscores
-        if rest.len() < 37 {
-            return;
-        }
-
-        let profile_id_str = &rest[..36];
-        let db_name = &rest[37..]; // skip the underscore after UUID
-
-        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+        let Some(SchemaNodeId::Database {
+            profile_id,
+            name: db_name,
+        }) = parse_node_id(item_id)
+        else {
             return;
         };
 
@@ -2652,10 +2377,10 @@ impl Sidebar {
 
         match strategy {
             Some(SchemaLoadingStrategy::LazyPerDatabase) => {
-                self.handle_lazy_database_click(profile_id, db_name, cx);
+                self.handle_lazy_database_click(profile_id, &db_name, cx);
             }
             Some(SchemaLoadingStrategy::ConnectionPerDatabase) => {
-                self.handle_connection_per_database_click(profile_id, db_name, cx);
+                self.handle_connection_per_database_click(profile_id, &db_name, cx);
             }
             Some(SchemaLoadingStrategy::SingleDatabase) | None => {
                 log::info!("Database click not applicable for this database type");
@@ -2664,28 +2389,21 @@ impl Sidebar {
     }
 
     fn close_database(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let Some(rest) = item_id.strip_prefix("db_") else {
-            return;
-        };
-
-        if rest.len() < 37 {
-            return;
-        }
-
-        let profile_id_str = &rest[..36];
-        let db_name = &rest[37..];
-
-        let Ok(profile_id) = Uuid::parse_str(profile_id_str) else {
+        let Some(SchemaNodeId::Database {
+            profile_id,
+            name: db_name,
+        }) = parse_node_id(item_id)
+        else {
             return;
         };
 
         self.app_state.update(cx, |state, cx| {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 // Remove the database schema
-                conn.database_schemas.remove(db_name);
+                conn.database_schemas.remove(&db_name);
 
                 // If this was the active database, clear it
-                if conn.active_database.as_deref() == Some(db_name) {
+                if conn.active_database.as_deref() == Some(db_name.as_str()) {
                     conn.active_database = None;
                 }
             }
@@ -2782,9 +2500,7 @@ impl Sidebar {
         }
 
         // Handle profile rename
-        if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-        {
+        if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
             let current_name = self
                 .app_state
                 .read(cx)
@@ -2823,20 +2539,15 @@ impl Sidebar {
         target_folder_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        let node_id = if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-            && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-        {
-            self.app_state
+        let node_id = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Profile { profile_id }) => self
+                .app_state
                 .read(cx)
                 .connection_tree()
                 .find_by_profile(profile_id)
-                .map(|n| n.id)
-        } else if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-        {
-            Some(folder_id)
-        } else {
-            None
+                .map(|n| n.id),
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => Some(node_id),
+            _ => None,
         };
 
         if let Some(node_id) = node_id {
@@ -3008,17 +2719,17 @@ impl Sidebar {
         let state = self.app_state.read(cx);
 
         // Parse the target item
-        let (target_node_id, is_folder) =
-            if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") {
-                (Uuid::parse_str(folder_id_str).ok(), true)
-            } else if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
-                let profile_id = Uuid::parse_str(profile_id_str).ok();
-                let node_id = profile_id
-                    .and_then(|pid| state.connection_tree().find_by_profile(pid).map(|n| n.id));
+        let (target_node_id, is_folder) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => (Some(node_id), true),
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                let node_id = state
+                    .connection_tree()
+                    .find_by_profile(profile_id)
+                    .map(|n| n.id);
                 (node_id, false)
-            } else {
-                (None, false)
-            };
+            }
+            _ => (None, false),
+        };
 
         let Some(target_node_id) = target_node_id else {
             return (None, None);
@@ -3248,9 +2959,9 @@ impl Sidebar {
         };
 
         let item_id = entry.item().id.to_string();
-        let kind = TreeNodeKind::from_id(&item_id);
+        let kind = parse_node_kind(&item_id);
 
-        if matches!(kind, TreeNodeKind::ConnectionFolder | TreeNodeKind::Profile) {
+        if matches!(kind, SchemaNodeKind::ConnectionFolder | SchemaNodeKind::Profile) {
             self.start_rename(&item_id, window, cx);
         }
     }
@@ -3266,9 +2977,9 @@ impl Sidebar {
         };
 
         let item_id = entry.item().id.to_string();
-        let kind = TreeNodeKind::from_id(&item_id);
+        let kind = parse_node_kind(&item_id);
 
-        if matches!(kind, TreeNodeKind::ConnectionFolder | TreeNodeKind::Profile) {
+        if matches!(kind, SchemaNodeKind::ConnectionFolder | SchemaNodeKind::Profile) {
             self.pending_delete_item = Some(item_id);
             cx.notify();
         }
@@ -3294,25 +3005,18 @@ impl Sidebar {
     }
 
     pub fn show_delete_confirm_modal(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let kind = TreeNodeKind::from_id(item_id);
         let state = self.app_state.read(cx);
 
-        let (item_name, is_folder) = match kind {
-            TreeNodeKind::ConnectionFolder => {
-                if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-                    && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-                    && let Some(node) = state.connection_tree().find_by_id(folder_id)
-                {
+        let (item_name, is_folder) = match parse_node_id(item_id) {
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+                if let Some(node) = state.connection_tree().find_by_id(node_id) {
                     (node.name.clone(), true)
                 } else {
                     return;
                 }
             }
-            TreeNodeKind::Profile => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                    && let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id)
-                {
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                if let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id) {
                     (profile.name.clone(), false)
                 } else {
                     return;
@@ -3372,18 +3076,12 @@ impl Sidebar {
     }
 
     fn execute_delete(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let kind = TreeNodeKind::from_id(item_id);
-
-        match kind {
-            TreeNodeKind::ConnectionFolder => {
+        match parse_node_id(item_id) {
+            Some(SchemaNodeId::ConnectionFolder { .. }) => {
                 self.delete_folder_from_context(item_id, cx);
             }
-            TreeNodeKind::Profile => {
-                if let Some(profile_id_str) = item_id.strip_prefix("profile_")
-                    && let Ok(profile_id) = Uuid::parse_str(profile_id_str)
-                {
-                    self.delete_profile(profile_id, cx);
-                }
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                self.delete_profile(profile_id, cx);
             }
             _ => {}
         }
@@ -3527,13 +3225,12 @@ impl Sidebar {
         item_id: &str,
         tree: &dbflux_core::ConnectionTree,
     ) -> Option<Uuid> {
-        if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") {
-            Uuid::parse_str(folder_id_str).ok()
-        } else if let Some(profile_id_str) = item_id.strip_prefix("profile_") {
-            let profile_id = Uuid::parse_str(profile_id_str).ok()?;
-            tree.find_by_profile(profile_id).map(|n| n.id)
-        } else {
-            None
+        match parse_node_id(item_id) {
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => Some(node_id),
+            Some(SchemaNodeId::Profile { profile_id }) => {
+                tree.find_by_profile(profile_id).map(|n| n.id)
+            }
+            _ => None,
         }
     }
 
@@ -3669,7 +3366,7 @@ impl Sidebar {
 
                     // Collapse database on failure
                     if failed {
-                        let db_item_id = format!("db_{}_{}", profile_id, db_name_owned);
+                        let db_item_id = SchemaNodeId::Database { profile_id, name: db_name_owned.clone() }.to_string();
                         sidebar.expansion_overrides.remove(&db_item_id);
                     }
 
@@ -3819,28 +3516,18 @@ impl Sidebar {
         let state = self.app_state.read(cx);
 
         self.expansion_overrides.retain(|item_id, _expanded| {
-            if item_id.starts_with("types_")
-                && let Some((profile_id, database, schema)) =
-                    Self::parse_schema_folder_id(item_id, "types_")
-            {
-                return !state.needs_schema_types(profile_id, &database, Some(&schema));
+            match parse_node_id(item_id) {
+                Some(SchemaNodeId::TypesFolder { profile_id, database, schema }) => {
+                    !state.needs_schema_types(profile_id, &database, Some(&schema))
+                }
+                Some(SchemaNodeId::SchemaIndexesFolder { profile_id, database, schema }) => {
+                    !state.needs_schema_indexes(profile_id, &database, Some(&schema))
+                }
+                Some(SchemaNodeId::SchemaForeignKeysFolder { profile_id, database, schema }) => {
+                    !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema))
+                }
+                _ => true,
             }
-
-            if item_id.starts_with("schema_indexes_")
-                && let Some((profile_id, database, schema)) =
-                    Self::parse_schema_folder_id(item_id, "schema_indexes_")
-            {
-                return !state.needs_schema_indexes(profile_id, &database, Some(&schema));
-            }
-
-            if item_id.starts_with("schema_fks_")
-                && let Some((profile_id, database, schema)) =
-                    Self::parse_schema_folder_id(item_id, "schema_fks_")
-            {
-                return !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema));
-            }
-
-            true
         });
     }
 
@@ -3912,7 +3599,7 @@ impl Sidebar {
                     let children = Self::build_tree_nodes_recursive(&children_refs, state);
 
                     let folder_item =
-                        TreeItem::new(format!("conn_folder_{}", node.id), node.name.clone())
+                        TreeItem::new(SchemaNodeId::ConnectionFolder { node_id: node.id }.to_string(), node.name.clone())
                             .expanded(!node.collapsed)
                             .children(children);
 
@@ -3945,7 +3632,7 @@ impl Sidebar {
             profile.name.clone()
         };
 
-        let mut profile_item = TreeItem::new(format!("profile_{}", profile_id), profile_label);
+        let mut profile_item = TreeItem::new(SchemaNodeId::Profile { profile_id }.to_string(), profile_label);
 
         if is_connected
             && let Some(connected) = state.connections().get(&profile_id)
@@ -3978,7 +3665,7 @@ impl Sidebar {
                             }
                         } else if is_pending {
                             vec![TreeItem::new(
-                                format!("loading_{}_{}", profile_id, db.name),
+                                SchemaNodeId::Loading { profile_id, database: db.name.clone() }.to_string(),
                                 "Loading...".to_string(),
                             )]
                         } else {
@@ -4012,7 +3699,7 @@ impl Sidebar {
                     };
 
                     profile_children.push(
-                        TreeItem::new(format!("db_{}_{}", profile_id, db.name), db_label)
+                        TreeItem::new(SchemaNodeId::Database { profile_id, name: db.name.clone() }.to_string(), db_label)
                             .expanded(is_expanded)
                             .children(db_children),
                     );
@@ -4088,9 +3775,9 @@ impl Sidebar {
         database_name: &str,
         snapshot: &dbflux_core::SchemaSnapshot,
         table_details: &HashMap<(String, String), TableInfo>,
-        schema_types: &HashMap<String, Vec<CustomTypeInfo>>,
-        schema_indexes: &HashMap<String, Vec<SchemaIndexInfo>>,
-        schema_foreign_keys: &HashMap<String, Vec<SchemaForeignKeyInfo>>,
+        schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+        schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+        schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
@@ -4107,7 +3794,7 @@ impl Sidebar {
 
             children.push(
                 TreeItem::new(
-                    format!("schema_{}_{}", profile_id, db_schema.name),
+                    SchemaNodeId::Schema { profile_id, name: db_schema.name.clone() }.to_string(),
                     db_schema.name.clone(),
                 )
                 .expanded(db_schema.name == "public")
@@ -4134,7 +3821,7 @@ impl Sidebar {
 
             content.push(
                 TreeItem::new(
-                    format!("collections_{}_{}", profile_id, database_name),
+                    SchemaNodeId::CollectionsFolder { profile_id, database: database_name.to_string() }.to_string(),
                     format!("Collections ({})", db_schema.tables.len()),
                 )
                 .expanded(true)
@@ -4165,7 +3852,7 @@ impl Sidebar {
                     let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
 
                     TreeItem::new(
-                        format!("idx_{}_{}_{}", profile_id, coll_name, idx.name),
+                        SchemaNodeId::CollectionIndex { profile_id, collection: coll_name.to_string(), name: idx.name.clone() }.to_string(),
                         label,
                     )
                 })
@@ -4173,7 +3860,7 @@ impl Sidebar {
 
             collection_children.push(
                 TreeItem::new(
-                    format!("indexes_{}_{}_{}", profile_id, database_name, coll_name),
+                    SchemaNodeId::CollectionIndexesFolder { profile_id, database: database_name.to_string(), collection: coll_name.to_string() }.to_string(),
                     format!("Indexes ({})", indexes.len()),
                 )
                 .expanded(false)
@@ -4183,18 +3870,12 @@ impl Sidebar {
 
         if collection_children.is_empty() {
             TreeItem::new(
-                format!(
-                    "collection_{}__{}__{}",
-                    profile_id, database_name, coll_name
-                ),
+                SchemaNodeId::Collection { profile_id, database: database_name.to_string(), name: coll_name.to_string() }.to_string(),
                 coll_name.clone(),
             )
         } else {
             TreeItem::new(
-                format!(
-                    "collection_{}__{}__{}",
-                    profile_id, database_name, coll_name
-                ),
+                SchemaNodeId::Collection { profile_id, database: database_name.to_string(), name: coll_name.to_string() }.to_string(),
                 coll_name.clone(),
             )
             .expanded(false)
@@ -4207,9 +3888,9 @@ impl Sidebar {
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
-        schema_types: &HashMap<String, Vec<CustomTypeInfo>>,
-        schema_indexes: &HashMap<String, Vec<SchemaIndexInfo>>,
-        schema_foreign_keys: &HashMap<String, Vec<SchemaForeignKeyInfo>>,
+        schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+        schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+        schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
         let schema_name = &db_schema.name;
@@ -4223,7 +3904,7 @@ impl Sidebar {
 
             content.push(
                 TreeItem::new(
-                    format!("tables_{}_{}", profile_id, schema_name),
+                    SchemaNodeId::TablesFolder { profile_id, schema: schema_name.to_string() }.to_string(),
                     format!("Tables ({})", db_schema.tables.len()),
                 )
                 .expanded(true)
@@ -4237,7 +3918,7 @@ impl Sidebar {
                 .iter()
                 .map(|view| {
                     TreeItem::new(
-                        format!("view_{}__{}__{}", profile_id, schema_name, view.name),
+                        SchemaNodeId::View { profile_id, schema: schema_name.to_string(), name: view.name.clone() }.to_string(),
                         view.name.clone(),
                     )
                 })
@@ -4245,7 +3926,7 @@ impl Sidebar {
 
             content.push(
                 TreeItem::new(
-                    format!("views_{}_{}", profile_id, schema_name),
+                    SchemaNodeId::ViewsFolder { profile_id, schema: schema_name.to_string() }.to_string(),
                     format!("Views ({})", db_schema.views.len()),
                 )
                 .expanded(true)
@@ -4254,14 +3935,14 @@ impl Sidebar {
         }
 
         // Custom types (enums, domains, composites) - check cache first, then db_schema
-        let types_cache_key = format!("{}__{}", database_name, schema_name);
+        let types_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
         let cached_types = schema_types.get(&types_cache_key);
 
         let custom_types: Option<&Vec<CustomTypeInfo>> =
             cached_types.or(db_schema.custom_types.as_ref());
 
         // Item ID format: types_{profile_id}_{database}_{schema}
-        let types_item_id = format!("types_{}_{}_{}", profile_id, database_name, schema_name);
+        let types_item_id = SchemaNodeId::TypesFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string();
 
         if let Some(types) = custom_types {
             if !types.is_empty() {
@@ -4286,10 +3967,7 @@ impl Sidebar {
         } else {
             // Placeholder so chevron appears; fetch triggers on expand
             let placeholder = TreeItem::new(
-                format!(
-                    "types_loading_{}_{}_{}",
-                    profile_id, database_name, schema_name
-                ),
+                SchemaNodeId::TypesLoadingFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string(),
                 "Loading...".to_string(),
             );
 
@@ -4301,12 +3979,9 @@ impl Sidebar {
         }
 
         // Schema-level Indexes folder
-        let indexes_cache_key = format!("{}__{}", database_name, schema_name);
+        let indexes_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
         let cached_indexes = schema_indexes.get(&indexes_cache_key);
-        let indexes_item_id = format!(
-            "schema_indexes_{}_{}_{}",
-            profile_id, database_name, schema_name
-        );
+        let indexes_item_id = SchemaNodeId::SchemaIndexesFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string();
 
         if let Some(indexes) = cached_indexes {
             if !indexes.is_empty() {
@@ -4324,7 +3999,7 @@ impl Sidebar {
                             pk_marker
                         );
                         TreeItem::new(
-                            format!("sidx_{}__{}__{}", profile_id, schema_name, idx.name),
+                            SchemaNodeId::SchemaIndex { profile_id, schema: schema_name.to_string(), name: idx.name.clone() }.to_string(),
                             label,
                         )
                     })
@@ -4344,10 +4019,7 @@ impl Sidebar {
             }
         } else {
             let placeholder = TreeItem::new(
-                format!(
-                    "schema_indexes_loading_{}_{}_{}",
-                    profile_id, database_name, schema_name
-                ),
+                SchemaNodeId::SchemaIndexesLoadingFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string(),
                 "Loading...".to_string(),
             );
 
@@ -4359,12 +4031,9 @@ impl Sidebar {
         }
 
         // Schema-level Foreign Keys folder
-        let fks_cache_key = format!("{}__{}", database_name, schema_name);
+        let fks_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
         let cached_fks = schema_foreign_keys.get(&fks_cache_key);
-        let fks_item_id = format!(
-            "schema_fks_{}_{}_{}",
-            profile_id, database_name, schema_name
-        );
+        let fks_item_id = SchemaNodeId::SchemaForeignKeysFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string();
 
         if let Some(fks) = cached_fks {
             if !fks.is_empty() {
@@ -4383,7 +4052,7 @@ impl Sidebar {
                             ref_table
                         );
                         TreeItem::new(
-                            format!("sfk_{}__{}__{}", profile_id, schema_name, fk.name),
+                            SchemaNodeId::SchemaForeignKey { profile_id, schema: schema_name.to_string(), name: fk.name.clone() }.to_string(),
                             label,
                         )
                     })
@@ -4403,10 +4072,7 @@ impl Sidebar {
             }
         } else {
             let placeholder = TreeItem::new(
-                format!(
-                    "schema_fks_loading_{}_{}_{}",
-                    profile_id, database_name, schema_name
-                ),
+                SchemaNodeId::SchemaForeignKeysLoadingFolder { profile_id, database: database_name.to_string(), schema: schema_name.to_string() }.to_string(),
                 "Loading...".to_string(),
             );
 
@@ -4441,10 +4107,7 @@ impl Sidebar {
                 .iter()
                 .map(|v| {
                     TreeItem::new(
-                        format!(
-                            "enumval_{}__{}__{}_{}",
-                            profile_id, schema_name, custom_type.name, v
-                        ),
+                        SchemaNodeId::EnumValue { profile_id, schema: schema_name.to_string(), type_name: custom_type.name.clone(), value: v.clone() }.to_string(),
                         v.clone(),
                     )
                 })
@@ -4454,19 +4117,13 @@ impl Sidebar {
         // For domains, show the base type as a child
         if let Some(ref base_type) = custom_type.base_type {
             children.push(TreeItem::new(
-                format!(
-                    "basetype_{}__{}__{}",
-                    profile_id, schema_name, custom_type.name
-                ),
+                SchemaNodeId::BaseType { profile_id, schema: schema_name.to_string(), type_name: custom_type.name.clone() }.to_string(),
                 format!("Base: {}", base_type),
             ));
         }
 
         TreeItem::new(
-            format!(
-                "customtype_{}__{}__{}",
-                profile_id, schema_name, custom_type.name
-            ),
+            SchemaNodeId::CustomType { profile_id, schema: schema_name.to_string(), name: custom_type.name.clone() }.to_string(),
             label,
         )
         .expanded(false)
@@ -4497,7 +4154,7 @@ impl Sidebar {
                     let nullable = if col.nullable { "?" } else { "" };
                     let label = format!("{}: {}{}{}", col.name, col.type_name, nullable, pk_marker);
                     TreeItem::new(
-                        format!("col_{}__{}__{}", profile_id, table.name, col.name),
+                        SchemaNodeId::Column { profile_id, table: table.name.clone(), name: col.name.clone() }.to_string(),
                         label,
                     )
                 })
@@ -4505,7 +4162,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!("columns_{}__{}__{}", profile_id, schema_name, table.name),
+                    SchemaNodeId::ColumnsFolder { profile_id, schema: schema_name.to_string(), table: table.name.clone() }.to_string(),
                     format!("Columns ({})", columns.len()),
                 )
                 .expanded(true)
@@ -4525,7 +4182,7 @@ impl Sidebar {
                     let cols = idx.columns.join(", ");
                     let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
                     TreeItem::new(
-                        format!("idx_{}__{}__{}", profile_id, table.name, idx.name),
+                        SchemaNodeId::Index { profile_id, table: table.name.clone(), name: idx.name.clone() }.to_string(),
                         label,
                     )
                 })
@@ -4533,7 +4190,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!("indexes_{}__{}__{}", profile_id, schema_name, table.name),
+                    SchemaNodeId::IndexesFolder { profile_id, schema: schema_name.to_string(), table: table.name.clone() }.to_string(),
                     format!("Indexes ({})", indexes.len()),
                 )
                 .expanded(false)
@@ -4560,7 +4217,7 @@ impl Sidebar {
                         fk.referenced_columns.join(", ")
                     );
                     TreeItem::new(
-                        format!("fk_{}__{}__{}", profile_id, table.name, fk.name),
+                        SchemaNodeId::ForeignKey { profile_id, table: table.name.clone(), name: fk.name.clone() }.to_string(),
                         label,
                     )
                 })
@@ -4568,7 +4225,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!("fks_{}__{}__{}", profile_id, schema_name, table.name),
+                    SchemaNodeId::ForeignKeysFolder { profile_id, schema: schema_name.to_string(), table: table.name.clone() }.to_string(),
                     format!("Foreign Keys ({})", fks.len()),
                 )
                 .expanded(false)
@@ -4595,7 +4252,7 @@ impl Sidebar {
                     };
                     let label = format!("{} {} ({})", c.name, kind_label, detail);
                     TreeItem::new(
-                        format!("constraint_{}__{}__{}", profile_id, table.name, c.name),
+                        SchemaNodeId::Constraint { profile_id, table: table.name.clone(), name: c.name.clone() }.to_string(),
                         label,
                     )
                 })
@@ -4603,10 +4260,7 @@ impl Sidebar {
 
             table_sections.push(
                 TreeItem::new(
-                    format!(
-                        "constraints_{}__{}__{}",
-                        profile_id, schema_name, table.name
-                    ),
+                    SchemaNodeId::ConstraintsFolder { profile_id, schema: schema_name.to_string(), table: table.name.clone() }.to_string(),
                     format!("Constraints ({})", constraints.len()),
                 )
                 .expanded(false)
@@ -4617,16 +4271,13 @@ impl Sidebar {
         // Add placeholder when columns not loaded yet (shows chevron indicator)
         if columns_not_loaded && table_sections.is_empty() {
             table_sections.push(TreeItem::new(
-                format!(
-                    "placeholder_{}__{}__{}",
-                    profile_id, schema_name, table.name
-                ),
+                SchemaNodeId::Placeholder { profile_id, schema: schema_name.to_string(), table: table.name.clone() }.to_string(),
                 "Click to load schema...".to_string(),
             ));
         }
 
         TreeItem::new(
-            format!("table_{}__{}__{}", profile_id, schema_name, table.name),
+            SchemaNodeId::Table { profile_id, schema: schema_name.to_string(), name: table.name.clone() }.to_string(),
             table.name.clone(),
         )
         .expanded(false)
@@ -5159,44 +4810,29 @@ impl Render for Sidebar {
                             let item_id = item.id.clone();
                             let depth = entry.depth();
 
-                            let node_kind = TreeNodeKind::from_id(&item_id);
+                            let node_kind = parse_node_kind(&item_id);
+                            let parsed_id = parse_node_id(&item_id);
 
-                            let is_connected = if node_kind == TreeNodeKind::Profile {
-                                item_id
-                                    .strip_prefix("profile_")
-                                    .and_then(|id_str| Uuid::parse_str(id_str).ok())
-                                    .is_some_and(|id| connections.contains(&id))
-                            } else {
-                                false
-                            };
+                            let is_connected = matches!(
+                                &parsed_id,
+                                Some(SchemaNodeId::Profile { profile_id })
+                                    if connections.contains(profile_id)
+                            );
 
-                            let is_active = if node_kind == TreeNodeKind::Profile {
-                                item_id
-                                    .strip_prefix("profile_")
-                                    .and_then(|id_str| Uuid::parse_str(id_str).ok())
-                                    .is_some_and(|id| active_id == Some(id))
-                            } else {
-                                false
-                            };
+                            let is_active = matches!(
+                                &parsed_id,
+                                Some(SchemaNodeId::Profile { profile_id })
+                                    if active_id == Some(*profile_id)
+                            );
 
                             // Check if this database is the active one for its connection
-                            let is_active_database = if node_kind == TreeNodeKind::Database {
-                                item_id
-                                    .strip_prefix("db_")
-                                    .and_then(|rest| {
-                                        // Format: db_{profile_id}_{db_name}
-                                        let underscore_pos = rest.find('_')?;
-                                        let profile_id_str = &rest[..underscore_pos];
-                                        let db_name = &rest[underscore_pos + 1..];
-                                        let profile_id = Uuid::parse_str(profile_id_str).ok()?;
-                                        active_databases
-                                            .get(&profile_id)
-                                            .map(|active_db| active_db == db_name)
-                                    })
-                                    .unwrap_or(false)
-                            } else {
-                                false
-                            };
+                            let is_active_database = matches!(
+                                &parsed_id,
+                                Some(SchemaNodeId::Database { profile_id, name })
+                                    if active_databases
+                                        .get(profile_id)
+                                        .is_some_and(|active_db| active_db == name)
+                            );
 
                             let theme = cx.theme();
                             let indent_per_level = 12.0_f32;
@@ -5206,22 +4842,22 @@ impl Render for Sidebar {
                             let needs_chevron = is_folder
                                 && matches!(
                                     node_kind,
-                                    TreeNodeKind::ConnectionFolder
-                                        | TreeNodeKind::Table
-                                        | TreeNodeKind::View
-                                        | TreeNodeKind::Schema
-                                        | TreeNodeKind::TablesFolder
-                                        | TreeNodeKind::ViewsFolder
-                                        | TreeNodeKind::TypesFolder
-                                        | TreeNodeKind::ColumnsFolder
-                                        | TreeNodeKind::IndexesFolder
-                                        | TreeNodeKind::ForeignKeysFolder
-                                        | TreeNodeKind::ConstraintsFolder
-                                        | TreeNodeKind::SchemaIndexesFolder
-                                        | TreeNodeKind::SchemaForeignKeysFolder
-                                        | TreeNodeKind::CustomType
-                                        | TreeNodeKind::Database
-                                        | TreeNodeKind::Profile
+                                    SchemaNodeKind::ConnectionFolder
+                                        | SchemaNodeKind::Table
+                                        | SchemaNodeKind::View
+                                        | SchemaNodeKind::Schema
+                                        | SchemaNodeKind::TablesFolder
+                                        | SchemaNodeKind::ViewsFolder
+                                        | SchemaNodeKind::TypesFolder
+                                        | SchemaNodeKind::ColumnsFolder
+                                        | SchemaNodeKind::IndexesFolder
+                                        | SchemaNodeKind::ForeignKeysFolder
+                                        | SchemaNodeKind::ConstraintsFolder
+                                        | SchemaNodeKind::SchemaIndexesFolder
+                                        | SchemaNodeKind::SchemaForeignKeysFolder
+                                        | SchemaNodeKind::CustomType
+                                        | SchemaNodeKind::Database
+                                        | SchemaNodeKind::Profile
                                 );
                             let chevron_icon: Option<AppIcon> = if needs_chevron {
                                 Some(if is_expanded {
@@ -5238,13 +4874,13 @@ impl Render for Sidebar {
                                 &str,
                                 Hsla,
                             ) = match node_kind {
-                                TreeNodeKind::ConnectionFolder => {
+                                SchemaNodeKind::ConnectionFolder => {
                                     (Some(AppIcon::Folder), "", theme.muted_foreground)
                                 }
-                                TreeNodeKind::Profile => {
-                                    let icon = item_id
-                                        .strip_prefix("profile_")
-                                        .and_then(|id_str| Uuid::parse_str(id_str).ok())
+                                SchemaNodeKind::Profile => {
+                                    let icon = parsed_id
+                                        .as_ref()
+                                        .and_then(|n| n.profile_id())
                                         .and_then(|id| profile_icons.get(&id).copied())
                                         .map(AppIcon::from_icon);
 
@@ -5260,81 +4896,81 @@ impl Render for Sidebar {
                                     };
                                     (icon, unicode, color)
                                 }
-                                TreeNodeKind::Database => {
+                                SchemaNodeKind::Database => {
                                     (Some(AppIcon::Database), "", color_orange)
                                 }
-                                TreeNodeKind::Schema => (Some(AppIcon::Layers), "", color_schema),
-                                TreeNodeKind::TablesFolder => {
+                                SchemaNodeKind::Schema => (Some(AppIcon::Layers), "", color_schema),
+                                SchemaNodeKind::TablesFolder => {
                                     (Some(AppIcon::Table), "", color_teal)
                                 }
-                                TreeNodeKind::ViewsFolder => (Some(AppIcon::Eye), "", color_yellow),
-                                TreeNodeKind::TypesFolder => {
+                                SchemaNodeKind::ViewsFolder => (Some(AppIcon::Eye), "", color_yellow),
+                                SchemaNodeKind::TypesFolder => {
                                     (Some(AppIcon::Braces), "", color_purple)
                                 }
-                                TreeNodeKind::Table => (Some(AppIcon::Table), "", color_teal),
-                                TreeNodeKind::View => (Some(AppIcon::Eye), "", color_yellow),
-                                TreeNodeKind::CustomType => {
+                                SchemaNodeKind::Table => (Some(AppIcon::Table), "", color_teal),
+                                SchemaNodeKind::View => (Some(AppIcon::Eye), "", color_yellow),
+                                SchemaNodeKind::CustomType => {
                                     (Some(AppIcon::Braces), "", color_purple)
                                 }
-                                TreeNodeKind::ColumnsFolder => {
+                                SchemaNodeKind::ColumnsFolder => {
                                     (Some(AppIcon::Columns), "", color_blue)
                                 }
-                                TreeNodeKind::IndexesFolder | TreeNodeKind::SchemaIndexesFolder => {
+                                SchemaNodeKind::IndexesFolder | SchemaNodeKind::SchemaIndexesFolder => {
                                     (Some(AppIcon::Hash), "", color_purple)
                                 }
-                                TreeNodeKind::ForeignKeysFolder
-                                | TreeNodeKind::SchemaForeignKeysFolder => {
+                                SchemaNodeKind::ForeignKeysFolder
+                                | SchemaNodeKind::SchemaForeignKeysFolder => {
                                     (Some(AppIcon::KeyRound), "", color_orange)
                                 }
-                                TreeNodeKind::ConstraintsFolder => {
+                                SchemaNodeKind::ConstraintsFolder => {
                                     (Some(AppIcon::Lock), "", color_yellow)
                                 }
-                                TreeNodeKind::Column => (Some(AppIcon::Columns), "", color_blue),
-                                TreeNodeKind::Index | TreeNodeKind::SchemaIndex => {
+                                SchemaNodeKind::Column => (Some(AppIcon::Columns), "", color_blue),
+                                SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => {
                                     (Some(AppIcon::Hash), "", color_purple)
                                 }
-                                TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+                                SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => {
                                     (Some(AppIcon::KeyRound), "", color_orange)
                                 }
-                                TreeNodeKind::Constraint => (Some(AppIcon::Lock), "", color_yellow),
-                                TreeNodeKind::CollectionsFolder => {
+                                SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", color_yellow),
+                                SchemaNodeKind::CollectionsFolder => {
                                     (Some(AppIcon::Folder), "", color_teal)
                                 }
-                                TreeNodeKind::Collection => (Some(AppIcon::Box), "", color_teal),
-                                TreeNodeKind::Unknown => (None, "", theme.muted_foreground),
+                                SchemaNodeKind::Collection => (Some(AppIcon::Box), "", color_teal),
+                                _ => (None, "", theme.muted_foreground),
                             };
 
                             let label_color: Hsla = match node_kind {
-                                TreeNodeKind::ConnectionFolder => theme.foreground,
-                                TreeNodeKind::Profile => theme.foreground,
-                                TreeNodeKind::Database => color_orange,
-                                TreeNodeKind::Schema => color_schema,
-                                TreeNodeKind::TablesFolder
-                                | TreeNodeKind::ViewsFolder
-                                | TreeNodeKind::TypesFolder
-                                | TreeNodeKind::ColumnsFolder
-                                | TreeNodeKind::IndexesFolder
-                                | TreeNodeKind::ForeignKeysFolder
-                                | TreeNodeKind::ConstraintsFolder
-                                | TreeNodeKind::SchemaIndexesFolder
-                                | TreeNodeKind::SchemaForeignKeysFolder => color_gray,
-                                TreeNodeKind::Table => color_teal,
-                                TreeNodeKind::View => color_yellow,
-                                TreeNodeKind::CustomType => color_purple,
-                                TreeNodeKind::Column => color_blue,
-                                TreeNodeKind::Index | TreeNodeKind::SchemaIndex => color_purple,
-                                TreeNodeKind::ForeignKey | TreeNodeKind::SchemaForeignKey => {
+                                SchemaNodeKind::ConnectionFolder => theme.foreground,
+                                SchemaNodeKind::Profile => theme.foreground,
+                                SchemaNodeKind::Database => color_orange,
+                                SchemaNodeKind::Schema => color_schema,
+                                SchemaNodeKind::TablesFolder
+                                | SchemaNodeKind::ViewsFolder
+                                | SchemaNodeKind::TypesFolder
+                                | SchemaNodeKind::ColumnsFolder
+                                | SchemaNodeKind::IndexesFolder
+                                | SchemaNodeKind::ForeignKeysFolder
+                                | SchemaNodeKind::ConstraintsFolder
+                                | SchemaNodeKind::SchemaIndexesFolder
+                                | SchemaNodeKind::SchemaForeignKeysFolder => color_gray,
+                                SchemaNodeKind::Table => color_teal,
+                                SchemaNodeKind::View => color_yellow,
+                                SchemaNodeKind::CustomType => color_purple,
+                                SchemaNodeKind::Column => color_blue,
+                                SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => color_purple,
+                                SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => {
                                     color_orange
                                 }
-                                TreeNodeKind::Constraint => color_yellow,
-                                TreeNodeKind::CollectionsFolder => color_gray,
-                                TreeNodeKind::Collection => color_teal,
-                                TreeNodeKind::Unknown => theme.muted_foreground,
+                                SchemaNodeKind::Constraint => color_yellow,
+                                SchemaNodeKind::CollectionsFolder => color_gray,
+                                SchemaNodeKind::Collection => color_teal,
+                                _ => theme.muted_foreground,
                             };
 
                             let is_table_or_view = matches!(
                                 node_kind,
-                                TreeNodeKind::Table | TreeNodeKind::View | TreeNodeKind::Collection
+                                SchemaNodeKind::Table | SchemaNodeKind::View | SchemaNodeKind::Collection
                             );
 
                             let sidebar_for_mousedown = sidebar_entity.clone();
@@ -5384,7 +5020,7 @@ impl Render for Sidebar {
                                             let sidebar_cl = sidebar_for_click.clone();
                                             let id_cl = item_id_for_click.clone();
                                             let is_collection =
-                                                node_kind == TreeNodeKind::Collection;
+                                                node_kind == SchemaNodeKind::Collection;
                                             el.on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                 cx.stop_propagation();
                                                 sidebar_md.update(cx, |this, cx| {
@@ -5489,7 +5125,7 @@ impl Render for Sidebar {
                                                 .text_size(FontSizes::SM)
                                                 .text_color(label_color)
                                                 .when(
-                                                    node_kind == TreeNodeKind::Profile && is_active,
+                                                    node_kind == SchemaNodeKind::Profile && is_active,
                                                     |d| d.font_weight(FontWeight::SEMIBOLD),
                                                 )
                                                 .when(is_active_database, |d| {
@@ -5498,13 +5134,13 @@ impl Render for Sidebar {
                                                 .when(
                                                     matches!(
                                                         node_kind,
-                                                        TreeNodeKind::TablesFolder
-                                                            | TreeNodeKind::ViewsFolder
-                                                            | TreeNodeKind::TypesFolder
-                                                            | TreeNodeKind::ColumnsFolder
-                                                            | TreeNodeKind::IndexesFolder
-                                                            | TreeNodeKind::ForeignKeysFolder
-                                                            | TreeNodeKind::ConstraintsFolder
+                                                        SchemaNodeKind::TablesFolder
+                                                            | SchemaNodeKind::ViewsFolder
+                                                            | SchemaNodeKind::TypesFolder
+                                                            | SchemaNodeKind::ColumnsFolder
+                                                            | SchemaNodeKind::IndexesFolder
+                                                            | SchemaNodeKind::ForeignKeysFolder
+                                                            | SchemaNodeKind::ConstraintsFolder
                                                     ),
                                                     |d| d.font_weight(FontWeight::MEDIUM),
                                                 )
@@ -5513,24 +5149,24 @@ impl Render for Sidebar {
                                         .when(
                                             matches!(
                                                 node_kind,
-                                                TreeNodeKind::Profile
-                                                    | TreeNodeKind::ConnectionFolder
+                                                SchemaNodeKind::Profile
+                                                    | SchemaNodeKind::ConnectionFolder
                                             ),
                                             |el| {
-                                                let drag_node_id = match node_kind {
-                                                    TreeNodeKind::Profile => item_id
-                                                        .strip_prefix("profile_")
-                                                        .and_then(|s| Uuid::parse_str(s).ok()),
-                                                    TreeNodeKind::ConnectionFolder => item_id
-                                                        .strip_prefix("conn_folder_")
-                                                        .and_then(|s| Uuid::parse_str(s).ok()),
+                                                let drag_node_id = match &parsed_id {
+                                                    Some(SchemaNodeId::Profile { profile_id }) => {
+                                                        Some(*profile_id)
+                                                    }
+                                                    Some(SchemaNodeId::ConnectionFolder {
+                                                        node_id,
+                                                    }) => Some(*node_id),
                                                     _ => None,
                                                 };
 
                                                 if let Some(node_id) = drag_node_id {
                                                     let drag_label = item.label.to_string();
                                                     let is_folder =
-                                                        node_kind == TreeNodeKind::ConnectionFolder;
+                                                        node_kind == SchemaNodeKind::ConnectionFolder;
 
                                                     // Collect additional nodes from multi-selection
                                                     let current_item_id = item_id.to_string();
@@ -5539,16 +5175,16 @@ impl Render for Sidebar {
                                                             .iter()
                                                             .filter(|id| *id != &current_item_id)
                                                             .filter_map(|id| {
-                                                                if let Some(uuid_str) =
-                                                                    id.strip_prefix("profile_")
-                                                                {
-                                                                    Uuid::parse_str(uuid_str).ok()
-                                                                } else if let Some(uuid_str) =
-                                                                    id.strip_prefix("conn_folder_")
-                                                                {
-                                                                    Uuid::parse_str(uuid_str).ok()
-                                                                } else {
-                                                                    None
+                                                                match parse_node_id(id) {
+                                                                    Some(SchemaNodeId::Profile {
+                                                                        profile_id,
+                                                                    }) => Some(profile_id),
+                                                                    Some(
+                                                                        SchemaNodeId::ConnectionFolder {
+                                                                            node_id,
+                                                                        },
+                                                                    ) => Some(node_id),
+                                                                    _ => None,
                                                                 }
                                                             })
                                                             .collect();
@@ -5586,8 +5222,8 @@ impl Render for Sidebar {
                                         .when(
                                             matches!(
                                                 node_kind,
-                                                TreeNodeKind::Profile
-                                                    | TreeNodeKind::ConnectionFolder
+                                                SchemaNodeKind::Profile
+                                                    | SchemaNodeKind::ConnectionFolder
                                             ),
                                             |el| {
                                                 let is_drop_after = current_drop_target
@@ -5607,7 +5243,7 @@ impl Render for Sidebar {
                                             },
                                         )
                                         // Profile drop handling (insert after)
-                                        .when(node_kind == TreeNodeKind::Profile, |el| {
+                                        .when(node_kind == SchemaNodeKind::Profile, |el| {
                                             let item_id_for_drop = item_id.to_string();
                                             let item_id_for_move = item_id.to_string();
                                             let sidebar_for_drop = sidebar_entity.clone();
@@ -5617,14 +5253,12 @@ impl Render for Sidebar {
                                             el.drag_over::<SidebarDragState>(
                                                 move |style, state, _, cx| {
                                                     // Parse profile_id from item_id
-                                                    let profile_id = item_id_for_move
-                                                        .strip_prefix("profile_")
-                                                        .and_then(|s| Uuid::parse_str(s).ok());
+                                                    let profile_id = match parse_node_id(&item_id_for_move) {
+                                                        Some(SchemaNodeId::Profile { profile_id }) => Some(profile_id),
+                                                        _ => None,
+                                                    };
                                                     // Don't allow dropping on self
-                                                    if profile_id.is_some_and(|_| {
-                                                        state.node_id
-                                                            != profile_id.unwrap_or(state.node_id)
-                                                    }) {
+                                                    if profile_id.is_some_and(|pid| state.node_id != pid) {
                                                         sidebar_for_move.update(cx, |this, cx| {
                                                             // Clear folder hover (moved away from folder)
                                                             this.clear_drag_hover_folder(cx);
@@ -5656,7 +5290,7 @@ impl Render for Sidebar {
                                             )
                                         })
                                         // Folder drop handling (insert into)
-                                        .when(node_kind == TreeNodeKind::ConnectionFolder, |el| {
+                                        .when(node_kind == SchemaNodeKind::ConnectionFolder, |el| {
                                             let item_id_for_drop = item_id.to_string();
                                             let item_id_for_move = item_id.to_string();
                                             let sidebar_for_drop = sidebar_entity.clone();
@@ -5715,17 +5349,17 @@ impl Render for Sidebar {
                                         .when(
                                             matches!(
                                                 node_kind,
-                                                TreeNodeKind::Profile
-                                                    | TreeNodeKind::ConnectionFolder
-                                                    | TreeNodeKind::Table
-                                                    | TreeNodeKind::View
-                                                    | TreeNodeKind::Collection
-                                                    | TreeNodeKind::Database
-                                                    | TreeNodeKind::Index
-                                                    | TreeNodeKind::SchemaIndex
-                                                    | TreeNodeKind::ForeignKey
-                                                    | TreeNodeKind::SchemaForeignKey
-                                                    | TreeNodeKind::CustomType
+                                                SchemaNodeKind::Profile
+                                                    | SchemaNodeKind::ConnectionFolder
+                                                    | SchemaNodeKind::Table
+                                                    | SchemaNodeKind::View
+                                                    | SchemaNodeKind::Collection
+                                                    | SchemaNodeKind::Database
+                                                    | SchemaNodeKind::Index
+                                                    | SchemaNodeKind::SchemaIndex
+                                                    | SchemaNodeKind::ForeignKey
+                                                    | SchemaNodeKind::SchemaForeignKey
+                                                    | SchemaNodeKind::CustomType
                                             ),
                                             |el| {
                                                 let sidebar_for_menu = sidebar_entity.clone();
@@ -5774,17 +5408,17 @@ impl Render for Sidebar {
                                         .when(
                                             matches!(
                                                 node_kind,
-                                                TreeNodeKind::Profile
-                                                    | TreeNodeKind::ConnectionFolder
-                                                    | TreeNodeKind::Table
-                                                    | TreeNodeKind::View
-                                                    | TreeNodeKind::Collection
-                                                    | TreeNodeKind::Database
-                                                    | TreeNodeKind::Index
-                                                    | TreeNodeKind::SchemaIndex
-                                                    | TreeNodeKind::ForeignKey
-                                                    | TreeNodeKind::SchemaForeignKey
-                                                    | TreeNodeKind::CustomType
+                                                SchemaNodeKind::Profile
+                                                    | SchemaNodeKind::ConnectionFolder
+                                                    | SchemaNodeKind::Table
+                                                    | SchemaNodeKind::View
+                                                    | SchemaNodeKind::Collection
+                                                    | SchemaNodeKind::Database
+                                                    | SchemaNodeKind::Index
+                                                    | SchemaNodeKind::SchemaIndex
+                                                    | SchemaNodeKind::ForeignKey
+                                                    | SchemaNodeKind::SchemaForeignKey
+                                                    | SchemaNodeKind::CustomType
                                             ),
                                             |el| {
                                                 let sidebar_for_ctx = sidebar_entity.clone();
@@ -5965,87 +5599,122 @@ impl Render for Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::Sidebar;
+    use super::{parse_node_kind, ItemIdParts, NODE_KIND_NONE};
+    use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use uuid::Uuid;
 
+    fn test_uuid() -> Uuid {
+        Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+    }
+
     #[test]
-    fn parse_table_id_valid() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}__public__users");
-        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
-        assert_eq!(parts.profile_id, uuid);
+    fn table_id_roundtrip() {
+        let id = SchemaNodeId::Table {
+            profile_id: test_uuid(),
+            schema: "public".into(),
+            name: "users".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn view_id_roundtrip() {
+        let id = SchemaNodeId::View {
+            profile_id: test_uuid(),
+            schema: "analytics".into(),
+            name: "monthly_stats".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn table_with_special_chars_in_name() {
+        let id = SchemaNodeId::Table {
+            profile_id: test_uuid(),
+            schema: "public".into(),
+            name: "user_accounts_archive".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn collection_id_roundtrip() {
+        let id = SchemaNodeId::Collection {
+            profile_id: test_uuid(),
+            database: "mydb".into(),
+            name: "orders".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn parse_node_kind_returns_correct_kind() {
+        let table_id = SchemaNodeId::Table {
+            profile_id: test_uuid(),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+
+        assert_eq!(parse_node_kind(&table_id), SchemaNodeKind::Table);
+    }
+
+    #[test]
+    fn parse_node_kind_returns_placeholder_for_invalid_id() {
+        assert_eq!(parse_node_kind("garbage"), NODE_KIND_NONE);
+    }
+
+    #[test]
+    fn item_id_parts_from_table_node() {
+        let id = SchemaNodeId::Table {
+            profile_id: test_uuid(),
+            schema: "public".into(),
+            name: "users".into(),
+        };
+        let parts = ItemIdParts::from_node_id(&id).unwrap();
+        assert_eq!(parts.profile_id, test_uuid());
         assert_eq!(parts.schema_name, "public");
         assert_eq!(parts.object_name, "users");
     }
 
     #[test]
-    fn parse_view_id_valid() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("view_{uuid}__analytics__monthly_stats");
-        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
-        assert_eq!(parts.profile_id, uuid);
+    fn item_id_parts_from_view_node() {
+        let id = SchemaNodeId::View {
+            profile_id: test_uuid(),
+            schema: "analytics".into(),
+            name: "monthly_stats".into(),
+        };
+        let parts = ItemIdParts::from_node_id(&id).unwrap();
+        assert_eq!(parts.profile_id, test_uuid());
         assert_eq!(parts.schema_name, "analytics");
         assert_eq!(parts.object_name, "monthly_stats");
     }
 
     #[test]
-    fn parse_table_id_with_underscores_in_table_name() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}__public__user_accounts_archive");
-        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
-        assert_eq!(parts.schema_name, "public");
-        assert_eq!(parts.object_name, "user_accounts_archive");
+    fn item_id_parts_from_non_table_returns_none() {
+        let id = SchemaNodeId::Database {
+            profile_id: test_uuid(),
+            name: "mydb".into(),
+        };
+        assert!(ItemIdParts::from_node_id(&id).is_none());
     }
 
     #[test]
-    fn parse_table_id_with_double_underscore_in_table_name() {
-        // Ambiguous: rsplit gives __ to schema, not table
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}__public__user__accounts");
-        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
-        assert_eq!(parts.schema_name, "public__user");
-        assert_eq!(parts.object_name, "accounts");
-    }
-
-    #[test]
-    fn parse_table_id_with_double_underscore_only_in_schema() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}__my__schema__users");
-        let parts = Sidebar::parse_table_or_view_id(&item_id).unwrap();
-        assert_eq!(parts.schema_name, "my__schema");
-        assert_eq!(parts.object_name, "users");
-    }
-
-    #[test]
-    fn parse_invalid_prefix() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("schema_{uuid}__public__users");
-        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
-    }
-
-    #[test]
-    fn parse_invalid_uuid() {
-        let item_id = "table_not-a-valid-uuid-at-all-here__public__users";
-        assert!(Sidebar::parse_table_or_view_id(item_id).is_none());
-    }
-
-    #[test]
-    fn parse_missing_schema() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}____users");
-        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
-    }
-
-    #[test]
-    fn parse_missing_name() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let item_id = format!("table_{uuid}__public__");
-        assert!(Sidebar::parse_table_or_view_id(&item_id).is_none());
-    }
-
-    #[test]
-    fn parse_too_short() {
-        let item_id = "table_abc__public__users";
-        assert!(Sidebar::parse_table_or_view_id(item_id).is_none());
+    fn database_id_roundtrip() {
+        let id = SchemaNodeId::Database {
+            profile_id: test_uuid(),
+            name: "my_database".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
     }
 }

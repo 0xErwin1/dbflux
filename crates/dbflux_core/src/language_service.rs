@@ -1,5 +1,70 @@
 use crate::QueryLanguage;
 
+/// Severity level for a diagnostic message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+/// Byte range within a query string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Structured diagnostic message from query validation.
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+    pub hint: Option<String>,
+    pub code: Option<String>,
+    pub range: Option<TextRange>,
+}
+
+impl Diagnostic {
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            severity: DiagnosticSeverity::Error,
+            message: message.into(),
+            hint: None,
+            code: None,
+            range: None,
+        }
+    }
+
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    pub fn with_range(mut self, range: TextRange) -> Self {
+        self.range = Some(range);
+        self
+    }
+}
+
+impl From<String> for Diagnostic {
+    fn from(message: String) -> Self {
+        Self::error(message)
+    }
+}
+
+impl From<&str> for Diagnostic {
+    fn from(message: &str) -> Self {
+        Self::error(message)
+    }
+}
+
 /// Categories of potentially dangerous queries that require user confirmation.
 ///
 /// Each variant maps to a destructive pattern detected by heuristic analysis.
@@ -51,7 +116,7 @@ pub enum ValidationResult {
     Valid,
 
     /// Query has a syntax error.
-    SyntaxError(String),
+    SyntaxError(Diagnostic),
 
     /// Query uses syntax from the wrong language (e.g., SQL on a MongoDB connection).
     WrongLanguage {

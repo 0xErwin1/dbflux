@@ -3,11 +3,11 @@ use bitflags::bitflags;
 use crate::{
     CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues, KeyDelete, KeySet, LanguageService, NoOpCodeGenerator, QueryHandle,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
-    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, KeyDelete, KeySet, LanguageService,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -409,9 +409,9 @@ pub trait Connection: Send + Sync {
     /// Browse a table with pagination, ordering, and optional filter.
     ///
     /// The driver translates the request into its native query syntax.
-    /// The default implementation builds SQL using `TableBrowseRequest::build_sql_for_kind`.
+    /// The default implementation builds SQL using `TableBrowseRequest::build_sql_with`.
     fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
-        let sql = request.build_sql_for_kind(self.kind());
+        let sql = request.build_sql_with(self.dialect());
         let mut query_request = QueryRequest::new(sql);
 
         if let Some(ref schema) = request.table.schema {
@@ -425,7 +425,7 @@ pub trait Connection: Send + Sync {
     ///
     /// The default implementation builds a `SELECT COUNT(*)` query.
     fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
-        let quoted_table = request.table.quoted_for_kind(self.kind());
+        let quoted_table = request.table.quoted_with(self.dialect());
         let sql = if let Some(ref f) = request.filter {
             let trimmed = f.trim();
             if trimmed.is_empty() {
@@ -472,6 +472,26 @@ pub trait Connection: Send + Sync {
     fn count_collection(&self, _request: &CollectionCountRequest) -> Result<u64, DbError> {
         Err(DbError::NotSupported(
             "Collection counting not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Explain a query execution plan for a table or custom query.
+    ///
+    /// If `request.query` is `None`, explains a `SELECT * FROM table LIMIT 100`.
+    /// Drivers override this with their native EXPLAIN syntax.
+    fn explain(&self, _request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        Err(DbError::NotSupported(
+            "EXPLAIN not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Describe a table's structure (columns, types, constraints).
+    ///
+    /// Returns the result as a query result set, similar to what `DESCRIBE table`
+    /// would return in MySQL or `\d table` in psql.
+    fn describe_table(&self, _request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        Err(DbError::NotSupported(
+            "DESCRIBE not supported by this driver".to_string(),
         ))
     }
 

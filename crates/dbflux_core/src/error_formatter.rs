@@ -1,4 +1,5 @@
 use crate::DbError;
+use std::fmt;
 
 /// Formatted error with structured information for display.
 #[derive(Debug, Clone, Default)]
@@ -17,6 +18,9 @@ pub struct FormattedError {
 
     /// Location information if available.
     pub location: Option<ErrorLocation>,
+
+    /// Whether the error is retriable (e.g., transient network issues).
+    pub retriable: bool,
 }
 
 impl FormattedError {
@@ -44,6 +48,11 @@ impl FormattedError {
 
     pub fn with_location(mut self, location: ErrorLocation) -> Self {
         self.location = Some(location);
+        self
+    }
+
+    pub fn with_retriable(mut self, retriable: bool) -> Self {
+        self.retriable = retriable;
         self
     }
 
@@ -78,15 +87,104 @@ impl FormattedError {
         parts.join(". ")
     }
 
-    /// Convert to DbError::QueryFailed.
+    /// Classify into the appropriate `DbError` variant for query errors.
+    ///
+    /// Uses SQLSTATE codes (when present) to route to semantic variants:
+    /// - `42xxx` -> `SyntaxError`
+    /// - `23xxx` -> `ConstraintViolation`
+    /// - `28xxx` -> `AuthFailed`
+    /// - `42501` / `42000` (with permission context) -> `PermissionDenied`
+    /// - `42P01` / `1146` -> `ObjectNotFound`
+    /// - Everything else -> `QueryFailed`
     pub fn into_query_error(self) -> DbError {
-        DbError::QueryFailed(self.to_display_string())
+        if let Some(variant) = self.code.as_deref().and_then(classify_query_sqlstate) {
+            return match variant {
+                ErrorClass::Syntax => DbError::SyntaxError(self),
+                ErrorClass::Constraint => DbError::ConstraintViolation(self),
+                ErrorClass::Auth => DbError::AuthFailed(self),
+                ErrorClass::Permission => DbError::PermissionDenied(self),
+                ErrorClass::NotFound => DbError::ObjectNotFound(self),
+            };
+        }
+
+        DbError::QueryFailed(self)
     }
 
-    /// Convert to DbError::ConnectionFailed.
+    /// Classify into the appropriate `DbError` variant for connection errors.
+    ///
+    /// Uses SQLSTATE codes (when present) to route to semantic variants:
+    /// - `28xxx` -> `AuthFailed`
+    /// - Everything else -> `ConnectionFailed`
     pub fn into_connection_error(self) -> DbError {
-        DbError::ConnectionFailed(self.to_display_string())
+        if self.code.as_deref().is_some_and(|c| c.starts_with("28")) {
+            return DbError::AuthFailed(self);
+        }
+
+        DbError::ConnectionFailed(self)
     }
+}
+
+impl fmt::Display for FormattedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_display_string())
+    }
+}
+
+impl From<String> for FormattedError {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
+}
+
+impl From<&str> for FormattedError {
+    fn from(message: &str) -> Self {
+        Self::new(message)
+    }
+}
+
+enum ErrorClass {
+    Syntax,
+    Constraint,
+    Auth,
+    Permission,
+    NotFound,
+}
+
+/// Classify a SQLSTATE or MySQL error code into a semantic error class.
+fn classify_query_sqlstate(code: &str) -> Option<ErrorClass> {
+    // Exact matches first (more specific)
+    match code {
+        // PostgreSQL: insufficient_privilege
+        "42501" => return Some(ErrorClass::Permission),
+        // PostgreSQL: undefined_table
+        "42P01" => return Some(ErrorClass::NotFound),
+        // PostgreSQL: undefined_column
+        "42703" => return Some(ErrorClass::NotFound),
+        // PostgreSQL: undefined_function
+        "42883" => return Some(ErrorClass::NotFound),
+        // MySQL: Table doesn't exist
+        "1146" => return Some(ErrorClass::NotFound),
+        // MySQL: Unknown column
+        "1054" => return Some(ErrorClass::NotFound),
+        // MySQL: Access denied
+        "1044" | "1045" => return Some(ErrorClass::Auth),
+        _ => {}
+    }
+
+    // Class-level matching (first 2 characters of SQLSTATE)
+    if code.len() >= 2 {
+        match &code[..2] {
+            // Class 23: Integrity constraint violation
+            "23" => return Some(ErrorClass::Constraint),
+            // Class 28: Invalid authorization specification
+            "28" => return Some(ErrorClass::Auth),
+            // Class 42: Syntax error or access rule violation
+            "42" => return Some(ErrorClass::Syntax),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// Location information for database errors.
@@ -242,6 +340,21 @@ mod tests {
     }
 
     #[test]
+    fn test_formatted_error_display_trait() {
+        let err = FormattedError::new("test error");
+        assert_eq!(format!("{}", err), "test error");
+    }
+
+    #[test]
+    fn test_formatted_error_from_string() {
+        let err: FormattedError = "hello".into();
+        assert_eq!(err.message, "hello");
+
+        let err: FormattedError = String::from("world").into();
+        assert_eq!(err.message, "world");
+    }
+
+    #[test]
     fn test_formatted_error_with_location() {
         let err = FormattedError::new("duplicate key")
             .with_location(
@@ -255,6 +368,87 @@ mod tests {
             err.to_display_string(),
             "duplicate key. Table: users. Constraint: users_pkey. Code: 23505"
         );
+    }
+
+    #[test]
+    fn test_formatted_error_retriable() {
+        let err = FormattedError::new("timeout").with_retriable(true);
+        assert!(err.retriable);
+
+        let err = FormattedError::new("syntax error");
+        assert!(!err.retriable);
+    }
+
+    #[test]
+    fn test_classify_constraint_violation() {
+        let err = FormattedError::new("duplicate key").with_code("23505");
+        match err.into_query_error() {
+            DbError::ConstraintViolation(f) => assert_eq!(f.message, "duplicate key"),
+            other => panic!("Expected ConstraintViolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_syntax_error() {
+        let err = FormattedError::new("syntax error").with_code("42601");
+        match err.into_query_error() {
+            DbError::SyntaxError(f) => assert_eq!(f.message, "syntax error"),
+            other => panic!("Expected SyntaxError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_permission_denied() {
+        let err = FormattedError::new("insufficient privilege").with_code("42501");
+        match err.into_query_error() {
+            DbError::PermissionDenied(f) => assert_eq!(f.message, "insufficient privilege"),
+            other => panic!("Expected PermissionDenied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_object_not_found() {
+        let err = FormattedError::new("table not found").with_code("42P01");
+        match err.into_query_error() {
+            DbError::ObjectNotFound(f) => assert_eq!(f.message, "table not found"),
+            other => panic!("Expected ObjectNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_auth_failed() {
+        let err = FormattedError::new("invalid password").with_code("28P01");
+        match err.into_query_error() {
+            DbError::AuthFailed(f) => assert_eq!(f.message, "invalid password"),
+            other => panic!("Expected AuthFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_auth_connection() {
+        let err = FormattedError::new("invalid password").with_code("28P01");
+        match err.into_connection_error() {
+            DbError::AuthFailed(f) => assert_eq!(f.message, "invalid password"),
+            other => panic!("Expected AuthFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_no_code_defaults_to_query_failed() {
+        let err = FormattedError::new("some error");
+        match err.into_query_error() {
+            DbError::QueryFailed(f) => assert_eq!(f.message, "some error"),
+            other => panic!("Expected QueryFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_mysql_not_found() {
+        let err = FormattedError::new("table not found").with_code("1146");
+        match err.into_query_error() {
+            DbError::ObjectNotFound(f) => assert_eq!(f.message, "table not found"),
+            other => panic!("Expected ObjectNotFound, got {:?}", other),
+        }
     }
 
     #[test]

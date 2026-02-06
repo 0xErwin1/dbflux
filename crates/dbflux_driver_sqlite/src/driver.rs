@@ -7,8 +7,8 @@ use std::time::Instant;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
-    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DriverCapabilities,
-    DriverFormDef, DriverMetadata, DropIndexRequest, ForeignKeyInfo, FormValues, FormattedError,
+    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
+    DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo, FormValues, FormattedError,
     Icon, IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
     QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
     RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
@@ -173,7 +173,7 @@ impl DbDriver for SqliteDriver {
         };
 
         let conn = RusqliteConnection::open(&path)
-            .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         let interrupt_handle = conn.get_interrupt_handle();
 
@@ -196,10 +196,10 @@ impl DbDriver for SqliteDriver {
         };
 
         let conn = RusqliteConnection::open(&path)
-            .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         conn.execute_batch("SELECT 1")
-            .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         Ok(())
     }
@@ -310,7 +310,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
         conn.execute_batch("SELECT 1")
             .map_err(|e| format_sqlite_query_error(&e))
     }
@@ -326,7 +326,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let stmt_result = conn.prepare(&req.sql);
 
@@ -430,7 +430,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let tables = self.get_tables(&conn)?;
         let views = self.get_views(&conn)?;
@@ -470,7 +470,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let columns = self.get_columns(&conn, table)?;
         let indexes = self.get_indexes(&conn, table)?;
@@ -504,7 +504,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         self.get_all_indexes(&conn)
     }
@@ -517,7 +517,7 @@ impl Connection for SqliteConnection {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         self.get_all_foreign_keys(&conn)
     }
@@ -544,27 +544,27 @@ impl Connection for SqliteConnection {
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         if !patch.identity.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot update row: invalid row identity (missing primary key)".to_string(),
             ));
         }
 
         if !patch.has_changes() {
-            return Err(DbError::QueryFailed("No changes to save".to_string()));
+            return Err(DbError::query_failed("No changes to save".to_string()));
         }
 
         let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
 
         let update_sql = builder
             .build_update(patch, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let affected = conn
             .execute(&update_sql, [])
@@ -576,7 +576,7 @@ impl Connection for SqliteConnection {
 
         let select_sql = builder
             .build_select_by_identity(patch.schema.as_deref(), &patch.table, &patch.identity)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[UPDATE] Re-querying: {}", select_sql);
 
@@ -603,7 +603,7 @@ impl Connection for SqliteConnection {
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
         if !insert.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot insert row: no columns specified".to_string(),
             ));
         }
@@ -612,14 +612,14 @@ impl Connection for SqliteConnection {
 
         let insert_sql = builder
             .build_insert(insert, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         conn.execute(&insert_sql, [])
             .map_err(|e| format_sqlite_query_error(&e))?;
@@ -657,7 +657,7 @@ impl Connection for SqliteConnection {
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
         if !delete.is_valid() {
-            return Err(DbError::QueryFailed(
+            return Err(DbError::query_failed(
                 "Cannot delete row: invalid row identity (missing primary key)".to_string(),
             ));
         }
@@ -666,14 +666,14 @@ impl Connection for SqliteConnection {
 
         let select_sql = builder
             .build_select_by_identity(delete.schema.as_deref(), &delete.table, &delete.identity)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build SELECT query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?;
 
         log::debug!("[DELETE] Fetching row: {}", select_sql);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         let returning_row = {
             let mut stmt = conn
@@ -696,7 +696,7 @@ impl Connection for SqliteConnection {
 
         let delete_sql = builder
             .build_delete(delete, false)
-            .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string()))?;
+            .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 
@@ -711,6 +711,27 @@ impl Connection for SqliteConnection {
         Ok(CrudResult::new(affected as u64, returning_row))
     }
 
+
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let query = match &request.query {
+            Some(q) => q.clone(),
+            None => format!(
+                "SELECT * FROM {} LIMIT 100",
+                request.table.quoted_with(self.dialect())
+            ),
+        };
+
+        let sql = format!("EXPLAIN QUERY PLAN {}", query);
+        self.execute(&QueryRequest::new(sql))
+    }
+
+    fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
+        let sql = format!(
+            "PRAGMA table_info({})",
+            self.dialect().quote_identifier(&request.table.name)
+        );
+        self.execute(&QueryRequest::new(sql))
+    }
     fn dialect(&self) -> &dyn SqlDialect {
         &SQLITE_DIALECT
     }
