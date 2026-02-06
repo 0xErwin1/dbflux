@@ -844,7 +844,10 @@ impl DataGridPanel {
                         cx.notify();
                     }
                 }
-                DocumentTreeEvent::ContextMenuRequested { doc_index, position } => {
+                DocumentTreeEvent::ContextMenuRequested {
+                    doc_index,
+                    position,
+                } => {
                     // Set context menu state directly (same pattern as DataTableEvent::ContextMenuRequested)
                     this.context_menu = Some(TableContextMenu {
                         row: *doc_index,
@@ -4256,10 +4259,9 @@ impl DataGridPanel {
                     }),
             )
             // Center: pagination (for Table and Collection sources)
-            .child(div().flex().items_center().gap(Spacing::SM).when(
-                is_paginated && pagination_info.is_some(),
-                |d| {
-                    let pagination = pagination_info.clone().unwrap();
+            .child(div().flex().items_center().gap(Spacing::SM).when_some(
+                pagination_info.clone().filter(|_| is_paginated),
+                |d, pagination| {
                     let page = pagination.current_page();
                     let offset = pagination.offset();
                     let start = offset + 1;
@@ -4772,158 +4774,159 @@ impl DataGridPanel {
             visual_index += 1; // Separator takes an index slot
 
             // "Generate SQL" submenu trigger
-        let sql_submenu_open = menu.sql_submenu_open;
-        let submenu_bg = theme.popover;
-        let submenu_border = theme.border;
-        let submenu_fg = theme.foreground;
-        let submenu_hover = theme.secondary;
-        let gen_sql_index = visual_index; // Index for Generate SQL item
-        let gen_sql_selected = selected_index == gen_sql_index;
-        let submenu_selected_index = menu.submenu_selected_index;
+            let sql_submenu_open = menu.sql_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let gen_sql_index = visual_index; // Index for Generate SQL item
+            let gen_sql_selected = selected_index == gen_sql_index;
+            let submenu_selected_index = menu.submenu_selected_index;
 
-        menu_items.push(
-            div()
-                .id("generate-sql-trigger")
-                .relative()
-                .flex()
-                .items_center()
-                .justify_between()
-                .h(Heights::ROW_COMPACT)
-                .px(Spacing::SM)
-                .mx(Spacing::XS)
-                .rounded(Radii::SM)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .text_color(if gen_sql_selected && !sql_submenu_open {
-                    theme.accent_foreground
-                } else {
-                    submenu_fg
-                })
-                .when(sql_submenu_open, |d| d.bg(submenu_hover))
-                .when(gen_sql_selected && !sql_submenu_open, |d| {
-                    d.bg(theme.accent)
-                })
-                .when(!gen_sql_selected && !sql_submenu_open, |d| {
-                    d.hover(|d| d.bg(submenu_hover))
-                })
-                .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if let Some(ref mut menu) = this.context_menu
-                        && menu.selected_index != gen_sql_index
-                        && !menu.sql_submenu_open
-                    {
-                        menu.selected_index = gen_sql_index;
-                        cx.notify();
-                    }
-                }))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(ref mut menu) = this.context_menu {
-                        menu.sql_submenu_open = !menu.sql_submenu_open;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    }
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(svg().path(AppIcon::Code.path()).size_4().text_color(
-                            if gen_sql_selected && !sql_submenu_open {
+            menu_items.push(
+                div()
+                    .id("generate-sql-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if gen_sql_selected && !sql_submenu_open {
+                        theme.accent_foreground
+                    } else {
+                        submenu_fg
+                    })
+                    .when(sql_submenu_open, |d| d.bg(submenu_hover))
+                    .when(gen_sql_selected && !sql_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!gen_sql_selected && !sql_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != gen_sql_index
+                            && !menu.sql_submenu_open
+                        {
+                            menu.selected_index = gen_sql_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.sql_submenu_open = !menu.sql_submenu_open;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(svg().path(AppIcon::Code.path()).size_4().text_color(
+                                if gen_sql_selected && !sql_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                },
+                            ))
+                            .child("Generate SQL"),
+                    )
+                    .child(
+                        svg()
+                            .path(AppIcon::ChevronRight.path())
+                            .size_4()
+                            .text_color(if gen_sql_selected && !sql_submenu_open {
                                 theme.accent_foreground
                             } else {
-                                submenu_fg
-                            },
-                        ))
-                        .child("Generate SQL"),
-                )
-                .child(
-                    svg()
-                        .path(AppIcon::ChevronRight.path())
-                        .size_4()
-                        .text_color(if gen_sql_selected && !sql_submenu_open {
-                            theme.accent_foreground
-                        } else {
-                            theme.muted_foreground
-                        }),
-                )
-                // Submenu appears to the right
-                .when(sql_submenu_open, |d: Stateful<Div>| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .left(px(172.0)) // menu_width - some padding
-                            .top(px(-4.0))
-                            .w(px(160.0))
-                            .bg(submenu_bg)
-                            .border_1()
-                            .border_color(submenu_border)
-                            .rounded(Radii::MD)
-                            .shadow_lg()
-                            .py(Spacing::XS)
-                            // Capture clicks within submenu bounds (prevents overlay from closing menu)
-                            .occlude()
-                            // Stop click from bubbling to parent "Generate SQL" trigger
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .children(
-                                [
-                                    ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
-                                    ("INSERT", ContextMenuAction::GenerateInsert),
-                                    ("UPDATE", ContextMenuAction::GenerateUpdate),
-                                    ("DELETE", ContextMenuAction::GenerateDelete),
-                                ]
-                                .into_iter()
-                                .enumerate()
-                                .map(|(idx, (label, action))| {
-                                    let is_submenu_selected = idx == submenu_selected_index;
-                                    div()
-                                        .id(SharedString::from(label))
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::SM)
-                                        .h(Heights::ROW_COMPACT)
-                                        .px(Spacing::SM)
-                                        .mx(Spacing::XS)
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .text_size(FontSizes::SM)
-                                        .text_color(if is_submenu_selected {
-                                            theme.accent_foreground
-                                        } else {
-                                            submenu_fg
-                                        })
-                                        .when(is_submenu_selected, |d| d.bg(theme.accent))
-                                        .when(!is_submenu_selected, |d| {
-                                            d.hover(|d| d.bg(submenu_hover))
-                                        })
-                                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                                            if let Some(ref mut menu) = this.context_menu
-                                                && menu.submenu_selected_index != idx
-                                            {
-                                                menu.submenu_selected_index = idx;
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.handle_context_menu_action(action, window, cx);
-                                        }))
-                                        .child(
-                                            svg().path(AppIcon::Code.path()).size_4().text_color(
-                                                if is_submenu_selected {
-                                                    theme.accent_foreground
-                                                } else {
-                                                    theme.muted_foreground
-                                                },
-                                            ),
-                                        )
-                                        .child(label)
-                                })
-                                .collect::<Vec<_>>(),
-                            ),
+                                theme.muted_foreground
+                            }),
                     )
-                })
-                .into_any_element(),
+                    // Submenu appears to the right
+                    .when(sql_submenu_open, |d: Stateful<Div>| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0)) // menu_width - some padding
+                                .top(px(-4.0))
+                                .w(px(160.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                // Capture clicks within submenu bounds (prevents overlay from closing menu)
+                                .occlude()
+                                // Stop click from bubbling to parent "Generate SQL" trigger
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    [
+                                        ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
+                                        ("INSERT", ContextMenuAction::GenerateInsert),
+                                        ("UPDATE", ContextMenuAction::GenerateUpdate),
+                                        ("DELETE", ContextMenuAction::GenerateDelete),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(idx, (label, action))| {
+                                        let is_submenu_selected = idx == submenu_selected_index;
+                                        div()
+                                            .id(SharedString::from(label))
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .h(Heights::ROW_COMPACT)
+                                            .px(Spacing::SM)
+                                            .mx(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            })
+                                            .when(is_submenu_selected, |d| d.bg(theme.accent))
+                                            .when(!is_submenu_selected, |d| {
+                                                d.hover(|d| d.bg(submenu_hover))
+                                            })
+                                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                if let Some(ref mut menu) = this.context_menu
+                                                    && menu.submenu_selected_index != idx
+                                                {
+                                                    menu.submenu_selected_index = idx;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.handle_context_menu_action(action, window, cx);
+                                            }))
+                                            .child(
+                                                svg()
+                                                    .path(AppIcon::Code.path())
+                                                    .size_4()
+                                                    .text_color(if is_submenu_selected {
+                                                        theme.accent_foreground
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    }),
+                                            )
+                                            .child(label)
+                                    })
+                                    .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
             );
         }
 

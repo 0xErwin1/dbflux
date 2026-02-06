@@ -46,12 +46,6 @@ impl ProfileStore {
     }
 }
 
-impl Default for ProfileStore {
-    fn default() -> Self {
-        Self::new().expect("Failed to create profile store")
-    }
-}
-
 impl SshTunnelStore {
     pub fn new() -> Result<Self, DbError> {
         let config_dir = dirs::config_dir().ok_or_else(|| {
@@ -85,11 +79,5 @@ impl SshTunnelStore {
         fs::write(&self.path, content).map_err(DbError::IoError)?;
 
         Ok(())
-    }
-}
-
-impl Default for SshTunnelStore {
-    fn default() -> Self {
-        Self::new().expect("Failed to create SSH tunnel store")
     }
 }

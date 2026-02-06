@@ -721,7 +721,10 @@ impl DocumentTreeState {
         };
 
         let doc_index = cursor.doc_index().unwrap_or(0);
-        cx.emit(DocumentTreeEvent::ContextMenuRequested { doc_index, position });
+        cx.emit(DocumentTreeEvent::ContextMenuRequested {
+            doc_index,
+            position,
+        });
     }
 
     /// Double-click action: preview (root), expand (container), or edit (scalar).

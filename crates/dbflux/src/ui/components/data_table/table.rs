@@ -509,7 +509,13 @@ impl gpui::Render for DataTable {
                 let scroll_sync = self.scroll_sync.clone();
                 canvas(
                     move |bounds, _, cx| {
-                        let mut sync = scroll_sync.lock().unwrap();
+                        let mut sync = match scroll_sync.lock() {
+                            Ok(guard) => guard,
+                            Err(poison_err) => {
+                                log::warn!("Scroll sync mutex poisoned, recovering");
+                                poison_err.into_inner()
+                            }
+                        };
                         state_entity.update(cx, |state, cx| {
                             let new_size = bounds.size;
                             let viewport_changed = new_size != sync.last_viewport_size;

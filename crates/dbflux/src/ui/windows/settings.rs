@@ -2153,6 +2153,9 @@ impl SettingsWindow {
             && row_idx + 1 < rows.len()
         {
             let next_row = &rows[row_idx + 1];
+            if next_row.is_empty() {
+                return;
+            }
             let new_col = col_idx.min(next_row.len() - 1);
             self.ssh_form_field = next_row[new_col];
         }
@@ -2165,6 +2168,9 @@ impl SettingsWindow {
             && row_idx > 0
         {
             let prev_row = &rows[row_idx - 1];
+            if prev_row.is_empty() {
+                return;
+            }
             let new_col = col_idx.min(prev_row.len() - 1);
             self.ssh_form_field = prev_row[new_col];
         }
@@ -2211,7 +2217,7 @@ impl SettingsWindow {
             let row = &rows[row_idx];
             if col_idx + 1 < row.len() {
                 self.ssh_form_field = row[col_idx + 1];
-            } else if row_idx + 1 < rows.len() {
+            } else if row_idx + 1 < rows.len() && !rows[row_idx + 1].is_empty() {
                 self.ssh_form_field = rows[row_idx + 1][0];
             }
         }
@@ -2225,7 +2231,9 @@ impl SettingsWindow {
                 self.ssh_form_field = rows[row_idx][col_idx - 1];
             } else if row_idx > 0 {
                 let prev_row = &rows[row_idx - 1];
-                self.ssh_form_field = prev_row[prev_row.len() - 1];
+                if let Some(last_field) = prev_row.last() {
+                    self.ssh_form_field = *last_field;
+                }
             }
         }
     }

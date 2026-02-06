@@ -373,7 +373,7 @@ impl SqlQueryDocument {
             let result = task.await;
 
             cx.update(|cx| {
-                let _ = this.update(cx, |doc, cx| {
+                this.update(cx, |doc, cx| {
                     // Store pending result to be processed in render (where we have window)
                     doc.pending_result = Some(PendingQueryResult {
                         exec_id,
@@ -381,7 +381,8 @@ impl SqlQueryDocument {
                         result,
                     });
                     cx.notify();
-                });
+                })
+                .ok();
             })
             .ok();
         })
