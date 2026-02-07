@@ -1,12 +1,11 @@
 use crate::app::AppState;
-use crate::keymap::ContextId;
+use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::{
     ColumnInfo, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, TableInfo,
     Value,
 };
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -407,255 +406,183 @@ impl Render for SqlPreviewModal {
         let use_fqn = self.settings.use_fully_qualified_names;
         let compact = self.settings.compact_sql;
 
-        div()
-            .id("sql-preview-modal")
-            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
-            .track_focus(&self.focus_handle)
-            .absolute()
-            .inset_0()
-            .bg(gpui::black().opacity(0.5))
-            .flex()
-            .justify_center()
-            .items_start()
-            .pt(px(80.0))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.close(cx);
-                }),
-            )
-            .on_action(cx.listener(|this, _: &crate::keymap::Cancel, _, cx| {
-                this.close(cx);
-            }))
+        let entity = cx.entity().downgrade();
+        let close = move |_window: &mut Window, cx: &mut App| {
+            entity.update(cx, |this, cx| this.close(cx)).ok();
+        };
+
+        // Type badge for header
+        let type_badge = div()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .rounded(Radii::SM)
+            .bg(theme.secondary)
+            .text_size(FontSizes::XS)
+            .text_color(theme.muted_foreground)
+            .child(generation_type.label());
+
+        let mut frame = ModalFrame::new("sql-preview-modal", &self.focus_handle, close)
+            .title("SQL Preview")
+            .icon(AppIcon::Code)
+            .width(px(1000.0))
+            .max_height(px(800.0))
+            .header_extra(type_badge)
+            // SQL Editor
             .child(
                 div()
-                    .w(px(1000.0))
-                    .max_h(px(800.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
-                    .shadow_lg()
+                    .flex_1()
+                    .p(Spacing::MD)
+                    .min_h(px(200.0))
+                    .max_h(px(300.0))
                     .overflow_hidden()
+                    .child(Input::new(&sql_display).w_full().h_full()),
+            );
+
+        // Options (only for DML operations)
+        if !is_ddl {
+            frame = frame.child(
+                div()
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .border_t_1()
+                    .border_color(theme.border)
                     .flex()
-                    .flex_col()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    // Header
+                    .items_center()
+                    .gap(Spacing::LG)
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(theme.muted_foreground)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Options"),
+                    )
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::Code.path())
-                                            .size_4()
-                                            .text_color(theme.primary),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.foreground)
-                                            .child("SQL Preview"),
-                                    )
-                                    .child(
-                                        div()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(Radii::SM)
-                                            .bg(theme.secondary)
-                                            .text_size(FontSizes::XS)
-                                            .text_color(theme.muted_foreground)
-                                            .child(generation_type.label()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id("close-btn")
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size(Heights::ICON_SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close(cx);
-                                    }))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::X.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground),
-                                    ),
-                            ),
-                    )
-                    // SQL Editor
-                    .child(
-                        div()
-                            .flex_1()
-                            .p(Spacing::MD)
-                            .min_h(px(200.0))
-                            .max_h(px(300.0))
-                            .overflow_hidden()
-                            .child(Input::new(&sql_display).w_full().h_full()),
-                    )
-                    // Options (only for DML operations)
-                    .when(!is_ddl, |el: Div| {
-                        el.child(
-                            div()
-                                .px(Spacing::MD)
-                                .py(Spacing::SM)
-                                .border_t_1()
-                                .border_color(theme.border)
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::LG)
-                                .child(
-                                    div()
-                                        .text_size(FontSizes::XS)
-                                        .text_color(theme.muted_foreground)
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Options"),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::SM)
-                                        .child(
-                                            Checkbox::new("fqn-checkbox")
-                                                .checked(use_fqn)
-                                                .small()
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.toggle_fully_qualified(window, cx);
-                                                })),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(FontSizes::SM)
-                                                .text_color(theme.foreground)
-                                                .child("Fully qualified names"),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::SM)
-                                        .child(
-                                            Checkbox::new("compact-checkbox")
-                                                .checked(compact)
-                                                .small()
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.toggle_compact(window, cx);
-                                                })),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(FontSizes::SM)
-                                                .text_color(theme.foreground)
-                                                .child("Compact SQL"),
-                                        ),
-                                ),
-                        )
-                    })
-                    // Footer
-                    .child(
-                        div()
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .justify_end()
                             .gap(Spacing::SM)
                             .child(
-                                div()
-                                    .id("refresh-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::MD)
-                                    .py(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
+                                Checkbox::new("fqn-checkbox")
+                                    .checked(use_fqn)
+                                    .small()
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.regenerate_sql(window, cx);
-                                    }))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::RefreshCcw.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground),
-                                    )
-                                    .child("Refresh"),
+                                        this.toggle_fully_qualified(window, cx);
+                                    })),
                             )
                             .child(
                                 div()
-                                    .id("copy-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::MD)
-                                    .py(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.primary)
-                                    .hover(|d| d.opacity(0.9))
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.primary_foreground)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.copy_to_clipboard(cx);
-                                        this.close(cx);
-                                    }))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::Layers.path())
-                                            .size_4()
-                                            .text_color(theme.primary_foreground),
-                                    )
-                                    .child("Copy"),
-                            )
-                            .child(
-                                div()
-                                    .id("close-footer-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::MD)
-                                    .py(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
                                     .text_size(FontSizes::SM)
                                     .text_color(theme.foreground)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close(cx);
-                                    }))
-                                    .child("Close"),
+                                    .child("Fully qualified names"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Checkbox::new("compact-checkbox")
+                                    .checked(compact)
+                                    .small()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_compact(window, cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .child("Compact SQL"),
                             ),
                     ),
-            )
-            .into_any_element()
+            );
+        }
+
+        // Footer
+        frame = frame.child(
+            div()
+                .px(Spacing::MD)
+                .py(Spacing::SM)
+                .border_t_1()
+                .border_color(theme.border)
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(Spacing::SM)
+                .child(
+                    div()
+                        .id("refresh-btn")
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .px(Spacing::MD)
+                        .py(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(theme.secondary)
+                        .hover(|d| d.bg(theme.muted))
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.foreground)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.regenerate_sql(window, cx);
+                        }))
+                        .child(
+                            svg()
+                                .path(AppIcon::RefreshCcw.path())
+                                .size_4()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child("Refresh"),
+                )
+                .child(
+                    div()
+                        .id("copy-btn")
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .px(Spacing::MD)
+                        .py(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(theme.primary)
+                        .hover(|d| d.opacity(0.9))
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.primary_foreground)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.copy_to_clipboard(cx);
+                            this.close(cx);
+                        }))
+                        .child(
+                            svg()
+                                .path(AppIcon::Layers.path())
+                                .size_4()
+                                .text_color(theme.primary_foreground),
+                        )
+                        .child("Copy"),
+                )
+                .child(
+                    div()
+                        .id("close-footer-btn")
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .px(Spacing::MD)
+                        .py(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(theme.secondary)
+                        .hover(|d| d.bg(theme.muted))
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.foreground)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close(cx);
+                        }))
+                        .child("Close"),
+                ),
+        );
+
+        frame.render(cx)
     }
 }
 
