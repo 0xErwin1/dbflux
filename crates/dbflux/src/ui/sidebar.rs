@@ -311,10 +311,7 @@ pub struct Sidebar {
     add_menu_open: bool,
 }
 
-struct PendingToast {
-    message: String,
-    is_error: bool,
-}
+use crate::ui::toast::PendingToast;
 
 struct DeleteConfirmState {
     item_id: String,

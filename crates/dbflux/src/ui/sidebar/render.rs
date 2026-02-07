@@ -158,14 +158,7 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(toast) = self.pending_toast.take() {
-            use crate::ui::toast::ToastExt;
-            if toast.is_error {
-                cx.toast_error(toast.message, window);
-            } else {
-                cx.toast_success(toast.message, window);
-            }
-        }
+        crate::ui::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
 
         if let Some(item_id) = self.pending_rename_item.take() {
             self.start_rename(&item_id, window, cx);

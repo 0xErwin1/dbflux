@@ -218,6 +218,25 @@ pub trait ToastExt {
     fn toast_error(&mut self, message: impl Into<String>, window: &mut Window);
 }
 
+pub struct PendingToast {
+    pub message: String,
+    pub is_error: bool,
+}
+
+pub fn flush_pending_toast<T>(
+    toast: Option<PendingToast>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    if let Some(toast) = toast {
+        if toast.is_error {
+            cx.toast_error(toast.message, window);
+        } else {
+            cx.toast_success(toast.message, window);
+        }
+    }
+}
+
 impl<T> ToastExt for Context<'_, T> {
     fn toast_success(&mut self, message: impl Into<String>, _window: &mut Window) {
         let host = self.global::<ToastGlobal>().host.clone();

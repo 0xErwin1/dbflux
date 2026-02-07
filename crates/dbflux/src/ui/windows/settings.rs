@@ -1,7 +1,8 @@
 use crate::app::{AppState, AppStateChanged};
 use crate::keymap::{ContextId, KeyChord, Modifiers, default_keymap};
 use crate::ui::icons::AppIcon;
-use dbflux_core::{SshAuthMethod, SshTunnelConfig, SshTunnelProfile};
+use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
+use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -14,7 +15,6 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName};
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -63,12 +63,6 @@ enum KeybindingsListItem {
         ctx_idx: usize,
         binding_idx: usize,
     },
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SshAuthSelection {
-    PrivateKey,
-    Password,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -296,35 +290,22 @@ impl SettingsWindow {
         }
 
         let host = self.input_ssh_host.read(cx).value().to_string();
-        let port = self.input_ssh_port.read(cx).value().parse().unwrap_or(22);
+        let port_str = self.input_ssh_port.read(cx).value().to_string();
         let user = self.input_ssh_user.read(cx).value().to_string();
+        let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
+        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
+        let password = self.input_ssh_password.read(cx).value().to_string();
 
-        let auth_method = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
-                let key_path = if key_path_str.trim().is_empty() {
-                    None
-                } else {
-                    Some(Self::expand_path(&key_path_str))
-                };
-                SshAuthMethod::PrivateKey { key_path }
-            }
-            SshAuthSelection::Password => SshAuthMethod::Password,
-        };
+        let config = ssh_shared::build_ssh_config(
+            &host,
+            &port_str,
+            &user,
+            self.ssh_auth_method,
+            &key_path_str,
+        );
 
-        let secret = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                self.input_ssh_key_passphrase.read(cx).value().to_string()
-            }
-            SshAuthSelection::Password => self.input_ssh_password.read(cx).value().to_string(),
-        };
-
-        let config = SshTunnelConfig {
-            host,
-            port,
-            user,
-            auth_method,
-        };
+        let secret = ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password)
+            .unwrap_or_default();
 
         let tunnel = SshTunnelProfile {
             id: self.editing_tunnel_id.unwrap_or_else(Uuid::new_v4),
@@ -353,9 +334,8 @@ impl SettingsWindow {
     }
 
     fn test_ssh_tunnel(&mut self, cx: &mut Context<Self>) {
-        // Build SSH config from form inputs
         let host = self.input_ssh_host.read(cx).value().to_string();
-        let port = self.input_ssh_port.read(cx).value().parse().unwrap_or(22);
+        let port_str = self.input_ssh_port.read(cx).value().to_string();
         let user = self.input_ssh_user.read(cx).value().to_string();
 
         if host.trim().is_empty() || user.trim().is_empty() {
@@ -365,36 +345,19 @@ impl SettingsWindow {
             return;
         }
 
-        let auth_method = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
-                let key_path = if key_path_str.trim().is_empty() {
-                    None
-                } else {
-                    Some(Self::expand_path(&key_path_str))
-                };
-                SshAuthMethod::PrivateKey { key_path }
-            }
-            SshAuthSelection::Password => SshAuthMethod::Password,
-        };
+        let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
+        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
+        let password = self.input_ssh_password.read(cx).value().to_string();
 
-        let secret = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                let s = self.input_ssh_key_passphrase.read(cx).value().to_string();
-                if s.is_empty() { None } else { Some(s) }
-            }
-            SshAuthSelection::Password => {
-                let s = self.input_ssh_password.read(cx).value().to_string();
-                if s.is_empty() { None } else { Some(s) }
-            }
-        };
+        let config = ssh_shared::build_ssh_config(
+            &host,
+            &port_str,
+            &user,
+            self.ssh_auth_method,
+            &key_path_str,
+        );
 
-        let config = SshTunnelConfig {
-            host,
-            port,
-            user,
-            auth_method,
-        };
+        let secret = ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password);
 
         self.ssh_test_status = SshTestStatus::Testing;
         self.ssh_test_error = None;
@@ -503,15 +466,6 @@ impl SettingsWindow {
             }
         })
         .detach();
-    }
-
-    fn expand_path(path: &str) -> PathBuf {
-        if let Some(rest) = path.strip_prefix("~/")
-            && let Some(home) = dirs::home_dir()
-        {
-            return home.join(rest);
-        }
-        PathBuf::from(path)
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1573,27 +1527,6 @@ impl SettingsWindow {
             )
     }
 
-    fn render_radio(&self, selected: bool, primary: Hsla, border: Hsla) -> impl IntoElement {
-        div()
-            .w(px(16.0))
-            .h(px(16.0))
-            .rounded_full()
-            .border_2()
-            .border_color(if selected { primary } else { border })
-            .when(selected, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .top(px(3.0))
-                        .left(px(3.0))
-                        .w(px(6.0))
-                        .h(px(6.0))
-                        .rounded_full()
-                        .bg(primary),
-                )
-            })
-    }
-
     fn render_auth_selector_with_focus(
         &self,
         current: SshAuthSelection,
@@ -1643,7 +1576,7 @@ impl SettingsWindow {
                                 this.validate_ssh_form_field();
                                 cx.notify();
                             }))
-                            .child(self.render_radio(
+                            .child(ssh_shared::render_radio_button(
                                 current == SshAuthSelection::PrivateKey,
                                 primary,
                                 border,
@@ -1671,7 +1604,7 @@ impl SettingsWindow {
                                 this.validate_ssh_form_field();
                                 cx.notify();
                             }))
-                            .child(self.render_radio(
+                            .child(ssh_shared::render_radio_button(
                                 current == SshAuthSelection::Password,
                                 primary,
                                 border,

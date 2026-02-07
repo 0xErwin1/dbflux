@@ -207,10 +207,7 @@ struct PendingTotalCount {
     total: u64,
 }
 
-struct PendingToast {
-    message: String,
-    is_error: bool,
-}
+use crate::ui::toast::PendingToast;
 
 struct PendingModalOpen {
     row: usize,
@@ -3255,13 +3252,7 @@ impl Render for DataGridPanel {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
 
-        if let Some(toast) = self.pending_toast.take() {
-            if toast.is_error {
-                cx.toast_error(toast.message, window);
-            } else {
-                cx.toast_success(toast.message, window);
-            }
-        }
+        crate::ui::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
 
         if let Some(requery) = self.pending_requery.take() {
             self.run_table_query(

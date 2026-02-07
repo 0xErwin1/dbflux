@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::keymap::{Command, ContextId, KeyChord, KeymapStack};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::icons::AppIcon;
+use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
     FormTab, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
@@ -19,7 +20,6 @@ use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use log::info;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -469,12 +469,6 @@ enum TestStatus {
     Testing,
     Success,
     Failed,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum SshAuthSelection {
-    PrivateKey,
-    Password,
 }
 
 #[derive(Clone)]
@@ -1114,44 +1108,23 @@ impl ConnectionManagerWindow {
         self.validation_errors.is_empty()
     }
 
-    fn expand_path(path_str: &str) -> PathBuf {
-        if path_str.starts_with("~/") {
-            std::env::var("HOME")
-                .map(|home| PathBuf::from(home).join(&path_str[2..]))
-                .unwrap_or_else(|_| PathBuf::from(path_str))
-        } else {
-            PathBuf::from(path_str)
-        }
-    }
-
     fn build_ssh_config(&self, cx: &Context<Self>) -> Option<SshTunnelConfig> {
         if !self.ssh_enabled {
             return None;
         }
 
         let host = self.input_ssh_host.read(cx).value().to_string();
-        let port = self.input_ssh_port.read(cx).value().parse().unwrap_or(22);
+        let port_str = self.input_ssh_port.read(cx).value().to_string();
         let user = self.input_ssh_user.read(cx).value().to_string();
+        let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
 
-        let auth_method = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                let key_path_str = self.input_ssh_key_path.read(cx).value().to_string();
-                let key_path = if key_path_str.trim().is_empty() {
-                    None
-                } else {
-                    Some(Self::expand_path(&key_path_str))
-                };
-                SshAuthMethod::PrivateKey { key_path }
-            }
-            SshAuthSelection::Password => SshAuthMethod::Password,
-        };
-
-        Some(SshTunnelConfig {
-            host,
-            port,
-            user,
-            auth_method,
-        })
+        Some(ssh_shared::build_ssh_config(
+            &host,
+            &port_str,
+            &user,
+            self.ssh_auth_method,
+            &key_path_str,
+        ))
     }
 
     fn save_current_ssh_as_tunnel(&mut self, cx: &mut Context<Self>) {
@@ -1245,18 +1218,10 @@ impl ConnectionManagerWindow {
             return None;
         }
 
-        let secret = match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                self.input_ssh_key_passphrase.read(cx).value().to_string()
-            }
-            SshAuthSelection::Password => self.input_ssh_password.read(cx).value().to_string(),
-        };
+        let passphrase = self.input_ssh_key_passphrase.read(cx).value().to_string();
+        let password = self.input_ssh_password.read(cx).value().to_string();
 
-        if secret.is_empty() {
-            None
-        } else {
-            Some(secret)
-        }
+        ssh_shared::get_ssh_secret(self.ssh_auth_method, &passphrase, &password)
     }
 
     fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2645,7 +2610,7 @@ impl ConnectionManagerWindow {
                     })
                     .p(px(2.0))
                     .on_click(click_key)
-                    .child(self.render_radio_button(
+                    .child(ssh_shared::render_radio_button(
                         current == SshAuthSelection::PrivateKey,
                         primary,
                         border,
@@ -2667,34 +2632,13 @@ impl ConnectionManagerWindow {
                     })
                     .p(px(2.0))
                     .on_click(click_pw)
-                    .child(self.render_radio_button(
+                    .child(ssh_shared::render_radio_button(
                         current == SshAuthSelection::Password,
                         primary,
                         border,
                     ))
                     .child(div().text_sm().child("Password")),
             )
-    }
-
-    fn render_radio_button(&self, selected: bool, primary: Hsla, border: Hsla) -> impl IntoElement {
-        div()
-            .w(px(16.0))
-            .h(px(16.0))
-            .rounded_full()
-            .border_2()
-            .border_color(if selected { primary } else { border })
-            .when(selected, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .top(px(3.0))
-                        .left(px(3.0))
-                        .w(px(6.0))
-                        .h(px(6.0))
-                        .rounded_full()
-                        .bg(primary),
-                )
-            })
     }
 
     #[allow(clippy::too_many_arguments)]
