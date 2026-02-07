@@ -2912,12 +2912,14 @@ impl DataGridPanel {
     }
 
     /// Returns true if the context menu is currently open.
-    pub fn is_context_menu_open(&self) -> bool {
-        self.context_menu.is_some()
-    }
-
     /// Returns the active context for keyboard handling.
-    pub fn active_context(&self) -> ContextId {
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        if self.cell_editor.read(cx).is_visible()
+            || self.document_preview_modal.read(cx).is_visible()
+        {
+            return ContextId::TextInput;
+        }
+
         if self.context_menu.is_some() {
             ContextId::ContextMenu
         } else if self.edit_state == EditState::Editing {

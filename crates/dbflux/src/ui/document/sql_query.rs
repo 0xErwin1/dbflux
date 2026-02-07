@@ -228,13 +228,16 @@ impl SqlQueryDocument {
             return ContextId::HistoryModal;
         }
 
-        // Check if context menu is open in the active result tab
+        // Check if the active result tab's grid has a modal, context menu, or inline edit open
         if self.focus_mode == SqlQueryFocus::Results
             && let Some(index) = self.active_result_index
             && let Some(tab) = self.result_tabs.get(index)
-            && tab.grid.read(cx).is_context_menu_open()
         {
-            return ContextId::ContextMenu;
+            let grid_context = tab.grid.read(cx).active_context(cx);
+
+            if grid_context != ContextId::Results {
+                return grid_context;
+            }
         }
 
         match self.focus_mode {
