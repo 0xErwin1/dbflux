@@ -60,7 +60,7 @@ impl Sidebar {
         generator_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let is_view = item_id.starts_with("view_");
+        let is_view = parse_node_kind(item_id) == SchemaNodeKind::View;
 
         // For views, generate code directly (no columns needed)
         if is_view {
@@ -266,27 +266,7 @@ impl Sidebar {
     }
 
     pub(super) fn extract_profile_id_from_item(item_id: &str) -> Option<Uuid> {
-        // Try various prefixes used in item IDs
-        let prefixes = [
-            "idx_",
-            "sidx_",
-            "fk_",
-            "sfk_",
-            "customtype_",
-            "table_",
-            "view_",
-        ];
-
-        for prefix in prefixes {
-            if let Some(rest) = item_id.strip_prefix(prefix)
-                && rest.len() >= 36
-                && let Ok(uuid) = Uuid::parse_str(&rest[..36])
-            {
-                return Some(uuid);
-            }
-        }
-
-        None
+        parse_node_id(item_id).and_then(|n| n.profile_id())
     }
 
     pub(super) fn is_enum_type(&self, item_id: &str, cx: &App) -> bool {

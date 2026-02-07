@@ -35,8 +35,10 @@ impl Sidebar {
     }
 
     pub(super) fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        let parsed = parse_node_id(item_id);
+
         // When expanding a table, check if columns need to be lazy loaded
-        if expanded && item_id.starts_with("table_") {
+        if expanded && matches!(parsed, Some(SchemaNodeId::Table { .. })) {
             let pending = PendingAction::ViewSchema {
                 item_id: item_id.to_string(),
             };
@@ -55,18 +57,18 @@ impl Sidebar {
                 profile_id,
                 database,
                 schema,
-            }) = parse_node_id(item_id)
+            }) = &parsed
         {
             let needs_fetch =
                 self.app_state
                     .read(cx)
-                    .needs_schema_types(profile_id, &database, Some(&schema));
+                    .needs_schema_types(*profile_id, database, Some(schema));
 
             if needs_fetch {
                 let pending = PendingAction::ExpandTypesFolder {
                     item_id: item_id.to_string(),
                 };
-                self.spawn_fetch_schema_types(profile_id, &database, Some(&schema), pending, cx);
+                self.spawn_fetch_schema_types(*profile_id, database, Some(schema), pending, cx);
                 return;
             }
         }
@@ -77,18 +79,18 @@ impl Sidebar {
                 profile_id,
                 database,
                 schema,
-            }) = parse_node_id(item_id)
+            }) = &parsed
         {
             let needs_fetch =
                 self.app_state
                     .read(cx)
-                    .needs_schema_indexes(profile_id, &database, Some(&schema));
+                    .needs_schema_indexes(*profile_id, database, Some(schema));
 
             if needs_fetch {
                 let pending = PendingAction::ExpandSchemaIndexesFolder {
                     item_id: item_id.to_string(),
                 };
-                self.spawn_fetch_schema_indexes(profile_id, &database, Some(&schema), pending, cx);
+                self.spawn_fetch_schema_indexes(*profile_id, database, Some(schema), pending, cx);
                 return;
             }
         }
@@ -99,12 +101,12 @@ impl Sidebar {
                 profile_id,
                 database,
                 schema,
-            }) = parse_node_id(item_id)
+            }) = &parsed
         {
             let needs_fetch = self.app_state.read(cx).needs_schema_foreign_keys(
-                profile_id,
-                &database,
-                Some(&schema),
+                *profile_id,
+                database,
+                Some(schema),
             );
 
             if needs_fetch {
@@ -112,9 +114,9 @@ impl Sidebar {
                     item_id: item_id.to_string(),
                 };
                 self.spawn_fetch_schema_foreign_keys(
-                    profile_id,
-                    &database,
-                    Some(&schema),
+                    *profile_id,
+                    database,
+                    Some(schema),
                     pending,
                     cx,
                 );
@@ -124,17 +126,14 @@ impl Sidebar {
 
         // When expanding a database, trigger schema fetch via handle_database_click
         // which properly dispatches based on the driver's schema_loading_strategy
-        if expanded && item_id.starts_with("db_") {
+        if expanded && matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
 
         // Sync folder collapsed state with AppState
-        if item_id.starts_with("conn_folder_")
-            && let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
-        {
+        if let Some(SchemaNodeId::ConnectionFolder { node_id }) = &parsed {
             self.app_state.update(cx, |state, _cx| {
-                state.set_folder_collapsed(folder_id, !expanded);
+                state.set_folder_collapsed(*node_id, !expanded);
             });
         }
 

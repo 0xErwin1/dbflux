@@ -374,9 +374,10 @@ pub(super) fn render_tree_item(
                     let drop_target_bg = theme.drop_target;
                     let item_ix = ix;
 
-                    if let Some(folder_id) = item_id
-                        .strip_prefix("conn_folder_")
-                        .and_then(|s| Uuid::parse_str(s).ok())
+                    if let Some(folder_id) = parse_node_id(&item_id).and_then(|n| match n {
+                        SchemaNodeId::ConnectionFolder { node_id } => Some(node_id),
+                        _ => None,
+                    })
                     {
                         el.drag_over::<SidebarDragState>(move |style, state, _, cx| {
                             if state.node_id != folder_id {
