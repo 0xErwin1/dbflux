@@ -10,6 +10,8 @@ impl Sidebar {
         let hover_bg = theme.list_active;
 
         div()
+            .absolute()
+            .inset_0()
             .child(
                 // Overlay to close on click outside
                 div()

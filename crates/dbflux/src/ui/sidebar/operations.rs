@@ -70,10 +70,9 @@ impl Sidebar {
 
     pub(super) fn create_folder_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
         // Determine parent folder ID from item_id
-        let parent_id = if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") {
-            Uuid::parse_str(folder_id_str).ok()
-        } else {
-            None
+        let parent_id = match parse_node_id(item_id) {
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => Some(node_id),
+            _ => None,
         };
 
         // Create folder with default name
@@ -86,11 +85,8 @@ impl Sidebar {
     }
 
     pub(super) fn create_connection_in_folder(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let Some(folder_id_str) = item_id.strip_prefix("conn_folder_") else {
-            return;
-        };
-
-        let Ok(folder_id) = Uuid::parse_str(folder_id_str) else {
+        let Some(SchemaNodeId::ConnectionFolder { node_id: folder_id }) = parse_node_id(item_id)
+        else {
             return;
         };
 
@@ -125,8 +121,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         // Handle folder rename
-        if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        if let Some(SchemaNodeId::ConnectionFolder { node_id: folder_id }) = parse_node_id(item_id)
         {
             let current_name = self
                 .app_state
@@ -168,8 +163,7 @@ impl Sidebar {
     }
 
     pub(super) fn delete_folder_from_context(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(folder_id_str) = item_id.strip_prefix("conn_folder_")
-            && let Ok(folder_id) = Uuid::parse_str(folder_id_str)
+        if let Some(SchemaNodeId::ConnectionFolder { node_id: folder_id }) = parse_node_id(item_id)
         {
             self.app_state.update(cx, |state, cx| {
                 state.delete_folder(folder_id);

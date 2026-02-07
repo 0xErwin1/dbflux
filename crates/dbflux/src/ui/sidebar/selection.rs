@@ -174,7 +174,10 @@ impl Sidebar {
     }
 
     pub(super) fn is_selectable_item(item_id: &str) -> bool {
-        item_id.starts_with("profile_") || item_id.starts_with("conn_folder_")
+        matches!(
+            parse_node_kind(item_id),
+            SchemaNodeKind::Profile | SchemaNodeKind::ConnectionFolder
+        )
     }
 
     #[allow(dead_code)]
