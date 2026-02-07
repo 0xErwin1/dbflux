@@ -239,7 +239,7 @@ impl DataDocument {
 
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
-        self.data_grid.read(cx).active_context()
+        self.data_grid.read(cx).active_context(cx)
     }
 
     // === Command Dispatch ===
