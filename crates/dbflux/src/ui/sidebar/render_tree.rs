@@ -377,8 +377,7 @@ pub(super) fn render_tree_item(
                     if let Some(folder_id) = parse_node_id(&item_id).and_then(|n| match n {
                         SchemaNodeId::ConnectionFolder { node_id } => Some(node_id),
                         _ => None,
-                    })
-                    {
+                    }) {
                         el.drag_over::<SidebarDragState>(move |style, state, _, cx| {
                             if state.node_id != folder_id {
                                 sidebar_for_move.update(cx, |this, cx| {

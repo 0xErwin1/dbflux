@@ -339,6 +339,8 @@ impl SettingsWindow {
                         &self.input_tunnel_name,
                         is_form_focused && current_field == SshFormField::Name,
                         primary,
+                        SshFormField::Name,
+                        cx,
                     ))
                     .child(
                         div()
@@ -349,12 +351,16 @@ impl SettingsWindow {
                                 &self.input_ssh_host,
                                 is_form_focused && current_field == SshFormField::Host,
                                 primary,
+                                SshFormField::Host,
+                                cx,
                             )))
                             .child(div().w(px(80.0)).child(self.render_form_field_with_focus(
                                 "Port",
                                 &self.input_ssh_port,
                                 is_form_focused && current_field == SshFormField::Port,
                                 primary,
+                                SshFormField::Port,
+                                cx,
                             ))),
                     )
                     .child(self.render_form_field_with_focus(
@@ -362,6 +368,8 @@ impl SettingsWindow {
                         &self.input_ssh_user,
                         is_form_focused && current_field == SshFormField::User,
                         primary,
+                        SshFormField::User,
+                        cx,
                     ))
                     .child(auth_selector)
                     .child(auth_fields),
@@ -642,6 +650,8 @@ impl SettingsWindow {
         input: &Entity<InputState>,
         is_focused: bool,
         primary: Hsla,
+        field: SshFormField,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -662,6 +672,15 @@ impl SettingsWindow {
                     } else {
                         gpui::transparent_black()
                     })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.ssh_focus = SshFocus::Form;
+                            this.ssh_form_field = field;
+                            this.ssh_focus_current_field(window, cx);
+                            cx.notify();
+                        }),
+                    )
                     .child(Input::new(input).small()),
             )
     }
@@ -832,6 +851,15 @@ impl SettingsWindow {
                                             } else {
                                                 gpui::transparent_black()
                                             })
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.ssh_focus = SshFocus::Form;
+                                                    this.ssh_form_field = SshFormField::KeyPath;
+                                                    this.ssh_focus_current_field(window, cx);
+                                                    cx.notify();
+                                                }),
+                                            )
                                             .child(Input::new(&self.input_ssh_key_path).small()),
                                     )
                                     .child(
@@ -873,6 +901,8 @@ impl SettingsWindow {
                                 &self.input_ssh_key_passphrase,
                                 is_passphrase_focused,
                                 primary,
+                                SshFormField::Passphrase,
+                                cx,
                             )))
                             .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
                     )
@@ -897,6 +927,8 @@ impl SettingsWindow {
                                 &self.input_ssh_password,
                                 is_password_focused,
                                 primary,
+                                SshFormField::Password,
+                                cx,
                             )))
                             .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
                     )
