@@ -173,6 +173,18 @@ pub trait DbDriver: Send + Sync {
     /// Used when loading a saved connection profile into the form.
     fn extract_values(&self, config: &crate::DbConfig) -> FormValues;
 
+    /// Build a connection URI from individual form field values and password.
+    /// Returns `None` for drivers without URI support (e.g., SQLite).
+    fn build_uri(&self, _values: &FormValues, _password: &str) -> Option<String> {
+        None
+    }
+
+    /// Parse a connection URI into individual form field values.
+    /// Returns `None` for drivers without URI support or if the URI is malformed.
+    fn parse_uri(&self, _uri: &str) -> Option<FormValues> {
+        None
+    }
+
     /// Whether this database type requires authentication.
     ///
     /// Returns `false` for file-based databases like SQLite.

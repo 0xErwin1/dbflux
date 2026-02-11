@@ -139,6 +139,110 @@ impl DbDriver for MongoDriver {
         values
     }
 
+    fn build_uri(&self, values: &FormValues, password: &str) -> Option<String> {
+        let host = values.get("host").map(|s| s.as_str()).unwrap_or("");
+        let port = values.get("port").map(|s| s.as_str()).unwrap_or("27017");
+        let user = values.get("user").map(|s| s.as_str()).unwrap_or("");
+        let database = values.get("database").map(|s| s.as_str()).unwrap_or("");
+        let auth_db = values
+            .get("auth_database")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        let credentials = if !user.is_empty() {
+            if !password.is_empty() {
+                format!(
+                    "{}:{}@",
+                    urlencoding::encode(user),
+                    urlencoding::encode(password)
+                )
+            } else {
+                format!("{}@", urlencoding::encode(user))
+            }
+        } else {
+            String::new()
+        };
+
+        let db_part = if !database.is_empty() {
+            format!("/{}", database)
+        } else {
+            String::new()
+        };
+
+        let query = if !auth_db.is_empty() {
+            format!("?authSource={}", urlencoding::encode(auth_db))
+        } else {
+            String::new()
+        };
+
+        Some(format!(
+            "mongodb://{}{}:{}{}{}",
+            credentials, host, port, db_part, query
+        ))
+    }
+
+    fn parse_uri(&self, uri: &str) -> Option<FormValues> {
+        let stripped = uri
+            .strip_prefix("mongodb+srv://")
+            .or_else(|| uri.strip_prefix("mongodb://"))?;
+
+        let mut values = HashMap::new();
+        let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
+            (&stripped[..at_pos], &stripped[at_pos + 1..])
+        } else {
+            ("", stripped)
+        };
+
+        if !credentials.is_empty() {
+            if let Some(colon) = credentials.find(':') {
+                let user = urlencoding::decode(&credentials[..colon])
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            } else {
+                let user = urlencoding::decode(credentials)
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            }
+        }
+
+        let (host_port_db, query) = if let Some(q) = host_part.find('?') {
+            (&host_part[..q], Some(&host_part[q + 1..]))
+        } else {
+            (host_part, None)
+        };
+
+        let (host_port, database) = if let Some(slash) = host_port_db.find('/') {
+            (&host_port_db[..slash], &host_port_db[slash + 1..])
+        } else {
+            (host_port_db, "")
+        };
+
+        values.insert("database".to_string(), database.to_string());
+
+        if let Some(colon) = host_port.rfind(':') {
+            values.insert("host".to_string(), host_port[..colon].to_string());
+            values.insert("port".to_string(), host_port[colon + 1..].to_string());
+        } else {
+            values.insert("host".to_string(), host_port.to_string());
+            values.insert("port".to_string(), "27017".to_string());
+        }
+
+        if let Some(query_str) = query {
+            for param in query_str.split('&') {
+                if let Some(val) = param.strip_prefix("authSource=") {
+                    let auth_db = urlencoding::decode(val)
+                        .unwrap_or_default()
+                        .into_owned();
+                    values.insert("auth_database".to_string(), auth_db);
+                }
+            }
+        }
+
+        Some(values)
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,

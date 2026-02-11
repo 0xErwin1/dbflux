@@ -352,6 +352,82 @@ impl DbDriver for MysqlDriver {
 
         values
     }
+
+    fn build_uri(&self, values: &FormValues, password: &str) -> Option<String> {
+        let host = values.get("host").map(|s| s.as_str()).unwrap_or("");
+        let port = values.get("port").map(|s| s.as_str()).unwrap_or("3306");
+        let user = values.get("user").map(|s| s.as_str()).unwrap_or("");
+        let database = values.get("database").map(|s| s.as_str()).unwrap_or("");
+
+        let credentials = if !user.is_empty() {
+            if !password.is_empty() {
+                format!(
+                    "{}:{}@",
+                    urlencoding::encode(user),
+                    urlencoding::encode(password)
+                )
+            } else {
+                format!("{}@", urlencoding::encode(user))
+            }
+        } else {
+            String::new()
+        };
+
+        let db_part = if !database.is_empty() {
+            format!("/{}", database)
+        } else {
+            String::new()
+        };
+
+        Some(format!(
+            "mysql://{}{}:{}{}",
+            credentials, host, port, db_part
+        ))
+    }
+
+    fn parse_uri(&self, uri: &str) -> Option<FormValues> {
+        let stripped = uri.strip_prefix("mysql://")?;
+
+        let mut values = HashMap::new();
+        let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
+            (&stripped[..at_pos], &stripped[at_pos + 1..])
+        } else {
+            ("", stripped)
+        };
+
+        if !credentials.is_empty() {
+            if let Some(colon) = credentials.find(':') {
+                let user = urlencoding::decode(&credentials[..colon])
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            } else {
+                let user = urlencoding::decode(credentials)
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            }
+        }
+
+        let (host_port, database) = if let Some(slash) = host_part.find('/') {
+            (&host_part[..slash], &host_part[slash + 1..])
+        } else {
+            (host_part, "")
+        };
+
+        let database = database.split('?').next().unwrap_or(database);
+        values.insert("database".to_string(), database.to_string());
+
+        if let Some(colon) = host_port.rfind(':') {
+            values.insert("host".to_string(), host_port[..colon].to_string());
+            values.insert("port".to_string(), host_port[colon + 1..].to_string());
+        } else {
+            values.insert("host".to_string(), host_port.to_string());
+            values.insert("port".to_string(), "3306".to_string());
+        }
+
+        Some(values)
+    }
 }
 
 struct ExtractedMysqlConfig {
