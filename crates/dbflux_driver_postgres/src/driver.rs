@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -11,13 +13,11 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo,
-    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
-    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder,
-    SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, sanitize_uri,
+    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    TableInfo, TypeDefinition, Value, ViewInfo, POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -378,6 +378,78 @@ impl DbDriver for PostgresDriver {
         }
 
         values
+    }
+
+    fn build_uri(&self, values: &FormValues, password: &str) -> Option<String> {
+        let host = values.get("host").map(|s| s.as_str()).unwrap_or("");
+        let port = values.get("port").map(|s| s.as_str()).unwrap_or("5432");
+        let user = values.get("user").map(|s| s.as_str()).unwrap_or("");
+        let database = values.get("database").map(|s| s.as_str()).unwrap_or("");
+
+        let credentials = if !user.is_empty() {
+            if !password.is_empty() {
+                format!(
+                    "{}:{}@",
+                    urlencoding::encode(user),
+                    urlencoding::encode(password)
+                )
+            } else {
+                format!("{}@", urlencoding::encode(user))
+            }
+        } else {
+            String::new()
+        };
+
+        Some(format!(
+            "postgresql://{}{}:{}/{}",
+            credentials, host, port, database
+        ))
+    }
+
+    fn parse_uri(&self, uri: &str) -> Option<FormValues> {
+        let stripped = uri
+            .strip_prefix("postgresql://")
+            .or_else(|| uri.strip_prefix("postgres://"))?;
+
+        let mut values = HashMap::new();
+        let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
+            (&stripped[..at_pos], &stripped[at_pos + 1..])
+        } else {
+            ("", stripped)
+        };
+
+        if !credentials.is_empty() {
+            if let Some(colon) = credentials.find(':') {
+                let user = urlencoding::decode(&credentials[..colon])
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            } else {
+                let user = urlencoding::decode(credentials)
+                    .unwrap_or_default()
+                    .into_owned();
+                values.insert("user".to_string(), user);
+            }
+        }
+
+        let (host_port, database) = if let Some(slash) = host_part.find('/') {
+            (&host_part[..slash], &host_part[slash + 1..])
+        } else {
+            (host_part, "")
+        };
+
+        let database = database.split('?').next().unwrap_or(database);
+        values.insert("database".to_string(), database.to_string());
+
+        if let Some(colon) = host_port.rfind(':') {
+            values.insert("host".to_string(), host_port[..colon].to_string());
+            values.insert("port".to_string(), host_port[colon + 1..].to_string());
+        } else {
+            values.insert("host".to_string(), host_port.to_string());
+            values.insert("port".to_string(), "5432".to_string());
+        }
+
+        Some(values)
     }
 }
 

@@ -160,6 +160,8 @@ pub struct ConnectionManagerWindow {
 
     // Target folder for new connections
     target_folder_id: Option<Uuid>,
+
+    syncing_uri: bool,
 }
 
 impl ConnectionManagerWindow {
@@ -236,15 +238,35 @@ impl ConnectionManagerWindow {
             )
         }
 
-        let mut subscriptions = vec![dropdown_subscription];
-        subscriptions.push(subscribe_input(cx, window, &input_name));
-        subscriptions.push(subscribe_input(cx, window, &input_password));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_host));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_port));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_user));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_key_path));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_key_passphrase));
-        subscriptions.push(subscribe_input(cx, window, &input_ssh_password));
+        let password_change_sub = cx.subscribe_in(
+            &input_password,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { secondary: false } => {
+                    this.exit_edit_mode(window, cx);
+                    this.focus_down(cx);
+                }
+                InputEvent::Blur => {
+                    this.exit_edit_mode(window, cx);
+                }
+                InputEvent::Change => {
+                    this.handle_field_change("password", window, cx);
+                }
+                _ => {}
+            },
+        );
+
+        let subscriptions = vec![
+            dropdown_subscription,
+            subscribe_input(cx, window, &input_name),
+            password_change_sub,
+            subscribe_input(cx, window, &input_ssh_host),
+            subscribe_input(cx, window, &input_ssh_port),
+            subscribe_input(cx, window, &input_ssh_user),
+            subscribe_input(cx, window, &input_ssh_key_path),
+            subscribe_input(cx, window, &input_ssh_key_passphrase),
+            subscribe_input(cx, window, &input_ssh_password),
+        ];
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
@@ -291,6 +313,7 @@ impl ConnectionManagerWindow {
             ssh_tunnel_uuids: Vec::new(),
             _subscriptions: subscriptions,
             target_folder_id: None,
+            syncing_uri: false,
         }
     }
 
@@ -432,6 +455,7 @@ impl ConnectionManagerWindow {
             let placeholder = field.placeholder;
             let default_value = field.default_value;
             let is_masked = field.kind == FormFieldKind::Password;
+            let field_id: &'static str = field.id;
 
             let input = cx.new(|cx| {
                 let mut state = InputState::new(window, cx).placeholder(placeholder);
@@ -444,19 +468,23 @@ impl ConnectionManagerWindow {
                 state
             });
 
-            let subscription =
-                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-                    match event {
-                        InputEvent::PressEnter { secondary: false } => {
-                            this.exit_edit_mode(window, cx);
-                            this.focus_down(cx);
-                        }
-                        InputEvent::Blur => {
-                            this.exit_edit_mode(window, cx);
-                        }
-                        _ => {}
+            let subscription = cx.subscribe_in(
+                &input,
+                window,
+                move |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { secondary: false } => {
+                        this.exit_edit_mode(window, cx);
+                        this.focus_down(cx);
                     }
-                });
+                    InputEvent::Blur => {
+                        this.exit_edit_mode(window, cx);
+                    }
+                    InputEvent::Change => {
+                        this.handle_field_change(field_id, window, cx);
+                    }
+                    _ => {}
+                },
+            );
             self._subscriptions.push(subscription);
 
             self.driver_inputs.insert(field.id.to_string(), input);
@@ -661,13 +689,22 @@ impl ConnectionManagerWindow {
     }
 
     fn input_for_focus(&self, focus: FormFocus) -> Option<&Entity<InputState>> {
+        let uri_mode = self
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+
+        if focus == FormFocus::Host && uri_mode {
+            return self.driver_inputs.get("uri");
+        }
+
         if let Some(field_id) = Self::focus_to_field_id(focus)
             && let Some(input) = self.driver_inputs.get(field_id)
         {
             return Some(input);
         }
 
-        // Field name aliases (uri -> Host, path -> Database)
         match focus {
             FormFocus::Host => self
                 .driver_inputs
@@ -679,6 +716,83 @@ impl ConnectionManagerWindow {
                 .or_else(|| self.driver_inputs.get("database")),
             _ => None,
         }
+    }
+
+    fn handle_field_change(&mut self, field_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.syncing_uri {
+            return;
+        }
+
+        let use_uri = self
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+
+        if field_id == "uri" && use_uri {
+            self.sync_uri_to_fields(window, cx);
+        } else if field_id != "uri" && !use_uri {
+            self.sync_fields_to_uri(window, cx);
+        }
+    }
+
+    pub(super) fn sync_fields_to_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(driver) = &self.selected_driver else {
+            return;
+        };
+
+        let form = driver.form_definition();
+        let values = self.collect_form_values(form, cx);
+        let password = self.input_password.read(cx).value().to_string();
+
+        let Some(uri) = driver.build_uri(&values, &password) else {
+            return;
+        };
+
+        if let Some(uri_input) = self.driver_inputs.get("uri") {
+            let current = uri_input.read(cx).value().to_string();
+            if current != uri {
+                self.syncing_uri = true;
+                uri_input.update(cx, |state, cx| {
+                    state.set_value(&uri, window, cx);
+                });
+                self.syncing_uri = false;
+            }
+        }
+    }
+
+    pub(super) fn sync_uri_to_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(driver) = &self.selected_driver else {
+            return;
+        };
+
+        let Some(uri_input) = self.driver_inputs.get("uri") else {
+            return;
+        };
+        let uri_value = uri_input.read(cx).value().to_string();
+
+        if uri_value.is_empty() {
+            return;
+        }
+
+        let Some(parsed) = driver.parse_uri(&uri_value) else {
+            return;
+        };
+
+        self.syncing_uri = true;
+
+        for (field_id, value) in &parsed {
+            if let Some(input) = self.driver_inputs.get(field_id.as_str()) {
+                let current = input.read(cx).value().to_string();
+                if current != *value {
+                    input.update(cx, |state, cx| {
+                        state.set_value(value, window, cx);
+                    });
+                }
+            }
+        }
+
+        self.syncing_uri = false;
     }
 }
 

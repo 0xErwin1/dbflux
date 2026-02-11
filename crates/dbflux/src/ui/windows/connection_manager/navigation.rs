@@ -42,6 +42,8 @@ pub(super) struct MainNavState {
     pub(super) uses_file_form: bool,
     /// True if the driver has a "Use Connection URI" checkbox option
     pub(super) has_uri_option: bool,
+    /// True when "Use Connection URI" is checked (skip disabled individual fields).
+    pub(super) uri_mode_active: bool,
 }
 
 impl FormFocus {
@@ -51,15 +53,28 @@ impl FormFocus {
         use FormFocus::*;
 
         if state.uses_file_form {
-            match self {
+            return match self {
                 Name => Database,
                 Database => TestConnection,
                 TestConnection => Save,
                 Save => Name,
                 _ => Name,
-            }
-        } else if state.has_uri_option {
-            match self {
+            };
+        }
+
+        if state.has_uri_option && state.uri_mode_active {
+            return match self {
+                Name => UseUri,
+                UseUri | Host | Port | Database | User => Host,
+                Password | PasswordSave => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            };
+        }
+
+        if state.has_uri_option {
+            return match self {
                 Name => UseUri,
                 UseUri => Host,
                 Host | Port => Database,
@@ -69,18 +84,18 @@ impl FormFocus {
                 TestConnection => Save,
                 Save => Name,
                 _ => Name,
-            }
-        } else {
-            match self {
-                Name => Host,
-                Host | Port => Database,
-                Database => User,
-                User => Password,
-                Password | PasswordSave => TestConnection,
-                TestConnection => Save,
-                Save => Name,
-                _ => Name,
-            }
+            };
+        }
+
+        match self {
+            Name => Host,
+            Host | Port => Database,
+            Database => User,
+            User => Password,
+            Password | PasswordSave => TestConnection,
+            TestConnection => Save,
+            Save => Name,
+            _ => Name,
         }
     }
 
@@ -88,15 +103,29 @@ impl FormFocus {
         use FormFocus::*;
 
         if state.uses_file_form {
-            match self {
+            return match self {
                 Name => Save,
                 Database => Name,
                 TestConnection => Database,
                 Save => TestConnection,
                 _ => Save,
-            }
-        } else if state.has_uri_option {
-            match self {
+            };
+        }
+
+        if state.has_uri_option && state.uri_mode_active {
+            return match self {
+                Name => Save,
+                UseUri => Name,
+                Host | Port | Database | User => UseUri,
+                Password | PasswordSave => Host,
+                TestConnection => Host,
+                Save => TestConnection,
+                _ => Save,
+            };
+        }
+
+        if state.has_uri_option {
+            return match self {
                 Name => Save,
                 UseUri => Name,
                 Host | Port => UseUri,
@@ -106,18 +135,18 @@ impl FormFocus {
                 TestConnection => Password,
                 Save => TestConnection,
                 _ => Save,
-            }
-        } else {
-            match self {
-                Name => Save,
-                Host | Port => Name,
-                Database => Host,
-                User => Database,
-                Password | PasswordSave => User,
-                TestConnection => Password,
-                Save => TestConnection,
-                _ => Save,
-            }
+            };
+        }
+
+        match self {
+            Name => Save,
+            Host | Port => Name,
+            Database => Host,
+            User => Database,
+            Password | PasswordSave => User,
+            TestConnection => Password,
+            Save => TestConnection,
+            _ => Save,
         }
     }
 
@@ -127,17 +156,17 @@ impl FormFocus {
         use FormFocus::*;
 
         if state.uses_file_form {
-            match self {
+            return match self {
                 Save => TestConnection,
                 other => other,
-            }
-        } else {
-            match self {
-                Port => Host,
-                PasswordSave => Password,
-                Save => TestConnection,
-                other => other,
-            }
+            };
+        }
+
+        match self {
+            Port => Host,
+            PasswordSave => Password,
+            Save => TestConnection,
+            other => other,
         }
     }
 
@@ -145,17 +174,17 @@ impl FormFocus {
         use FormFocus::*;
 
         if state.uses_file_form {
-            match self {
+            return match self {
                 TestConnection => Save,
                 other => other,
-            }
-        } else {
-            match self {
-                Host => Port,
-                Password => PasswordSave,
-                TestConnection => Save,
-                other => other,
-            }
+            };
+        }
+
+        match self {
+            Host => Port,
+            Password => PasswordSave,
+            TestConnection => Save,
+            other => other,
         }
     }
 
@@ -569,9 +598,17 @@ impl ConnectionManagerWindow {
             .and_then(|d| d.form_definition().field("use_uri"))
             .is_some();
 
+        let uri_mode_active = has_uri_option
+            && self
+                .checkbox_states
+                .get("use_uri")
+                .copied()
+                .unwrap_or(false);
+
         MainNavState {
             uses_file_form: self.uses_file_form(),
             has_uri_option,
+            uri_mode_active,
         }
     }
 
@@ -734,7 +771,15 @@ impl ConnectionManagerWindow {
                     .get("use_uri")
                     .copied()
                     .unwrap_or(false);
-                self.checkbox_states.insert("use_uri".to_string(), !current);
+                let new_value = !current;
+                self.checkbox_states
+                    .insert("use_uri".to_string(), new_value);
+
+                if new_value {
+                    self.sync_fields_to_uri(window, cx);
+                } else {
+                    self.sync_uri_to_fields(window, cx);
+                }
             }
             FormFocus::PasswordSave => {
                 self.form_save_password = !self.form_save_password;
