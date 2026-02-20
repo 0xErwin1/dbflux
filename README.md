@@ -10,7 +10,9 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 
 ## Installation
 
-### Quick Install (Linux)
+### Linux
+
+#### Tarball (recommended)
 
 ```bash
 # Install to /usr/local (requires sudo)
@@ -20,20 +22,16 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | bash -s -- --prefix ~/.local
 ```
 
-### Build from Source
+#### AppImage (portable)
 
 ```bash
-# Via install script
-curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | bash -s -- --build
-
-# Or manually
-git clone https://github.com/0xErwin1/dbflux.git
-cd dbflux
-cargo build --release --features sqlite,postgres,mysql
-./target/release/dbflux
+# Download from releases (replace amd64 with arm64 for ARM)
+wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.AppImage
+chmod +x dbflux-linux-amd64.AppImage
+./dbflux-linux-amd64.AppImage
 ```
 
-### Arch Linux
+#### Arch Linux
 
 Using the provided PKGBUILD:
 
@@ -48,7 +46,7 @@ Or with an AUR helper (once published):
 paru -S dbflux
 ```
 
-### Nix
+#### Nix
 
 Using flakes:
 
@@ -70,7 +68,69 @@ nix-build
 ./result/bin/dbflux
 ```
 
-### Uninstall
+### macOS
+
+DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time, you'll see a warning about an "unidentified developer".
+
+#### Installation
+
+1. Download the DMG for your architecture from [Releases](https://github.com/0xErwin1/dbflux/releases):
+   - **Intel Macs**: `dbflux-macos-amd64.dmg`
+   - **Apple Silicon (M1/M2/M3/M4)**: `dbflux-macos-arm64.dmg`
+2. Open the DMG and drag DBFlux to Applications
+3. When you see the "unidentified developer" warning:
+   - Go to **System Settings → Privacy & Security**
+   - Click **Open Anyway** next to the security warning
+   - Confirm you want to open the application
+
+#### Bypass Gatekeeper from Terminal
+
+```bash
+# Remove quarantine attribute (allows opening without GUI confirmation)
+xattr -cr /Applications/DBFlux.app
+
+# Now you can open it normally
+open /Applications/DBFlux.app
+```
+
+#### Requirements
+
+- macOS 11.0 (Big Sur) or later
+
+### Windows
+
+#### Installer
+
+1. Download `dbflux-windows-amd64-setup.exe` from [Releases](https://github.com/0xErwin1/dbflux/releases)
+2. Run the installer and follow the wizard
+
+#### Portable
+
+1. Download `dbflux-windows-amd64.zip` from [Releases](https://github.com/0xErwin1/dbflux/releases)
+2. Extract to any folder
+3. Run `dbflux.exe`
+
+> **Note**: The executable is not signed with a Windows code signing certificate. Windows SmartScreen may show a warning. Click "More info" → "Run anyway" to proceed.
+
+#### Requirements
+
+- Windows 10 or later
+- x86_64 (ARM64 not yet supported)
+
+### Build from Source
+
+```bash
+# Via install script (Linux)
+curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | bash -s -- --build
+
+# Or manually
+git clone https://github.com/0xErwin1/dbflux.git
+cd dbflux
+cargo build --release --features sqlite,postgres,mysql,mongodb
+./target/release/dbflux
+```
+
+### Uninstall (Linux)
 
 ```bash
 # If installed with install.sh
@@ -85,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ### Verify Downloads
 
-All release artifacts are signed with GPG (key `A614B7D25134987A`).
+Releases triggered with `workflow_dispatch` and `sign=true` include GPG signatures (key `A614B7D25134987A`).
 
 ```bash
 # Import the public key from keyserver (one time)
@@ -94,7 +154,7 @@ gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
 # Verify checksum
 sha256sum -c dbflux-linux-amd64.tar.gz.sha256
 
-# Verify GPG signature
+# Verify GPG signature (if the release includes .asc files)
 gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 ```
 
@@ -160,16 +220,28 @@ sudo dnf install pkg-config openssl-devel dbus-devel libxkbcommon-devel
 sudo pacman -S pkg-config openssl dbus libxkbcommon
 ```
 
+**macOS:**
+```bash
+# Xcode Command Line Tools (required)
+xcode-select --install
+```
+
+**Windows:**
+```powershell
+# Visual Studio Build Tools with C++ workload (required)
+# Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+```
+
 ### Building
 
 ```bash
-cargo build -p dbflux --release --features sqlite,postgres,mysql
+cargo build -p dbflux --release --features sqlite,postgres,mysql,mongodb
 ```
 
 ### Running
 
 ```bash
-cargo run -p dbflux --features sqlite,postgres,mysql
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb
 ```
 
 ### Commands
@@ -209,12 +281,15 @@ dbflux/
 │   ├── dbflux_driver_sqlite/   # SQLite driver
 │   ├── dbflux_driver_postgres/ # PostgreSQL driver
 │   ├── dbflux_driver_mysql/    # MySQL driver
+│   ├── dbflux_driver_mongodb/  # MongoDB driver
 │   ├── dbflux_ssh/             # SSH tunnel support
 │   └── dbflux_export/          # Export functionality
 ├── resources/
-│   ├── desktop/                # Desktop entry
-│   ├── icons/                  # Application icons
-│   └── mime/                   # MIME type definitions
+│   ├── desktop/                # Linux desktop entry
+│   ├── icons/                  # Application icons (SVG)
+│   ├── macos/                  # macOS bundle resources
+│   ├── mime/                   # MIME type definitions
+│   └── windows/                # Windows installer resources
 └── scripts/
     ├── install.sh              # Linux installer
     ├── uninstall.sh            # Linux uninstaller

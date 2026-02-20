@@ -19,19 +19,24 @@ on:
 permissions:
   contents: write
 
+env:
+  FEATURES: "sqlite,postgres,mysql,mongodb"
+
 jobs:
-  build:
-    name: Build ${{ matrix.name }}
+  build-linux:
+    name: Build Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-amd64
+          - arch: amd64
             runs_on: ubuntu-latest
-          - name: linux-arm64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
             runs_on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - name: Checkout repository
@@ -40,6 +45,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: ${{ matrix.target }}
           components: rust-src
 
       - name: Install system dependencies
@@ -52,22 +58,22 @@ jobs:
             libxkbcommon-dev \
             libxkbcommon-x11-dev
 
+          if apt-cache show libfuse2 >/dev/null 2>&1; then
+            sudo apt-get install -y libfuse2
+          else
+            sudo apt-get install -y libfuse2t64
+          fi
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0-rust"
-          shared-key: ${{ matrix.name }}
+          shared-key: linux-${{ matrix.arch }}
           cache-targets: true
           cache-on-failure: true
 
-      - name: Compute build features
-        run: |
-          FEATURES="sqlite,postgres,mysql"
-          echo "FEATURES=$FEATURES" >> $GITHUB_ENV
-
       - name: Build DBFlux
-        run: |
-          cargo build --release --features "$FEATURES"
+        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
 
       - name: Create package
         run: |
@@ -76,16 +82,13 @@ jobs:
           mkdir -p pkg/resources/mime
           mkdir -p pkg/scripts
 
-          # Copy binary
-          cp target/release/dbflux pkg/dbflux
+          cp target/${{ matrix.target }}/release/dbflux pkg/dbflux
           chmod +x pkg/dbflux
 
-          # Copy resources
           cp resources/icons/dbflux.svg pkg/resources/icons/
           cp resources/desktop/dbflux.desktop pkg/resources/desktop/
           cp resources/mime/dbflux-sql.xml pkg/resources/mime/
 
-          # Copy installer scripts
           cp scripts/install.sh pkg/scripts/
           cp scripts/uninstall.sh pkg/scripts/
           chmod +x pkg/scripts/*.sh
@@ -93,10 +96,57 @@ jobs:
       - name: Create tar archive
         run: |
           cd pkg
-          tar -czf ../dbflux-${{ matrix.name }}.tar.gz .
+          tar -czf ../dbflux-linux-${{ matrix.arch }}.tar.gz .
 
       - name: Generate checksum
-        run: sha256sum dbflux-${{ matrix.name }}.tar.gz > dbflux-${{ matrix.name }}.tar.gz.sha256
+        run: sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+
+      - name: Download appimagetool
+        run: |
+          ARCH=$(echo "${{ matrix.arch }}" | sed 's/amd64/x86_64/' | sed 's/arm64/aarch64/')
+          curl -LO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage
+          chmod +x appimagetool-${ARCH}.AppImage
+          echo "APPIMAGE_ARCH=$ARCH" >> $GITHUB_ENV
+
+      - name: Create AppImage
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
+          fi
+
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+          mkdir -p AppDir/usr/share/mime/packages
+
+          cp target/${{ matrix.target }}/release/dbflux AppDir/usr/bin/
+          chmod +x AppDir/usr/bin/dbflux
+
+          cp resources/desktop/dbflux.desktop AppDir/usr/share/applications/
+          sed -i 's|@EXEC_PATH@|dbflux|g' AppDir/usr/share/applications/dbflux.desktop
+
+          cp resources/icons/dbflux.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+
+          cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
+
+          ln -sf usr/bin/dbflux AppDir/AppRun
+          ln -sf usr/share/applications/dbflux.desktop AppDir/dbflux.desktop
+          ln -sf usr/share/icons/hicolor/scalable/apps/dbflux.svg AppDir/dbflux.svg
+
+          APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$VERSION" ./appimagetool-${{ env.APPIMAGE_ARCH }}.AppImage AppDir
+
+          APPIMAGE_FILE=$(find . -maxdepth 1 -name "*.AppImage" ! -name "appimagetool-*.AppImage" | head -n 1)
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "AppImage output not found"
+            exit 1
+          fi
+
+          mv "$APPIMAGE_FILE" dbflux-linux-${{ matrix.arch }}.AppImage
+
+      - name: Generate AppImage checksum
+        run: sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
 
       - name: Import GPG key
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
@@ -108,45 +158,314 @@ jobs:
       - name: Sign artifacts
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         run: |
-          gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz
-          gpg --armor --detach-sign dbflux-${{ matrix.name }}.tar.gz.sha256
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
+          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage.sha256
 
-      - name: Upload artifacts (unsigned)
+      - name: Upload artifacts
         if: env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dbflux-${{ matrix.name }}
+          name: linux-${{ matrix.arch }}
           path: |
-            dbflux-${{ matrix.name }}.tar.gz
-            dbflux-${{ matrix.name }}.tar.gz.sha256
+            dbflux-linux-${{ matrix.arch }}.tar.gz
+            dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+            dbflux-linux-${{ matrix.arch }}.AppImage
+            dbflux-linux-${{ matrix.arch }}.AppImage.sha256
           retention-days: 90
 
-      - name: Upload artifacts (signatures)
+      - name: Upload signatures
         if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dbflux-${{ matrix.name }}-signatures
+          name: linux-${{ matrix.arch }}-signatures
           path: |
-            dbflux-${{ matrix.name }}.tar.gz.asc
-            dbflux-${{ matrix.name }}.tar.gz.sha256.asc
+            dbflux-linux-${{ matrix.arch }}.tar.gz.asc
+            dbflux-linux-${{ matrix.arch }}.tar.gz.sha256.asc
+            dbflux-linux-${{ matrix.arch }}.AppImage.asc
+            dbflux-linux-${{ matrix.arch }}.AppImage.sha256.asc
           retention-days: 90
 
       - name: (act) Store artifacts locally
         if: env.ACT == 'true'
         run: |
-          mkdir -p /tmp/artifacts/dbflux-${{ matrix.name }}
-          cp dbflux-${{ matrix.name }}.tar.gz /tmp/artifacts/dbflux-${{ matrix.name }}/
-          cp dbflux-${{ matrix.name }}.tar.gz.sha256 /tmp/artifacts/dbflux-${{ matrix.name }}/
-          if [ -f dbflux-${{ matrix.name }}.tar.gz.asc ]; then
-            cp dbflux-${{ matrix.name }}.tar.gz.asc /tmp/artifacts/dbflux-${{ matrix.name }}/
+          mkdir -p /tmp/artifacts/linux-${{ matrix.arch }}
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          if [ -f dbflux-linux-${{ matrix.arch }}.tar.gz.asc ]; then
+            cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+            cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           fi
-          if [ -f dbflux-${{ matrix.name }}.tar.gz.sha256.asc ]; then
-            cp dbflux-${{ matrix.name }}.tar.gz.sha256.asc /tmp/artifacts/dbflux-${{ matrix.name }}/
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs_on }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs_on: macos-13
+            target: x86_64-apple-darwin
+          - arch: arm64
+            runs_on: macos-14
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: macos-${{ matrix.arch }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+
+      - name: Create app bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
           fi
+
+          mkdir -p DBFlux.app/Contents/MacOS
+          mkdir -p DBFlux.app/Contents/Resources
+
+          cp target/${{ matrix.target }}/release/dbflux DBFlux.app/Contents/MacOS/
+          chmod +x DBFlux.app/Contents/MacOS/dbflux
+
+          cp resources/icons/dbflux.svg DBFlux.app/Contents/Resources/
+
+          sed -e "s/\${VERSION}/$VERSION/g" resources/macos/Info.plist > DBFlux.app/Contents/Info.plist
+
+          chmod +x DBFlux.app/Contents/MacOS/dbflux
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
+          fi
+
+          create-dmg \
+            --volname "DBFlux" \
+            --window-pos 200 120 \
+            --window-size 800 450 \
+            --icon-size 100 \
+            --icon "DBFlux.app" 200 190 \
+            --hide-extension "DBFlux.app" \
+            --app-drop-link 600 185 \
+            --skip-jenkins \
+            dbflux-macos-${{ matrix.arch }}.dmg \
+            DBFlux.app
+
+      - name: Generate checksum
+        run: shasum -a 256 dbflux-macos-${{ matrix.arch }}.dmg > dbflux-macos-${{ matrix.arch }}.dmg.sha256
+
+      - name: Import GPG key
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign artifacts
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        run: |
+          gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg
+          gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg.sha256
+
+      - name: Upload artifacts
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            dbflux-macos-${{ matrix.arch }}.dmg
+            dbflux-macos-${{ matrix.arch }}.dmg.sha256
+          retention-days: 90
+
+      - name: Upload signatures
+        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-signatures
+          path: |
+            dbflux-macos-${{ matrix.arch }}.dmg.asc
+            dbflux-macos-${{ matrix.arch }}.dmg.sha256.asc
+          retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p /tmp/artifacts/macos-${{ matrix.arch }}
+          cp dbflux-macos-${{ matrix.arch }}.dmg /tmp/artifacts/macos-${{ matrix.arch }}/
+          cp dbflux-macos-${{ matrix.arch }}.dmg.sha256 /tmp/artifacts/macos-${{ matrix.arch }}/
+          if [ -f dbflux-macos-${{ matrix.arch }}.dmg.asc ]; then
+            cp dbflux-macos-${{ matrix.arch }}.dmg.asc /tmp/artifacts/macos-${{ matrix.arch }}/
+          fi
+
+  build-windows:
+    name: Build Windows amd64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: windows-amd64
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Build DBFlux
+        run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
+
+      - name: Install ImageMagick
+        run: choco install imagemagick -y
+
+      - name: Create ICO from SVG
+        run: |
+          magick convert -background none -resize 256x256 resources/icons/dbflux.svg dbflux-256.png
+          magick convert -background none -resize 128x128 resources/icons/dbflux.svg dbflux-128.png
+          magick convert -background none -resize 64x64 resources/icons/dbflux.svg dbflux-64.png
+          magick convert -background none -resize 48x48 resources/icons/dbflux.svg dbflux-48.png
+          magick convert -background none -resize 32x32 resources/icons/dbflux.svg dbflux-32.png
+          magick convert -background none -resize 16x16 resources/icons/dbflux.svg dbflux-16.png
+          magick convert dbflux-16.png dbflux-32.png dbflux-48.png dbflux-64.png dbflux-128.png dbflux-256.png dbflux.ico
+
+      - name: Create portable package
+        run: |
+          New-Item -Path pkg -ItemType Directory -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/dbflux.exe pkg/dbflux.exe
+          Copy-Item dbflux.ico pkg/dbflux.ico
+          Compress-Archive -Path pkg/* -DestinationPath dbflux-windows-amd64.zip -Force
+
+      - name: Generate ZIP checksum
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64.zip).Hash.ToLower()
+          "$hash  dbflux-windows-amd64.zip" | Out-File -FilePath dbflux-windows-amd64.zip.sha256 -Encoding ascii
+
+      - name: Prepare installer files
+        run: |
+          New-Item -Path installer -ItemType Directory -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/dbflux.exe installer/dbflux.exe
+          Copy-Item dbflux.ico installer/dbflux.ico
+          Copy-Item resources/windows/installer.iss installer/installer.iss
+          Copy-Item LICENSE installer/LICENSE
+
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ github.event.inputs.version }}"
+          else
+            $version = "$env:GITHUB_REF_NAME"
+          }
+
+          $version = $version.TrimStart('v')
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: installer/installer.iss
+          options: /DMyAppVersion=${{ steps.version.outputs.version }} /O+
+
+      - name: Generate installer checksum
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 installer/output/dbflux-windows-amd64-setup.exe).Hash.ToLower()
+          "$hash  dbflux-windows-amd64-setup.exe" | Out-File -FilePath dbflux-windows-amd64-setup.exe.sha256 -Encoding ascii
+
+      - name: Move installer
+        run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
+
+      - name: Import GPG key
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign artifacts
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        run: |
+          gpg --armor --detach-sign dbflux-windows-amd64.zip
+          gpg --armor --detach-sign dbflux-windows-amd64.zip.sha256
+          gpg --armor --detach-sign dbflux-windows-amd64-setup.exe
+          gpg --armor --detach-sign dbflux-windows-amd64-setup.exe.sha256
+
+      - name: Upload artifacts
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: |
+            dbflux-windows-amd64.zip
+            dbflux-windows-amd64.zip.sha256
+            dbflux-windows-amd64-setup.exe
+            dbflux-windows-amd64-setup.exe.sha256
+          retention-days: 90
+
+      - name: Upload signatures
+        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64-signatures
+          path: |
+            dbflux-windows-amd64.zip.asc
+            dbflux-windows-amd64.zip.sha256.asc
+            dbflux-windows-amd64-setup.exe.asc
+            dbflux-windows-amd64-setup.exe.sha256.asc
+          retention-days: 90
+
+      - name: (act) Store artifacts locally
+        if: env.ACT == 'true'
+        shell: pwsh
+        run: |
+          New-Item -Path C:\tmp\artifacts\windows-amd64 -ItemType Directory -Force | Out-Null
+          Copy-Item dbflux-windows-amd64.zip C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64.zip.sha256 C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64-setup.exe C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64-setup.exe.sha256 C:\tmp\artifacts\windows-amd64\
+          if (Test-Path dbflux-windows-amd64.zip.asc) {
+            Copy-Item dbflux-windows-amd64.zip.asc C:\tmp\artifacts\windows-amd64\
+            Copy-Item dbflux-windows-amd64-setup.exe.asc C:\tmp\artifacts\windows-amd64\
+          }
 
   release:
     name: Create Release
-    needs: build
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
 
     steps:
@@ -160,6 +479,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: "*"
+          merge-multiple: false
 
       - name: (act) Load artifacts locally
         if: env.ACT == 'true'
@@ -205,13 +526,14 @@ jobs:
 
       - name: Compose release body
         run: |
-          cat > release_body.md << 'PREFACE'
+          cat > release_body.md << 'EOF'
           ## Installation
 
-          Download the appropriate archive for your architecture and run the installer:
+          ### Linux
 
+          #### Tarball (recommended)
           ```bash
-          # Download and extract (replace linux-amd64 with linux-arm64 for ARM)
+          # Download and extract (replace amd64 with arm64 for ARM)
           wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/dbflux-linux-amd64.tar.gz
           tar -xzf dbflux-linux-amd64.tar.gz
 
@@ -219,20 +541,71 @@ jobs:
           sudo ./scripts/install.sh
           ```
 
-          ### Verify checksums
+          #### AppImage (portable)
+          ```bash
+          # Download
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/dbflux-linux-amd64.AppImage
+          chmod +x dbflux-linux-amd64.AppImage
+          ./dbflux-linux-amd64.AppImage
+          ```
+
+          ### macOS
+
+          DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time:
+
+          1. Download the DMG for your architecture:
+             - **Intel Macs**: `dbflux-macos-amd64.dmg`
+             - **Apple Silicon (M1/M2/M3)**: `dbflux-macos-arm64.dmg`
+          2. Open the DMG and drag DBFlux to Applications
+          3. When you see "unidentified developer", go to **System Preferences → Privacy & Security**
+          4. Click **Open Anyway** next to the warning
+          5. Confirm you want to open the application
+
+          Alternatively, from Terminal:
+          ```bash
+          xattr -cr /Applications/DBFlux.app
+          ```
+
+          ### Windows
+
+          #### Installer
+          1. Download `dbflux-windows-amd64-setup.exe`
+          2. Run the installer and follow the wizard
+
+          #### Portable
+          1. Download `dbflux-windows-amd64.zip`
+          2. Extract and run `dbflux.exe`
+
+          > Note: The executable is not signed. Windows SmartScreen may show a warning. Click "More info" → "Run anyway".
+
+          ---
+
+          ### Verify Downloads
+
+          Releases triggered with `workflow_dispatch` and `sign=true` include GPG signatures (key `A614B7D25134987A`).
 
           ```bash
+          # Import the public key (one time)
+          gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
+
+          # Verify checksum
           sha256sum -c dbflux-linux-amd64.tar.gz.sha256
+
+          # Verify GPG signature (if signed)
+          gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
           ```
 
           ### System Requirements
 
-          - Linux x86_64 or ARM64
-          - Vulkan-capable GPU (recommended)
+          | Platform | Requirements |
+          |----------|-------------|
+          | Linux | x86_64 or ARM64, Vulkan-capable GPU (recommended) |
+          | macOS | macOS 11.0 (Big Sur) or later |
+          | Windows | Windows 10 or later, x86_64 |
 
           ---
 
-          PREFACE
+          EOF
 
           if [ -f auto_notes.md ]; then
             cat auto_notes.md >> release_body.md
@@ -242,15 +615,23 @@ jobs:
             echo "Initial release or no previous tag found." >> release_body.md
           fi
 
-      - name: Create release (unsigned)
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: DBFlux ${{ steps.version.outputs.version }}
           body_path: release_body.md
           files: |
-            artifacts/*/dbflux-*.tar.gz
-            artifacts/*/dbflux-*.tar.gz.sha256
+            artifacts/linux-*/*.tar.gz
+            artifacts/linux-*/*.tar.gz.sha256
+            artifacts/linux-*/*.AppImage
+            artifacts/linux-*/*.AppImage.sha256
+            artifacts/macos-*/*.dmg
+            artifacts/macos-*/*.dmg.sha256
+            artifacts/windows-*/*.zip
+            artifacts/windows-*/*.zip.sha256
+            artifacts/windows-*/*-setup.exe
+            artifacts/windows-*/*-setup.exe.sha256
           draft: true
           prerelease: false
         env:
