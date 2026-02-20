@@ -44,6 +44,13 @@ impl Render for DataGridPanel {
             self.refresh(window, cx);
         }
 
+        if self.context_menu.is_none() {
+            self.pending_context_menu_focus = false;
+        } else if self.pending_context_menu_focus {
+            self.pending_context_menu_focus = false;
+            self.context_menu_focus.focus(window);
+        }
+
         if let Some(modal) = self.pending_modal_open.take() {
             self.cell_editor.update(cx, |editor, cx| {
                 editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);

@@ -189,28 +189,33 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::document::TabManagerEvent, window, cx| {
                 use crate::ui::document::TabManagerEvent;
-                if let TabManagerEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
-                    generation_type,
-                } = event
-                {
-                    use crate::ui::sql_preview_modal::SqlPreviewContext;
-                    let context = SqlPreviewContext::DataTableRow {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
-                    };
-                    this.sql_preview_modal.update(cx, |modal, cx| {
-                        modal.open(context, *generation_type, window, cx);
-                    });
+                match event {
+                    TabManagerEvent::DocumentRequestedFocus => {
+                        this.set_focus(FocusTarget::Document, window, cx);
+                    }
+                    TabManagerEvent::RequestSqlPreview {
+                        profile_id,
+                        schema_name,
+                        table_name,
+                        column_names,
+                        row_values,
+                        pk_indices,
+                        generation_type,
+                    } => {
+                        use crate::ui::sql_preview_modal::SqlPreviewContext;
+                        let context = SqlPreviewContext::DataTableRow {
+                            profile_id: *profile_id,
+                            schema_name: schema_name.clone(),
+                            table_name: table_name.clone(),
+                            column_names: column_names.clone(),
+                            row_values: row_values.clone(),
+                            pk_indices: pk_indices.clone(),
+                        };
+                        this.sql_preview_modal.update(cx, |modal, cx| {
+                            modal.open(context, *generation_type, window, cx);
+                        });
+                    }
+                    _ => {}
                 }
             },
         )

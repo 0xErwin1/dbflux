@@ -135,6 +135,14 @@ impl Render for Workspace {
                                         }
                                     }),
                                 )
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(|this, _, window, cx| {
+                                        if this.focus_target != FocusTarget::Document {
+                                            this.set_focus(FocusTarget::Document, window, cx);
+                                        }
+                                    }),
+                                )
                                 .child(tab_bar)
                                 .when_some(active_doc_element, |el, doc| {
                                     el.child(
@@ -405,11 +413,9 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::Cancel, window, cx| {
-                if this.command_palette.read(cx).is_visible() {
-                    this.command_palette.update(cx, |p, cx| p.hide(cx));
+                if !this.dispatch(Command::Cancel, window, cx) {
+                    cx.propagate();
                 }
-                // Always focus the workspace to exit any input and enable navigation
-                this.focus_handle.focus(window);
             }))
             .on_action(cx.listener(|this, _: &keymap::ExportResults, window, cx| {
                 if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {

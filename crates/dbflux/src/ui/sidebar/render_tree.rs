@@ -182,10 +182,22 @@ pub(super) fn render_tree_item(
                         }
                     })
                 })
-                // Intercept mouse_down for non-table folder items
-                .when(!is_table_or_view && is_folder, |el| {
+                // Handle clicks directly on non-table nodes (single select, double action)
+                .when(!is_table_or_view && node_kind.needs_click_handler(), |el| {
+                    let sidebar_click = sidebar_entity.clone();
+                    let item_id_click = item_id.clone();
+
                     el.on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
+                    })
+                    .on_click(move |event, _window, cx| {
+                        cx.stop_propagation();
+                        let click_count = event.click_count();
+                        let with_ctrl = event.modifiers().platform || event.modifiers().control;
+
+                        sidebar_click.update(cx, |this, cx| {
+                            this.handle_item_click(&item_id_click, click_count, with_ctrl, cx);
+                        });
                     })
                 })
                 .child(
@@ -495,20 +507,6 @@ pub(super) fn render_tree_item(
 
     if node_kind.shows_pointer_cursor() {
         list_item = list_item.cursor(CursorStyle::PointingHand);
-    }
-
-    if !is_table_or_view && node_kind.needs_click_handler() {
-        let item_id_for_click = item_id.clone();
-        let sidebar = sidebar_entity.clone();
-
-        list_item = list_item.on_click(move |event, _window, cx| {
-            cx.stop_propagation();
-            let click_count = event.click_count();
-            let with_ctrl = event.modifiers().platform || event.modifiers().control;
-            sidebar.update(cx, |this, cx| {
-                this.handle_item_click(&item_id_for_click, click_count, with_ctrl, cx);
-            });
-        });
     }
 
     list_item

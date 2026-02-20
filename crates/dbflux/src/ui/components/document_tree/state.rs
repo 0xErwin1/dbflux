@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use dbflux_core::{QueryResult, Value};
-use gpui::{Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle};
+use gpui::{
+    AppContext, Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle, Window,
+};
+use gpui_component::input::{InputEvent, InputState};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -62,6 +65,12 @@ pub struct DocumentTreeState {
 
     /// Whether search input is visible.
     search_visible: bool,
+
+    /// Node currently being edited inline.
+    editing_node: Option<NodeId>,
+
+    /// Input state for inline value editing.
+    inline_edit_input: Option<gpui::Entity<InputState>>,
 }
 
 impl DocumentTreeState {
@@ -82,6 +91,8 @@ impl DocumentTreeState {
             search_matches: Vec::new(),
             current_match_index: None,
             search_visible: false,
+            editing_node: None,
+            inline_edit_input: None,
         }
     }
 
@@ -98,6 +109,8 @@ impl DocumentTreeState {
         self.search_matches.clear();
         self.current_match_index = None;
         self.search_visible = false;
+        self.editing_node = None;
+        self.inline_edit_input = None;
 
         // For document databases, each row is a single document stored in the first column
         // The _id column is typically the first, and the full document is in a "_document" column
@@ -170,6 +183,14 @@ impl DocumentTreeState {
 
     pub fn cursor(&self) -> Option<&NodeId> {
         self.cursor.as_ref()
+    }
+
+    pub fn editing_node(&self) -> Option<&NodeId> {
+        self.editing_node.as_ref()
+    }
+
+    pub fn inline_edit_input(&self) -> Option<&gpui::Entity<InputState>> {
+        self.inline_edit_input.as_ref()
     }
 
     /// Get raw document value by index (for copy/preview operations).
@@ -650,35 +671,92 @@ impl DocumentTreeState {
         self.focus_handle.focus(window);
     }
 
-    pub fn request_edit(&self, cx: &mut Context<Self>) {
-        let Some(cursor) = &self.cursor else {
+    pub fn start_edit_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cursor) = self.cursor.clone() else {
             return;
         };
 
-        let node = self.visible_nodes.iter().find(|n| &n.id == cursor);
+        self.start_inline_edit(&cursor, window, cx);
+    }
 
-        if let Some(node) = node {
-            let (current_value, is_json) = match &node.value {
-                NodeValue::Scalar(v) => (format_value_for_edit(v), false),
-                NodeValue::Document(_) | NodeValue::Array(_) => {
-                    // For complex values, serialize as JSON
-                    let raw_value = self.get_value_at_path(cursor);
-                    if let Some(v) = raw_value {
-                        (
-                            serde_json::to_string_pretty(&value_to_json(&v)).unwrap_or_default(),
-                            true,
-                        )
-                    } else {
-                        return;
-                    }
+    pub fn handle_value_click(&mut self, id: &NodeId, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_cursor(id, cx);
+        self.start_inline_edit(id, window, cx);
+    }
+
+    pub fn commit_inline_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.editing_node.take() else {
+            return;
+        };
+
+        let Some(input) = self.inline_edit_input.take() else {
+            return;
+        };
+
+        let new_value = input.read(cx).value().to_string();
+
+        cx.emit(DocumentTreeEvent::InlineEditCommitted { node_id, new_value });
+        cx.notify();
+    }
+
+    pub fn cancel_inline_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing_node.take().is_some() {
+            self.inline_edit_input = None;
+            cx.notify();
+        }
+    }
+
+    fn start_inline_edit(&mut self, id: &NodeId, window: &mut Window, cx: &mut Context<Self>) {
+        let node = self.visible_nodes.iter().find(|n| &n.id == id).cloned();
+
+        let Some(node) = node else {
+            return;
+        };
+
+        if id.is_root() {
+            self.toggle_expand(id, cx);
+            return;
+        }
+
+        match &node.value {
+            NodeValue::Document(_) | NodeValue::Array(_) => {
+                self.toggle_expand(id, cx);
+            }
+            NodeValue::Scalar(value) => {
+                if should_expand_scalar_value(value) {
+                    self.cancel_inline_edit(cx);
+                    self.toggle_value_expand(id, cx);
+                    return;
                 }
-            };
 
-            cx.emit(DocumentTreeEvent::EditRequested {
-                node_id: cursor.clone(),
-                current_value,
-                is_json,
-            });
+                if self.editing_node.as_ref() == Some(id) {
+                    return;
+                }
+
+                self.cancel_inline_edit(cx);
+
+                let initial_value = format_value_for_edit(value);
+                let input = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx);
+                    state.set_value(&initial_value, window, cx);
+                    state
+                });
+
+                input.update(cx, |state, cx| {
+                    state.focus(window, cx);
+                });
+
+                cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
+                    InputEvent::PressEnter { .. } => this.commit_inline_edit(cx),
+                    InputEvent::Blur => this.cancel_inline_edit(cx),
+                    _ => {}
+                })
+                .detach();
+
+                self.editing_node = Some(id.clone());
+                self.inline_edit_input = Some(input);
+                cx.notify();
+            }
         }
     }
 
@@ -727,49 +805,41 @@ impl DocumentTreeState {
         });
     }
 
-    /// Double-click action: preview (root), expand (container), or edit (scalar).
-    pub fn execute_node(&mut self, id: &NodeId, cx: &mut Context<Self>) {
+    /// Double-click action: expand/collapse containers, edit scalar values.
+    pub fn execute_node(&mut self, id: &NodeId, window: &mut Window, cx: &mut Context<Self>) {
         self.set_cursor(id, cx);
 
-        let is_expandable = self
-            .visible_nodes
-            .iter()
-            .find(|n| &n.id == id)
-            .map(|n| n.is_expandable())
-            .unwrap_or(false);
-
-        if id.is_root() {
-            self.request_document_preview(cx);
-        } else if is_expandable {
-            self.toggle_expand(id, cx);
-        } else {
-            self.request_edit(cx);
-        }
+        self.start_inline_edit(id, window, cx);
     }
 
-    /// Get the value at a given path within the documents.
-    fn get_value_at_path(&self, id: &NodeId) -> Option<Value> {
-        let doc_index = id.doc_index()?;
-        let raw_doc = self.raw_documents.get(doc_index)?;
+    /// Apply an inline value edit directly to the in-memory tree data.
+    pub fn apply_inline_edit_value(&mut self, id: &NodeId, value: Value, cx: &mut Context<Self>) {
+        let Some(doc_index) = id.doc_index() else {
+            return;
+        };
 
-        if id.is_root() {
-            return Some(raw_doc.clone());
+        if id.path.len() < 2 {
+            return;
         }
 
-        // Navigate the path
-        let mut current = raw_doc.clone();
-        for segment in &id.path[1..] {
-            current = match current {
-                Value::Document(fields) => fields.into_iter().find(|(k, _)| k == segment)?.1,
-                Value::Array(items) => {
-                    let idx: usize = segment.parse().ok()?;
-                    items.into_iter().nth(idx)?
-                }
-                _ => return None,
-            };
+        let Some(raw_doc) = self.raw_documents.get_mut(doc_index) else {
+            return;
+        };
+
+        let updated = set_value_at_path(raw_doc, &id.path[1..], value);
+        if !updated {
+            return;
         }
 
-        Some(current)
+        self.raw_json_cache = None;
+
+        if let Some(root_node) = self.documents.get_mut(doc_index) {
+            root_node.value = NodeValue::from_value(raw_doc);
+        }
+
+        self.cursor = Some(id.clone());
+        self.needs_rebuild = true;
+        cx.notify();
     }
 
     // === Internal ===
@@ -804,6 +874,72 @@ impl Focusable for DocumentTreeState {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+fn should_expand_scalar_value(value: &Value) -> bool {
+    match value {
+        Value::Text(text) => text.contains('\n') || text.len() > 100,
+        Value::Json(_) | Value::Bytes(_) => true,
+        _ => false,
+    }
+}
+
+fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> bool {
+    if path.is_empty() {
+        *current = new_value;
+        return true;
+    }
+
+    let mut cursor = current;
+
+    for (idx, segment) in path.iter().enumerate() {
+        let is_last = idx + 1 == path.len();
+
+        if is_last {
+            match cursor {
+                Value::Document(fields) => {
+                    fields.insert(segment.clone(), new_value);
+                    return true;
+                }
+                Value::Array(items) => {
+                    let Ok(item_idx) = segment.parse::<usize>() else {
+                        return false;
+                    };
+
+                    if item_idx >= items.len() {
+                        return false;
+                    }
+
+                    items[item_idx] = new_value;
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        cursor = match cursor {
+            Value::Document(fields) => {
+                let Some(next) = fields.get_mut(segment) else {
+                    return false;
+                };
+                next
+            }
+            Value::Array(items) => {
+                let Ok(item_idx) = segment.parse::<usize>() else {
+                    return false;
+                };
+
+                let Some(next) = items.get_mut(item_idx) else {
+                    return false;
+                };
+
+                next
+            }
+            _ => return false,
+        };
+    }
+
+    false
 }
 
 fn format_value_for_edit(value: &Value) -> String {

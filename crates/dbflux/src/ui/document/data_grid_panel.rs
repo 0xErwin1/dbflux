@@ -6,13 +6,15 @@ mod render;
 mod utils;
 
 use crate::app::AppState;
-use crate::ui::cell_editor_modal::{CellEditorModal, CellEditorSaveEvent};
+use crate::ui::cell_editor_modal::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
     TableModel,
 };
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
-use crate::ui::document_preview_modal::{DocumentPreviewModal, DocumentPreviewSaveEvent};
+use crate::ui::document_preview_modal::{
+    DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
+};
 use crate::ui::toast::PendingToast;
 use dbflux_core::{
     CancelToken, CollectionRef, OrderByColumn, Pagination, QueryResult, SortDirection, TableRef,
@@ -302,6 +304,7 @@ pub struct DataGridPanel {
     // Context menu
     context_menu: Option<TableContextMenu>,
     context_menu_focus: FocusHandle,
+    pending_context_menu_focus: bool,
 
     // Modal editor for JSON/long text
     cell_editor: Entity<CellEditorModal>,
@@ -551,6 +554,15 @@ impl DataGridPanel {
         )
         .detach();
 
+        cx.subscribe_in(
+            &cell_editor,
+            window,
+            |this, _, _: &CellEditorClosedEvent, window, cx| {
+                this.focus_active_view(window, cx);
+            },
+        )
+        .detach();
+
         let document_preview_modal = cx.new(|cx| DocumentPreviewModal::new(window, cx));
 
         cx.subscribe_in(
@@ -563,6 +575,15 @@ impl DataGridPanel {
                     window,
                     cx,
                 );
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &document_preview_modal,
+            window,
+            |this, _, _: &DocumentPreviewClosedEvent, window, cx| {
+                this.focus_active_view(window, cx);
             },
         )
         .detach();
@@ -598,6 +619,7 @@ impl DataGridPanel {
             is_maximized: false,
             context_menu: None,
             context_menu_focus,
+            pending_context_menu_focus: false,
             cell_editor,
             pending_modal_open: None,
             panel_origin: Point::default(),
@@ -671,6 +693,24 @@ impl DataGridPanel {
         self.set_result((*result).clone(), cx);
     }
 
+    pub(super) fn focus_active_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_mode = GridFocusMode::Table;
+        self.edit_state = EditState::Navigating;
+
+        if self.view_config.mode == super::data_view::DataViewMode::Document {
+            if let Some(tree_state) = &self.document_tree_state {
+                tree_state.update(cx, |state, _| state.focus(window));
+            } else {
+                self.focus_handle.focus(window);
+            }
+        } else {
+            self.focus_handle.focus(window);
+        }
+
+        cx.emit(DataGridEvent::Focused);
+        cx.notify();
+    }
+
     fn rebuild_table(&mut self, initial_sort: Option<TableSortState>, cx: &mut Context<Self>) {
         // Find PK column indices in result columns
         let pk_indices: Vec<usize> = self
@@ -734,6 +774,8 @@ impl DataGridPanel {
                             submenu_selected_index: 0,
                             is_document_view: false,
                         });
+                        this.pending_context_menu_focus = true;
+                        cx.emit(DataGridEvent::Focused);
                         cx.notify();
                     }
                     // Keyboard-triggered row operations
@@ -803,18 +845,8 @@ impl DataGridPanel {
                 DocumentTreeEvent::Focused => {
                     cx.emit(DataGridEvent::Focused);
                 }
-                DocumentTreeEvent::EditRequested {
-                    node_id,
-                    current_value,
-                    is_json,
-                } => {
-                    this.pending_modal_open = Some(PendingModalOpen {
-                        row: node_id.doc_index().unwrap_or(0),
-                        col: 0,
-                        value: current_value.clone(),
-                        is_json: *is_json,
-                    });
-                    cx.notify();
+                DocumentTreeEvent::InlineEditCommitted { node_id, new_value } => {
+                    this.handle_document_tree_inline_edit(node_id, new_value, cx);
                 }
                 DocumentTreeEvent::DocumentPreviewRequested {
                     doc_index,
@@ -849,6 +881,8 @@ impl DataGridPanel {
                         submenu_selected_index: 0,
                         is_document_view: true,
                     });
+                    this.pending_context_menu_focus = true;
+                    cx.emit(DataGridEvent::Focused);
                     cx.notify();
                 }
                 DocumentTreeEvent::CursorMoved

@@ -11,6 +11,10 @@ pub struct DocumentPreviewSaveEvent {
     pub document_json: String,
 }
 
+/// Event emitted when the document preview modal is closed.
+#[derive(Clone)]
+pub struct DocumentPreviewClosedEvent;
+
 /// Modal editor for viewing and editing full MongoDB documents.
 pub struct DocumentPreviewModal {
     visible: bool,
@@ -65,8 +69,14 @@ impl DocumentPreviewModal {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        let was_visible = self.visible;
         self.visible = false;
         self.validation_error = None;
+
+        if was_visible {
+            cx.emit(DocumentPreviewClosedEvent);
+        }
+
         cx.notify();
     }
 
@@ -109,6 +119,7 @@ impl DocumentPreviewModal {
 }
 
 impl EventEmitter<DocumentPreviewSaveEvent> for DocumentPreviewModal {}
+impl EventEmitter<DocumentPreviewClosedEvent> for DocumentPreviewModal {}
 
 impl Render for DocumentPreviewModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

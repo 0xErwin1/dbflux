@@ -12,6 +12,10 @@ pub struct CellEditorSaveEvent {
     pub value: String,
 }
 
+/// Event emitted when the modal editor is closed.
+#[derive(Clone)]
+pub struct CellEditorClosedEvent;
+
 /// Modal editor for JSON and long text values.
 pub struct CellEditorModal {
     visible: bool,
@@ -78,8 +82,14 @@ impl CellEditorModal {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        let was_visible = self.visible;
         self.visible = false;
         self.validation_error = None;
+
+        if was_visible {
+            cx.emit(CellEditorClosedEvent);
+        }
+
         cx.notify();
     }
 
@@ -125,6 +135,7 @@ impl CellEditorModal {
 }
 
 impl EventEmitter<CellEditorSaveEvent> for CellEditorModal {}
+impl EventEmitter<CellEditorClosedEvent> for CellEditorModal {}
 
 impl Render for CellEditorModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

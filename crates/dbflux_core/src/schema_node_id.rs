@@ -1032,6 +1032,7 @@ impl SchemaNodeKind {
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
                 | Self::CollectionsFolder
+                | Self::Database
                 | Self::CustomType
         )
     }

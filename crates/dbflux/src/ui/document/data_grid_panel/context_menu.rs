@@ -18,6 +18,28 @@ use std::fs::File;
 use std::io::BufWriter;
 
 impl DataGridPanel {
+    fn restore_focus_after_context_menu(
+        &mut self,
+        is_document_view: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_mode = super::GridFocusMode::Table;
+        self.edit_state = EditState::Navigating;
+
+        if is_document_view {
+            if let Some(tree_state) = &self.document_tree_state {
+                tree_state.update(cx, |state, _| state.focus(window));
+            } else {
+                self.focus_handle.focus(window);
+            }
+        } else {
+            self.focus_handle.focus(window);
+        }
+
+        cx.emit(DataGridEvent::Focused);
+    }
+
     /// Opens context menu at the current selection.
     pub(super) fn open_context_menu_at_selection(
         &mut self,
@@ -66,6 +88,7 @@ impl DataGridPanel {
 
         // Focus the context menu to receive keyboard events
         self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
 
@@ -89,6 +112,7 @@ impl DataGridPanel {
         });
 
         self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
 
@@ -122,6 +146,7 @@ impl DataGridPanel {
         });
 
         self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
 
@@ -292,9 +317,10 @@ impl DataGridPanel {
                         menu.sql_submenu_open = false;
                         cx.notify();
                     } else {
-                        // Close menu and restore focus to table
+                        // Close menu and restore focus to active view
+                        let is_document_view = menu.is_document_view;
                         self.context_menu = None;
-                        self.focus_handle.focus(window);
+                        self.restore_focus_after_context_menu(is_document_view, window, cx);
                         cx.notify();
                     }
                 }
@@ -588,11 +614,11 @@ impl DataGridPanel {
                                     .text_color(theme.muted_foreground)
                                     .bg(theme.secondary)
                                     .hover(|d| d.bg(btn_hover))
-                                    .on_click(move |_, _, cx| {
+                                    .on_click(cx.listener(move |_, _, window, cx| {
                                         entity_cancel.update(cx, |panel, cx| {
-                                            panel.cancel_delete(cx);
+                                            panel.cancel_delete(window, cx);
                                         });
-                                    })
+                                    }))
                                     .child(
                                         svg()
                                             .path(AppIcon::X.path())
@@ -615,11 +641,11 @@ impl DataGridPanel {
                                     .text_color(theme.background)
                                     .bg(theme.danger)
                                     .hover(|d| d.opacity(0.9))
-                                    .on_click(move |_, _, cx| {
+                                    .on_click(cx.listener(move |_, _, window, cx| {
                                         entity.update(cx, |panel, cx| {
-                                            panel.confirm_delete(cx);
+                                            panel.confirm_delete(window, cx);
                                         });
-                                    })
+                                    }))
                                     .child(
                                         svg()
                                             .path(AppIcon::Delete.path())
@@ -939,16 +965,28 @@ impl DataGridPanel {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
+                        let is_document_view = this
+                            .context_menu
+                            .as_ref()
+                            .map(|menu| menu.is_document_view)
+                            .unwrap_or(false);
+
                         this.context_menu = None;
-                        this.focus_handle.focus(window);
+                        this.restore_focus_after_context_menu(is_document_view, window, cx);
                         cx.notify();
                     }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(|this, _, window, cx| {
+                        let is_document_view = this
+                            .context_menu
+                            .as_ref()
+                            .map(|menu| menu.is_document_view)
+                            .unwrap_or(false);
+
                         this.context_menu = None;
-                        this.focus_handle.focus(window);
+                        this.restore_focus_after_context_menu(is_document_view, window, cx);
                         cx.notify();
                     }),
                 )
@@ -985,6 +1023,8 @@ impl DataGridPanel {
             Some(m) => m,
             None => return,
         };
+
+        let is_document_view = menu.is_document_view;
 
         match action {
             ContextMenuAction::Copy => {
@@ -1032,8 +1072,8 @@ impl DataGridPanel {
             }
         }
 
-        // Restore focus to table after action
-        self.focus_handle.focus(window);
+        // Restore focus to the active view after action
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
         cx.notify();
     }
 
