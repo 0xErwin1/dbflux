@@ -42,10 +42,15 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_driver_redis]
+workspace = true
+optional = true
+
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis"]
 sqlite = ["dbflux_driver_sqlite"]
 postgres = ["dbflux_driver_postgres"]
 mysql = ["dbflux_driver_mysql"]
 mongodb = ["dbflux_driver_mongodb"]
+redis = ["dbflux_driver_redis"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]

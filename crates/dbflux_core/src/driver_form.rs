@@ -532,6 +532,90 @@ pub static MONGODB_FORM: DriverFormDef = DriverFormDef {
     ],
 };
 
+pub static REDIS_FORM: DriverFormDef = DriverFormDef {
+    tabs: &[
+        FormTab {
+            id: "main",
+            label: "Main",
+            sections: &[
+                FormSection {
+                    title: "Server",
+                    fields: &[
+                        FIELD_USE_URI,
+                        FormFieldDef {
+                            id: "uri",
+                            label: "Connection URI",
+                            kind: FormFieldKind::Text,
+                            placeholder: "redis://localhost:6379/0",
+                            required: true,
+                            default_value: "",
+                            enabled_when_checked: Some("use_uri"),
+                            enabled_when_unchecked: None,
+                        },
+                        FormFieldDef {
+                            id: "host",
+                            label: "Host",
+                            kind: FormFieldKind::Text,
+                            placeholder: "localhost",
+                            required: true,
+                            default_value: "localhost",
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: Some("use_uri"),
+                        },
+                        FormFieldDef {
+                            id: "port",
+                            label: "Port",
+                            kind: FormFieldKind::Number,
+                            placeholder: "6379",
+                            required: true,
+                            default_value: "6379",
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: Some("use_uri"),
+                        },
+                        FormFieldDef {
+                            id: "database",
+                            label: "Database Index",
+                            kind: FormFieldKind::Number,
+                            placeholder: "0",
+                            required: false,
+                            default_value: "0",
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: Some("use_uri"),
+                        },
+                        FormFieldDef {
+                            id: "tls",
+                            label: "Use TLS",
+                            kind: FormFieldKind::Checkbox,
+                            placeholder: "",
+                            required: false,
+                            default_value: "",
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: Some("use_uri"),
+                        },
+                    ],
+                },
+                FormSection {
+                    title: "Authentication",
+                    fields: &[
+                        FormFieldDef {
+                            id: "user",
+                            label: "User",
+                            kind: FormFieldKind::Text,
+                            placeholder: "optional",
+                            required: false,
+                            default_value: "",
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: Some("use_uri"),
+                        },
+                        FIELD_PASSWORD,
+                    ],
+                },
+            ],
+        },
+        SSH_TAB,
+    ],
+};
+
 impl DriverFormDef {
     pub fn main_tab(&self) -> Option<&FormTab> {
         self.tabs.first()

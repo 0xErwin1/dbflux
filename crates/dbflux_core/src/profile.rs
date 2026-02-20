@@ -10,6 +10,7 @@ pub enum DbKind {
     MySQL,
     MariaDB,
     MongoDB,
+    Redis,
 }
 
 impl DbKind {
@@ -20,6 +21,7 @@ impl DbKind {
             DbKind::MySQL => "MySQL",
             DbKind::MariaDB => "MariaDB",
             DbKind::MongoDB => "MongoDB",
+            DbKind::Redis => "Redis",
         }
     }
 }
@@ -155,6 +157,23 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    Redis {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
+        host: String,
+        port: u16,
+        user: Option<String>,
+        /// Redis logical database index.
+        #[serde(default)]
+        database: Option<u32>,
+        #[serde(default)]
+        tls: bool,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
 }
 
 impl DbConfig {
@@ -168,6 +187,7 @@ impl DbConfig {
             DbConfig::SQLite { .. } => DbKind::SQLite,
             DbConfig::MySQL { .. } => DbKind::MySQL,
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
+            DbConfig::Redis { .. } => DbKind::Redis,
         }
     }
 
@@ -219,11 +239,26 @@ impl DbConfig {
         }
     }
 
+    pub fn default_redis() -> Self {
+        DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 6379,
+            user: None,
+            database: Some(0),
+            tls: false,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
-            | DbConfig::MongoDB { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            | DbConfig::MongoDB { ssh_tunnel, .. }
+            | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
             DbConfig::SQLite { .. } => None,
         }
     }
