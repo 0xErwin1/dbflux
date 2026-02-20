@@ -131,6 +131,11 @@ impl ConnectionManagerWindow {
                 ssh_tunnel: tunnel,
                 ssh_tunnel_profile_id: profile_id,
                 ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
             } => {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;

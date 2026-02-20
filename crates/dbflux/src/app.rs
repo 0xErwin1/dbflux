@@ -24,6 +24,9 @@ use dbflux_driver_mysql::MysqlDriver;
 #[cfg(feature = "mongodb")]
 use dbflux_driver_mongodb::MongoDriver;
 
+#[cfg(feature = "redis")]
+use dbflux_driver_redis::RedisDriver;
+
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
     FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
@@ -58,6 +61,11 @@ impl AppState {
         #[cfg(feature = "mongodb")]
         {
             drivers.insert(DbKind::MongoDB, Arc::new(MongoDriver::new()));
+        }
+
+        #[cfg(feature = "redis")]
+        {
+            drivers.insert(DbKind::Redis, Arc::new(RedisDriver::new()));
         }
 
         Self {

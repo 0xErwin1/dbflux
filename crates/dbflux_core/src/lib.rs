@@ -55,7 +55,7 @@ pub use driver_capabilities::{
 };
 pub use driver_form::{
     DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MONGODB_FORM,
-    MYSQL_FORM, POSTGRES_FORM, SQLITE_FORM,
+    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
 pub use error_formatter::{
