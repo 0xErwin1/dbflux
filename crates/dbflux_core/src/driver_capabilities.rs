@@ -228,22 +228,46 @@ bitflags! {
 
         // === Key-value specific features ===
 
-        /// Driver supports key expiration (TTL).
-        const KEY_EXPIRATION = 1 << 30;
+        /// Driver supports cursor-based key scanning.
+        const KV_SCAN = 1 << 30;
 
-        /// Driver supports key patterns / wildcards.
-        const KEY_PATTERNS = 1 << 31;
+        /// Driver supports reading single key values.
+        const KV_GET = 1 << 31;
+
+        /// Driver supports writing key values.
+        const KV_SET = 1 << 32;
+
+        /// Driver supports deleting keys.
+        const KV_DELETE = 1 << 33;
+
+        /// Driver supports key existence checks.
+        const KV_EXISTS = 1 << 34;
+
+        /// Driver supports key TTL read/write operations.
+        const KV_TTL = 1 << 35;
+
+        /// Driver can report concrete key types.
+        const KV_KEY_TYPES = 1 << 36;
+
+        /// Driver can report key value size.
+        const KV_VALUE_SIZE = 1 << 37;
+
+        /// Driver supports key rename operations.
+        const KV_RENAME = 1 << 38;
+
+        /// Driver supports bulk key reads.
+        const KV_BULK_GET = 1 << 39;
 
         /// Driver supports pub/sub.
-        const PUBSUB = 1 << 32;
+        const PUBSUB = 1 << 40;
 
         // === Graph-specific features ===
 
         /// Driver supports graph traversal queries.
-        const GRAPH_TRAVERSAL = 1 << 33;
+        const GRAPH_TRAVERSAL = 1 << 41;
 
         /// Driver supports edge properties.
-        const EDGE_PROPERTIES = 1 << 34;
+        const EDGE_PROPERTIES = 1 << 42;
     }
 }
 
@@ -285,11 +309,11 @@ impl DriverCapabilities {
     /// Common capabilities for key-value databases.
     pub const KEYVALUE_BASE: Self = Self::from_bits_truncate(
         Self::AUTHENTICATION.bits()
-            | Self::KEY_EXPIRATION.bits()
-            | Self::KEY_PATTERNS.bits()
-            | Self::INSERT.bits()
-            | Self::UPDATE.bits()
-            | Self::DELETE.bits()
+            | Self::KV_SCAN.bits()
+            | Self::KV_GET.bits()
+            | Self::KV_SET.bits()
+            | Self::KV_DELETE.bits()
+            | Self::KV_EXISTS.bits()
             | Self::EXPORT_JSON.bits(),
     );
 }
@@ -461,7 +485,7 @@ mod tests {
         assert!(caps.contains(DriverCapabilities::MULTIPLE_DATABASES));
         assert!(caps.contains(DriverCapabilities::TRANSACTIONS));
         assert!(caps.contains(DriverCapabilities::PAGINATION));
-        assert!(!caps.contains(DriverCapabilities::KEY_EXPIRATION));
+        assert!(!caps.contains(DriverCapabilities::KV_TTL));
     }
 
     #[test]
@@ -471,6 +495,18 @@ mod tests {
         assert!(caps.contains(DriverCapabilities::NESTED_DOCUMENTS));
         assert!(caps.contains(DriverCapabilities::ARRAYS));
         assert!(!caps.contains(DriverCapabilities::SCHEMAS));
+    }
+
+    #[test]
+    fn test_keyvalue_base_capabilities() {
+        let caps = DriverCapabilities::KEYVALUE_BASE;
+
+        assert!(caps.contains(DriverCapabilities::KV_SCAN));
+        assert!(caps.contains(DriverCapabilities::KV_GET));
+        assert!(caps.contains(DriverCapabilities::KV_SET));
+        assert!(caps.contains(DriverCapabilities::KV_DELETE));
+        assert!(caps.contains(DriverCapabilities::KV_EXISTS));
+        assert!(!caps.contains(DriverCapabilities::TRANSACTIONS));
     }
 
     #[test]

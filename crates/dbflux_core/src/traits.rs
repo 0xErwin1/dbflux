@@ -4,10 +4,15 @@ use crate::{
     CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
     ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
     DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, KeyDelete, KeySet, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
-    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService, NoOpCodeGenerator,
+    QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
+    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    key_value::{
+        KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest, KeyExpireRequest, KeyGetRequest,
+        KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest,
+        KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
+    },
 };
 
 bitflags! {
@@ -227,6 +232,73 @@ pub trait DbDriver: Send + Sync {
     ///
     /// Used by the "Test Connection" button in the connection manager.
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError>;
+}
+
+/// Key-value operations exposed by drivers in `DatabaseCategory::KeyValue`.
+///
+/// The UI must rely on this contract plus `DriverCapabilities` rather than
+/// driver-specific conditionals.
+pub trait KeyValueApi: Send + Sync {
+    /// Scan keys with cursor-based pagination.
+    fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError>;
+
+    /// Get key value plus metadata.
+    fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError>;
+
+    /// Set key value, optionally with TTL and conditional flags.
+    fn set_key(&self, request: &KeySetRequest) -> Result<(), DbError>;
+
+    /// Delete a single key. Returns `true` if a key was deleted.
+    fn delete_key(&self, request: &KeyDeleteRequest) -> Result<bool, DbError>;
+
+    /// Check whether a key exists.
+    fn exists_key(&self, request: &KeyExistsRequest) -> Result<bool, DbError>;
+
+    /// Get key type if supported by the driver.
+    fn key_type(&self, _request: &KeyTypeRequest) -> Result<KeyType, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value TYPE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Get key TTL in seconds.
+    ///
+    /// `Ok(None)` means key exists and has no expiration.
+    fn key_ttl(&self, _request: &KeyTtlRequest) -> Result<Option<i64>, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value TTL not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Set or update key expiration. Returns `true` when expiration changed.
+    fn expire_key(&self, _request: &KeyExpireRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value EXPIRE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Remove key expiration. Returns `true` when expiration was removed.
+    fn persist_key(&self, _request: &KeyPersistRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value PERSIST not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Rename a key.
+    fn rename_key(&self, _request: &KeyRenameRequest) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "Key-value RENAME not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Fetch multiple key values preserving request order.
+    ///
+    /// Missing keys are returned as `None`.
+    fn bulk_get(&self, _request: &KeyBulkGetRequest) -> Result<Vec<Option<KeyGetResult>>, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value bulk GET not supported by this driver".to_string(),
+        ))
+    }
 }
 
 /// Active database connection.
@@ -576,22 +648,11 @@ pub trait Connection: Send + Sync {
         ))
     }
 
-    // =========================================================================
-    // Key-Value Operations (Redis-style)
-    // =========================================================================
-
-    /// Set a key-value pair.
-    fn set_key(&self, _set: &KeySet) -> Result<CrudResult, DbError> {
-        Err(DbError::NotSupported(
-            "Key-value SET not supported by this driver".to_string(),
-        ))
-    }
-
-    /// Delete one or more keys.
-    fn delete_key(&self, _delete: &KeyDelete) -> Result<CrudResult, DbError> {
-        Err(DbError::NotSupported(
-            "Key-value DELETE not supported by this driver".to_string(),
-        ))
+    /// Returns the key-value API implementation when available.
+    ///
+    /// Non-key-value drivers return `None`.
+    fn key_value_api(&self) -> Option<&dyn KeyValueApi> {
+        None
     }
 
     /// Returns the language service for this connection.

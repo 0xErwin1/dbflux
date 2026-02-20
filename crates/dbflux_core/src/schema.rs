@@ -1,3 +1,4 @@
+use crate::key_value::KeyType;
 use serde::{Deserialize, Serialize};
 
 /// Information about a database on the server.
@@ -832,7 +833,7 @@ pub struct KeyInfo {
     pub key: String,
 
     /// Value type (string, list, set, hash, zset, stream, etc.).
-    pub value_type: KeyValueType,
+    pub value_type: KeyType,
 
     /// Time-to-live in seconds. None if no expiration.
     pub ttl_seconds: Option<i64>,
@@ -842,18 +843,6 @@ pub struct KeyInfo {
 
     /// Number of elements (for collections like list, set, hash).
     pub element_count: Option<u64>,
-}
-
-/// Redis/Valkey value types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeyValueType {
-    String,
-    List,
-    Set,
-    SortedSet,
-    Hash,
-    Stream,
-    Unknown,
 }
 
 // =============================================================================
