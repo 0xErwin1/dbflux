@@ -4,5 +4,6 @@ mod state;
 mod tree;
 
 pub use events::DocumentTreeEvent;
+pub use node::NodeId;
 pub use state::DocumentTreeState;
 pub use tree::{DocumentTree, init};

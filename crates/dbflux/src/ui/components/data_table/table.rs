@@ -447,9 +447,10 @@ impl gpui::Render for DataTable {
                             cx.stop_propagation();
                             window.focus(&focus_for_empty);
                         })
-                        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                             cx.stop_propagation();
-                            state_for_empty_context.update(cx, |_, cx| {
+                            state_for_empty_context.update(cx, |state, cx| {
+                                state.focus(window, cx);
                                 cx.emit(DataTableEvent::ContextMenuRequested {
                                     row: 0,
                                     col: 0,
@@ -958,9 +959,10 @@ fn render_rows(
                         })
                         .on_mouse_down(
                             MouseButton::Right,
-                            move |event: &MouseDownEvent, _window, cx| {
+                            move |event: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 state_for_context.update(cx, |state, cx| {
+                                    state.focus(window, cx);
                                     state.select_cell(coord, cx);
                                     cx.emit(DataTableEvent::ContextMenuRequested {
                                         row: coord.row,

@@ -458,10 +458,12 @@ impl Sidebar {
 
         let node_kind = parse_node_kind(item_id);
 
-        if node_kind.is_expandable_folder() {
-            self.toggle_item_expansion(item_id, cx);
-        } else if click_count == 2 {
-            self.execute_item(item_id, cx);
+        if click_count == 2 {
+            if node_kind.is_expandable_folder() {
+                self.toggle_item_expansion(item_id, cx);
+            } else {
+                self.execute_item(item_id, cx);
+            }
         }
 
         cx.notify();

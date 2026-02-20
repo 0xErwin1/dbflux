@@ -1,15 +1,304 @@
 use super::utils::value_to_json;
 use super::{DataGridPanel, DataSource, PendingDeleteConfirm, PendingToast};
+use crate::ui::components::document_tree::NodeId;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{
     CollectionRef, DocumentFilter, DocumentUpdate, Pagination, RowDelete, RowIdentity, RowInsert,
     RowPatch, RowState, TableRef, Value,
 };
 use gpui::*;
+use std::collections::BTreeMap;
 use uuid::Uuid;
+
+fn parse_inline_document_value(input: &str) -> serde_json::Value {
+    let trimmed = input.trim();
+
+    if trimmed.eq_ignore_ascii_case("null") {
+        return serde_json::Value::Null;
+    }
+
+    if trimmed.eq_ignore_ascii_case("true") {
+        return serde_json::Value::Bool(true);
+    }
+
+    if trimmed.eq_ignore_ascii_case("false") {
+        return serde_json::Value::Bool(false);
+    }
+
+    if (trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with('"'))
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        return value;
+    }
+
+    if let Ok(value) = trimmed.parse::<i64>() {
+        return serde_json::json!(value);
+    }
+
+    if let Ok(value) = trimmed.parse::<f64>()
+        && let Some(number) = serde_json::Number::from_f64(value)
+    {
+        return serde_json::Value::Number(number);
+    }
+
+    serde_json::Value::String(input.to_string())
+}
+
+fn json_to_inline_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(boolean) => Value::Bool(*boolean),
+        serde_json::Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                Value::Int(integer)
+            } else if let Some(float) = number.as_f64() {
+                Value::Float(float)
+            } else {
+                Value::Text(number.to_string())
+            }
+        }
+        serde_json::Value::String(text) => Value::Text(text.clone()),
+        serde_json::Value::Array(items) => {
+            Value::Array(items.iter().map(json_to_inline_value).collect())
+        }
+        serde_json::Value::Object(object) => {
+            if object.len() == 1
+                && let Some(serde_json::Value::String(object_id)) = object.get("$oid")
+            {
+                return Value::ObjectId(object_id.clone());
+            }
+
+            let fields: BTreeMap<String, Value> = object
+                .iter()
+                .map(|(key, val)| (key.clone(), json_to_inline_value(val)))
+                .collect();
+            Value::Document(fields)
+        }
+    }
+}
+
+fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> bool {
+    if path.is_empty() {
+        *current = new_value;
+        return true;
+    }
+
+    let mut cursor = current;
+
+    for (idx, segment) in path.iter().enumerate() {
+        let is_last = idx + 1 == path.len();
+
+        if is_last {
+            match cursor {
+                Value::Document(fields) => {
+                    fields.insert(segment.clone(), new_value);
+                    return true;
+                }
+                Value::Array(items) => {
+                    let Ok(item_idx) = segment.parse::<usize>() else {
+                        return false;
+                    };
+
+                    if item_idx >= items.len() {
+                        return false;
+                    }
+
+                    items[item_idx] = new_value;
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        cursor = match cursor {
+            Value::Document(fields) => {
+                let Some(next) = fields.get_mut(segment) else {
+                    return false;
+                };
+                next
+            }
+            Value::Array(items) => {
+                let Ok(item_idx) = segment.parse::<usize>() else {
+                    return false;
+                };
+
+                let Some(next) = items.get_mut(item_idx) else {
+                    return false;
+                };
+
+                next
+            }
+            _ => return false,
+        };
+    }
+
+    false
+}
 
 impl DataGridPanel {
     // === Row Editing ===
+
+    fn apply_inline_value_to_result(&mut self, node_id: &NodeId, new_value: &Value) {
+        let Some(doc_index) = node_id.doc_index() else {
+            return;
+        };
+
+        let Some(row) = self.result.rows.get_mut(doc_index) else {
+            return;
+        };
+
+        let mut updated = false;
+
+        if let Some(doc_col_idx) = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_document")
+            && let Some(doc_cell) = row.get_mut(doc_col_idx)
+        {
+            updated |= set_value_at_path(doc_cell, &node_id.path[1..], new_value.clone());
+        }
+
+        if node_id.path.len() == 2 {
+            let field_name = &node_id.path[1];
+            if let Some(col_idx) = self
+                .result
+                .columns
+                .iter()
+                .position(|c| c.name == *field_name)
+                && let Some(cell) = row.get_mut(col_idx)
+            {
+                *cell = new_value.clone();
+                updated = true;
+            }
+        }
+
+        if !updated {
+            log::warn!(
+                "[SAVE] Could not update cached row for path: {:?}",
+                node_id.path
+            );
+        }
+    }
+
+    pub(super) fn handle_document_tree_inline_edit(
+        &mut self,
+        node_id: &NodeId,
+        new_value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
+            return;
+        };
+
+        let Some(doc_index) = node_id.doc_index() else {
+            return;
+        };
+
+        if node_id.path.len() < 2 {
+            return;
+        }
+
+        let Some(row) = self.result.rows.get(doc_index) else {
+            return;
+        };
+
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = row.get(id_col_idx).cloned().unwrap_or(Value::Null);
+
+        let filter = match &id_value {
+            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
+            Value::Text(value) => DocumentFilter::new(serde_json::json!({"_id": value})),
+            _ => {
+                log::error!("[SAVE] Invalid _id value for document inline edit");
+                return;
+            }
+        };
+
+        let field_path = node_id.path[1..].join(".");
+        let parsed_json = parse_inline_document_value(new_value);
+        let inline_value = json_to_inline_value(&parsed_json);
+        let node_id = node_id.clone();
+
+        let mut set_fields = serde_json::Map::new();
+        set_fields.insert(field_path, parsed_json);
+
+        let update_doc = serde_json::json!({"$set": set_fields});
+        let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+            .with_database(collection.database.clone());
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let profile_id = *profile_id;
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .ok()
+                .flatten();
+
+            let Some(conn) = conn else {
+                log::error!("[SAVE] No connection for profile {}", profile_id);
+                return;
+            };
+
+            let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
+                .background_executor()
+                .spawn(async move { conn.update_document(&update) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            panel.apply_inline_value_to_result(&node_id, &inline_value);
+
+                            if let Some(tree_state) = panel.document_tree_state.clone() {
+                                tree_state.update(cx, |state, cx| {
+                                    state.apply_inline_edit_value(
+                                        &node_id,
+                                        inline_value.clone(),
+                                        cx,
+                                    );
+                                });
+                            }
+
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Document updated".to_string(),
+                                is_error: false,
+                            });
+                        }
+                        Err(error) => {
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Failed to update document: {}", error),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
 
     pub(super) fn handle_save_row(&mut self, row_idx: usize, cx: &mut Context<Self>) {
         let Some(table_state) = &self.table_state else {
@@ -565,7 +854,7 @@ impl DataGridPanel {
         }
     }
 
-    pub fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+    pub fn confirm_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(confirm) = self.pending_delete_confirm.take() else {
             return;
         };
@@ -577,12 +866,15 @@ impl DataGridPanel {
         {
             self.commit_delete_table(*profile_id, table.clone(), confirm.row_idx, cx);
         }
+
+        self.focus_active_view(window, cx);
         cx.notify();
     }
 
-    pub fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+    pub fn cancel_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_delete_confirm.is_some() {
             self.pending_delete_confirm = None;
+            self.focus_active_view(window, cx);
             cx.notify();
         }
     }

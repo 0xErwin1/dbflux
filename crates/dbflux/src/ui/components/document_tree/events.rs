@@ -16,12 +16,8 @@ pub enum DocumentTreeEvent {
     /// Cursor moved to a different node.
     CursorMoved,
 
-    /// User requested to edit a field value.
-    EditRequested {
-        node_id: NodeId,
-        current_value: String,
-        is_json: bool,
-    },
+    /// User committed an inline edit for a scalar value.
+    InlineEditCommitted { node_id: NodeId, new_value: String },
 
     /// User toggled expand/collapse on a node.
     ExpandToggled,

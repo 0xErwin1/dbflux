@@ -92,14 +92,6 @@ impl NodeValue {
         }
     }
 
-    /// Check if the value is truncated in preview.
-    pub fn is_truncated(&self) -> bool {
-        match self {
-            NodeValue::Scalar(v) => is_value_truncated(v),
-            NodeValue::Document(_) | NodeValue::Array(_) => false,
-        }
-    }
-
     /// Get the type label for display.
     pub fn type_label(&self) -> &'static str {
         match self {
@@ -225,14 +217,6 @@ fn format_value_preview(value: &Value, truncate: bool) -> String {
         }
         Value::Document(fields) => format!("{{{} fields}}", fields.len()),
         Value::Array(items) => format!("[{} items]", items.len()),
-    }
-}
-
-fn is_value_truncated(value: &Value) -> bool {
-    match value {
-        Value::Text(s) => s.len() > MAX_PREVIEW_LEN,
-        Value::Json(j) => j.len() > MAX_PREVIEW_LEN,
-        _ => false,
     }
 }
 

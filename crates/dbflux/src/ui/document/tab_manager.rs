@@ -47,17 +47,19 @@ impl TabManager {
         let tab_manager = cx.entity().clone();
         let subscription = doc.subscribe(cx, move |event, cx| {
             use super::handle::DocumentEvent;
-            if let DocumentEvent::RequestSqlPreview {
-                profile_id,
-                schema_name,
-                table_name,
-                column_names,
-                row_values,
-                pk_indices,
-                generation_type,
-            } = event
-            {
-                tab_manager.update(cx, |_, cx| {
+            tab_manager.update(cx, |_, cx| match event {
+                DocumentEvent::RequestFocus => {
+                    cx.emit(TabManagerEvent::DocumentRequestedFocus);
+                }
+                DocumentEvent::RequestSqlPreview {
+                    profile_id,
+                    schema_name,
+                    table_name,
+                    column_names,
+                    row_values,
+                    pk_indices,
+                    generation_type,
+                } => {
                     cx.emit(TabManagerEvent::RequestSqlPreview {
                         profile_id: *profile_id,
                         schema_name: schema_name.clone(),
@@ -67,8 +69,9 @@ impl TabManager {
                         pk_indices: pk_indices.clone(),
                         generation_type: *generation_type,
                     });
-                });
-            }
+                }
+                _ => {}
+            });
         });
         self.subscriptions.insert(id, subscription);
 

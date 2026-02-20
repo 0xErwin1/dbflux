@@ -477,11 +477,11 @@ impl DataGridPanel {
         if self.pending_delete_confirm.is_some() {
             match cmd {
                 Command::Cancel => {
-                    self.cancel_delete(cx);
+                    self.cancel_delete(window, cx);
                     return true;
                 }
                 Command::Execute => {
-                    self.confirm_delete(cx);
+                    self.confirm_delete(window, cx);
                     return true;
                 }
                 _ => return true, // Block other commands while modal is open

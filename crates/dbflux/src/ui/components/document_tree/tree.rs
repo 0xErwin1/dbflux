@@ -256,8 +256,8 @@ impl Render for DocumentTree {
             })
             .on_action({
                 let state = self.state.clone();
-                move |_: &StartEdit, _window, cx| {
-                    state.update(cx, |s, cx| s.request_edit(cx));
+                move |_: &StartEdit, window, cx| {
+                    state.update(cx, |s, cx| s.start_edit_at_cursor(window, cx));
                 }
             })
             .on_action({
@@ -362,6 +362,9 @@ impl Render for DocumentTree {
                                         .find(|n| state_ref.is_current_match(&n.id))
                                         .map(|n| n.id.clone());
 
+                                    let editing_node = state_ref.editing_node().cloned();
+                                    let inline_edit_input = state_ref.inline_edit_input().cloned();
+
                                     range
                                         .filter_map(|ix| visible_nodes.get(ix).cloned())
                                         .map(|node| {
@@ -373,6 +376,8 @@ impl Render for DocumentTree {
                                                 search_matches_set.contains(&node.id);
                                             let is_current_match =
                                                 current_match.as_ref() == Some(&node.id);
+                                            let is_editing =
+                                                editing_node.as_ref() == Some(&node.id);
                                             let state_clone = state.clone();
                                             let node_id = node.id.clone();
 
@@ -383,6 +388,8 @@ impl Render for DocumentTree {
                                                 is_value_expanded,
                                                 is_search_match,
                                                 is_current_match,
+                                                is_editing,
+                                                inline_edit_input.clone(),
                                                 theme.clone(),
                                                 state_clone,
                                                 node_id,
@@ -540,13 +547,14 @@ fn render_tree_row(
     is_value_expanded: bool,
     is_search_match: bool,
     is_current_match: bool,
+    is_editing: bool,
+    inline_edit_input: Option<Entity<InputState>>,
     theme: gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
 ) -> Stateful<Div> {
     let indent = INDENT_WIDTH * node.depth as f32;
     let is_expandable = node.is_expandable();
-    let is_truncated = node.value.is_truncated();
 
     let chevron_state = state.clone();
     let chevron_node_id = node_id.clone();
@@ -610,8 +618,8 @@ fn render_tree_row(
                         // Single click: set cursor to this node
                         s.set_cursor(&row_node_id, cx);
                     } else if click_count == 2 {
-                        // Double click: execute action (expand, edit, or preview)
-                        s.execute_node(&row_node_id, cx);
+                        // Double click: expand/collapse or edit
+                        s.execute_node(&row_node_id, window, cx);
                     }
                 });
             }
@@ -659,7 +667,8 @@ fn render_tree_row(
         .child(render_value_preview_with_expand(
             &node.value,
             is_value_expanded,
-            is_truncated,
+            is_editing,
+            inline_edit_input,
             &theme,
             value_state,
             value_node_id,
@@ -735,7 +744,8 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
 fn render_value_preview_with_expand(
     value: &NodeValue,
     is_expanded: bool,
-    is_truncated: bool,
+    is_editing: bool,
+    inline_edit_input: Option<Entity<InputState>>,
     theme: &gpui_component::Theme,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
@@ -756,27 +766,50 @@ fn render_value_preview_with_expand(
         .text_size(FontSizes::SM)
         .text_color(color);
 
+    if is_editing && let Some(input) = inline_edit_input {
+        return base
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(Input::new(&input).small().w_full());
+    }
+
+    let click_state = state.clone();
+    let click_node_id = node_id.clone();
+
     if is_expanded {
         base.max_h(px(120.0))
             .overflow_y_scroll()
+            .cursor_pointer()
             .child(text)
-            .when(is_truncated, |d| {
-                d.cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.stop_propagation();
-                        state.update(cx, |s, cx| s.toggle_value_expand(&node_id, cx));
-                    })
+            .on_click(move |event, window, cx| {
+                cx.stop_propagation();
+                let click_count = event.click_count();
+
+                click_state.update(cx, |s, cx| {
+                    if click_count == 1 {
+                        s.set_cursor(&click_node_id, cx);
+                    } else if click_count == 2 {
+                        s.handle_value_click(&click_node_id, window, cx);
+                    }
+                });
             })
     } else {
         base.text_ellipsis()
             .whitespace_nowrap()
+            .cursor_pointer()
             .child(text)
-            .when(is_truncated, |d| {
-                d.cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.stop_propagation();
-                        state.update(cx, |s, cx| s.toggle_value_expand(&node_id, cx));
-                    })
+            .on_click(move |event, window, cx| {
+                cx.stop_propagation();
+                let click_count = event.click_count();
+
+                state.update(cx, |s, cx| {
+                    if click_count == 1 {
+                        s.set_cursor(&node_id, cx);
+                    } else if click_count == 2 {
+                        s.handle_value_click(&node_id, window, cx);
+                    }
+                });
             })
     }
 }
