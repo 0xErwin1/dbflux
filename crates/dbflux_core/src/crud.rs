@@ -427,98 +427,6 @@ impl DocumentDelete {
 }
 
 // =============================================================================
-// Key-Value Store Mutations (Redis-style)
-// =============================================================================
-
-/// SET operation for key-value stores.
-#[derive(Debug, Clone)]
-pub struct KeySet {
-    /// The key to set.
-    pub key: String,
-
-    /// The value to store.
-    pub value: Value,
-
-    /// Keyspace/database index (Redis: 0-15).
-    pub keyspace: Option<u32>,
-
-    /// Time-to-live in seconds (None = no expiry).
-    pub ttl_seconds: Option<u64>,
-
-    /// Only set if key doesn't exist (NX).
-    pub if_not_exists: bool,
-
-    /// Only set if key exists (XX).
-    pub if_exists: bool,
-}
-
-impl KeySet {
-    pub fn new(key: String, value: Value) -> Self {
-        Self {
-            key,
-            value,
-            keyspace: None,
-            ttl_seconds: None,
-            if_not_exists: false,
-            if_exists: false,
-        }
-    }
-
-    pub fn with_keyspace(mut self, keyspace: u32) -> Self {
-        self.keyspace = Some(keyspace);
-        self
-    }
-
-    pub fn with_ttl(mut self, seconds: u64) -> Self {
-        self.ttl_seconds = Some(seconds);
-        self
-    }
-
-    pub fn nx(mut self) -> Self {
-        self.if_not_exists = true;
-        self.if_exists = false;
-        self
-    }
-
-    pub fn xx(mut self) -> Self {
-        self.if_exists = true;
-        self.if_not_exists = false;
-        self
-    }
-}
-
-/// DELETE operation for key-value stores.
-#[derive(Debug, Clone)]
-pub struct KeyDelete {
-    /// Keys to delete.
-    pub keys: Vec<String>,
-
-    /// Keyspace/database index (Redis: 0-15).
-    pub keyspace: Option<u32>,
-}
-
-impl KeyDelete {
-    pub fn one(key: String) -> Self {
-        Self {
-            keys: vec![key],
-            keyspace: None,
-        }
-    }
-
-    pub fn many(keys: Vec<String>) -> Self {
-        Self {
-            keys,
-            keyspace: None,
-        }
-    }
-
-    pub fn with_keyspace(mut self, keyspace: u32) -> Self {
-        self.keyspace = Some(keyspace);
-        self
-    }
-}
-
-// =============================================================================
 // Unified Mutation Request
 // =============================================================================
 
@@ -534,10 +442,6 @@ pub enum MutationRequest {
     DocumentUpdate(DocumentUpdate),
     DocumentInsert(DocumentInsert),
     DocumentDelete(DocumentDelete),
-
-    // Key-value mutations (Redis-style)
-    KeySet(KeySet),
-    KeyDelete(KeyDelete),
 }
 
 impl MutationRequest {
@@ -565,14 +469,6 @@ impl MutationRequest {
         Self::DocumentDelete(delete)
     }
 
-    pub fn key_set(set: KeySet) -> Self {
-        Self::KeySet(set)
-    }
-
-    pub fn key_delete(delete: KeyDelete) -> Self {
-        Self::KeyDelete(delete)
-    }
-
     /// Returns true if this is a SQL mutation.
     pub fn is_sql(&self) -> bool {
         matches!(
@@ -587,10 +483,5 @@ impl MutationRequest {
             self,
             Self::DocumentUpdate(_) | Self::DocumentInsert(_) | Self::DocumentDelete(_)
         )
-    }
-
-    /// Returns true if this is a key-value mutation.
-    pub fn is_key_value(&self) -> bool {
-        matches!(self, Self::KeySet(_) | Self::KeyDelete(_))
     }
 }

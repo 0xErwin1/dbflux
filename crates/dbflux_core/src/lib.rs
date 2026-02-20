@@ -10,6 +10,7 @@ mod driver_form;
 mod error;
 mod error_formatter;
 mod history;
+mod key_value;
 mod language_service;
 mod profile;
 mod query;
@@ -45,8 +46,8 @@ pub use code_generation::{
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
 pub use crud::{
-    CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, KeyDelete, KeySet,
-    MutationRequest, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
+    CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
+    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
 };
 pub use data_view::DataViewKind;
 pub use driver_capabilities::{
@@ -62,6 +63,11 @@ pub use error_formatter::{
     QueryErrorFormatter, sanitize_uri,
 };
 pub use history::{HistoryEntry, HistoryStore};
+pub use key_value::{
+    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
+    KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest,
+    KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest, SetCondition, ValueRepr,
+};
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,
     TextRange, ValidationResult, detect_dangerous_mongo, detect_dangerous_query,
@@ -76,10 +82,10 @@ pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
     ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
     DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema,
-    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, KeyValueType,
-    MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo,
-    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
+    MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo, RelationalSchema,
+    RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
     TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
@@ -97,8 +103,8 @@ pub use table_browser::{
 };
 pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSnapshot, TaskStatus};
 pub use traits::{
-    CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, NoopCancelHandle, QueryCancelHandle,
-    SchemaFeatures, SchemaLoadingStrategy,
+    CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
+    QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,
 };
 pub use value::Value;
 
