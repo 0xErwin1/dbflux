@@ -6,12 +6,13 @@ use bson::{Bson, Document, doc};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic, DocumentDelete,
-    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues, FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM,
-    PlaceholderStyle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
-    ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
+    DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FormValues,
+    FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM, PlaceholderStyle,
+    QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
+    TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1048,6 +1049,49 @@ impl LanguageService for MongoLanguageService {
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
         detect_dangerous_mongo(query)
     }
+
+    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
+        let trimmed = query.trim();
+
+        if trimmed.is_empty() {
+            return vec![];
+        }
+
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("select ")
+            || lower.starts_with("insert into")
+            || lower.starts_with("update ")
+            || lower.starts_with("delete from")
+        {
+            return vec![EditorDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: "SQL syntax not supported for MongoDB. Use db.collection.method() syntax."
+                    .to_string(),
+                range: full_first_line_range(query),
+            }];
+        }
+
+        match crate::query_parser::validate_query(query) {
+            Ok(_) => vec![],
+            Err(e) => vec![EditorDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: format!("Invalid MongoDB query: {}", e),
+                range: full_first_line_range(query),
+            }],
+        }
+    }
+}
+
+fn full_first_line_range(query: &str) -> TextPositionRange {
+    let first_line_len = query
+        .lines()
+        .next()
+        .map(|line| line.chars().count())
+        .unwrap_or(1) as u32;
+
+    let end_col = first_line_len.max(1);
+
+    TextPositionRange::new(TextPosition::new(0, 0), TextPosition::new(0, end_col))
 }
 
 /// Stub dialect for MongoDB. SQL generation is not used for document databases.

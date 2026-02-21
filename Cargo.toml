@@ -35,7 +35,7 @@ dbflux_export = { path = "crates/dbflux_export" }
 mysql = "25"
 
 gpui = "0.2.2"
-gpui-component = "0.5.0"
+gpui-component = { version = "0.5.0", features = ["tree-sitter-languages"] }
 smallvec = "1.13.2"
 rfd = "0.17"
 

@@ -25,6 +25,8 @@ serde_json.workspace = true
 dirs.workspace = true
 rfd.workspace = true
 fuzzy-matcher.workspace = true
+anyhow = "1"
+lsp-types = "0.97"
 
 [dependencies.dbflux_driver_sqlite]
 workspace = true

@@ -71,9 +71,9 @@ pub use key_value::{
     SetCondition, SetRemoveRequest, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 pub use language_service::{
-    DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,
-    TextRange, ValidationResult, detect_dangerous_mongo, detect_dangerous_query,
-    detect_dangerous_sql, strip_leading_comments,
+    DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
+    SqlLanguageService, TextPosition, TextPositionRange, TextRange, ValidationResult,
+    detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
 };
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,

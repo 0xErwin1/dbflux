@@ -103,6 +103,8 @@ fn global_layer() -> KeymapLayer {
 fn sidebar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Sidebar);
 
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+
     // Panel navigation (Ctrl+hjkl)
     layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
 
@@ -254,6 +256,8 @@ fn history_modal_layer() -> KeymapLayer {
 fn results_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Results);
 
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+
     // Panel navigation (Ctrl+hjkl)
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
@@ -381,6 +385,8 @@ fn context_menu_layer() -> KeymapLayer {
 fn background_tasks_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::BackgroundTasks);
 
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+
     // Panel navigation (Ctrl+hjkl)
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusDown);
@@ -459,6 +465,8 @@ fn connection_manager_layer() -> KeymapLayer {
 fn form_navigation_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::FormNavigation);
 
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
     layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
     layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
@@ -472,6 +480,8 @@ fn form_navigation_layer() -> KeymapLayer {
 fn text_input_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::TextInput);
 
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+
     // Escape exits text input mode
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
@@ -480,6 +490,8 @@ fn text_input_layer() -> KeymapLayer {
 
 fn dropdown_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Dropdown);
+
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
 
     // Navigation within dropdown
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
@@ -560,6 +572,22 @@ mod tests {
         assert_eq!(
             keymap.resolve(ContextId::Sidebar, &ctrl_enter),
             Some(Command::RunQuery)
+        );
+    }
+
+    #[test]
+    fn test_ctrl_n_available_in_sidebar_and_text_input() {
+        let keymap = default_keymap();
+
+        let ctrl_n = KeyChord::new("n", Modifiers::ctrl());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Sidebar, &ctrl_n),
+            Some(Command::NewQueryTab)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::TextInput, &ctrl_n),
+            Some(Command::NewQueryTab)
         );
     }
 
