@@ -452,13 +452,21 @@ impl RedisConnection {
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        let target_db = keyspace.or(self.active_db_index()?);
+        let active = self.active_db_index()?;
+        let target_db = keyspace.or(active);
 
         if let Some(db) = target_db {
             select_db(&mut conn, db).map_err(|e| format_redis_query_error(&e))?;
         }
 
-        f(&mut conn)
+        let result = f(&mut conn);
+
+        // Restore the active database if we temporarily switched to a different one
+        if keyspace.is_some() && keyspace != active && let Some(db) = active {
+            let _ = select_db(&mut conn, db);
+        }
+
+        result
     }
 }
 
@@ -590,7 +598,16 @@ impl Connection for RedisConnection {
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
         let target = database.map(parse_database_name).transpose()?;
 
-        self.with_connection(target, |_| Ok(()))?;
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        if let Some(db) = target {
+            select_db(&mut conn, db).map_err(|e| format_redis_query_error(&e))?;
+        }
+
+        drop(conn);
         self.set_active_db_index(target)
     }
 
@@ -634,7 +651,7 @@ impl KeyValueApi for RedisConnection {
             request.limit
         };
 
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let mut command = redis::cmd("SCAN");
             command.arg(cursor);
 
@@ -681,7 +698,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let key_type_name = redis::cmd("TYPE")
                 .arg(&request.key)
                 .query::<String>(conn)
@@ -730,7 +747,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn set_key(&self, request: &KeySetRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let mut command = redis::cmd("SET");
             command.arg(&request.key).arg(&request.value);
 
@@ -763,7 +780,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn delete_key(&self, request: &KeyDeleteRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let deleted = redis::cmd("DEL")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -773,7 +790,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn exists_key(&self, request: &KeyExistsRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let exists = redis::cmd("EXISTS")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -783,7 +800,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn key_type(&self, request: &KeyTypeRequest) -> Result<KeyType, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let type_name = redis::cmd("TYPE")
                 .arg(&request.key)
                 .query::<String>(conn)
@@ -802,7 +819,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn key_ttl(&self, request: &KeyTtlRequest) -> Result<Option<i64>, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let ttl = redis::cmd("TTL")
                 .arg(&request.key)
                 .query::<i64>(conn)
@@ -820,7 +837,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn expire_key(&self, request: &KeyExpireRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let changed = redis::cmd("EXPIRE")
                 .arg(&request.key)
                 .arg(request.ttl_seconds)
@@ -831,7 +848,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn persist_key(&self, request: &KeyPersistRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let changed = redis::cmd("PERSIST")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -841,7 +858,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn rename_key(&self, request: &KeyRenameRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             redis::cmd("RENAME")
                 .arg(&request.from_key)
                 .arg(&request.to_key)
@@ -852,7 +869,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn bulk_get(&self, request: &KeyBulkGetRequest) -> Result<Vec<Option<KeyGetResult>>, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let mut values = Vec::with_capacity(request.keys.len());
 
             for key in &request.keys {
@@ -928,7 +945,7 @@ impl KeyValueApi for RedisConnection {
     // -- Hash member operations --
 
     fn hash_set(&self, request: &HashSetRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             redis::cmd("HSET")
                 .arg(&request.key)
                 .arg(&request.field)
@@ -939,7 +956,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn hash_delete(&self, request: &HashDeleteRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let removed = redis::cmd("HDEL")
                 .arg(&request.key)
                 .arg(&request.field)
@@ -952,7 +969,7 @@ impl KeyValueApi for RedisConnection {
     // -- List member operations --
 
     fn list_set(&self, request: &ListSetRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             redis::cmd("LSET")
                 .arg(&request.key)
                 .arg(request.index)
@@ -963,7 +980,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn list_push(&self, request: &ListPushRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let cmd_name = match request.end {
                 ListEnd::Head => "LPUSH",
                 ListEnd::Tail => "RPUSH",
@@ -978,7 +995,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn list_remove(&self, request: &ListRemoveRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let removed = redis::cmd("LREM")
                 .arg(&request.key)
                 .arg(request.count)
@@ -992,7 +1009,7 @@ impl KeyValueApi for RedisConnection {
     // -- Set member operations --
 
     fn set_add(&self, request: &SetAddRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let added = redis::cmd("SADD")
                 .arg(&request.key)
                 .arg(&request.member)
@@ -1003,7 +1020,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn set_remove(&self, request: &SetRemoveRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let removed = redis::cmd("SREM")
                 .arg(&request.key)
                 .arg(&request.member)
@@ -1016,7 +1033,7 @@ impl KeyValueApi for RedisConnection {
     // -- Sorted Set member operations --
 
     fn zset_add(&self, request: &ZSetAddRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let added = redis::cmd("ZADD")
                 .arg(&request.key)
                 .arg(request.score)
@@ -1028,7 +1045,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn zset_remove(&self, request: &ZSetRemoveRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+        self.with_connection(request.keyspace, |conn| {
             let removed = redis::cmd("ZREM")
                 .arg(&request.key)
                 .arg(&request.member)

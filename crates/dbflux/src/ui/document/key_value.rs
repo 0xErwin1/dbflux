@@ -256,7 +256,7 @@ impl KeyValueDocument {
         }
 
         if self.pending_key_delete.is_some() || self.pending_member_delete.is_some() {
-            return ContextId::TextInput;
+            return ContextId::ConfirmModal;
         }
 
         match self.focus_mode {
@@ -416,8 +416,6 @@ impl KeyValueDocument {
                 } else if self.editing_member_index.is_some() {
                     self.cancel_member_edit(cx);
                     self.focus_handle.focus(window);
-                } else if self.focus_mode == KeyValueFocusMode::ValuePanel {
-                    self.focus_mode = KeyValueFocusMode::List;
                 } else {
                     self.focus_mode = KeyValueFocusMode::List;
                     self.focus_handle.focus(window);
@@ -825,12 +823,28 @@ impl KeyValueDocument {
             return;
         };
 
-        // Optimistic: remove from cached members immediately
+        if self.selected_key().is_none()
+            || self.selected_key_type().is_none()
+            || self.get_connection(cx).is_none()
+        {
+            self.last_error = Some("Cannot delete member: connection or key unavailable".into());
+            cx.notify();
+            return;
+        }
+
         let member = if pending.member_index < self.cached_members.len() {
             Some(self.cached_members.remove(pending.member_index))
         } else {
             None
         };
+
+        if self.cached_members.is_empty() {
+            self.selected_member_index = None;
+        } else if let Some(sel) = self.selected_member_index {
+            let new_sel = sel.min(self.cached_members.len() - 1);
+            self.selected_member_index = Some(new_sel);
+        }
+
         cx.notify();
 
         if let Some(member) = member {
@@ -1946,6 +1960,7 @@ impl Render for KeyValueDocument {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
                                         this.start_member_edit(idx, window, cx);
                                     }),
                                 )
@@ -1973,6 +1988,7 @@ impl Render for KeyValueDocument {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
                                     this.request_delete_member(idx, cx);
                                 }),
                             ),
