@@ -7,6 +7,7 @@ use log::{error, info};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Instant;
 use uuid::Uuid;
 
 /// Typed cache key for schema-level data (types, indexes, foreign keys).
@@ -132,6 +133,54 @@ impl SchemaCacheKey {
     }
 }
 
+pub struct RedisKeyCacheEntry {
+    pub keys: Arc<[String]>,
+    pub fetched_at: Instant,
+}
+
+/// Cached Redis key names per keyspace (e.g. "db0"). Keyed by keyspace
+/// so the completion provider can read it without coupling to `KeyValueDocument`.
+pub struct RedisKeyCache {
+    entries: HashMap<String, RedisKeyCacheEntry>,
+    ttl: std::time::Duration,
+}
+
+impl Default for RedisKeyCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            ttl: std::time::Duration::from_secs(30),
+        }
+    }
+}
+
+impl RedisKeyCache {
+    pub fn get_keys(&self, keyspace: &str) -> Option<Arc<[String]>> {
+        self.entries.get(keyspace).map(|e| e.keys.clone())
+    }
+
+    pub fn set_keys(&mut self, keyspace: String, keys: Vec<String>) {
+        self.entries.insert(
+            keyspace,
+            RedisKeyCacheEntry {
+                keys: keys.into(),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+
+    pub fn is_stale(&self, keyspace: &str) -> bool {
+        match self.entries.get(keyspace) {
+            None => true,
+            Some(entry) => entry.fetched_at.elapsed() > self.ttl,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -144,6 +193,7 @@ pub struct ConnectedProfile {
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
+    pub redis_key_cache: RedisKeyCache,
 }
 
 impl ConnectedProfile {
@@ -314,6 +364,7 @@ impl ConnectionManager {
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
                 active_database: None,
+                redis_key_cache: RedisKeyCache::default(),
             },
         );
         self.active_connection_id = Some(id);
@@ -661,6 +712,7 @@ impl ConnectionManager {
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
                 active_database: None,
+                redis_key_cache: RedisKeyCache::default(),
             },
         );
     }

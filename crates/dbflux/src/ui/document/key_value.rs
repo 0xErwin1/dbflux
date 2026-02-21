@@ -508,8 +508,7 @@ impl KeyValueDocument {
         }
 
         let current = self.selected_member_index.unwrap_or(0) as isize;
-        let next =
-            (current + delta).clamp(0, (self.cached_members.len() - 1) as isize) as usize;
+        let next = (current + delta).clamp(0, (self.cached_members.len() - 1) as isize) as usize;
         self.selected_member_index = Some(next);
         cx.notify();
     }
@@ -570,6 +569,7 @@ impl KeyValueDocument {
         };
 
         let filter = self.filter_input.read(cx).value().trim().to_string();
+        let is_unfiltered = filter.is_empty();
         let database = self.database.clone();
         let entity = cx.entity().clone();
         let request = KeyScanRequest {
@@ -603,6 +603,19 @@ impl KeyValueDocument {
                             this.keys = page.entries;
                             this.next_cursor = page.next_cursor;
                             this.last_error = None;
+
+                            if is_unfiltered {
+                                let key_names: Vec<String> =
+                                    this.keys.iter().map(|e| e.key.clone()).collect();
+
+                                this.app_state.update(cx, |state, _cx| {
+                                    state.set_redis_cached_keys(
+                                        this.profile_id,
+                                        this.database.clone(),
+                                        key_names,
+                                    );
+                                });
+                            }
 
                             if !this.keys.is_empty() {
                                 this.selected_index = Some(0);

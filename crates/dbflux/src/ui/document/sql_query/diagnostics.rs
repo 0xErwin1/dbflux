@@ -1,11 +1,43 @@
 use super::*;
 
+const DIAGNOSTIC_DEBOUNCE_MS: u64 = 200;
+
 impl SqlQueryDocument {
+    /// Debounced diagnostic refresh. Bumps request id so stale runs are discarded.
+    pub(super) fn schedule_diagnostic_refresh(&mut self, cx: &mut Context<Self>) {
+        self.diagnostic_request_id += 1;
+        let request_id = self.diagnostic_request_id;
+
+        let entity = cx.entity().clone();
+        self._diagnostic_debounce = Some(cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(DIAGNOSTIC_DEBOUNCE_MS))
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |this, cx| {
+                    if this.diagnostic_request_id != request_id {
+                        return;
+                    }
+
+                    this.run_diagnostics(cx);
+                });
+            })
+            .ok();
+        }));
+    }
+
+    /// Run diagnostics immediately, bypassing the debounce timer.
     pub(super) fn refresh_editor_diagnostics(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.diagnostic_request_id += 1;
+        self.run_diagnostics(cx);
+    }
+
+    fn run_diagnostics(&mut self, cx: &mut Context<Self>) {
         let query_text = self.input_state.read(cx).value().to_string();
 
         let diagnostics = if let Some(conn_id) = self.connection_id {

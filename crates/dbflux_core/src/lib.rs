@@ -129,7 +129,7 @@ pub use connection_manager::{
     FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
     FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
     FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,
-    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;

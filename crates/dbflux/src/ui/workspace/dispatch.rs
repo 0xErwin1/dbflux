@@ -600,9 +600,7 @@ impl CommandDispatcher for Workspace {
             }
 
             // Row operations - handled via GPUI actions in DataTable
-            Command::ResultsDeleteRow
-            | Command::ResultsDuplicateRow
-            | Command::ResultsSetNull => {
+            Command::ResultsDeleteRow | Command::ResultsDuplicateRow | Command::ResultsSetNull => {
                 log::debug!(
                     "Row operation {:?} handled via GPUI actions in Results context",
                     cmd

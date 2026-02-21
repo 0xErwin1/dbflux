@@ -1535,13 +1535,166 @@ impl LanguageService for RedisLanguageService {
         }
 
         match parse_command(query) {
-            Ok(_) => vec![],
+            Ok(tokens) => check_redis_arity(&tokens, query),
             Err(e) => vec![EditorDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 message: format!("Invalid Redis command: {}", e),
                 range: redis_first_line_range(query),
             }],
         }
+    }
+}
+
+/// Arity rule for a Redis command.
+///
+/// - `min`: minimum number of arguments (excluding the command name itself)
+/// - `max`: maximum number of arguments, or `None` for variadic commands
+enum Arity {
+    Exact(usize),
+    AtLeast(usize),
+    Range(usize, usize),
+}
+
+/// Look up the arity expectation for a known Redis command. Returns `None`
+/// for unknown commands (no arity check performed).
+fn command_arity(command: &str) -> Option<Arity> {
+    match command {
+        // Key inspection / manipulation
+        "GET" => Some(Arity::Exact(1)),
+        "SET" => Some(Arity::Range(2, 7)),
+        "SETNX" => Some(Arity::Exact(2)),
+        "GETSET" => Some(Arity::Exact(2)),
+        "GETRANGE" => Some(Arity::Exact(3)),
+        "SETRANGE" => Some(Arity::Exact(3)),
+        "APPEND" => Some(Arity::Exact(2)),
+        "STRLEN" => Some(Arity::Exact(1)),
+        "MGET" => Some(Arity::AtLeast(1)),
+        "MSET" => Some(Arity::AtLeast(2)),
+        "DEL" => Some(Arity::AtLeast(1)),
+        "EXISTS" => Some(Arity::AtLeast(1)),
+        "EXPIRE" => Some(Arity::Range(2, 3)),
+        "TTL" => Some(Arity::Exact(1)),
+        "PTTL" => Some(Arity::Exact(1)),
+        "TYPE" => Some(Arity::Exact(1)),
+        "PERSIST" => Some(Arity::Exact(1)),
+        "RENAME" => Some(Arity::Exact(2)),
+        "INCR" => Some(Arity::Exact(1)),
+        "DECR" => Some(Arity::Exact(1)),
+        "INCRBY" => Some(Arity::Exact(2)),
+        "DECRBY" => Some(Arity::Exact(2)),
+        "DUMP" => Some(Arity::Exact(1)),
+        "OBJECT" => Some(Arity::AtLeast(1)),
+        "KEYS" => Some(Arity::Exact(1)),
+        "SCAN" => Some(Arity::AtLeast(1)),
+        "SELECT" => Some(Arity::Exact(1)),
+
+        // Hash
+        "HGET" => Some(Arity::Exact(2)),
+        "HSET" => Some(Arity::AtLeast(3)),
+        "HDEL" => Some(Arity::AtLeast(2)),
+        "HGETALL" => Some(Arity::Exact(1)),
+        "HLEN" => Some(Arity::Exact(1)),
+
+        // List
+        "LPUSH" => Some(Arity::AtLeast(2)),
+        "RPUSH" => Some(Arity::AtLeast(2)),
+        "LPOP" => Some(Arity::Range(1, 2)),
+        "RPOP" => Some(Arity::Range(1, 2)),
+        "LRANGE" => Some(Arity::Exact(3)),
+        "LLEN" => Some(Arity::Exact(1)),
+        "LINDEX" => Some(Arity::Exact(2)),
+        "LSET" => Some(Arity::Exact(3)),
+
+        // Set
+        "SADD" => Some(Arity::AtLeast(2)),
+        "SREM" => Some(Arity::AtLeast(2)),
+        "SMEMBERS" => Some(Arity::Exact(1)),
+        "SCARD" => Some(Arity::Exact(1)),
+        "SISMEMBER" => Some(Arity::Exact(2)),
+
+        // Sorted Set
+        "ZADD" => Some(Arity::AtLeast(3)),
+        "ZREM" => Some(Arity::AtLeast(2)),
+        "ZRANGE" => Some(Arity::Range(3, 7)),
+        "ZCARD" => Some(Arity::Exact(1)),
+        "ZSCORE" => Some(Arity::Exact(2)),
+        "ZRANK" => Some(Arity::Exact(2)),
+
+        // Server
+        "PING" => Some(Arity::Range(0, 1)),
+        "INFO" => Some(Arity::Range(0, 1)),
+
+        _ => None,
+    }
+}
+
+/// Check argument count for a parsed Redis command, returning diagnostics if
+/// the arity is wrong.
+fn check_redis_arity(tokens: &[String], query: &str) -> Vec<EditorDiagnostic> {
+    if tokens.is_empty() {
+        return vec![];
+    }
+
+    let command = tokens[0].to_uppercase();
+    let arg_count = tokens.len() - 1;
+
+    let Some(arity) = command_arity(&command) else {
+        return vec![];
+    };
+
+    let problem = match arity {
+        Arity::Exact(n) if arg_count != n => Some(if n == 1 {
+            format!("{command} requires exactly {n} argument, got {arg_count}")
+        } else {
+            format!("{command} requires exactly {n} arguments, got {arg_count}")
+        }),
+
+        Arity::AtLeast(n) if arg_count < n => Some(if n == 1 {
+            format!("{command} requires at least {n} argument, got {arg_count}")
+        } else {
+            format!("{command} requires at least {n} arguments, got {arg_count}")
+        }),
+
+        Arity::Range(min, max) if arg_count < min || arg_count > max => Some(format!(
+            "{command} accepts {min}–{max} arguments, got {arg_count}"
+        )),
+
+        _ => None,
+    };
+
+    if let Some(message) = problem {
+        return vec![EditorDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            message,
+            range: redis_first_line_range(query),
+        }];
+    }
+
+    if let Some(pairing_msg) = check_pairing(&command, arg_count) {
+        return vec![EditorDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            message: pairing_msg,
+            range: redis_first_line_range(query),
+        }];
+    }
+
+    vec![]
+}
+
+/// Commands that require arguments in pairs (key/value or field/value).
+fn check_pairing(command: &str, arg_count: usize) -> Option<String> {
+    match command {
+        // MSET key value [key value ...] — total args must be even
+        "MSET" | "MSETNX" if !arg_count.is_multiple_of(2) => Some(format!(
+            "{command} requires key-value pairs (even number of arguments), got {arg_count}"
+        )),
+
+        // HSET key field value [field value ...] — args after the key must be in pairs
+        "HSET" | "HMSET" if arg_count >= 3 && !(arg_count - 1).is_multiple_of(2) => Some(format!(
+            "{command} requires a key followed by field-value pairs, got {arg_count} arguments"
+        )),
+
+        _ => None,
     }
 }
 

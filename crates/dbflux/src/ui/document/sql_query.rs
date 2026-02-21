@@ -106,6 +106,10 @@ pub struct SqlQueryDocument {
 
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
+
+    // Diagnostic debounce: incremental request id to discard stale results.
+    diagnostic_request_id: u64,
+    _diagnostic_debounce: Option<Task<()>>,
 }
 
 struct PendingQueryResult {
@@ -163,9 +167,9 @@ impl SqlQueryDocument {
         let input_change_sub = cx.subscribe_in(
             &input_state,
             window,
-            |this, _input, event: &InputEvent, window, cx| match event {
+            |this, _input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
-                    this.refresh_editor_diagnostics(window, cx);
+                    this.schedule_diagnostic_refresh(cx);
                 }
                 InputEvent::Focus => {
                     this.enter_editor_mode(cx);
@@ -212,6 +216,8 @@ impl SqlQueryDocument {
             active_cancel_token: None,
             results_maximized: false,
             pending_dangerous_query: None,
+            diagnostic_request_id: 0,
+            _diagnostic_debounce: None,
         }
     }
 

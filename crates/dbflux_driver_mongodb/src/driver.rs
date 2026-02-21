@@ -1071,15 +1071,44 @@ impl LanguageService for MongoLanguageService {
             }];
         }
 
-        match crate::query_parser::validate_query(query) {
-            Ok(_) => vec![],
-            Err(e) => vec![EditorDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                message: format!("Invalid MongoDB query: {}", e),
-                range: full_first_line_range(query),
-            }],
-        }
+        let errors = crate::query_parser::validate_query_positional(query);
+        errors
+            .into_iter()
+            .map(|err| {
+                let range = byte_offset_to_range(query, err.offset, err.len);
+                EditorDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.message,
+                    range,
+                }
+            })
+            .collect()
     }
+}
+
+fn byte_offset_to_range(source: &str, offset: usize, len: usize) -> TextPositionRange {
+    let clamped_offset = offset.min(source.len());
+    let clamped_end = (offset + len.max(1))
+        .min(source.len())
+        .max(clamped_offset + 1);
+
+    let start = byte_offset_to_position(source, clamped_offset);
+    let end = byte_offset_to_position(source, clamped_end);
+
+    if start == end {
+        let end_col = start.column + 1;
+        return TextPositionRange::new(start, TextPosition::new(start.line, end_col));
+    }
+
+    TextPositionRange::new(start, end)
+}
+
+fn byte_offset_to_position(source: &str, offset: usize) -> TextPosition {
+    let before = &source[..offset.min(source.len())];
+    let line = before.matches('\n').count() as u32;
+    let last_newline = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let column = before[last_newline..].chars().count() as u32;
+    TextPosition::new(line, column)
 }
 
 fn full_first_line_range(query: &str) -> TextPositionRange {
