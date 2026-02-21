@@ -232,9 +232,7 @@ impl DbDriver for MongoDriver {
         if let Some(query_str) = query {
             for param in query_str.split('&') {
                 if let Some(val) = param.strip_prefix("authSource=") {
-                    let auth_db = urlencoding::decode(val)
-                        .unwrap_or_default()
-                        .into_owned();
+                    let auth_db = urlencoding::decode(val).unwrap_or_default().into_owned();
                     values.insert("auth_database".to_string(), auth_db);
                 }
             }

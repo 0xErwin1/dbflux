@@ -9,9 +9,11 @@ use crate::{
     SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
     TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
     key_value::{
-        KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest, KeyExpireRequest, KeyGetRequest,
-        KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest,
-        KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
+        HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
+        KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
+        KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
+        ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
+        ZSetAddRequest, ZSetRemoveRequest,
     },
 };
 
@@ -297,6 +299,77 @@ pub trait KeyValueApi: Send + Sync {
     fn bulk_get(&self, _request: &KeyBulkGetRequest) -> Result<Vec<Option<KeyGetResult>>, DbError> {
         Err(DbError::NotSupported(
             "Key-value bulk GET not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- Hash member operations --
+
+    /// Set a field in a Hash key.
+    fn hash_set(&self, _request: &HashSetRequest) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "Hash SET not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Delete a field from a Hash key.
+    fn hash_delete(&self, _request: &HashDeleteRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Hash DELETE not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- List member operations --
+
+    /// Overwrite a list element at the given index.
+    fn list_set(&self, _request: &ListSetRequest) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "List SET not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Push a value to the head or tail of a list.
+    fn list_push(&self, _request: &ListPushRequest) -> Result<(), DbError> {
+        Err(DbError::NotSupported(
+            "List PUSH not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Remove occurrences of a value from a list.
+    fn list_remove(&self, _request: &ListRemoveRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "List REMOVE not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- Set member operations --
+
+    /// Add a member to a Set key.
+    fn set_add(&self, _request: &SetAddRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Set ADD not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Remove a member from a Set key.
+    fn set_remove(&self, _request: &SetRemoveRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Set REMOVE not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- Sorted Set member operations --
+
+    /// Add or update a member with a score in a Sorted Set key.
+    fn zset_add(&self, _request: &ZSetAddRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Sorted Set ADD not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Remove a member from a Sorted Set key.
+    fn zset_remove(&self, _request: &ZSetRemoveRequest) -> Result<bool, DbError> {
+        Err(DbError::NotSupported(
+            "Sorted Set REMOVE not supported by this driver".to_string(),
         ))
     }
 }

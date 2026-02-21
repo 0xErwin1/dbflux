@@ -64,9 +64,11 @@ pub use error_formatter::{
 };
 pub use history::{HistoryEntry, HistoryStore};
 pub use key_value::{
-    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
-    KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest,
-    KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest, SetCondition, ValueRepr,
+    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
+    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest,
+    SetCondition, SetRemoveRequest, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, LanguageService, SqlLanguageService,

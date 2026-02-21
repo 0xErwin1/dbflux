@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use super::data_document::{DataDocument, DataDocumentEvent};
+use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
 use super::sql_query::SqlQueryDocument;
 use super::types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
@@ -25,11 +26,10 @@ pub enum DocumentHandle {
         id: DocumentId,
         entity: Entity<DataDocument>,
     },
-    // Future variants:
-    // RedisKeyBrowser { id: DocumentId, entity: Entity<RedisKeyBrowserDocument> },
-    // RedisKey { id: DocumentId, entity: Entity<RedisKeyDocument> },
-    // RedisConsole { id: DocumentId, entity: Entity<RedisConsoleDocument> },
-    // MongoCollection { id: DocumentId, entity: Entity<MongoCollectionDocument> },
+    KeyValue {
+        id: DocumentId,
+        entity: Entity<KeyValueDocument>,
+    },
 }
 
 impl DocumentHandle {
@@ -45,11 +45,17 @@ impl DocumentHandle {
         Self::Data { id, entity }
     }
 
+    pub fn key_value(entity: Entity<KeyValueDocument>, cx: &App) -> Self {
+        let id = entity.read(cx).id();
+        Self::KeyValue { id, entity }
+    }
+
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
             Self::SqlQuery { id, .. } => *id,
             Self::Data { id, .. } => *id,
+            Self::KeyValue { id, .. } => *id,
         }
     }
 
@@ -58,6 +64,7 @@ impl DocumentHandle {
         match self {
             Self::SqlQuery { .. } => DocumentKind::Script,
             Self::Data { .. } => DocumentKind::Data,
+            Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
         }
     }
 
@@ -73,6 +80,16 @@ impl DocumentHandle {
         match self {
             Self::Data { entity, .. } => {
                 entity.read(cx).collection_ref(cx).as_ref() == Some(collection)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_key_value_database(&self, profile_id: uuid::Uuid, database: &str, cx: &App) -> bool {
+        match self {
+            Self::KeyValue { entity, .. } => {
+                let doc = entity.read(cx);
+                doc.connection_id() == Some(profile_id) && doc.database_name() == database
             }
             _ => false,
         }
@@ -110,6 +127,18 @@ impl DocumentHandle {
                     connection_id: doc.connection_id(cx),
                 }
             }
+            Self::KeyValue { id, entity } => {
+                let doc = entity.read(cx);
+                DocumentMetaSnapshot {
+                    id: *id,
+                    kind: DocumentKind::RedisKeyBrowser,
+                    title: doc.title(),
+                    icon: DocumentIcon::Redis,
+                    state: doc.state(),
+                    closable: true,
+                    connection_id: doc.connection_id(),
+                }
+            }
         }
     }
 
@@ -128,6 +157,7 @@ impl DocumentHandle {
         match self {
             Self::SqlQuery { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
+            Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
         }
     }
 
@@ -136,6 +166,7 @@ impl DocumentHandle {
         match self {
             Self::SqlQuery { entity, .. } => entity.clone().into_any_element(),
             Self::Data { entity, .. } => entity.clone().into_any_element(),
+            Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
         }
     }
 
@@ -146,6 +177,9 @@ impl DocumentHandle {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
             Self::Data { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
+            }
+            Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
         }
@@ -160,6 +194,9 @@ impl DocumentHandle {
             Self::Data { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
+            Self::KeyValue { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.focus(window, cx));
+            }
         }
     }
 
@@ -169,6 +206,7 @@ impl DocumentHandle {
         match self {
             Self::SqlQuery { entity, .. } => entity.read(cx).active_context(cx),
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
+            Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
         }
     }
 
@@ -205,6 +243,11 @@ impl DocumentHandle {
                     },
                 };
                 callback(&doc_event, cx);
+            }),
+            Self::KeyValue { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
+                if matches!(event, KeyValueDocumentEvent::RequestFocus) {
+                    callback(&DocumentEvent::RequestFocus, cx);
+                }
             }),
         }
     }

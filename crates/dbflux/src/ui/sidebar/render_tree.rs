@@ -97,6 +97,7 @@ pub(super) fn render_tree_item(
         is_connected,
         theme,
         params,
+        &item.label,
     );
 
     let label_color = resolve_label_color(node_kind, theme, params);
@@ -519,6 +520,7 @@ fn resolve_node_icon(
     is_connected: bool,
     theme: &gpui_component::Theme,
     params: &TreeRenderParams,
+    label: &str,
 ) -> (Option<AppIcon>, &'static str, Hsla) {
     match node_kind {
         SchemaNodeKind::ConnectionFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
@@ -535,7 +537,11 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
+                if is_connected {
+                    "\u{25CF}"
+                } else {
+                    "\u{25CB}"
+                }
             } else {
                 ""
             };
@@ -557,7 +563,10 @@ fn resolve_node_icon(
             (Some(AppIcon::KeyRound), "", params.color_orange)
         }
         SchemaNodeKind::ConstraintsFolder => (Some(AppIcon::Lock), "", params.color_yellow),
-        SchemaNodeKind::Column => (Some(AppIcon::Columns), "", params.color_blue),
+        SchemaNodeKind::Column => {
+            let icon = resolve_column_type_icon(label);
+            (Some(icon), "", params.color_blue)
+        }
         SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => {
             (Some(AppIcon::Hash), "", params.color_purple)
         }
@@ -568,6 +577,31 @@ fn resolve_node_icon(
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
         _ => (None, "", theme.muted_foreground),
+    }
+}
+
+/// Label format: `"col_name: type_name? PK"` — extracts the type portion.
+fn resolve_column_type_icon(label: &str) -> AppIcon {
+    let type_name = label
+        .split_once(": ")
+        .map(|(_, rest)| {
+            rest.trim_end_matches(" PK")
+                .trim_end_matches('?')
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+
+    let base = type_name.split('(').next().unwrap_or("").trim();
+
+    match base {
+        "varchar" | "char" | "character" | "character varying" | "nchar" | "nvarchar"
+        | "bpchar" | "string" => AppIcon::CaseSensitive,
+
+        "text" | "tinytext" | "mediumtext" | "longtext" | "clob" | "ntext" | "citext" => {
+            AppIcon::ScrollText
+        }
+
+        _ => AppIcon::Columns,
     }
 }
 

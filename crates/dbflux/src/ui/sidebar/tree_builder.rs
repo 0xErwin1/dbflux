@@ -117,7 +117,58 @@ impl Sidebar {
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
 
-            if !schema.databases().is_empty() {
+            if schema.is_key_value() {
+                let mut database_names: Vec<String> = schema
+                    .keyspaces()
+                    .iter()
+                    .map(|space| format!("db{}", space.db_index))
+                    .collect();
+
+                if database_names.is_empty() {
+                    if let Some(active_database) = connected.active_database.as_ref() {
+                        database_names.push(active_database.clone());
+                    } else {
+                        database_names.push("db0".to_string());
+                    }
+                }
+
+                for database_name in database_names {
+                    let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
+                    let is_active_db = connected.active_database.as_deref() == Some(&database_name);
+
+                    let db_children = if is_pending {
+                        vec![TreeItem::new(
+                            SchemaNodeId::Loading {
+                                profile_id,
+                                database: database_name.clone(),
+                            }
+                            .to_string(),
+                            "Loading...".to_string(),
+                        )]
+                    } else {
+                        Vec::new()
+                    };
+
+                    let db_label = if is_pending {
+                        format!("{} (loading...)", database_name)
+                    } else {
+                        database_name.clone()
+                    };
+
+                    profile_children.push(
+                        TreeItem::new(
+                            SchemaNodeId::Database {
+                                profile_id,
+                                name: database_name,
+                            }
+                            .to_string(),
+                            db_label,
+                        )
+                        .expanded(uses_lazy_loading && is_active_db)
+                        .children(db_children),
+                    );
+                }
+            } else if !schema.databases().is_empty() {
                 for db in schema.databases() {
                     let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                     let is_active_db = connected.active_database.as_deref() == Some(&db.name);

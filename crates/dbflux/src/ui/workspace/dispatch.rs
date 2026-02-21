@@ -466,6 +466,11 @@ impl CommandDispatcher for Workspace {
                     self.sidebar
                         .update(cx, |s, cx| s.start_rename_selected(window, cx));
                     true
+                } else if self.focus_target == FocusTarget::Document {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::Rename, window, cx);
+                    }
+                    true
                 } else {
                     false
                 }
@@ -475,6 +480,11 @@ impl CommandDispatcher for Workspace {
                 if self.focus_target == FocusTarget::Sidebar {
                     self.sidebar
                         .update(cx, |s, cx| s.request_delete_selected(cx));
+                    true
+                } else if self.focus_target == FocusTarget::Document {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::Delete, window, cx);
+                    }
                     true
                 } else {
                     false
@@ -491,8 +501,14 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusSearch => {
-                // Context-specific (saved queries modal)
-                false
+                if self.focus_target == FocusTarget::Document {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                        doc.dispatch_command(Command::FocusSearch, window, cx);
+                    }
+                    true
+                } else {
+                    false
+                }
             }
 
             Command::OpenItemMenu => {
@@ -575,11 +591,16 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
+            Command::ResultsAddRow | Command::ResultsCopyRow => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(cmd, window, cx);
+                }
+                true
+            }
+
             // Row operations - handled via GPUI actions in DataTable
             Command::ResultsDeleteRow
-            | Command::ResultsAddRow
             | Command::ResultsDuplicateRow
-            | Command::ResultsCopyRow
             | Command::ResultsSetNull => {
                 log::debug!(
                     "Row operation {:?} handled via GPUI actions in Results context",

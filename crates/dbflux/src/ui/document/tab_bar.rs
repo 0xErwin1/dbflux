@@ -228,11 +228,15 @@ impl TabBar {
                             .size(px(12.0))
                             .text_color(muted_fg),
                     )
-                    .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
-                        this.tab_manager.update(cx, |mgr, cx| {
-                            mgr.close(id, cx);
-                        });
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                mgr.close(id, cx);
+                            });
+                        }),
+                    )
                     .into_any_element()
             })
     }

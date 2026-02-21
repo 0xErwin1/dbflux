@@ -65,6 +65,8 @@ pub enum AppIcon {
     FileSpreadsheet,
     KeyRound,
     Link2,
+    CaseSensitive,
+    ScrollText,
 
     // Connection / Network
     Plug,
@@ -145,6 +147,8 @@ impl AppIcon {
             Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
             Self::KeyRound => "icons/ui/key-round.svg",
             Self::Link2 => "icons/ui/link-2.svg",
+            Self::CaseSensitive => "icons/ui/case-sensitive.svg",
+            Self::ScrollText => "icons/ui/scroll-text.svg",
             Self::Plug => "icons/ui/plug.svg",
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",

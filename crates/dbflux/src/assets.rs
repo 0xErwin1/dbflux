@@ -118,6 +118,19 @@ impl AssetSource for Assets {
             "icons/ui/file-spreadsheet.svg" => Some(include_bytes!(
                 "../../../resources/icons/ui/file-spreadsheet.svg"
             )),
+            "icons/ui/case-sensitive.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/case-sensitive.svg"
+            )),
+            "icons/ui/scroll-text.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/scroll-text.svg"
+            )),
+            "icons/ui/circle-check.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/circle-check.svg"
+            )),
+            "icons/ui/link-2.svg" => Some(include_bytes!("../../../resources/icons/ui/link-2.svg")),
+            "icons/ui/rotate-ccw.svg" => {
+                Some(include_bytes!("../../../resources/icons/ui/rotate-ccw.svg"))
+            }
 
             // App icon
             "icons/dbflux.svg" => Some(include_bytes!("../../../resources/icons/dbflux.svg")),
@@ -205,6 +218,11 @@ impl AssetSource for Assets {
                 "icons/ui/panel-bottom-close.svg".into(),
                 "icons/ui/panel-bottom-open.svg".into(),
                 "icons/ui/file-spreadsheet.svg".into(),
+                "icons/ui/case-sensitive.svg".into(),
+                "icons/ui/scroll-text.svg".into(),
+                "icons/ui/circle-check.svg".into(),
+                "icons/ui/link-2.svg".into(),
+                "icons/ui/rotate-ccw.svg".into(),
             ]),
             "icons/brand" | "icons/brand/" => Ok(vec![
                 "icons/brand/postgresql.svg".into(),

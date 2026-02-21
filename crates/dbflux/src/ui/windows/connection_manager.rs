@@ -65,15 +65,9 @@ enum FormFocus {
     Save,
 }
 
-/// Edit state within the form - determines how keyboard input is handled
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-enum EditState {
-    /// Navigating between fields with j/k, inputs don't have real focus
-    #[default]
-    Navigating,
-    /// Actively typing in an input field (input has real focus)
-    Editing,
-}
+use crate::ui::components::form_navigation::FormEditState;
+
+type EditState = FormEditState;
 
 #[derive(Clone, Copy, PartialEq)]
 enum View {

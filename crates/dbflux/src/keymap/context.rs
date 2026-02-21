@@ -45,6 +45,9 @@ pub enum ContextId {
 
     /// Confirmation modal is open (dangerous query, delete, etc.).
     ConfirmModal,
+
+    /// A navigable form is in `Navigating` mode (j/k/h/l move focus ring).
+    FormNavigation,
 }
 
 impl ContextId {
@@ -63,6 +66,7 @@ impl ContextId {
             ContextId::SqlPreviewModal => None,
             ContextId::ContextMenu => None,
             ContextId::ConfirmModal => None,
+            ContextId::FormNavigation => None,
             ContextId::Sidebar => Some(ContextId::Global),
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
@@ -83,6 +87,7 @@ impl ContextId {
                 | ContextId::SqlPreviewModal
                 | ContextId::ContextMenu
                 | ContextId::ConfirmModal
+                | ContextId::FormNavigation
         )
     }
 
@@ -103,6 +108,7 @@ impl ContextId {
             ContextId::SqlPreviewModal => "SQL Preview",
             ContextId::ContextMenu => "Context Menu",
             ContextId::ConfirmModal => "Confirm",
+            ContextId::FormNavigation => "Form Navigation",
         }
     }
 
@@ -122,6 +128,7 @@ impl ContextId {
             ContextId::SqlPreviewModal,
             ContextId::ContextMenu,
             ContextId::ConfirmModal,
+            ContextId::FormNavigation,
         ]
     }
 
@@ -141,6 +148,7 @@ impl ContextId {
             ContextId::SqlPreviewModal => "SqlPreviewModal",
             ContextId::ContextMenu => "ContextMenu",
             ContextId::ConfirmModal => "ConfirmModal",
+            ContextId::FormNavigation => "FormNavigation",
         }
     }
 }

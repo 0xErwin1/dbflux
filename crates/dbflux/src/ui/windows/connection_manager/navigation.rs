@@ -460,6 +460,7 @@ impl ConnectionManagerWindow {
         match self.edit_state {
             EditState::Navigating => self.handle_navigating_command(command, window, cx),
             EditState::Editing => self.handle_editing_command(command, window, cx),
+            EditState::DropdownOpen => false,
         }
     }
 

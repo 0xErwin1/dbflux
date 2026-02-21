@@ -460,7 +460,7 @@ impl Sidebar {
                 self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::OpenDatabase => {
-                self.handle_database_click(&item_id, cx);
+                self.execute_item(&item_id, cx);
             }
             ContextMenuAction::CloseDatabase => {
                 self.close_database(&item_id, cx);

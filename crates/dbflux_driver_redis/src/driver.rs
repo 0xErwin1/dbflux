@@ -4,13 +4,16 @@ use std::time::Instant;
 
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
-    DbConfig, DbDriver, DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues, FormattedError, Icon, KeyBulkGetRequest, KeyDeleteRequest,
-    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, FormattedError,
+    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot,
-    SetCondition, SqlDialect, SshTunnelConfig, Value, ValueRepr, sanitize_uri,
+    KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, ListEnd, ListPushRequest,
+    ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest,
+    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, Value, ValueRepr, ZSetAddRequest,
+    ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -69,7 +72,7 @@ impl RedisDriver {
 
         Ok(Box::new(RedisConnection {
             connection: Mutex::new(connection),
-            default_database: params.database,
+            active_database: Mutex::new(params.database),
             _ssh_tunnel: params.ssh_tunnel,
         }))
     }
@@ -102,7 +105,7 @@ impl RedisDriver {
 
         Ok(Box::new(RedisConnection {
             connection: Mutex::new(connection),
-            default_database: database,
+            active_database: Mutex::new(database),
             _ssh_tunnel: None,
         }))
     }
@@ -418,11 +421,27 @@ fn extract_redis_config(config: &DbConfig) -> Result<ExtractedRedisConfig, DbErr
 
 pub struct RedisConnection {
     connection: Mutex<redis::Connection>,
-    default_database: Option<u32>,
+    active_database: Mutex<Option<u32>>,
     _ssh_tunnel: Option<SshTunnel>,
 }
 
 impl RedisConnection {
+    fn active_db_index(&self) -> Result<Option<u32>, DbError> {
+        self.active_database
+            .lock()
+            .map(|db| *db)
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))
+    }
+
+    fn set_active_db_index(&self, database: Option<u32>) -> Result<(), DbError> {
+        let mut active = self
+            .active_database
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        *active = database;
+        Ok(())
+    }
+
     fn with_connection<T>(
         &self,
         keyspace: Option<u32>,
@@ -433,7 +452,9 @@ impl RedisConnection {
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        if let Some(db) = keyspace {
+        let target_db = keyspace.or(self.active_db_index()?);
+
+        if let Some(db) = target_db {
             select_db(&mut conn, db).map_err(|e| format_redis_query_error(&e))?;
         }
 
@@ -447,7 +468,7 @@ impl Connection for RedisConnection {
     }
 
     fn ping(&self) -> Result<(), DbError> {
-        self.with_connection(self.default_database, |conn| {
+        self.with_connection(None, |conn| {
             redis::cmd("PING")
                 .query::<String>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
@@ -461,13 +482,19 @@ impl Connection for RedisConnection {
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let start = Instant::now();
-        let parts = split_command(req.sql.trim());
+        let parts = parse_command(req.sql.trim())?;
 
         if parts.is_empty() {
             return Ok(QueryResult::empty());
         }
 
-        let value = self.with_connection(self.default_database, |conn| {
+        let query_db = req
+            .database
+            .as_deref()
+            .map(parse_database_name)
+            .transpose()?;
+
+        let value = self.with_connection(query_db, |conn| {
             let mut command = redis::cmd(&parts[0]);
             for arg in parts.iter().skip(1) {
                 command.arg(arg);
@@ -498,22 +525,80 @@ impl Connection for RedisConnection {
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-        let db_index = self.default_database.unwrap_or(0);
-        let key_count = self.with_connection(Some(db_index), |conn| {
+        self.with_connection(None, |conn| {
+            let current_db = self.active_db_index()?.unwrap_or(0);
+            let keyspace_stats = fetch_keyspace_stats(conn)?;
+            let db_count = fetch_database_count(conn).ok().unwrap_or_else(|| {
+                keyspace_stats
+                    .keys()
+                    .copied()
+                    .max()
+                    .map(|max| max + 1)
+                    .unwrap_or(current_db + 1)
+            });
+
+            let keyspaces = (0..db_count)
+                .map(|db_index| {
+                    let stats = keyspace_stats.get(&db_index);
+                    KeySpaceInfo {
+                        db_index,
+                        key_count: stats.map(|s| s.key_count),
+                        memory_bytes: None,
+                        avg_ttl_seconds: stats.and_then(|s| s.avg_ttl_seconds),
+                    }
+                })
+                .collect();
+
+            Ok(SchemaSnapshot::key_value(KeyValueSchema {
+                keyspaces,
+                current_keyspace: Some(current_db),
+            }))
+        })
+    }
+
+    fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
+        let schema = self.schema()?;
+        let current = schema.as_key_value().and_then(|s| s.current_keyspace);
+
+        Ok(schema
+            .keyspaces()
+            .iter()
+            .map(|space| DatabaseInfo {
+                name: format!("db{}", space.db_index),
+                is_current: Some(space.db_index) == current,
+            })
+            .collect())
+    }
+
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        let db_index = parse_database_name(database)?;
+
+        self.with_connection(Some(db_index), |conn| {
             redis::cmd("DBSIZE")
                 .query::<u64>(conn)
-                .map_err(|e| format_redis_query_error(&e))
-        })?;
+                .map_err(|e| format_redis_query_error(&e))?;
 
-        Ok(SchemaSnapshot::key_value(KeyValueSchema {
-            keyspaces: vec![KeySpaceInfo {
-                db_index,
-                key_count: Some(key_count),
-                memory_bytes: None,
-                avg_ttl_seconds: None,
-            }],
-            current_keyspace: Some(db_index),
-        }))
+            Ok(DbSchemaInfo {
+                name: database.to_string(),
+                tables: Vec::new(),
+                views: Vec::new(),
+                custom_types: None,
+            })
+        })
+    }
+
+    fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+        let target = database.map(parse_database_name).transpose()?;
+
+        self.with_connection(target, |_| Ok(()))?;
+        self.set_active_db_index(target)
+    }
+
+    fn active_database(&self) -> Option<String> {
+        self.active_db_index()
+            .ok()
+            .flatten()
+            .map(|db| format!("db{}", db))
     }
 
     fn kind(&self) -> DbKind {
@@ -521,7 +606,7 @@ impl Connection for RedisConnection {
     }
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
-        SchemaLoadingStrategy::SingleDatabase
+        SchemaLoadingStrategy::LazyPerDatabase
     }
 
     fn key_value_api(&self) -> Option<&dyn KeyValueApi> {
@@ -549,7 +634,7 @@ impl KeyValueApi for RedisConnection {
             request.limit
         };
 
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let mut command = redis::cmd("SCAN");
             command.arg(cursor);
 
@@ -565,7 +650,23 @@ impl KeyValueApi for RedisConnection {
                 .query(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
 
-            let entries = keys.into_iter().map(KeyEntry::new).collect();
+            let entries = keys
+                .into_iter()
+                .map(|key| {
+                    let type_name = redis::cmd("TYPE")
+                        .arg(&key)
+                        .query::<String>(conn)
+                        .map_err(|e| format_redis_query_error(&e))?;
+
+                    Ok(KeyEntry {
+                        key,
+                        key_type: Some(parse_key_type(&type_name)),
+                        ttl_seconds: None,
+                        size_bytes: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, DbError>>()?;
+
             let next_cursor = if next_cursor == 0 {
                 None
             } else {
@@ -580,7 +681,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let key_type_name = redis::cmd("TYPE")
                 .arg(&request.key)
                 .query::<String>(conn)
@@ -594,22 +695,7 @@ impl KeyValueApi for RedisConnection {
                 )));
             }
 
-            let value = match key_type {
-                KeyType::String | KeyType::Json | KeyType::Unknown => {
-                    let fetched = redis::cmd("GET")
-                        .arg(&request.key)
-                        .query::<Option<Vec<u8>>>(conn)
-                        .map_err(|e| format_redis_query_error(&e))?;
-
-                    fetched.ok_or_else(|| {
-                        DbError::object_not_found(format!("Key '{}' not found", request.key))
-                    })?
-                }
-                _ => redis::cmd("DUMP")
-                    .arg(&request.key)
-                    .query::<Vec<u8>>(conn)
-                    .map_err(|e| format_redis_query_error(&e))?,
-            };
+            let (value, repr) = fetch_key_payload(conn, &request.key, key_type)?;
 
             let ttl_seconds = if request.include_ttl {
                 let ttl = redis::cmd("TTL")
@@ -622,12 +708,7 @@ impl KeyValueApi for RedisConnection {
                 None
             };
 
-            let repr = if matches!(key_type, KeyType::String | KeyType::Json | KeyType::Unknown)
-            {
-                detect_value_repr(&value)
-            } else {
-                ValueRepr::Structured
-            };
+            let key_type = normalize_key_type_for_payload(key_type, repr);
 
             let entry = KeyEntry {
                 key: request.key.clone(),
@@ -649,7 +730,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn set_key(&self, request: &KeySetRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let mut command = redis::cmd("SET");
             command.arg(&request.key).arg(&request.value);
 
@@ -682,7 +763,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn delete_key(&self, request: &KeyDeleteRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let deleted = redis::cmd("DEL")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -692,7 +773,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn exists_key(&self, request: &KeyExistsRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let exists = redis::cmd("EXISTS")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -702,7 +783,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn key_type(&self, request: &KeyTypeRequest) -> Result<KeyType, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let type_name = redis::cmd("TYPE")
                 .arg(&request.key)
                 .query::<String>(conn)
@@ -721,7 +802,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn key_ttl(&self, request: &KeyTtlRequest) -> Result<Option<i64>, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let ttl = redis::cmd("TTL")
                 .arg(&request.key)
                 .query::<i64>(conn)
@@ -739,7 +820,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn expire_key(&self, request: &KeyExpireRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let changed = redis::cmd("EXPIRE")
                 .arg(&request.key)
                 .arg(request.ttl_seconds)
@@ -750,7 +831,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn persist_key(&self, request: &KeyPersistRequest) -> Result<bool, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let changed = redis::cmd("PERSIST")
                 .arg(&request.key)
                 .query::<u64>(conn)
@@ -760,7 +841,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn rename_key(&self, request: &KeyRenameRequest) -> Result<(), DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             redis::cmd("RENAME")
                 .arg(&request.from_key)
                 .arg(&request.to_key)
@@ -771,7 +852,7 @@ impl KeyValueApi for RedisConnection {
     }
 
     fn bulk_get(&self, request: &KeyBulkGetRequest) -> Result<Vec<Option<KeyGetResult>>, DbError> {
-        self.with_connection(request.keyspace.or(self.default_database), |conn| {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
             let mut values = Vec::with_capacity(request.keys.len());
 
             for key in &request.keys {
@@ -786,25 +867,26 @@ impl KeyValueApi for RedisConnection {
                     continue;
                 }
 
-                let payload = match key_type {
-                    KeyType::String | KeyType::Json | KeyType::Unknown => {
-                        match redis::cmd("GET")
+                let (payload, repr) =
+                    if matches!(key_type, KeyType::String | KeyType::Json | KeyType::Unknown) {
+                        let fetched = redis::cmd("GET")
                             .arg(key)
                             .query::<Option<Vec<u8>>>(conn)
-                            .map_err(|e| format_redis_query_error(&e))?
-                        {
-                            Some(v) => v,
+                            .map_err(|e| format_redis_query_error(&e))?;
+
+                        match fetched {
+                            Some(v) => {
+                                let repr = detect_value_repr(&v);
+                                (v, repr)
+                            }
                             None => {
                                 values.push(None);
                                 continue;
                             }
                         }
-                    }
-                    _ => redis::cmd("DUMP")
-                        .arg(key)
-                        .query::<Vec<u8>>(conn)
-                        .map_err(|e| format_redis_query_error(&e))?,
-                };
+                    } else {
+                        fetch_key_payload(conn, key, key_type)?
+                    };
 
                 let ttl_seconds = if request.include_ttl {
                     let ttl = redis::cmd("TTL")
@@ -817,12 +899,7 @@ impl KeyValueApi for RedisConnection {
                     None
                 };
 
-                let repr =
-                    if matches!(key_type, KeyType::String | KeyType::Json | KeyType::Unknown) {
-                        detect_value_repr(&payload)
-                    } else {
-                        ValueRepr::Structured
-                    };
+                let key_type = normalize_key_type_for_payload(key_type, repr);
 
                 values.push(Some(KeyGetResult {
                     entry: KeyEntry {
@@ -845,6 +922,119 @@ impl KeyValueApi for RedisConnection {
             }
 
             Ok(values)
+        })
+    }
+
+    // -- Hash member operations --
+
+    fn hash_set(&self, request: &HashSetRequest) -> Result<(), DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            redis::cmd("HSET")
+                .arg(&request.key)
+                .arg(&request.field)
+                .arg(&request.value)
+                .query::<()>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+
+    fn hash_delete(&self, request: &HashDeleteRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let removed = redis::cmd("HDEL")
+                .arg(&request.key)
+                .arg(&request.field)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(removed > 0)
+        })
+    }
+
+    // -- List member operations --
+
+    fn list_set(&self, request: &ListSetRequest) -> Result<(), DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            redis::cmd("LSET")
+                .arg(&request.key)
+                .arg(request.index)
+                .arg(&request.value)
+                .query::<()>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+
+    fn list_push(&self, request: &ListPushRequest) -> Result<(), DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let cmd_name = match request.end {
+                ListEnd::Head => "LPUSH",
+                ListEnd::Tail => "RPUSH",
+            };
+
+            redis::cmd(cmd_name)
+                .arg(&request.key)
+                .arg(&request.value)
+                .query::<()>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+
+    fn list_remove(&self, request: &ListRemoveRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let removed = redis::cmd("LREM")
+                .arg(&request.key)
+                .arg(request.count)
+                .arg(&request.value)
+                .query::<i64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(removed > 0)
+        })
+    }
+
+    // -- Set member operations --
+
+    fn set_add(&self, request: &SetAddRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let added = redis::cmd("SADD")
+                .arg(&request.key)
+                .arg(&request.member)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(added > 0)
+        })
+    }
+
+    fn set_remove(&self, request: &SetRemoveRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let removed = redis::cmd("SREM")
+                .arg(&request.key)
+                .arg(&request.member)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(removed > 0)
+        })
+    }
+
+    // -- Sorted Set member operations --
+
+    fn zset_add(&self, request: &ZSetAddRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let added = redis::cmd("ZADD")
+                .arg(&request.key)
+                .arg(request.score)
+                .arg(&request.member)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(added > 0)
+        })
+    }
+
+    fn zset_remove(&self, request: &ZSetRemoveRequest) -> Result<bool, DbError> {
+        self.with_connection(request.keyspace.or(self.active_db_index()?), |conn| {
+            let removed = redis::cmd("ZREM")
+                .arg(&request.key)
+                .arg(&request.member)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok(removed > 0)
         })
     }
 }
@@ -963,16 +1153,211 @@ fn uri_authority_has_credentials(uri: &str) -> bool {
     false
 }
 
+#[derive(Clone, Copy)]
+struct KeyspaceStats {
+    key_count: u64,
+    avg_ttl_seconds: Option<u64>,
+}
+
+fn parse_database_name(database: &str) -> Result<u32, DbError> {
+    let trimmed = database.trim();
+    let digits = trimmed.strip_prefix("db").unwrap_or(trimmed);
+
+    digits.parse::<u32>().map_err(|_| {
+        DbError::InvalidProfile(format!(
+            "Invalid database name '{}': expected dbN",
+            database
+        ))
+    })
+}
+
+fn fetch_database_count(conn: &mut redis::Connection) -> Result<u32, DbError> {
+    let values: Vec<String> = redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("databases")
+        .query(conn)
+        .map_err(|e| format_redis_query_error(&e))?;
+
+    if values.len() < 2 {
+        return Err(DbError::query_failed(
+            "Invalid CONFIG GET databases response",
+        ));
+    }
+
+    values[1]
+        .parse::<u32>()
+        .map_err(|_| DbError::query_failed("Invalid Redis databases count"))
+}
+
+fn fetch_keyspace_stats(
+    conn: &mut redis::Connection,
+) -> Result<HashMap<u32, KeyspaceStats>, DbError> {
+    let info = redis::cmd("INFO")
+        .arg("keyspace")
+        .query::<String>(conn)
+        .map_err(|e| format_redis_query_error(&e))?;
+
+    let mut stats = HashMap::new();
+
+    for line in info.lines() {
+        let line = line.trim();
+        if !line.starts_with("db") {
+            continue;
+        }
+
+        let Some((db_part, fields_part)) = line.split_once(':') else {
+            continue;
+        };
+
+        let Ok(db_index) = db_part.trim_start_matches("db").parse::<u32>() else {
+            continue;
+        };
+
+        let mut key_count = 0_u64;
+        let mut avg_ttl_seconds = None;
+
+        for field in fields_part.split(',') {
+            let Some((name, value)) = field.split_once('=') else {
+                continue;
+            };
+
+            if name == "keys" {
+                key_count = value.parse::<u64>().unwrap_or(0);
+            }
+
+            if name == "avg_ttl" {
+                let avg_ttl_ms = value.parse::<u64>().unwrap_or(0);
+                avg_ttl_seconds = if avg_ttl_ms == 0 {
+                    None
+                } else {
+                    Some(avg_ttl_ms / 1000)
+                };
+            }
+        }
+
+        stats.insert(
+            db_index,
+            KeyspaceStats {
+                key_count,
+                avg_ttl_seconds,
+            },
+        );
+    }
+
+    Ok(stats)
+}
+
+fn fetch_key_payload(
+    conn: &mut redis::Connection,
+    key: &str,
+    key_type: KeyType,
+) -> Result<(Vec<u8>, ValueRepr), DbError> {
+    match key_type {
+        KeyType::String | KeyType::Json | KeyType::Unknown => {
+            let fetched = redis::cmd("GET")
+                .arg(key)
+                .query::<Option<Vec<u8>>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let value = fetched
+                .ok_or_else(|| DbError::object_not_found(format!("Key '{}' not found", key)))?;
+            let repr = detect_value_repr(&value);
+            Ok((value, repr))
+        }
+        KeyType::Hash => {
+            let entries = redis::cmd("HGETALL")
+                .arg(key)
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let mut object = serde_json::Map::new();
+            for chunk in entries.chunks(2) {
+                if let [field, value] = chunk {
+                    object.insert(field.clone(), serde_json::Value::String(value.clone()));
+                }
+            }
+
+            let value = serde_json::to_vec(&serde_json::Value::Object(object))
+                .map_err(|e| DbError::query_failed(e.to_string()))?;
+            Ok((value, ValueRepr::Structured))
+        }
+        KeyType::List => {
+            let entries = redis::cmd("LRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(-1)
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let value =
+                serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
+            Ok((value, ValueRepr::Structured))
+        }
+        KeyType::Set => {
+            let entries = redis::cmd("SMEMBERS")
+                .arg(key)
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let value =
+                serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
+            Ok((value, ValueRepr::Structured))
+        }
+        KeyType::SortedSet => {
+            let entries = redis::cmd("ZRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(-1)
+                .arg("WITHSCORES")
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let items: Vec<serde_json::Value> = entries
+                .chunks(2)
+                .filter_map(|chunk| {
+                    if let [member, score] = chunk {
+                        Some(serde_json::json!({"member": member, "score": score}))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let value =
+                serde_json::to_vec(&items).map_err(|e| DbError::query_failed(e.to_string()))?;
+            Ok((value, ValueRepr::Structured))
+        }
+        KeyType::Stream | KeyType::Bytes => {
+            let payload = redis::cmd("DUMP")
+                .arg(key)
+                .query::<Vec<u8>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+            Ok((payload, ValueRepr::Binary))
+        }
+    }
+}
+
 fn parse_key_type(type_name: &str) -> KeyType {
-    match type_name {
+    let normalized = type_name.trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
         "string" => KeyType::String,
         "hash" => KeyType::Hash,
         "list" => KeyType::List,
         "set" => KeyType::Set,
         "zset" => KeyType::SortedSet,
         "stream" => KeyType::Stream,
-        "json" => KeyType::Json,
+        "json" | "rejson-rl" => KeyType::Json,
+        _ if normalized.contains("json") => KeyType::Json,
         _ => KeyType::Unknown,
+    }
+}
+
+fn normalize_key_type_for_payload(key_type: KeyType, repr: ValueRepr) -> KeyType {
+    if key_type == KeyType::String && repr == ValueRepr::Binary {
+        KeyType::Bytes
+    } else {
+        key_type
     }
 }
 
@@ -988,10 +1373,81 @@ fn detect_value_repr(value: &[u8]) -> ValueRepr {
     }
 }
 
-fn split_command(input: &str) -> Vec<String> {
-    input
-        .split_whitespace()
-        .filter(|part| !part.is_empty())
-        .map(ToString::to_string)
-        .collect()
+fn split_command(input: &str) -> Result<Vec<String>, DbError> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            continue;
+        }
+
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+
+        if ch.is_whitespace() && !in_single && !in_double {
+            if !current.is_empty() {
+                items.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+
+        current.push(ch);
+    }
+
+    if escaped {
+        return Err(DbError::query_failed(
+            "Dangling escape character in command",
+        ));
+    }
+
+    if in_single {
+        return Err(DbError::query_failed("Unterminated single-quoted string"));
+    }
+
+    if in_double {
+        return Err(DbError::query_failed("Unterminated double-quoted string"));
+    }
+
+    if !current.is_empty() {
+        items.push(current);
+    }
+
+    Ok(items)
+}
+
+fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
+    let cleaned = input
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let cleaned = cleaned.trim_end_matches(';').trim();
+    split_command(cleaned)
 }

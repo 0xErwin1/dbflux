@@ -16,6 +16,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(text_input_layer());
     stack.add_layer(dropdown_layer());
     stack.add_layer(context_menu_layer());
+    stack.add_layer(form_navigation_layer());
 
     stack
 });
@@ -314,8 +315,21 @@ fn results_layer() -> KeymapLayer {
     // Execute (Enter to edit input in toolbar mode)
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
 
-    // Toolbar focus
+    // Toolbar / filter focus
     layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+
+    // CRUD operations
+    layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
+    layer.bind(KeyChord::new("r", Modifiers::none()), Command::Rename);
+    layer.bind(
+        KeyChord::new("o", Modifiers::none()),
+        Command::ResultsAddRow,
+    );
+    layer.bind(
+        KeyChord::new("y", Modifiers::none()),
+        Command::ResultsCopyRow,
+    );
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
@@ -436,6 +450,19 @@ fn connection_manager_layer() -> KeymapLayer {
     );
 
     // Actions
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+    layer
+}
+
+fn form_navigation_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::FormNavigation);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 

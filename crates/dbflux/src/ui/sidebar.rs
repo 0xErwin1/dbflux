@@ -20,10 +20,10 @@ use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CollectionRef,
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
-    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
-    TaskKind, TypeDefinition, ViewInfo,
+    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
+    TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -47,6 +47,10 @@ pub enum SidebarEvent {
     OpenCollection {
         profile_id: Uuid,
         collection: CollectionRef,
+    },
+    OpenKeyValueDatabase {
+        profile_id: Uuid,
+        database: String,
     },
     /// Request to show SQL preview modal
     RequestSqlPreview {
@@ -420,9 +424,29 @@ impl Sidebar {
             }
             SchemaNodeId::Database { .. } => {
                 self.handle_database_click(item_id, cx);
+
+                if let Some(SchemaNodeId::Database {
+                    profile_id,
+                    name: database,
+                }) = parse_node_id(item_id)
+                    && self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
+                {
+                    cx.emit(SidebarEvent::OpenKeyValueDatabase {
+                        profile_id,
+                        database,
+                    });
+                }
             }
             _ => {}
         }
+    }
+
+    fn profile_category(&self, profile_id: Uuid, cx: &App) -> Option<DatabaseCategory> {
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.metadata().category)
     }
 
     fn handle_item_click(
@@ -459,7 +483,12 @@ impl Sidebar {
         let node_kind = parse_node_kind(item_id);
 
         if click_count == 2 {
-            if node_kind.is_expandable_folder() {
+            let is_key_value_db = matches!(parse_node_id(item_id), Some(SchemaNodeId::Database { profile_id, .. }) if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue));
+
+            if is_key_value_db {
+                self.toggle_item_expansion(item_id, cx);
+                self.execute_item(item_id, cx);
+            } else if node_kind.is_expandable_folder() {
                 self.toggle_item_expansion(item_id, cx);
             } else {
                 self.execute_item(item_id, cx);

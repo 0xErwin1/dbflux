@@ -355,3 +355,91 @@ impl KeyBulkGetRequest {
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// Member-level operations for structured key types (Hash, List, Set, ZSet)
+// ---------------------------------------------------------------------------
+
+/// Which end of a list to push to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ListEnd {
+    Head,
+    Tail,
+}
+
+/// Set a field in a Hash key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HashSetRequest {
+    pub key: String,
+    pub field: String,
+    pub value: String,
+    pub keyspace: Option<u32>,
+}
+
+/// Delete a field from a Hash key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HashDeleteRequest {
+    pub key: String,
+    pub field: String,
+    pub keyspace: Option<u32>,
+}
+
+/// Overwrite a list element at a given index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListSetRequest {
+    pub key: String,
+    pub index: i64,
+    pub value: String,
+    pub keyspace: Option<u32>,
+}
+
+/// Push a value to the head or tail of a list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListPushRequest {
+    pub key: String,
+    pub value: String,
+    pub end: ListEnd,
+    pub keyspace: Option<u32>,
+}
+
+/// Remove occurrences of a value from a list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListRemoveRequest {
+    pub key: String,
+    pub value: String,
+    pub count: i64,
+    pub keyspace: Option<u32>,
+}
+
+/// Add a member to a Set key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetAddRequest {
+    pub key: String,
+    pub member: String,
+    pub keyspace: Option<u32>,
+}
+
+/// Remove a member from a Set key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetRemoveRequest {
+    pub key: String,
+    pub member: String,
+    pub keyspace: Option<u32>,
+}
+
+/// Add or update a member with a score in a Sorted Set key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZSetAddRequest {
+    pub key: String,
+    pub member: String,
+    pub score: f64,
+    pub keyspace: Option<u32>,
+}
+
+/// Remove a member from a Sorted Set key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZSetRemoveRequest {
+    pub key: String,
+    pub member: String,
+    pub keyspace: Option<u32>,
+}

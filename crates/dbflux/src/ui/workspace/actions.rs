@@ -373,6 +373,58 @@ impl Workspace {
         );
     }
 
+    pub(super) fn open_key_value_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::toast::ToastExt;
+
+        if !self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id)
+        {
+            cx.toast_error("No active connection for this key-value database", window);
+            return;
+        }
+
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| doc.is_key_value_database(profile_id, &database, cx))
+            .map(|doc| doc.id());
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::KeyValueDocument::new(
+                profile_id,
+                database.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::key_value(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Creates a new SQL query tab (v0.3).
     pub(super) fn new_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Count existing query tabs for naming

@@ -136,6 +136,12 @@ impl Workspace {
                 } => {
                     this.open_collection_document(*profile_id, collection.clone(), window, cx);
                 }
+                SidebarEvent::OpenKeyValueDatabase {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,
@@ -315,8 +321,7 @@ impl Workspace {
         self.focus_target.to_context()
     }
 
-    pub fn set_focus(&mut self, target: FocusTarget, _window: &mut Window, cx: &mut Context<Self>) {
-        // Don't allow focus on sidebar when it's collapsed
+    pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
         let target = if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
             FocusTarget::Document
         } else {
@@ -329,6 +334,12 @@ impl Workspace {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_connections_focused(target == FocusTarget::Sidebar, cx);
         });
+
+        if target == FocusTarget::Document
+            && let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+        {
+            doc.focus(window, cx);
+        }
 
         cx.notify();
     }
