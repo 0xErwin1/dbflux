@@ -6,13 +6,64 @@
 use bson::Document;
 use dbflux_core::DbError;
 
-use crate::driver::{MongoOperation, MongoQuery, json_array_to_bson_docs, json_to_bson_doc};
+use crate::driver::{json_array_to_bson_docs, json_to_bson_doc, MongoOperation, MongoQuery};
+
+/// Parse error with byte-offset position (`offset` + `len` in bytes).
+#[derive(Debug, Clone)]
+pub struct MongoParseError {
+    pub message: String,
+    pub offset: usize,
+    pub len: usize,
+}
+
+impl MongoParseError {
+    fn new(message: impl Into<String>, offset: usize, len: usize) -> Self {
+        Self {
+            message: message.into(),
+            offset,
+            len,
+        }
+    }
+
+    fn from_db_error(err: DbError, offset: usize) -> Self {
+        Self {
+            message: err.to_string(),
+            offset,
+            len: 0,
+        }
+    }
+}
+
+impl From<MongoParseError> for DbError {
+    fn from(e: MongoParseError) -> Self {
+        DbError::query_failed(e.message)
+    }
+}
 
 /// Validate MongoDB query syntax without executing.
 /// Returns collection name on success, error on parse failure.
 pub fn validate_query(input: &str) -> Result<String, DbError> {
     let query = parse_query(input)?;
     Ok(query.collection)
+}
+
+/// Like `validate_query`, but returns positional `MongoParseError`s.
+pub fn validate_query_positional(input: &str) -> Vec<MongoParseError> {
+    match parse_query_positional(input) {
+        Ok(_) => vec![],
+        Err(e) => vec![e],
+    }
+}
+
+fn parse_query_positional(input: &str) -> Result<MongoQuery, MongoParseError> {
+    let trimmed = input.trim();
+    let trim_offset = input.len() - input.trim_start().len();
+
+    if trimmed.starts_with("db.") {
+        return parse_shell_syntax_positional(trimmed, trim_offset);
+    }
+
+    parse_json_format(trimmed).map_err(|e| MongoParseError::from_db_error(e, trim_offset))
 }
 
 /// Parse a query string into a MongoQuery.
@@ -46,6 +97,49 @@ fn parse_shell_syntax(input: &str) -> Result<MongoQuery, DbError> {
     let (method_name, args_str) = parse_method_call(method_call)?;
 
     let operation = parse_operation(method_name, args_str)?;
+
+    Ok(MongoQuery {
+        database: None,
+        collection: collection.to_string(),
+        operation,
+    })
+}
+
+fn parse_shell_syntax_positional(
+    input: &str,
+    base_offset: usize,
+) -> Result<MongoQuery, MongoParseError> {
+    let rest = input.strip_prefix("db.").ok_or_else(|| {
+        MongoParseError::new("Expected 'db.' prefix", base_offset, input.len().min(3))
+    })?;
+    let rest_offset = base_offset + 3;
+
+    let (collection, method_call) = split_collection_and_method(rest)
+        .map_err(|e| MongoParseError::from_db_error(e, rest_offset))?;
+
+    if collection.is_empty() {
+        return Err(MongoParseError::new(
+            "Collection name cannot be empty",
+            rest_offset,
+            1,
+        ));
+    }
+
+    let method_offset = rest_offset + collection.len() + 1; // +1 for the dot
+    let (method_name, args_str) = parse_method_call(method_call)
+        .map_err(|e| MongoParseError::from_db_error(e, method_offset))?;
+
+    let method_name_len = method_name.len();
+    let args_offset = method_offset + method_name_len + 1; // +1 for '('
+
+    let operation = parse_operation(method_name, args_str).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Unsupported method") {
+            MongoParseError::new(msg, method_offset, method_name_len)
+        } else {
+            MongoParseError::new(msg, args_offset, args_str.len())
+        }
+    })?;
 
     Ok(MongoQuery {
         database: None,

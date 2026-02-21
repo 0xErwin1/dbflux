@@ -92,24 +92,24 @@ impl QueryCompletionProvider {
 
         let mut metadata = SqlCompletionMetadata::default();
 
-        if let Some(snapshot) = &connected.schema {
-            if let Some(relational) = snapshot.as_relational() {
-                for table in &relational.tables {
+        if let Some(snapshot) = &connected.schema
+            && let Some(relational) = snapshot.as_relational()
+        {
+            for table in &relational.tables {
+                metadata.add_table(table);
+            }
+
+            for view in &relational.views {
+                metadata.add_view(view);
+            }
+
+            for schema in &relational.schemas {
+                for table in &schema.tables {
                     metadata.add_table(table);
                 }
 
-                for view in &relational.views {
+                for view in &schema.views {
                     metadata.add_view(view);
-                }
-
-                for schema in &relational.schemas {
-                    for table in &schema.tables {
-                        metadata.add_table(table);
-                    }
-
-                    for view in &schema.views {
-                        metadata.add_view(view);
-                    }
                 }
             }
         }
@@ -198,6 +198,16 @@ impl QueryCompletionProvider {
 
         metadata.keyspaces.sort_unstable();
         metadata.keyspaces.dedup();
+
+        let active_keyspace = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "db0".to_string());
+
+        if let Some(keys) = connected.redis_key_cache.get_keys(&active_keyspace) {
+            metadata.cached_keys = keys.to_vec();
+        }
+
         metadata
     }
 
@@ -473,6 +483,22 @@ impl QueryCompletionProvider {
             }
         }
 
+        if is_redis_key_argument(&command, argument_index) && !metadata.cached_keys.is_empty() {
+            let prefix = if ends_with_space {
+                String::new()
+            } else {
+                tokens.last().cloned().unwrap_or_default()
+            };
+
+            for key in &metadata.cached_keys {
+                if !prefix.is_empty() && !key.starts_with(&prefix) {
+                    continue;
+                }
+
+                push_completion_item(&mut items, &mut seen, key, CompletionItemKind::VALUE);
+            }
+        }
+
         items
     }
 }
@@ -675,6 +701,7 @@ impl MongoCompletionMetadata {
 #[derive(Default)]
 struct RedisCompletionMetadata {
     keyspaces: Vec<u32>,
+    cached_keys: Vec<String>,
 }
 
 enum MongoCompletionContext {
@@ -946,6 +973,27 @@ fn extract_sql_aliases(sql_before_cursor: &str) -> HashMap<String, String> {
     }
 
     aliases
+}
+
+/// Returns true when `argument_index` is a key-name position for the given Redis command.
+fn is_redis_key_argument(command: &str, argument_index: usize) -> bool {
+    match command {
+        // Single-key commands: key is always the first argument
+        "GET" | "SET" | "DEL" | "EXISTS" | "EXPIRE" | "TTL" | "TYPE" | "INCR" | "DECR" | "HGET"
+        | "HSET" | "HDEL" | "HGETALL" | "LPUSH" | "RPUSH" | "LPOP" | "RPOP" | "LRANGE" | "SADD"
+        | "SREM" | "SMEMBERS" | "ZADD" | "ZREM" | "ZRANGE" | "PERSIST" | "PTTL" | "DUMP"
+        | "OBJECT" | "RENAME" | "SETNX" | "GETSET" | "APPEND" | "GETRANGE" | "SETRANGE"
+        | "STRLEN" | "LLEN" | "LINDEX" | "LSET" | "SCARD" | "SISMEMBER" | "ZCARD" | "ZSCORE"
+        | "ZRANK" => argument_index == 0,
+
+        // MGET: every argument is a key
+        "MGET" => true,
+
+        // MSET: alternating key/value pairs — only even indices are keys
+        "MSET" => argument_index.is_multiple_of(2),
+
+        _ => false,
+    }
 }
 
 fn is_sql_table_context(sql_before_cursor: &str) -> bool {

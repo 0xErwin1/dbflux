@@ -266,6 +266,33 @@ impl AppState {
             .set_active_database(profile_id, database);
     }
 
+    // --- Redis key cache ---
+
+    #[allow(dead_code)]
+    pub fn get_redis_cached_keys(&self, profile_id: Uuid, keyspace: &str) -> Option<Arc<[String]>> {
+        self.facade
+            .connections
+            .connections
+            .get(&profile_id)
+            .and_then(|conn| conn.redis_key_cache.get_keys(keyspace))
+    }
+
+    pub fn set_redis_cached_keys(&mut self, profile_id: Uuid, keyspace: String, keys: Vec<String>) {
+        if let Some(conn) = self.facade.connections.connections.get_mut(&profile_id) {
+            conn.redis_key_cache.set_keys(keyspace, keys);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn redis_keys_stale(&self, profile_id: Uuid, keyspace: &str) -> bool {
+        self.facade
+            .connections
+            .connections
+            .get(&profile_id)
+            .map(|conn| conn.redis_key_cache.is_stale(keyspace))
+            .unwrap_or(true)
+    }
+
     // --- Pending operations ---
 
     pub fn is_operation_pending(&self, profile_id: Uuid, database: Option<&str>) -> bool {
