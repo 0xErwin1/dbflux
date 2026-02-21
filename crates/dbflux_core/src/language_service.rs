@@ -1,4 +1,5 @@
 use crate::QueryLanguage;
+use tree_sitter::{Node, Parser};
 
 /// Severity level for a diagnostic message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +15,40 @@ pub enum DiagnosticSeverity {
 pub struct TextRange {
     pub start: usize,
     pub end: usize,
+}
+
+/// A position in a document (zero-based line and column).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextPosition {
+    pub line: u32,
+    pub column: u32,
+}
+
+impl TextPosition {
+    pub fn new(line: u32, column: u32) -> Self {
+        Self { line, column }
+    }
+}
+
+/// A range of positions in a document for editor diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextPositionRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+impl TextPositionRange {
+    pub fn new(start: TextPosition, end: TextPosition) -> Self {
+        Self { start, end }
+    }
+}
+
+/// A diagnostic with precise line/column position for editor display.
+#[derive(Debug, Clone)]
+pub struct EditorDiagnostic {
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+    pub range: TextPositionRange,
 }
 
 /// Structured diagnostic message from query validation.
@@ -142,6 +177,14 @@ pub trait LanguageService: Send + Sync {
     /// Returns `None` for safe queries. The UI shows a confirmation dialog
     /// for dangerous queries without needing to understand the syntax.
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind>;
+
+    /// Produce diagnostics for the editor with precise line/column positions.
+    ///
+    /// Returns an empty vec if no problems are found. The UI may call this on
+    /// frequent text changes to provide live feedback as the user types.
+    fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
+        vec![]
+    }
 }
 
 /// Default SQL language service that handles standard SQL dangerous-query detection.
@@ -157,6 +200,78 @@ impl LanguageService for SqlLanguageService {
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
         detect_dangerous_sql(query)
+    }
+
+    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
+        sql_editor_diagnostics(query)
+    }
+}
+
+/// Produce editor diagnostics for SQL using tree-sitter error nodes.
+fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
+    if query.trim().is_empty() {
+        return vec![];
+    }
+
+    let mut parser = Parser::new();
+    let language = tree_sitter::Language::new(tree_sitter_sequel::LANGUAGE);
+
+    if parser.set_language(&language).is_err() {
+        return vec![];
+    }
+
+    let Some(tree) = parser.parse(query, None) else {
+        return vec![];
+    };
+
+    if !tree.root_node().has_error() {
+        return vec![];
+    }
+
+    let mut diagnostics = Vec::new();
+    collect_error_nodes(tree.root_node(), query, &mut diagnostics);
+    diagnostics
+}
+
+/// Walk the tree-sitter parse tree and collect ERROR / MISSING nodes.
+fn collect_error_nodes(node: Node, source: &str, diagnostics: &mut Vec<EditorDiagnostic>) {
+    if node.is_error() {
+        let start = node.start_position();
+        let end = node.end_position();
+
+        let snippet = source.get(node.byte_range()).unwrap_or("");
+        let display = crate::truncate_string_safe(snippet, 40);
+
+        diagnostics.push(EditorDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: format!("Unexpected: {display}"),
+            range: TextPositionRange::new(
+                TextPosition::new(start.row as u32, start.column as u32),
+                TextPosition::new(end.row as u32, end.column as u32),
+            ),
+        });
+        return;
+    }
+
+    if node.is_missing() {
+        let start = node.start_position();
+        let end = node.end_position();
+        let kind = node.kind();
+
+        diagnostics.push(EditorDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: format!("Missing: {kind}"),
+            range: TextPositionRange::new(
+                TextPosition::new(start.row as u32, start.column as u32),
+                TextPosition::new(end.row as u32, end.column as u32),
+            ),
+        });
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_error_nodes(child, source, diagnostics);
     }
 }
 
@@ -874,5 +989,36 @@ mod tests {
             detect_dangerous_query("db.users.DeleteMany({})"),
             Some(DangerousQueryKind::MongoDeleteMany)
         );
+    }
+
+    #[test]
+    fn valid_sql_has_no_diagnostics() {
+        let diags = sql_editor_diagnostics("SELECT * FROM users WHERE id = 1");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn empty_sql_has_no_diagnostics() {
+        assert!(sql_editor_diagnostics("").is_empty());
+        assert!(sql_editor_diagnostics("   ").is_empty());
+    }
+
+    #[test]
+    fn syntax_error_produces_diagnostic() {
+        let diags = sql_editor_diagnostics("SELEC * FROM users");
+        assert!(!diags.is_empty());
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+    }
+
+    #[test]
+    fn unclosed_paren_produces_diagnostic() {
+        let diags = sql_editor_diagnostics("SELECT * FROM users WHERE id IN (1, 2");
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn multiple_valid_statements_no_diagnostics() {
+        let diags = sql_editor_diagnostics("SELECT 1; SELECT 2;");
+        assert!(diags.is_empty());
     }
 }

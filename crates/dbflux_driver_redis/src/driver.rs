@@ -4,16 +4,17 @@ use std::time::Instant;
 
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, ListEnd, ListPushRequest,
-    ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest,
-    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, Value, ValueRepr, ZSetAddRequest,
-    ZSetRemoveRequest, sanitize_uri,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
+    DiagnosticSeverity, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
+    FormValues, FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest,
+    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
+    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, TextPosition,
+    TextPositionRange, ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -462,7 +463,10 @@ impl RedisConnection {
         let result = f(&mut conn);
 
         // Restore the active database if we temporarily switched to a different one
-        if keyspace.is_some() && keyspace != active && let Some(db) = active {
+        if keyspace.is_some()
+            && keyspace != active
+            && let Some(db) = active
+        {
             let _ = select_db(&mut conn, db);
         }
 
@@ -530,6 +534,10 @@ impl Connection for RedisConnection {
         Err(DbError::NotSupported(
             "Query cancellation not supported for Redis".to_string(),
         ))
+    }
+
+    fn language_service(&self) -> &dyn LanguageService {
+        &RedisLanguageService
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
@@ -1467,4 +1475,83 @@ fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
 
     let cleaned = cleaned.trim_end_matches(';').trim();
     split_command(cleaned)
+}
+
+struct RedisLanguageService;
+
+impl LanguageService for RedisLanguageService {
+    fn validate(&self, query: &str) -> ValidationResult {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return ValidationResult::Valid;
+        }
+
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("select ")
+            || lower.starts_with("insert ")
+            || lower.starts_with("update ")
+            || lower.starts_with("delete ")
+        {
+            return ValidationResult::WrongLanguage {
+                expected: QueryLanguage::RedisCommands,
+                message:
+                    "SQL syntax not supported for Redis. Use Redis command syntax (e.g. GET key)."
+                        .to_string(),
+            };
+        }
+
+        match parse_command(query) {
+            Ok(_) => ValidationResult::Valid,
+            Err(e) => ValidationResult::SyntaxError(
+                Diagnostic::error(format!("Invalid Redis command: {}", e))
+                    .with_hint("Use Redis command syntax, for example: SET mykey myvalue"),
+            ),
+        }
+    }
+
+    fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
+        None
+    }
+
+    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return vec![];
+        }
+
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("select ")
+            || lower.starts_with("insert ")
+            || lower.starts_with("update ")
+            || lower.starts_with("delete ")
+        {
+            return vec![EditorDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                message:
+                    "SQL syntax not supported for Redis. Use Redis command syntax (e.g. GET key)."
+                        .to_string(),
+                range: redis_first_line_range(query),
+            }];
+        }
+
+        match parse_command(query) {
+            Ok(_) => vec![],
+            Err(e) => vec![EditorDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: format!("Invalid Redis command: {}", e),
+                range: redis_first_line_range(query),
+            }],
+        }
+    }
+}
+
+fn redis_first_line_range(query: &str) -> TextPositionRange {
+    let first_line_len = query
+        .lines()
+        .next()
+        .map(|line| line.chars().count())
+        .unwrap_or(1) as u32;
+    let end_col = first_line_len.max(1);
+
+    TextPositionRange::new(TextPosition::new(0, 0), TextPosition::new(0, end_col))
 }

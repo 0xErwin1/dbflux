@@ -14,7 +14,8 @@ impl CommandDispatcher for Workspace {
                 | Command::Execute
                 | Command::ColumnLeft
                 | Command::ColumnRight
-                | Command::Cancel => {}
+                | Command::Cancel
+                | Command::NewQueryTab => {}
                 _ => return true,
             }
         }
