@@ -35,15 +35,20 @@ pub struct KeyValueDocument {
     members_filter_input: Entity<InputState>,
     focus_mode: KeyValueFocusMode,
 
-    // Keys list
+    // Keys list (current page only)
     keys: Vec<KeyEntry>,
-    next_cursor: Option<String>,
     selected_index: Option<usize>,
     selected_value: Option<KeyGetResult>,
     loading_keys: bool,
     loading_value: bool,
     value_load_generation: u64,
     last_error: Option<String>,
+
+    // Cursor-based pagination
+    current_page: u64,
+    current_cursor: Option<String>,
+    next_cursor: Option<String>,
+    previous_cursors: Vec<Option<String>>,
 
     // Inline rename
     rename_input: Option<Entity<InputState>>,
@@ -75,6 +80,11 @@ pub struct KeyValueDocument {
     new_key_modal: Entity<NewKeyModal>,
     pending_open_new_key_modal: bool,
 
+    // Context menu
+    context_menu: Option<KvContextMenu>,
+    context_menu_focus: FocusHandle,
+    panel_origin: Point<Pixels>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -98,6 +108,44 @@ struct PendingKeyDelete {
 struct PendingMemberDelete {
     member_index: usize,
     member_display: String,
+}
+
+// ---------------------------------------------------------------------------
+// Context menu
+// ---------------------------------------------------------------------------
+
+struct KvContextMenu {
+    target: KvMenuTarget,
+    position: Point<Pixels>,
+    items: Vec<KvMenuItem>,
+    selected_index: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KvMenuTarget {
+    Key,
+    Value,
+}
+
+struct KvMenuItem {
+    label: &'static str,
+    action: KvMenuAction,
+    icon: AppIcon,
+    is_danger: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KvMenuAction {
+    CopyKey,
+    RenameKey,
+    NewKey,
+    DeleteKey,
+    CopyMember,
+    EditMember,
+    AddMember,
+    DeleteMember,
+    CopyValue,
+    EditValue,
 }
 
 #[derive(Clone, Debug)]
@@ -186,13 +234,16 @@ impl KeyValueDocument {
             members_filter_input,
             focus_mode: KeyValueFocusMode::List,
             keys: Vec::new(),
-            next_cursor: None,
             selected_index: None,
             selected_value: None,
             loading_keys: false,
             loading_value: false,
             value_load_generation: 0,
             last_error: None,
+            current_page: 1,
+            current_cursor: None,
+            next_cursor: None,
+            previous_cursors: Vec::new(),
             rename_input: None,
             renaming_index: None,
             editing_member_index: None,
@@ -207,6 +258,9 @@ impl KeyValueDocument {
             pending_member_delete: None,
             new_key_modal,
             pending_open_new_key_modal: false,
+            context_menu: None,
+            context_menu_focus: cx.focus_handle(),
+            panel_origin: Point::default(),
             _subscriptions: subscriptions,
         };
 
@@ -259,6 +313,10 @@ impl KeyValueDocument {
             return ContextId::ConfirmModal;
         }
 
+        if self.context_menu.is_some() {
+            return ContextId::ContextMenu;
+        }
+
         match self.focus_mode {
             KeyValueFocusMode::List | KeyValueFocusMode::ValuePanel => ContextId::Results,
             KeyValueFocusMode::TextInput => ContextId::TextInput,
@@ -287,7 +345,22 @@ impl KeyValueDocument {
             return handled;
         }
 
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
+        }
+
         match cmd {
+            // -- Context menu --
+            Command::OpenContextMenu => {
+                let target = match self.focus_mode {
+                    KeyValueFocusMode::ValuePanel => KvMenuTarget::Value,
+                    _ => KvMenuTarget::Key,
+                };
+                let position = self.keyboard_menu_position(target);
+                self.open_context_menu(target, position, window, cx);
+                true
+            }
+
             // -- Panel switching (h/l) --
             Command::ColumnLeft => {
                 if self.focus_mode == KeyValueFocusMode::ValuePanel {
@@ -445,8 +518,12 @@ impl KeyValueDocument {
                 self.start_string_edit(window, cx);
                 true
             }
-            Command::ResultsNextPage => {
-                self.load_next_page(cx);
+            Command::ResultsNextPage | Command::PageDown => {
+                self.go_next_page(cx);
+                true
+            }
+            Command::ResultsPrevPage | Command::PageUp => {
+                self.go_prev_page(cx);
                 true
             }
             Command::ResultsAddRow => {
@@ -482,6 +559,261 @@ impl KeyValueDocument {
             }
             _ => false,
         }
+    }
+
+    // -- Context menu --
+
+    fn build_key_menu_items(&self) -> Vec<KvMenuItem> {
+        vec![
+            KvMenuItem {
+                label: "Copy Key",
+                action: KvMenuAction::CopyKey,
+                icon: AppIcon::Columns,
+                is_danger: false,
+            },
+            KvMenuItem {
+                label: "Rename",
+                action: KvMenuAction::RenameKey,
+                icon: AppIcon::Pencil,
+                is_danger: false,
+            },
+            KvMenuItem {
+                label: "New Key",
+                action: KvMenuAction::NewKey,
+                icon: AppIcon::Plus,
+                is_danger: false,
+            },
+            KvMenuItem {
+                label: "Delete Key",
+                action: KvMenuAction::DeleteKey,
+                icon: AppIcon::Delete,
+                is_danger: true,
+            },
+        ]
+    }
+
+    fn build_value_menu_items(&self) -> Vec<KvMenuItem> {
+        if self.is_structured_type() {
+            vec![
+                KvMenuItem {
+                    label: "Copy Member",
+                    action: KvMenuAction::CopyMember,
+                    icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Edit Member",
+                    action: KvMenuAction::EditMember,
+                    icon: AppIcon::Pencil,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Add Member",
+                    action: KvMenuAction::AddMember,
+                    icon: AppIcon::Plus,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Delete Member",
+                    action: KvMenuAction::DeleteMember,
+                    icon: AppIcon::Delete,
+                    is_danger: true,
+                },
+            ]
+        } else {
+            vec![
+                KvMenuItem {
+                    label: "Copy Value",
+                    action: KvMenuAction::CopyValue,
+                    icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Edit Value",
+                    action: KvMenuAction::EditValue,
+                    icon: AppIcon::Pencil,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Delete Key",
+                    action: KvMenuAction::DeleteKey,
+                    icon: AppIcon::Delete,
+                    is_danger: true,
+                },
+            ]
+        }
+    }
+
+    /// Computes a window-coordinate position for keyboard-triggered menus,
+    /// aligned vertically with the selected row in the active panel.
+    fn keyboard_menu_position(&self, target: KvMenuTarget) -> Point<Pixels> {
+        // Left panel: toolbar(32) + status line(~24) = 56px before keys list
+        // Right panel: toolbar(32) + metadata(~24) + optional filter(~30) + header(24) ≈ 110px
+        let left_header = Heights::TOOLBAR + Heights::ROW_COMPACT;
+        let right_header =
+            Heights::TOOLBAR + Heights::ROW_COMPACT + px(30.0) + Heights::ROW_COMPACT;
+
+        match target {
+            KvMenuTarget::Key => {
+                let row_index = self.selected_index.unwrap_or(0) as f32;
+                Point {
+                    x: self.panel_origin.x + px(12.0),
+                    y: self.panel_origin.y + left_header + Heights::ROW * row_index,
+                }
+            }
+            KvMenuTarget::Value => {
+                let row_index = self.selected_member_index.unwrap_or(0) as f32;
+                Point {
+                    x: self.panel_origin.x + px(240.0) + px(12.0),
+                    y: self.panel_origin.y + right_header + Heights::ROW * row_index,
+                }
+            }
+        }
+    }
+
+    fn open_context_menu(
+        &mut self,
+        target: KvMenuTarget,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = match target {
+            KvMenuTarget::Key => self.build_key_menu_items(),
+            KvMenuTarget::Value => self.build_value_menu_items(),
+        };
+
+        self.context_menu = Some(KvContextMenu {
+            target,
+            position,
+            items,
+            selected_index: 0,
+        });
+
+        self.context_menu_focus.focus(window);
+        cx.notify();
+    }
+
+    fn close_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.context_menu.take() {
+            match menu.target {
+                KvMenuTarget::Key => self.focus_mode = KeyValueFocusMode::List,
+                KvMenuTarget::Value => self.focus_mode = KeyValueFocusMode::ValuePanel,
+            }
+        }
+
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    fn dispatch_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let item_count = match &self.context_menu {
+            Some(menu) => menu.items.len(),
+            None => return false,
+        };
+
+        match cmd {
+            Command::MenuDown => {
+                if let Some(ref mut menu) = self.context_menu {
+                    menu.selected_index = (menu.selected_index + 1) % item_count;
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuUp => {
+                if let Some(ref mut menu) = self.context_menu {
+                    menu.selected_index = if menu.selected_index == 0 {
+                        item_count - 1
+                    } else {
+                        menu.selected_index - 1
+                    };
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuSelect => {
+                if let Some(menu) = self.context_menu.take() {
+                    let action = menu.items[menu.selected_index].action;
+                    let target = menu.target;
+                    self.execute_menu_action(action, target, window, cx);
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel => {
+                self.close_context_menu(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn execute_menu_action(
+        &mut self,
+        action: KvMenuAction,
+        target: KvMenuTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            KvMenuTarget::Key => self.focus_mode = KeyValueFocusMode::List,
+            KvMenuTarget::Value => self.focus_mode = KeyValueFocusMode::ValuePanel,
+        }
+        self.focus_handle.focus(window);
+
+        match action {
+            KvMenuAction::CopyKey => {
+                if let Some(key) = self.selected_key() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(key));
+                }
+            }
+            KvMenuAction::RenameKey => {
+                self.start_rename(window, cx);
+            }
+            KvMenuAction::NewKey => {
+                self.pending_open_new_key_modal = true;
+            }
+            KvMenuAction::DeleteKey => {
+                self.request_delete_key(cx);
+            }
+            KvMenuAction::CopyMember => {
+                if let Some(idx) = self.selected_member_index
+                    && let Some(member) = self.cached_members.get(idx)
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(member.display.clone()));
+                }
+            }
+            KvMenuAction::EditMember => {
+                if let Some(idx) = self.selected_member_index {
+                    self.start_member_edit(idx, window, cx);
+                }
+            }
+            KvMenuAction::AddMember => {
+                self.add_member_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+                self.focus_mode = KeyValueFocusMode::TextInput;
+            }
+            KvMenuAction::DeleteMember => {
+                if let Some(idx) = self.selected_member_index {
+                    self.request_delete_member(idx, cx);
+                }
+            }
+            KvMenuAction::CopyValue => {
+                if let Some(value) = &self.selected_value {
+                    let text = String::from_utf8_lossy(&value.value).to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            KvMenuAction::EditValue => {
+                self.start_string_edit(window, cx);
+            }
+        }
+
+        cx.notify();
     }
 
     // -- Selection helpers --
@@ -545,12 +877,46 @@ impl KeyValueDocument {
     // -- Key CRUD --
 
     fn reload_keys(&mut self, cx: &mut Context<Self>) {
+        self.current_page = 1;
+        self.current_cursor = None;
+        self.next_cursor = None;
+        self.previous_cursors.clear();
+        self.load_page(cx);
+    }
+
+    fn go_next_page(&mut self, cx: &mut Context<Self>) {
+        let Some(next) = self.next_cursor.clone() else {
+            return;
+        };
+        self.previous_cursors.push(self.current_cursor.clone());
+        self.current_cursor = Some(next);
+        self.current_page += 1;
+        self.load_page(cx);
+    }
+
+    fn go_prev_page(&mut self, cx: &mut Context<Self>) {
+        let Some(prev) = self.previous_cursors.pop() else {
+            return;
+        };
+        self.current_cursor = prev;
+        self.current_page = self.current_page.saturating_sub(1).max(1);
+        self.load_page(cx);
+    }
+
+    fn can_go_next(&self) -> bool {
+        !self.loading_keys && self.next_cursor.is_some()
+    }
+
+    fn can_go_prev(&self) -> bool {
+        !self.loading_keys && !self.previous_cursors.is_empty()
+    }
+
+    fn load_page(&mut self, cx: &mut Context<Self>) {
         if self.loading_keys {
             return;
         }
 
         self.loading_keys = true;
-        self.next_cursor = None;
         self.keys.clear();
         self.selected_index = None;
         self.selected_value = None;
@@ -569,11 +935,13 @@ impl KeyValueDocument {
         };
 
         let filter = self.filter_input.read(cx).value().trim().to_string();
+        let is_first_page = self.current_page == 1;
         let is_unfiltered = filter.is_empty();
         let database = self.database.clone();
         let entity = cx.entity().clone();
+
         let request = KeyScanRequest {
-            cursor: None,
+            cursor: self.current_cursor.clone(),
             filter: if filter.is_empty() {
                 None
             } else {
@@ -604,7 +972,7 @@ impl KeyValueDocument {
                             this.next_cursor = page.next_cursor;
                             this.last_error = None;
 
-                            if is_unfiltered {
+                            if is_first_page && is_unfiltered {
                                 let key_names: Vec<String> =
                                     this.keys.iter().map(|e| e.key.clone()).collect();
 
@@ -621,73 +989,6 @@ impl KeyValueDocument {
                                 this.selected_index = Some(0);
                                 this.reload_selected_value(cx);
                             }
-                        }
-                        Err(error) => {
-                            this.last_error = Some(error.to_string());
-                        }
-                    }
-
-                    cx.notify();
-                });
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn load_next_page(&mut self, cx: &mut Context<Self>) {
-        if self.loading_keys {
-            return;
-        }
-
-        let Some(cursor) = self.next_cursor.clone() else {
-            return;
-        };
-
-        let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
-            cx.notify();
-            return;
-        };
-
-        self.loading_keys = true;
-        cx.notify();
-
-        let filter = self.filter_input.read(cx).value().trim().to_string();
-        let database = self.database.clone();
-        let entity = cx.entity().clone();
-
-        let request = KeyScanRequest {
-            cursor: Some(cursor),
-            filter: if filter.is_empty() {
-                None
-            } else {
-                Some(format!("*{}*", filter))
-            },
-            limit: 200,
-            keyspace: parse_database_name(&database),
-        };
-
-        cx.spawn(async move |_this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let api = connection.key_value_api().ok_or_else(|| {
-                        DbError::NotSupported("Key-value API unavailable".to_string())
-                    })?;
-                    api.scan_keys(&request)
-                })
-                .await;
-
-            cx.update(|cx| {
-                entity.update(cx, |this, cx| {
-                    this.loading_keys = false;
-
-                    match result {
-                        Ok(page) => {
-                            this.keys.extend(page.entries);
-                            this.next_cursor = page.next_cursor;
-                            this.last_error = None;
                         }
                         Err(error) => {
                             this.last_error = Some(error.to_string());
@@ -1943,7 +2244,22 @@ impl Render for KeyValueDocument {
                         .border_color(theme.border)
                         .text_size(FontSizes::SM)
                         .when(is_selected, |d| d.bg(theme.list_active))
-                        .when(!is_selected, |d| d.hover(|d| d.bg(theme.list_active)));
+                        .when(!is_selected, |d| d.hover(|d| d.bg(theme.list_active)))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.focus_mode = KeyValueFocusMode::ValuePanel;
+                                this.selected_member_index = Some(idx);
+                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                this.open_context_menu(
+                                    KvMenuTarget::Value,
+                                    event.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        );
 
                     row = row.child(
                         div()
@@ -2090,6 +2406,20 @@ impl Render for KeyValueDocument {
                                 }),
                             )
                         })
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.focus_mode = KeyValueFocusMode::ValuePanel;
+                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                this.open_context_menu(
+                                    KvMenuTarget::Value,
+                                    event.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .child(value_preview)
                         .when(is_editable, |d| {
                             d.child(
@@ -2180,39 +2510,120 @@ impl Render for KeyValueDocument {
                                 this.reload_keys(cx);
                             }),
                         ),
-                    )
-                    .child(
-                        icon_button_base("kv-next", AppIcon::ChevronDown, theme).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.load_next_page(cx);
-                            }),
-                        ),
                     ),
             )
-            // Status line
-            .child(
+            // Pagination bar
+            .child({
+                let can_prev = self.can_go_prev();
+                let can_next = self.can_go_next();
+                let current_page = self.current_page;
+                let key_count = self.keys.len();
+
                 div()
                     .flex()
                     .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
                     .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(format!(
-                        "{} keys{}",
-                        self.keys.len(),
-                        if self.loading_keys {
-                            " (loading...)"
-                        } else if self.next_cursor.is_some() {
-                            " (more available)"
-                        } else {
-                            ""
-                        }
-                    )),
-            )
+                    .bg(theme.tab_bar)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_size(FontSizes::XS)
+                            .text_color(theme.muted_foreground)
+                            .child(
+                                svg()
+                                    .path(AppIcon::Rows3.path())
+                                    .size_3()
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(if self.loading_keys {
+                                "Loading...".to_string()
+                            } else {
+                                format!("{} keys", key_count)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                div()
+                                    .id("kv-prev-page")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::XS)
+                                    .when(can_prev, |d| {
+                                        d.cursor_pointer()
+                                            .text_color(theme.foreground)
+                                            .hover(|d| d.bg(theme.secondary))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.go_prev_page(cx);
+                                            }))
+                                    })
+                                    .when(!can_prev, |d| {
+                                        d.text_color(theme.muted_foreground).opacity(0.5)
+                                    })
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronLeft.path())
+                                            .size_3()
+                                            .text_color(if can_prev {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                    )
+                                    .child("Prev"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(FontSizes::XS)
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("Page {}", current_page)),
+                            )
+                            .child(
+                                div()
+                                    .id("kv-next-page")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .text_size(FontSizes::XS)
+                                    .when(can_next, |d| {
+                                        d.cursor_pointer()
+                                            .text_color(theme.foreground)
+                                            .hover(|d| d.bg(theme.secondary))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.go_next_page(cx);
+                                            }))
+                                    })
+                                    .when(!can_next, |d| {
+                                        d.text_color(theme.muted_foreground).opacity(0.5)
+                                    })
+                                    .child("Next")
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronRight.path())
+                                            .size_3()
+                                            .text_color(if can_next {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                    ),
+                            ),
+                    )
+            })
             .when_some(error_message, |this, message| {
                 this.child(
                     div()
@@ -2252,6 +2663,21 @@ impl Render for KeyValueDocument {
                             cx.listener(move |this, _, _, cx| {
                                 this.focus_mode = KeyValueFocusMode::List;
                                 this.select_index(index, cx);
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.focus_mode = KeyValueFocusMode::List;
+                                this.select_index(index, cx);
+                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                this.open_context_menu(
+                                    KvMenuTarget::Key,
+                                    event.position,
+                                    window,
+                                    cx,
+                                );
                             }),
                         );
 
@@ -2295,6 +2721,8 @@ impl Render for KeyValueDocument {
             ));
 
         // -- Compose --
+        let this_entity = cx.entity().clone();
+
         div()
             .size_full()
             .track_focus(&self.focus_handle)
@@ -2307,6 +2735,18 @@ impl Render for KeyValueDocument {
                 }),
             )
             .flex()
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        this_entity.update(cx, |this, _| {
+                            this.panel_origin = bounds.origin;
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(left_panel)
             .child(right_panel)
             .when(self.new_key_modal.read(cx).is_visible(), |d| {
@@ -2316,6 +2756,14 @@ impl Render for KeyValueDocument {
                 d.child(render_delete_confirm_modal(
                     &delete_title,
                     &delete_message,
+                    cx,
+                ))
+            })
+            .when_some(self.context_menu.as_ref(), |d, menu| {
+                d.child(render_kv_context_menu(
+                    menu,
+                    &self.context_menu_focus,
+                    self.panel_origin,
                     cx,
                 ))
             })
@@ -2444,6 +2892,147 @@ fn render_delete_confirm_modal(
                         ),
                 ),
         )
+}
+
+fn render_kv_context_menu(
+    menu: &KvContextMenu,
+    menu_focus: &FocusHandle,
+    panel_origin: Point<Pixels>,
+    cx: &mut Context<KeyValueDocument>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let menu_width = px(180.0);
+    let menu_x = menu.position.x - panel_origin.x;
+    let menu_y = menu.position.y - panel_origin.y;
+    let selected_index = menu.selected_index;
+
+    let menu_items: Vec<AnyElement> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let is_selected = idx == selected_index;
+            let is_danger = item.is_danger;
+            let label = item.label;
+            let icon = item.icon;
+            let action = item.action;
+
+            div()
+                .id(SharedString::from(label))
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(Heights::ROW_COMPACT)
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .text_size(FontSizes::SM)
+                .text_color(if is_danger {
+                    theme.danger
+                } else {
+                    theme.foreground
+                })
+                .when(is_selected, |d| {
+                    d.bg(if is_danger {
+                        theme.danger.opacity(0.1)
+                    } else {
+                        theme.accent
+                    })
+                    .text_color(if is_danger {
+                        theme.danger
+                    } else {
+                        theme.accent_foreground
+                    })
+                })
+                .when(!is_selected, |d| {
+                    d.hover(|d| {
+                        d.bg(if is_danger {
+                            theme.danger.opacity(0.1)
+                        } else {
+                            theme.secondary
+                        })
+                    })
+                })
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if let Some(ref mut m) = this.context_menu
+                        && m.selected_index != idx
+                    {
+                        m.selected_index = idx;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(m) = this.context_menu.take() {
+                        let target = m.target;
+                        this.execute_menu_action(action, target, window, cx);
+                    }
+                }))
+                .child(svg().path(icon.path()).size_4().text_color(if is_danger {
+                    theme.danger
+                } else if is_selected {
+                    theme.accent_foreground
+                } else {
+                    theme.muted_foreground
+                }))
+                .child(label)
+                .into_any_element()
+        })
+        .collect();
+
+    deferred(
+        div()
+            .id("kv-context-menu-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .track_focus(menu_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                use crate::keymap::{KeyChord, default_keymap};
+
+                let chord = KeyChord::from_gpui(&event.keystroke);
+                let keymap = default_keymap();
+
+                if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord)
+                    && this.dispatch_menu_command(cmd, window, cx)
+                {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.close_context_menu(window, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, window, cx| {
+                    this.close_context_menu(window, cx);
+                }),
+            )
+            .child(
+                div()
+                    .id("kv-context-menu")
+                    .absolute()
+                    .left(menu_x)
+                    .top(menu_y)
+                    .w(menu_width)
+                    .bg(theme.popover)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(Radii::MD)
+                    .shadow_lg()
+                    .py(Spacing::XS)
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .children(menu_items),
+            ),
+    )
+    .with_priority(1)
 }
 
 fn icon_button_base(

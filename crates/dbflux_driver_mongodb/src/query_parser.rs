@@ -6,7 +6,7 @@
 use bson::Document;
 use dbflux_core::DbError;
 
-use crate::driver::{json_array_to_bson_docs, json_to_bson_doc, MongoOperation, MongoQuery};
+use crate::driver::{MongoOperation, MongoQuery, json_array_to_bson_docs, json_to_bson_doc};
 
 /// Parse error with byte-offset position (`offset` + `len` in bytes).
 #[derive(Debug, Clone)]
