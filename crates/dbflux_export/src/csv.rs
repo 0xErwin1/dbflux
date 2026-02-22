@@ -1,6 +1,6 @@
 use crate::{ExportError, Exporter};
 use csv::Writer;
-use dbflux_core::{QueryResult, Value};
+use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::io::Write;
 
 pub struct CsvExporter;
@@ -15,6 +15,22 @@ impl Exporter for CsvExporter {
     }
 
     fn export(&self, result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
+        match &result.shape {
+            QueryResultShape::Text => {
+                if let Some(body) = &result.text_body {
+                    writer.write_all(body.as_bytes())?;
+                }
+                return Ok(());
+            }
+            QueryResultShape::Binary => {
+                if let Some(bytes) = &result.raw_bytes {
+                    writer.write_all(bytes)?;
+                }
+                return Ok(());
+            }
+            QueryResultShape::Table | QueryResultShape::Json => {}
+        }
+
         let mut csv_writer = Writer::from_writer(writer);
 
         let headers: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
@@ -69,8 +85,8 @@ mod tests {
     use std::time::Duration;
 
     fn make_result(columns: Vec<&str>, rows: Vec<Vec<Value>>) -> QueryResult {
-        QueryResult {
-            columns: columns
+        QueryResult::table(
+            columns
                 .into_iter()
                 .map(|name| ColumnMeta {
                     name: name.to_string(),
@@ -79,10 +95,9 @@ mod tests {
                 })
                 .collect(),
             rows,
-            affected_rows: None,
-            execution_time: Duration::from_millis(10),
-            is_document_result: false,
-        }
+            None,
+            Duration::from_millis(10),
+        )
     }
 
     #[test]

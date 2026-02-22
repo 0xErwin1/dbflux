@@ -1117,13 +1117,7 @@ impl Connection for MysqlConnection {
                             "[QUERY] Completed in {:.2}ms, 0 rows",
                             query_time.as_secs_f64() * 1000.0
                         );
-                        return Ok(QueryResult {
-                            columns,
-                            rows: Vec::new(),
-                            affected_rows: None,
-                            execution_time: query_time,
-                            is_document_result: false,
-                        });
+                        return Ok(QueryResult::table(columns, Vec::new(), None, query_time));
                     } else {
                         // Non-SELECT query, get affected rows from conn
                         let affected = state.conn.affected_rows();
@@ -1132,13 +1126,12 @@ impl Connection for MysqlConnection {
                             query_time.as_secs_f64() * 1000.0,
                             affected
                         );
-                        return Ok(QueryResult {
+                        return Ok(QueryResult::table(
                             columns,
-                            rows: Vec::new(),
-                            affected_rows: Some(affected),
-                            execution_time: query_time,
-                            is_document_result: false,
-                        });
+                            Vec::new(),
+                            Some(affected),
+                            query_time,
+                        ));
                     }
                 }
 
@@ -1159,13 +1152,7 @@ impl Connection for MysqlConnection {
                     result_rows.len()
                 );
 
-                Ok(QueryResult {
-                    columns,
-                    rows: result_rows,
-                    affected_rows: None,
-                    execution_time: query_time,
-                    is_document_result: false,
-                })
+                Ok(QueryResult::table(columns, result_rows, None, query_time))
             }
             Err(e) => {
                 if self.cancelled.load(Ordering::SeqCst) {

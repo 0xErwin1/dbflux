@@ -81,7 +81,7 @@ pub use language_service::{
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
-pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
+pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
 pub use query_safety::is_safe_read_query;
 pub use refresh_policy::RefreshPolicy;
 pub use saved_query::{SavedQuery, SavedQueryStore};

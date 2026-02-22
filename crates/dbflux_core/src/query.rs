@@ -3,6 +3,46 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
+// -- Query Result Shape --
+
+/// Shape of data returned by a query. Set by the driver; the UI never sniffs content.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum QueryResultShape {
+    /// Tabular data with columns and rows (SQL results, Redis arrays that
+    /// fit a uniform structure).
+    #[default]
+    Table,
+
+    /// Structured JSON (MongoDB documents, Redis hash results).
+    Json,
+
+    /// Plain text (Redis status replies, single-value results).
+    Text,
+
+    /// Raw binary data (Redis bulk strings that failed UTF-8 decode).
+    Binary,
+}
+
+impl QueryResultShape {
+    pub fn is_table(&self) -> bool {
+        matches!(self, Self::Table)
+    }
+
+    pub fn is_json(&self) -> bool {
+        matches!(self, Self::Json)
+    }
+
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text)
+    }
+
+    pub fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary)
+    }
+}
+
+// -- Query Request --
+
 /// Parameters for executing a SQL query.
 #[derive(Debug, Clone, Default)]
 pub struct QueryRequest {
@@ -69,34 +109,82 @@ pub struct ColumnMeta {
     pub nullable: bool,
 }
 
-/// Result of executing a SQL query.
+// -- Query Result --
+
 #[derive(Debug, Clone)]
 pub struct QueryResult {
-    /// Metadata for each column in the result set.
+    pub shape: QueryResultShape,
     pub columns: Vec<ColumnMeta>,
-
-    /// Row data, where each row contains values matching `columns` order.
     pub rows: Vec<Row>,
-
-    /// Number of rows affected by INSERT/UPDATE/DELETE statements.
-    /// `None` for SELECT queries.
     pub affected_rows: Option<u64>,
-
-    /// Wall-clock time taken to execute the query.
     pub execution_time: Duration,
-
-    /// True when result contains document data (from MongoDB/document DBs).
-    pub is_document_result: bool,
+    pub text_body: Option<String>,
+    pub raw_bytes: Option<Vec<u8>>,
 }
 
 impl QueryResult {
     pub fn empty() -> Self {
         Self {
+            shape: QueryResultShape::Table,
             columns: Vec::new(),
             rows: Vec::new(),
             affected_rows: None,
             execution_time: Duration::ZERO,
-            is_document_result: false,
+            text_body: None,
+            raw_bytes: None,
+        }
+    }
+
+    pub fn table(
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Row>,
+        affected_rows: Option<u64>,
+        execution_time: Duration,
+    ) -> Self {
+        Self {
+            shape: QueryResultShape::Table,
+            columns,
+            rows,
+            affected_rows,
+            execution_time,
+            text_body: None,
+            raw_bytes: None,
+        }
+    }
+
+    pub fn json(columns: Vec<ColumnMeta>, rows: Vec<Row>, execution_time: Duration) -> Self {
+        Self {
+            shape: QueryResultShape::Json,
+            columns,
+            rows,
+            affected_rows: None,
+            execution_time,
+            text_body: None,
+            raw_bytes: None,
+        }
+    }
+
+    pub fn text(body: String, execution_time: Duration) -> Self {
+        Self {
+            shape: QueryResultShape::Text,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: None,
+            execution_time,
+            text_body: Some(body),
+            raw_bytes: None,
+        }
+    }
+
+    pub fn binary(data: Vec<u8>, execution_time: Duration) -> Self {
+        Self {
+            shape: QueryResultShape::Binary,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: None,
+            execution_time,
+            text_body: None,
+            raw_bytes: Some(data),
         }
     }
 

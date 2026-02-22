@@ -221,6 +221,7 @@ impl QueryCompletionProvider {
         let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
         let prefix_upper = prefix.to_uppercase();
         let before_cursor = &source[..cursor];
+        let replace_range = completion_replace_range(source, prefix_start, cursor);
 
         let mut seen = HashSet::new();
         let mut items = Vec::new();
@@ -251,6 +252,8 @@ impl QueryCompletionProvider {
                     &mut seen,
                     column_name,
                     CompletionItemKind::FIELD,
+                    &prefix,
+                    replace_range,
                 );
             }
 
@@ -262,7 +265,14 @@ impl QueryCompletionProvider {
                 continue;
             }
 
-            push_completion_item(&mut items, &mut seen, keyword, CompletionItemKind::KEYWORD);
+            push_completion_item(
+                &mut items,
+                &mut seen,
+                keyword,
+                CompletionItemKind::KEYWORD,
+                &prefix,
+                replace_range,
+            );
         }
 
         let in_table_context = is_sql_table_context(before_cursor);
@@ -281,6 +291,8 @@ impl QueryCompletionProvider {
                 &mut seen,
                 table_name,
                 CompletionItemKind::STRUCT,
+                &prefix,
+                replace_range,
             );
         }
 
@@ -293,7 +305,14 @@ impl QueryCompletionProvider {
                 continue;
             }
 
-            push_completion_item(&mut items, &mut seen, view_name, CompletionItemKind::STRUCT);
+            push_completion_item(
+                &mut items,
+                &mut seen,
+                view_name,
+                CompletionItemKind::STRUCT,
+                &prefix,
+                replace_range,
+            );
         }
 
         if !in_table_context {
@@ -313,6 +332,8 @@ impl QueryCompletionProvider {
                     &mut seen,
                     column_name,
                     CompletionItemKind::FIELD,
+                    &prefix,
+                    replace_range,
                 );
             }
         }
@@ -329,6 +350,7 @@ impl QueryCompletionProvider {
         let metadata = self.mongo_completion_metadata(cx);
         let (prefix_start, prefix) = extract_identifier_prefix(source, cursor);
         let prefix_upper = prefix.to_uppercase();
+        let replace_range = completion_replace_range(source, prefix_start, cursor);
 
         let mut seen = HashSet::new();
         let mut items = Vec::new();
@@ -349,6 +371,24 @@ impl QueryCompletionProvider {
                         &mut seen,
                         collection,
                         CompletionItemKind::CLASS,
+                        &prefix,
+                        replace_range,
+                    );
+                }
+
+                for method in MONGO_DB_METHODS {
+                    if !prefix_upper.is_empty() && !method.to_uppercase().starts_with(&prefix_upper)
+                    {
+                        continue;
+                    }
+
+                    push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        method,
+                        CompletionItemKind::METHOD,
+                        &prefix,
+                        replace_range,
                     );
                 }
             }
@@ -359,7 +399,14 @@ impl QueryCompletionProvider {
                         continue;
                     }
 
-                    push_completion_item(&mut items, &mut seen, method, CompletionItemKind::METHOD);
+                    push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        method,
+                        CompletionItemKind::METHOD,
+                        &prefix,
+                        replace_range,
+                    );
                 }
             }
             MongoCompletionContext::Field { collection } => {
@@ -371,7 +418,14 @@ impl QueryCompletionProvider {
                         continue;
                     }
 
-                    push_completion_item(&mut items, &mut seen, field, CompletionItemKind::FIELD);
+                    push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        field,
+                        CompletionItemKind::FIELD,
+                        &prefix,
+                        replace_range,
+                    );
                 }
 
                 if items.is_empty() {
@@ -387,6 +441,8 @@ impl QueryCompletionProvider {
                             &mut seen,
                             field,
                             CompletionItemKind::FIELD,
+                            &prefix,
+                            replace_range,
                         );
                     }
                 }
@@ -404,6 +460,8 @@ impl QueryCompletionProvider {
                         &mut seen,
                         operator,
                         CompletionItemKind::OPERATOR,
+                        &prefix,
+                        replace_range,
                     );
                 }
             }
@@ -415,7 +473,14 @@ impl QueryCompletionProvider {
                 continue;
             }
 
-            push_completion_item(&mut items, &mut seen, keyword, CompletionItemKind::KEYWORD);
+            push_completion_item(
+                &mut items,
+                &mut seen,
+                keyword,
+                CompletionItemKind::KEYWORD,
+                &prefix,
+                replace_range,
+            );
         }
 
         items
@@ -435,8 +500,13 @@ impl QueryCompletionProvider {
             .last()
             .is_some_and(|ch| ch.is_whitespace());
 
+        let prefix_start = scan_redis_token_start(source, cursor);
+        let prefix_text = &source[prefix_start..cursor];
+
         let mut seen = HashSet::new();
         let mut items = Vec::new();
+
+        let replace_range = completion_replace_range(source, prefix_start, cursor);
 
         let command_mode = tokens.is_empty() || (tokens.len() == 1 && !ends_with_space);
         if command_mode {
@@ -447,7 +517,14 @@ impl QueryCompletionProvider {
                     continue;
                 }
 
-                push_completion_item(&mut items, &mut seen, command, CompletionItemKind::FUNCTION);
+                push_completion_item(
+                    &mut items,
+                    &mut seen,
+                    command,
+                    CompletionItemKind::FUNCTION,
+                    prefix_text,
+                    replace_range,
+                );
             }
 
             return items;
@@ -463,7 +540,14 @@ impl QueryCompletionProvider {
         if command == "SELECT" && argument_index == 0 {
             for keyspace in &metadata.keyspaces {
                 let label = keyspace.to_string();
-                push_completion_item(&mut items, &mut seen, &label, CompletionItemKind::VALUE);
+                push_completion_item(
+                    &mut items,
+                    &mut seen,
+                    &label,
+                    CompletionItemKind::VALUE,
+                    prefix_text,
+                    replace_range,
+                );
             }
         }
 
@@ -479,7 +563,14 @@ impl QueryCompletionProvider {
                     continue;
                 }
 
-                push_completion_item(&mut items, &mut seen, option, CompletionItemKind::KEYWORD);
+                push_completion_item(
+                    &mut items,
+                    &mut seen,
+                    option,
+                    CompletionItemKind::KEYWORD,
+                    prefix_text,
+                    replace_range,
+                );
             }
         }
 
@@ -495,7 +586,14 @@ impl QueryCompletionProvider {
                     continue;
                 }
 
-                push_completion_item(&mut items, &mut seen, key, CompletionItemKind::VALUE);
+                push_completion_item(
+                    &mut items,
+                    &mut seen,
+                    key,
+                    CompletionItemKind::VALUE,
+                    prefix_text,
+                    replace_range,
+                );
             }
         }
 
@@ -527,8 +625,9 @@ impl CompletionProvider for QueryCompletionProvider {
                 self.completion_items_for_redis(&source, cursor, _cx)
             }
             _ => {
-                let (_, prefix) = extract_identifier_prefix(&source, cursor);
+                let (prefix_start, prefix) = extract_identifier_prefix(&source, cursor);
                 let prefix_upper = prefix.to_uppercase();
+                let replace_range = completion_replace_range(&source, prefix_start, cursor);
                 let mut items = Vec::new();
                 let mut seen = HashSet::new();
 
@@ -544,6 +643,8 @@ impl CompletionProvider for QueryCompletionProvider {
                         &mut seen,
                         candidate,
                         CompletionItemKind::KEYWORD,
+                        &prefix,
+                        replace_range,
                     );
                 }
 
@@ -728,6 +829,21 @@ const MONGO_METHODS: &[&str] = &[
     "drop",
 ];
 
+const MONGO_DB_METHODS: &[&str] = &[
+    "getName",
+    "getCollectionNames",
+    "getCollectionInfos",
+    "stats",
+    "serverStatus",
+    "createCollection",
+    "dropDatabase",
+    "runCommand",
+    "adminCommand",
+    "version",
+    "hostInfo",
+    "currentOp",
+];
+
 const MONGO_OPERATORS: &[&str] = &[
     "$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin", "$and", "$or", "$not", "$exists",
     "$regex", "$match", "$project", "$group", "$sort", "$limit", "$skip", "$lookup", "$unwind",
@@ -862,11 +978,29 @@ fn redis_argument_options(command: &str, argument_index: usize) -> Option<&'stat
     }
 }
 
+fn byte_offset_to_lsp_position(source: &str, offset: usize) -> LspPosition {
+    let before = &source[..offset];
+    let line = before.matches('\n').count() as u32;
+    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let character = source[line_start..offset].chars().count() as u32;
+
+    LspPosition { line, character }
+}
+
+fn completion_replace_range(source: &str, prefix_start: usize, cursor: usize) -> LspRange {
+    LspRange {
+        start: byte_offset_to_lsp_position(source, prefix_start),
+        end: byte_offset_to_lsp_position(source, cursor),
+    }
+}
+
 fn push_completion_item(
     items: &mut Vec<CompletionItem>,
     seen: &mut HashSet<String>,
     label: &str,
     kind: CompletionItemKind,
+    filter_prefix: &str,
+    replace_range: LspRange,
 ) {
     let key = label.to_uppercase();
     if !seen.insert(key) {
@@ -877,6 +1011,11 @@ fn push_completion_item(
         label: label.to_string(),
         kind: Some(kind),
         insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+        filter_text: Some(filter_prefix.to_string()),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: replace_range,
+            new_text: label.to_string(),
+        })),
         ..CompletionItem::default()
     });
 }
@@ -896,6 +1035,22 @@ fn scan_identifier_start(source: &str, end: usize) -> usize {
     while start > 0 {
         let idx = start - 1;
         if !is_identifier_byte(bytes[idx]) {
+            break;
+        }
+
+        start -= 1;
+    }
+
+    start
+}
+
+fn scan_redis_token_start(source: &str, end: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut start = end;
+
+    while start > 0 {
+        let idx = start - 1;
+        if bytes[idx].is_ascii_whitespace() {
             break;
         }
 
