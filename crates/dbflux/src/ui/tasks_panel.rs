@@ -6,6 +6,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use std::collections::HashSet;
 use std::time::Duration;
+use uuid::Uuid;
 
 pub struct TasksPanel {
     app_state: Entity<AppState>,
@@ -78,22 +79,40 @@ impl TasksPanel {
         }
     }
 
-    fn cancel_task(&mut self, task_id: TaskId, task_kind: TaskKind, cx: &mut Context<Self>) {
-        if task_kind == TaskKind::Query
-            && let Some(conn) = self
-                .app_state
-                .read(cx)
-                .active_connection()
-                .map(|c| c.connection.clone())
-        {
-            let cancel_handle = conn.cancel_handle();
-            if let Err(e) = cancel_handle.cancel() {
-                log::warn!("Failed to send cancel via handle: {}", e);
+    fn cancel_task(
+        &mut self,
+        task_id: TaskId,
+        task_kind: TaskKind,
+        profile_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        match task_kind {
+            TaskKind::Query => {
+                let conn = profile_id.and_then(|pid| {
+                    self.app_state
+                        .read(cx)
+                        .connections()
+                        .get(&pid)
+                        .map(|c| c.connection.clone())
+                });
+
+                if let Some(conn) = conn {
+                    let cancel_handle = conn.cancel_handle();
+                    if let Err(e) = cancel_handle.cancel() {
+                        log::warn!("Failed to send cancel via handle: {}", e);
+                    }
+
+                    if let Err(e) = conn.cancel_active() {
+                        log::warn!("Failed to send cancel to database: {}", e);
+                    }
+                }
             }
 
-            if let Err(e) = conn.cancel_active() {
-                log::warn!("Failed to send cancel to database: {}", e);
+            TaskKind::KeyScan | TaskKind::KeyGet | TaskKind::KeyMutation => {
+                // Soft cancel only — Redis/MongoDB drivers don't support driver-level cancel
             }
+
+            _ => {}
         }
 
         self.app_state.update(cx, |state, cx| {
@@ -120,6 +139,7 @@ impl TasksPanel {
         let theme = cx.theme();
         let task_id = task.id;
         let task_kind = task.kind;
+        let task_profile_id = task.profile_id;
         let is_running = matches!(task.status, TaskStatus::Running);
 
         let status_icon = match &task.status {
@@ -181,7 +201,7 @@ impl TasksPanel {
                         .text_color(gpui::rgb(0xDC2626))
                         .hover(|s| s.bg(gpui::rgb(0xFEE2E2)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.cancel_task(task_id, task_kind, cx);
+                            this.cancel_task(task_id, task_kind, task_profile_id, cx);
                         }))
                         .child(
                             svg()

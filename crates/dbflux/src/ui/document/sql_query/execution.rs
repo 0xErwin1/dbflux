@@ -122,8 +122,10 @@ impl SqlQueryDocument {
 
         self.run_in_new_tab = in_new_tab;
 
-        let cancel_token = CancelToken::new();
-        self.active_cancel_token = Some(cancel_token.clone());
+        let description = dbflux_core::truncate_string_safe(query.trim(), 80);
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary(dbflux_core::TaskKind::Query, description, cx);
 
         let exec_id = Uuid::new_v4();
         let record = ExecutionRecord {
@@ -158,9 +160,15 @@ impl SqlQueryDocument {
         cx.spawn(async move |this, cx| {
             let result = task.await;
 
+            if cancel_token.is_cancelled() {
+                log::info!("Query was cancelled, discarding result");
+                return;
+            }
+
             cx.update(|cx| {
                 this.update(cx, |doc, cx| {
                     doc.pending_result = Some(PendingQueryResult {
+                        task_id,
                         exec_id,
                         query,
                         result,
@@ -231,7 +239,6 @@ impl SqlQueryDocument {
             return;
         };
 
-        self.active_cancel_token = None;
         self.state = DocumentState::Clean;
 
         let Some(record) = self
@@ -246,6 +253,8 @@ impl SqlQueryDocument {
 
         match pending.result {
             Ok(qr) => {
+                self.runner.complete_primary(pending.task_id, cx);
+
                 let row_count = qr.rows.len();
                 let execution_time = qr.execution_time;
                 record.rows_affected = Some(row_count as u64);
@@ -278,6 +287,8 @@ impl SqlQueryDocument {
                 self.focus_mode = SqlQueryFocus::Results;
             }
             Err(e) => {
+                self.runner.fail_primary(pending.task_id, e.to_string(), cx);
+
                 let error_msg = e.to_string();
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
@@ -375,8 +386,20 @@ impl SqlQueryDocument {
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
-        if let Some(token) = self.active_cancel_token.take() {
-            token.cancel();
+        if self.runner.cancel_primary(cx) {
+            if let Some(conn_id) = self.connection_id
+                && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
+            {
+                let conn = connected.connection.clone();
+                let cancel_handle = conn.cancel_handle();
+                if let Err(e) = cancel_handle.cancel() {
+                    log::warn!("Failed to send cancel via handle: {}", e);
+                }
+                if let Err(e) = conn.cancel_active() {
+                    log::warn!("Failed to send cancel to database: {}", e);
+                }
+            }
+
             self.state = DocumentState::Clean;
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();

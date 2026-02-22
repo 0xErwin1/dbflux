@@ -1,5 +1,6 @@
 use super::add_member_modal::{AddMemberEvent, AddMemberModal};
 use super::new_key_modal::{NewKeyCreatedEvent, NewKeyModal, NewKeyType, NewKeyValue};
+use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
@@ -9,11 +10,11 @@ use crate::ui::components::document_tree::{
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyEntry, KeyGetRequest,
-    KeyGetResult, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyType, ListEnd,
+    CancelToken, DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyEntry,
+    KeyGetRequest, KeyGetResult, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyType, ListEnd,
     ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetCondition,
-    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, Value, ValueRepr,
-    ZSetAddRequest, ZSetRemoveRequest,
+    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TaskKind, Value,
+    ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -41,13 +42,13 @@ pub struct KeyValueDocument {
     members_filter_input: Entity<InputState>,
     focus_mode: KeyValueFocusMode,
 
+    // Task runner (reads: auto-cancel-previous, mutations: independent)
+    runner: DocumentTaskRunner,
+
     // Keys list (current page only)
     keys: Vec<KeyEntry>,
     selected_index: Option<usize>,
     selected_value: Option<KeyGetResult>,
-    loading_keys: bool,
-    loading_value: bool,
-    value_load_generation: u64,
     last_error: Option<String>,
 
     // Cursor-based pagination
@@ -228,17 +229,19 @@ impl KeyValueDocument {
             title: format!("Redis {}", database),
             profile_id,
             database,
-            app_state,
+            app_state: app_state.clone(),
             focus_handle: cx.focus_handle(),
+            runner: {
+                let mut r = DocumentTaskRunner::new(app_state);
+                r.set_profile_id(profile_id);
+                r
+            },
             filter_input,
             members_filter_input,
             focus_mode: KeyValueFocusMode::List,
             keys: Vec::new(),
             selected_index: None,
             selected_value: None,
-            loading_keys: false,
-            loading_value: false,
-            value_load_generation: 0,
             last_error: None,
             current_page: 1,
             current_cursor: None,
@@ -283,7 +286,7 @@ impl KeyValueDocument {
     }
 
     pub fn state(&self) -> DocumentState {
-        if self.loading_keys || self.loading_value {
+        if self.runner.is_primary_active() {
             DocumentState::Loading
         } else {
             DocumentState::Clean
@@ -1053,19 +1056,14 @@ impl KeyValueDocument {
     }
 
     fn can_go_next(&self) -> bool {
-        !self.loading_keys && self.next_cursor.is_some()
+        !self.runner.is_primary_active() && self.next_cursor.is_some()
     }
 
     fn can_go_prev(&self) -> bool {
-        !self.loading_keys && !self.previous_cursors.is_empty()
+        !self.runner.is_primary_active() && !self.previous_cursors.is_empty()
     }
 
     fn load_page(&mut self, cx: &mut Context<Self>) {
-        if self.loading_keys {
-            return;
-        }
-
-        self.loading_keys = true;
         self.keys.clear();
         self.selected_index = None;
         self.selected_value = None;
@@ -1074,10 +1072,8 @@ impl KeyValueDocument {
         self.rebuild_cached_members(cx);
         self.cancel_rename(cx);
         self.cancel_member_edit(cx);
-        cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.loading_keys = false;
             self.last_error = Some("Connection is no longer active".to_string());
             cx.notify();
             return;
@@ -1088,6 +1084,17 @@ impl KeyValueDocument {
         let is_unfiltered = filter.is_empty();
         let database = self.database.clone();
         let entity = cx.entity().clone();
+
+        let description = if filter.is_empty() {
+            format!("SCAN {}", database)
+        } else {
+            format!("SCAN {} *{}*", database, filter)
+        };
+
+        let (task_id, cancel_token) = self
+            .runner
+            .start_primary(TaskKind::KeyScan, description, cx);
+        cx.notify();
 
         let request = KeyScanRequest {
             cursor: self.current_cursor.clone(),
@@ -1113,10 +1120,14 @@ impl KeyValueDocument {
 
             cx.update(|cx| {
                 entity.update(cx, |this, cx| {
-                    this.loading_keys = false;
+                    if cancel_token.is_cancelled() {
+                        return;
+                    }
 
                     match result {
                         Ok(page) => {
+                            this.runner.complete_primary(task_id, cx);
+
                             this.keys = page.entries;
                             this.next_cursor = page.next_cursor;
                             this.last_error = None;
@@ -1140,6 +1151,7 @@ impl KeyValueDocument {
                             }
                         }
                         Err(error) => {
+                            this.runner.fail_primary(task_id, error.to_string(), cx);
                             this.last_error = Some(error.to_string());
                         }
                     }
@@ -1166,14 +1178,13 @@ impl KeyValueDocument {
             return;
         };
 
-        self.value_load_generation += 1;
-        let generation = self.value_load_generation;
-
-        self.loading_value = true;
+        let description = format!("GET {}", dbflux_core::truncate_string_safe(&key, 60));
+        let (task_id, cancel_token) = self.runner.start_primary(TaskKind::KeyGet, description, cx);
         cx.notify();
 
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
+
         cx.spawn(async move |_this, cx| {
             let result = cx
                 .background_executor()
@@ -1193,15 +1204,14 @@ impl KeyValueDocument {
 
             cx.update(|cx| {
                 entity.update(cx, |this, cx| {
-                    // Discard stale responses from previous selections
-                    if this.value_load_generation != generation {
+                    if cancel_token.is_cancelled() {
                         return;
                     }
 
-                    this.loading_value = false;
-
                     match result {
                         Ok(value) => {
+                            this.runner.complete_primary(task_id, cx);
+
                             let key_type = value.entry.key_type;
                             let is_hash_or_stream =
                                 matches!(key_type, Some(KeyType::Hash | KeyType::Stream));
@@ -1215,6 +1225,7 @@ impl KeyValueDocument {
                             this.rebuild_cached_members(cx);
                         }
                         Err(error) => {
+                            this.runner.fail_primary(task_id, error.to_string(), cx);
                             this.selected_value = None;
                             this.last_error = Some(error.to_string());
                             this.rebuild_cached_members(cx);
@@ -1335,6 +1346,11 @@ impl KeyValueDocument {
             return;
         };
 
+        let description = format!("DEL {}", dbflux_core::truncate_string_safe(&key, 60));
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::KeyMutation, description, cx);
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -1353,14 +1369,18 @@ impl KeyValueDocument {
                 entity.update(cx, |this, cx| {
                     match result {
                         Ok(true) => {
+                            this.runner.complete_mutation(task_id, cx);
                             this.last_error = None;
                         }
                         Ok(false) => {
+                            this.runner
+                                .fail_mutation(task_id, "Key was not deleted", cx);
                             this.last_error = Some("Key was not deleted".to_string());
                             this.reload_keys(cx);
                             return;
                         }
                         Err(error) => {
+                            this.runner.fail_mutation(task_id, error.to_string(), cx);
                             this.last_error = Some(error.to_string());
                             this.reload_keys(cx);
                             return;
@@ -1384,6 +1404,15 @@ impl KeyValueDocument {
         let Some(connection) = self.get_connection(cx) else {
             return;
         };
+
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "Delete member from {}",
+                dbflux_core::truncate_string_safe(&key, 40)
+            ),
+            cx,
+        );
 
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
@@ -1447,10 +1476,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         this.reload_selected_value(cx);
                     }
@@ -1530,6 +1561,16 @@ impl KeyValueDocument {
             return;
         };
 
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "RENAME {} -> {}",
+                dbflux_core::truncate_string_safe(&old_name, 30),
+                dbflux_core::truncate_string_safe(&new_name, 30)
+            ),
+            cx,
+        );
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -1551,10 +1592,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_keys(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -1646,6 +1689,12 @@ impl KeyValueDocument {
             return;
         };
 
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!("SET {}", dbflux_core::truncate_string_safe(&key, 60)),
+            cx,
+        );
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -1670,10 +1719,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -1779,6 +1830,15 @@ impl KeyValueDocument {
             return;
         };
 
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "Edit member in {}",
+                dbflux_core::truncate_string_safe(&key, 40)
+            ),
+            cx,
+        );
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -1857,10 +1917,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -1899,6 +1961,15 @@ impl KeyValueDocument {
             cx.notify();
             return;
         };
+
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "Add member to {}",
+                dbflux_core::truncate_string_safe(&key, 40)
+            ),
+            cx,
+        );
 
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
@@ -1972,10 +2043,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -1994,6 +2067,15 @@ impl KeyValueDocument {
             cx.notify();
             return;
         };
+
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "Create key {}",
+                dbflux_core::truncate_string_safe(&event.key_name, 40)
+            ),
+            cx,
+        );
 
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
@@ -2115,10 +2197,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_keys(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -2279,6 +2363,16 @@ impl KeyValueDocument {
             return;
         };
 
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::KeyMutation,
+            format!(
+                "HSET {} {}",
+                dbflux_core::truncate_string_safe(&key, 30),
+                dbflux_core::truncate_string_safe(&field_name, 30)
+            ),
+            cx,
+        );
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -2304,10 +2398,12 @@ impl KeyValueDocument {
             cx.update(|cx| {
                 entity.update(cx, |this, cx| match result {
                     Ok(()) => {
+                        this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
+                        this.runner.fail_mutation(task_id, error.to_string(), cx);
                         this.last_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -2826,7 +2922,7 @@ impl Render for KeyValueDocument {
                 .border_color(theme.border)
                 .text_color(theme.muted_foreground)
                 .text_size(FontSizes::SM)
-                .child(if self.loading_value {
+                .child(if self.runner.is_primary_active() {
                     "Loading..."
                 } else {
                     "Select a key to inspect"
@@ -2923,7 +3019,7 @@ impl Render for KeyValueDocument {
                                     .size_3()
                                     .text_color(theme.muted_foreground),
                             )
-                            .child(if self.loading_keys {
+                            .child(if self.runner.is_primary_active() {
                                 "Loading...".to_string()
                             } else {
                                 format!("{} keys", key_count)

@@ -17,6 +17,9 @@ pub enum TaskKind {
     LoadSchema,
     SchemaRefresh,
     Export,
+    KeyScan,
+    KeyGet,
+    KeyMutation,
 }
 
 impl TaskKind {
@@ -29,6 +32,9 @@ impl TaskKind {
             TaskKind::LoadSchema => "Load Schema",
             TaskKind::SchemaRefresh => "Schema Refresh",
             TaskKind::Export => "Export",
+            TaskKind::KeyScan => "Key Scan",
+            TaskKind::KeyGet => "Key Get",
+            TaskKind::KeyMutation => "Key Mutation",
         }
     }
 }
@@ -82,6 +88,7 @@ pub struct Task {
     pub started_at: Instant,
     pub completed_at: Option<Instant>,
     pub progress: Option<f32>,
+    pub profile_id: Option<Uuid>,
     cancel_token: CancelToken,
 }
 
@@ -111,6 +118,7 @@ pub struct TaskSnapshot {
     pub elapsed_secs: f64,
     pub progress: Option<f32>,
     pub is_cancellable: bool,
+    pub profile_id: Option<Uuid>,
 }
 
 impl From<&Task> for TaskSnapshot {
@@ -123,6 +131,7 @@ impl From<&Task> for TaskSnapshot {
             elapsed_secs: task.elapsed().as_secs_f64(),
             progress: task.progress,
             is_cancellable: task.is_cancellable(),
+            profile_id: task.profile_id,
         }
     }
 }
@@ -144,6 +153,15 @@ impl TaskManager {
         kind: TaskKind,
         description: impl Into<String>,
     ) -> (TaskId, CancelToken) {
+        self.start_for_profile(kind, description, None)
+    }
+
+    pub fn start_for_profile(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        profile_id: Option<Uuid>,
+    ) -> (TaskId, CancelToken) {
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
 
@@ -155,6 +173,7 @@ impl TaskManager {
             started_at: Instant::now(),
             completed_at: None,
             progress: None,
+            profile_id,
             cancel_token: cancel_token.clone(),
         };
 
@@ -290,5 +309,69 @@ impl TaskManager {
             .filter(|t| t.completed_at.is_some())
             .max_by_key(|t| t.completed_at)
             .map(TaskSnapshot::from)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TaskSlot — single-occupancy slot that auto-cancels the previous occupant
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct TaskSlot {
+    active: Option<(TaskId, CancelToken)>,
+}
+
+impl TaskSlot {
+    pub fn new() -> Self {
+        Self { active: None }
+    }
+
+    /// Store a new task pair, cancelling the previous token if present.
+    /// Returns the old `TaskId` if one was replaced.
+    pub fn start(&mut self, id: TaskId, cancel_token: CancelToken) -> Option<TaskId> {
+        let previous = self.active.take().map(|(old_id, old_token)| {
+            old_token.cancel();
+            old_id
+        });
+
+        self.active = Some((id, cancel_token));
+        previous
+    }
+
+    /// Cancel the current occupant and clear the slot.
+    /// Returns the cancelled `TaskId` if the slot was occupied.
+    pub fn cancel(&mut self) -> Option<TaskId> {
+        self.active.take().map(|(id, token)| {
+            token.cancel();
+            id
+        })
+    }
+
+    /// Take the current occupant without cancelling.
+    pub fn take(&mut self) -> Option<(TaskId, CancelToken)> {
+        self.active.take()
+    }
+
+    /// Take the current occupant only if its `TaskId` matches.
+    ///
+    /// Returns `None` if the slot is empty or holds a different task.
+    /// This prevents stale callbacks from draining a newer task's entry.
+    pub fn take_if(&mut self, expected: TaskId) -> Option<(TaskId, CancelToken)> {
+        if self.active.as_ref().is_some_and(|(id, _)| *id == expected) {
+            self.active.take()
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` when the slot holds a non-cancelled task.
+    pub fn is_active(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|(_, token)| !token.is_cancelled())
+    }
+
+    pub fn active_token(&self) -> Option<&CancelToken> {
+        self.active.as_ref().map(|(_, token)| token)
     }
 }

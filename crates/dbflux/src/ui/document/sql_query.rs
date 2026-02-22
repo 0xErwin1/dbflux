@@ -1,5 +1,6 @@
 use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
+use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
@@ -8,7 +9,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    CancelToken, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
+    DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     EditorDiagnostic as CoreEditorDiagnostic, HistoryEntry, QueryRequest, QueryResult,
     ValidationResult, detect_dangerous_query,
 };
@@ -101,8 +102,10 @@ pub struct SqlQueryDocument {
     layout: SqlQueryLayout,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
-    active_cancel_token: Option<CancelToken>,
     results_maximized: bool,
+
+    // Task runner (query execution)
+    runner: DocumentTaskRunner,
 
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
@@ -113,6 +116,7 @@ pub struct SqlQueryDocument {
 }
 
 struct PendingQueryResult {
+    task_id: dbflux_core::TaskId,
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
@@ -190,6 +194,14 @@ impl SqlQueryDocument {
             },
         );
 
+        let runner = {
+            let mut r = DocumentTaskRunner::new(app_state.clone());
+            if let Some(pid) = connection_id {
+                r.set_profile_id(pid);
+            }
+            r
+        };
+
         Self {
             id: DocumentId::new(),
             title: "Query 1".to_string(),
@@ -213,8 +225,8 @@ impl SqlQueryDocument {
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
-            active_cancel_token: None,
             results_maximized: false,
+            runner,
             pending_dangerous_query: None,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
@@ -379,7 +391,7 @@ impl SqlQueryDocument {
                 true
             }
             Command::Cancel | Command::CancelQuery => {
-                if self.active_cancel_token.is_some() {
+                if self.runner.is_primary_active() {
                     self.cancel_query(cx);
                     true
                 } else {
