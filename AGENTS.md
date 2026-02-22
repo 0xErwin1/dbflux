@@ -16,6 +16,7 @@ crates/
 ├── dbflux_driver_sqlite/      # SQLite driver
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
 ├── dbflux_driver_mongodb/     # MongoDB driver
+├── dbflux_driver_redis/       # Redis driver
 ├── dbflux_ssh/                # SSH tunnel support
 └── dbflux_export/             # CSV export
 ```
@@ -246,8 +247,8 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 ### Crate Boundaries
 
-- `dbflux_core`: Pure types/traits, driver capabilities, SQL generation, no DB-specific code
-- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter` traits
+- `dbflux_core`: Pure types/traits, driver capabilities, SQL generation, query generator trait, no DB-specific code
+- `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
 - `dbflux`: UI only, drivers via feature flags
 
 ### Driver/UI Decoupling
@@ -292,8 +293,9 @@ Key abstractions for UI adaptation:
 2. Implement `DbDriver` and `Connection` from `dbflux_core`
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
 4. Implement `ErrorFormatter` for driver-specific error messages
-5. Add feature flag in `crates/dbflux/Cargo.toml`
-6. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+5. Optionally implement `QueryGenerator` for "Copy as Query" support
+6. Add feature flag in `crates/dbflux/Cargo.toml`
+7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 
 ### Driver Capabilities
 
@@ -345,8 +347,14 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_core/src/traits.rs`                       | `DbDriver`, `Connection` traits                     |
 | `crates/dbflux_core/src/driver_capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
 | `crates/dbflux_core/src/error_formatter.rs`              | ErrorFormatter trait for driver errors              |
+| `crates/dbflux_core/src/query_generator.rs`              | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/language_service.rs`             | Dangerous query detection (SQL, MongoDB, Redis)     |
 | `crates/dbflux_core/src/schema.rs`                       | Schema types with lazy loading support              |
 | `crates/dbflux_core/src/crud.rs`                         | CRUD mutation types for all database paradigms      |
+| `crates/dbflux_core/src/key_value.rs`                    | Key-value operation types (Hash, Set, List, ZSet)   |
 | `crates/dbflux_core/src/sql_dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
 | `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
 | `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |
+| `crates/dbflux_driver_mongodb/src/query_generator.rs`    | MongoDB shell query generator                       |
+| `crates/dbflux_driver_redis/src/driver.rs`               | Redis driver implementation                         |
+| `crates/dbflux_driver_redis/src/command_generator.rs`    | Redis command generator                             |

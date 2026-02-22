@@ -15,7 +15,7 @@
 - Workspace crates live under `crates/`, with UI in `crates/dbflux/` and shared domain logic in `crates/dbflux_core/` (Cargo.toml).
 - Each module is a dedicated file (no `mod.rs`); submodules are declared in the parent file (AGENTS.md, crates/dbflux/src/ui/mod.rs).
 - UI is organized by pane, window, and component in `crates/dbflux/src/ui/` (workspace, sidebar, editor, dock, document, windows, components).
-- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`).
+- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`).
 
 ## Import Style
 
