@@ -50,6 +50,7 @@ pub struct Dropdown {
     disabled: bool,
     placeholder: SharedString,
     focus_ring_color: Option<Hsla>,
+    compact_trigger: bool,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
 
@@ -65,6 +66,7 @@ impl Dropdown {
             disabled: false,
             placeholder: "Select".into(),
             focus_ring_color: None,
+            compact_trigger: false,
             on_select: None,
         }
     }
@@ -139,13 +141,17 @@ impl Dropdown {
         cx.notify();
     }
 
+    pub fn compact_trigger(mut self, compact: bool) -> Self {
+        self.compact_trigger = compact;
+        self
+    }
+
     pub fn toggle_open(&mut self, cx: &mut Context<Self>) {
         if self.disabled || self.items.is_empty() {
             return;
         }
         self.open = !self.open;
         if self.open {
-            // When opening, highlight the selected item or first item
             self.highlighted_index = self.selected_index.or(Some(0));
         }
         cx.notify();
@@ -322,16 +328,7 @@ impl Render for Dropdown {
             .id("dropdown-trigger")
             .flex()
             .items_center()
-            .justify_between()
-            .gap_2()
-            .px_3()
-            .py_1p5()
             .w_full()
-            .rounded_md()
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.input)
-            .text_sm()
             .when(disabled, |el| {
                 el.text_color(theme.muted_foreground)
                     .cursor_not_allowed()
@@ -341,20 +338,59 @@ impl Render for Dropdown {
                 el.text_color(theme.foreground)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.accent.opacity(0.1)))
-            })
-            .child(div().flex_1().truncate().child(label))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("▾"),
-            );
+            });
+
+        if self.compact_trigger {
+            trigger = trigger
+                .h_full()
+                .justify_center()
+                .px_2()
+                .text_sm()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("▾"),
+                );
+        } else {
+            trigger = trigger
+                .justify_between()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .bg(theme.background)
+                .border_1()
+                .border_color(theme.input)
+                .text_sm()
+                .child(div().flex_1().truncate().child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("▾"),
+                );
+        }
 
         if !disabled {
             trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
         }
 
-        // Focus ring wrapper
+        if self.compact_trigger {
+            let mut container = div()
+                .id(self.id.clone())
+                .w_full()
+                .h_full()
+                .child(trigger)
+                .child(self.render_menu(cx));
+
+            if self.open {
+                container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
+            }
+
+            return container;
+        }
+
         let trigger_wrap = div()
             .id("trigger-wrap")
             .w_full()

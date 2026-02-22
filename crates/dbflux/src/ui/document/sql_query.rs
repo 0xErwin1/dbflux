@@ -4,6 +4,7 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
+use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
@@ -11,7 +12,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     EditorDiagnostic as CoreEditorDiagnostic, HistoryEntry, QueryRequest, QueryResult,
-    ValidationResult, detect_dangerous_query,
+    RefreshPolicy, ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -106,6 +107,11 @@ pub struct SqlQueryDocument {
 
     // Task runner (query execution)
     runner: DocumentTaskRunner,
+    refresh_policy: RefreshPolicy,
+    refresh_dropdown: Entity<Dropdown>,
+    pending_auto_refresh: bool,
+    _refresh_timer: Option<Task<()>>,
+    _refresh_subscriptions: Vec<Subscription>,
 
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
@@ -202,6 +208,36 @@ impl SqlQueryDocument {
             r
         };
 
+        let refresh_dropdown = cx.new(|_cx| {
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("sql-auto-refresh")
+                .items(items)
+                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .compact_trigger(true)
+        });
+
+        let refresh_policy_sub = cx.subscribe_in(
+            &refresh_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+
+                if policy.is_auto() && !this.can_auto_refresh(cx) {
+                    this.refresh_dropdown.update(cx, |dd, cx| {
+                        dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
+                    });
+                    cx.toast_warning("Auto-refresh blocked: query modifies data", window);
+                    return;
+                }
+
+                this.set_refresh_policy(policy, cx);
+            },
+        );
+
         Self {
             id: DocumentId::new(),
             title: "Query 1".to_string(),
@@ -227,10 +263,58 @@ impl SqlQueryDocument {
             focus_mode: SqlQueryFocus::Editor,
             results_maximized: false,
             runner,
+            refresh_policy: RefreshPolicy::Manual,
+            refresh_dropdown,
+            pending_auto_refresh: false,
+            _refresh_timer: None,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             pending_dangerous_query: None,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
         }
+    }
+
+    pub fn can_auto_refresh(&self, cx: &App) -> bool {
+        dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
+    }
+
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        if self.refresh_policy == policy {
+            return;
+        }
+
+        self.refresh_policy = policy;
+        self.update_refresh_timer(cx);
+        cx.notify();
+    }
+
+    fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        let Some(duration) = self.refresh_policy.duration() else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let _ = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return;
+                    };
+
+                    entity.update(cx, |doc, cx| {
+                        if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                            return;
+                        }
+
+                        doc.pending_auto_refresh = true;
+                        cx.notify();
+                    });
+                });
+            }
+        }));
     }
 
     /// Sets the document content.
@@ -260,6 +344,10 @@ impl SqlQueryDocument {
 
     pub fn state(&self) -> DocumentState {
         self.state
+    }
+
+    pub fn refresh_policy(&self) -> RefreshPolicy {
+        self.refresh_policy
     }
 
     pub fn connection_id(&self) -> Option<Uuid> {

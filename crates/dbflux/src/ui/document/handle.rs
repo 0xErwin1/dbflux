@@ -7,7 +7,7 @@ use super::types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
 };
 use crate::keymap::{Command, ContextId};
-use dbflux_core::Value;
+use dbflux_core::{RefreshPolicy, Value};
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
@@ -158,6 +158,28 @@ impl DocumentHandle {
             Self::SqlQuery { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
+        }
+    }
+
+    pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
+        match self {
+            Self::SqlQuery { entity, .. } => entity.read(cx).refresh_policy(),
+            Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
+            Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
+        }
+    }
+
+    pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
+        match self {
+            Self::SqlQuery { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
+            }
+            Self::Data { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
+            }
+            Self::KeyValue { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
+            }
         }
     }
 

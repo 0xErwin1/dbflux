@@ -70,8 +70,21 @@ impl Render for DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
+        let show_data_toolbar = matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
         let is_paginated = self.source.is_paginated();
-        let table_name = self.source.table_ref().map(|t| t.qualified_name());
+        let source_name = match &self.source {
+            DataSource::Table { table, .. } => table.qualified_name(),
+            DataSource::Collection { collection, .. } => collection.qualified_name(),
+            DataSource::QueryResult { .. } => String::new(),
+        };
+        let source_query_prefix = if self.source.is_collection() {
+            "find"
+        } else {
+            "SELECT * FROM"
+        };
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
@@ -143,11 +156,11 @@ impl Render for DataGridPanel {
                 .absolute()
                 .size_full()
             })
-            // Toolbar (only for Table source)
-            .when(is_table_view, |d| {
-                let table_name = table_name.clone().unwrap_or_default();
+            // Toolbar (Table / Collection sources)
+            .when(show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
-                    &table_name,
+                    source_query_prefix,
+                    &source_name,
                     &filter_input,
                     filter_has_value,
                     &limit_input,
@@ -321,7 +334,8 @@ impl DataGridPanel {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_toolbar(
         &self,
-        table_name: &str,
+        source_query_prefix: &str,
+        source_name: &str,
         filter_input: &Entity<InputState>,
         filter_has_value: bool,
         limit_input: &Entity<InputState>,
@@ -330,6 +344,12 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let refresh_label = if self.refresh_policy.is_auto() {
+            self.refresh_policy.label()
+        } else {
+            "Refresh"
+        };
+
         div()
             .flex()
             .items_center()
@@ -348,14 +368,14 @@ impl DataGridPanel {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
-                            .child("SELECT * FROM"),
+                            .child(source_query_prefix.to_string()),
                     )
                     .child(
                         div()
                             .text_size(FontSizes::SM)
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.foreground)
-                            .child(table_name.to_string()),
+                            .child(source_name.to_string()),
                     ),
             )
             .child(
@@ -452,30 +472,62 @@ impl DataGridPanel {
             )
             .child(
                 div()
-                    .id("refresh-btn")
-                    .w(Heights::ICON_MD)
-                    .h(Heights::ICON_MD)
+                    .id("refresh-control")
+                    .h(Heights::BUTTON)
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap_0()
                     .rounded(Radii::SM)
-                    .text_size(FontSizes::BASE)
-                    .text_color(theme.muted_foreground)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                    .when(
-                        show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh,
-                        |d| d.border_1().border_color(theme.ring),
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(
+                        if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
+                            theme.ring
+                        } else {
+                            theme.input
+                        },
                     )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.refresh(window, cx);
-                        this.focus_table(window, cx);
-                    }))
                     .child(
-                        svg()
-                            .path(AppIcon::RefreshCcw.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
+                        div()
+                            .id("refresh-action")
+                            .h_full()
+                            .px(Spacing::SM)
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.foreground)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    cx.notify();
+                                } else {
+                                    this.refresh(window, cx);
+                                    this.focus_table(window, cx);
+                                }
+                            }))
+                            .child(
+                                svg()
+                                    .path(if self.runner.is_primary_active() {
+                                        AppIcon::Loader.path()
+                                    } else if self.refresh_policy.is_auto() {
+                                        AppIcon::Clock.path()
+                                    } else {
+                                        AppIcon::RefreshCcw.path()
+                                    })
+                                    .size_4()
+                                    .text_color(theme.foreground),
+                            )
+                            .child(refresh_label),
+                    )
+                    .child(div().w(px(1.0)).h_full().bg(theme.input))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h_full()
+                            .child(self.refresh_dropdown.clone()),
                     ),
             )
             .when(self.can_toggle_view(), |d| {

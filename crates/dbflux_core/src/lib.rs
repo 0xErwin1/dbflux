@@ -14,6 +14,8 @@ mod key_value;
 mod language_service;
 mod profile;
 mod query;
+mod query_safety;
+mod refresh_policy;
 mod saved_query;
 mod schema;
 mod schema_builder;
@@ -80,6 +82,8 @@ pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, Row};
+pub use query_safety::is_safe_read_query;
+pub use refresh_policy::RefreshPolicy;
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,

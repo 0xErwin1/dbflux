@@ -7,12 +7,13 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId, TreeDirection,
 };
+use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     CancelToken, DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyEntry,
     KeyGetRequest, KeyGetResult, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyType, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetCondition,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, RefreshPolicy, SetAddRequest, SetCondition,
     SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TaskKind, Value,
     ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
@@ -44,6 +45,10 @@ pub struct KeyValueDocument {
 
     // Task runner (reads: auto-cancel-previous, mutations: independent)
     runner: DocumentTaskRunner,
+    refresh_policy: RefreshPolicy,
+    refresh_dropdown: Entity<Dropdown>,
+    _refresh_timer: Option<Task<()>>,
+    _refresh_subscriptions: Vec<Subscription>,
 
     // Keys list (current page only)
     keys: Vec<KeyEntry>,
@@ -217,6 +222,27 @@ impl KeyValueDocument {
 
         let add_member_modal = cx.new(AddMemberModal::new);
 
+        let refresh_dropdown = cx.new(|_cx| {
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("kv-auto-refresh")
+                .items(items)
+                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .compact_trigger(true)
+        });
+
+        let refresh_policy_sub = cx.subscribe_in(
+            &refresh_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+                this.set_refresh_policy(policy, cx);
+            },
+        );
+
         subscriptions.push(cx.subscribe(
             &add_member_modal,
             |this: &mut Self, _, event: &AddMemberEvent, cx| {
@@ -236,6 +262,10 @@ impl KeyValueDocument {
                 r.set_profile_id(profile_id);
                 r
             },
+            refresh_policy: RefreshPolicy::Manual,
+            refresh_dropdown,
+            _refresh_timer: None,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             filter_input,
             members_filter_input,
             focus_mode: KeyValueFocusMode::List,
@@ -291,6 +321,48 @@ impl KeyValueDocument {
         } else {
             DocumentState::Clean
         }
+    }
+
+    pub fn refresh_policy(&self) -> RefreshPolicy {
+        self.refresh_policy
+    }
+
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        if self.refresh_policy == policy {
+            return;
+        }
+
+        self.refresh_policy = policy;
+        self.update_refresh_timer(cx);
+        cx.notify();
+    }
+
+    fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        let Some(duration) = self.refresh_policy.duration() else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let _ = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return;
+                    };
+
+                    entity.update(cx, |doc, cx| {
+                        if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                            return;
+                        }
+
+                        doc.reload_keys(cx);
+                    });
+                });
+            }
+        }));
     }
 
     pub fn can_close(&self) -> bool {
@@ -594,6 +666,8 @@ impl KeyValueDocument {
                 } else if self.editing_member_index.is_some() {
                     self.cancel_member_edit(cx);
                     self.focus_handle.focus(window);
+                } else if self.runner.cancel_primary(cx) {
+                    self.last_error = None;
                 } else {
                     self.focus_mode = KeyValueFocusMode::List;
                     self.focus_handle.focus(window);
@@ -2930,6 +3004,12 @@ impl Render for KeyValueDocument {
                 .into_any_element()
         };
 
+        let refresh_label = if self.refresh_policy.is_auto() {
+            self.refresh_policy.label()
+        } else {
+            "Refresh"
+        };
+
         // -- Left panel --
         let left_panel = div()
             .w_1_3()
@@ -2982,12 +3062,61 @@ impl Render for KeyValueDocument {
                         ),
                     )
                     .child(
-                        icon_button_base("kv-reload", AppIcon::RefreshCcw, theme).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.reload_keys(cx);
-                            }),
-                        ),
+                        div()
+                            .id("kv-refresh-control")
+                            .h(Heights::BUTTON)
+                            .flex()
+                            .items_center()
+                            .gap_0()
+                            .rounded(Radii::SM)
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.input)
+                            .child(
+                                div()
+                                    .id("kv-refresh-action")
+                                    .h_full()
+                                    .px(Spacing::SM)
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            if this.runner.is_primary_active() {
+                                                this.runner.cancel_primary(cx);
+                                                this.last_error = None;
+                                                cx.notify();
+                                            } else {
+                                                this.reload_keys(cx);
+                                            }
+                                        }),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(if self.runner.is_primary_active() {
+                                                AppIcon::Loader.path()
+                                            } else if self.refresh_policy.is_auto() {
+                                                AppIcon::Clock.path()
+                                            } else {
+                                                AppIcon::RefreshCcw.path()
+                                            })
+                                            .size(Heights::ICON_SM)
+                                            .text_color(theme.foreground),
+                                    )
+                                    .child(refresh_label),
+                            )
+                            .child(div().w(px(1.0)).h_full().bg(theme.input))
+                            .child(
+                                div()
+                                    .w(px(28.0))
+                                    .h_full()
+                                    .child(self.refresh_dropdown.clone()),
+                            ),
                     ),
             )
             // Pagination bar

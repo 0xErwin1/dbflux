@@ -16,9 +16,12 @@ use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, Docu
 use crate::ui::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
+use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::toast::PendingToast;
+use crate::ui::toast::ToastExt;
 use dbflux_core::{
-    CollectionRef, OrderByColumn, Pagination, QueryResult, SortDirection, TableRef, Value,
+    CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
+    Value,
 };
 use gpui::*;
 use gpui_component::Sizable;
@@ -275,6 +278,10 @@ pub struct DataGridPanel {
 
     // Async state
     runner: DocumentTaskRunner,
+    refresh_policy: RefreshPolicy,
+    refresh_dropdown: Entity<Dropdown>,
+    _refresh_timer: Option<Task<()>>,
+    _refresh_subscriptions: Vec<Subscription>,
     state: GridState,
     pending_requery: Option<PendingRequery>,
     pending_total_count: Option<PendingTotalCount>,
@@ -583,6 +590,42 @@ impl DataGridPanel {
 
         let view_config = super::data_view::DataViewConfig::for_source(&source);
 
+        let supports_auto_refresh = matches!(
+            &source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
+
+        let refresh_dropdown = cx.new(|_cx| {
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("data-grid-auto-refresh")
+                .items(items)
+                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .disabled(!supports_auto_refresh)
+                .compact_trigger(true)
+        });
+
+        let refresh_policy_sub = cx.subscribe_in(
+            &refresh_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+
+                if policy.is_auto() && !this.supports_auto_refresh() {
+                    this.refresh_dropdown.update(cx, |dd, cx| {
+                        dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
+                    });
+                    cx.toast_warning("Auto-refresh not available for query results", window);
+                    return;
+                }
+
+                this.set_refresh_policy(policy, cx);
+            },
+        );
+
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
 
@@ -612,6 +655,10 @@ impl DataGridPanel {
             original_row_order: None,
             pk_columns,
             runner,
+            refresh_policy: RefreshPolicy::Manual,
+            refresh_dropdown,
+            _refresh_timer: None,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             state: GridState::Ready,
             pending_requery: None,
             pending_total_count: None,
@@ -678,6 +725,63 @@ impl DataGridPanel {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
     }
 
+    pub fn supports_auto_refresh(&self) -> bool {
+        matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
+    }
+
+    pub fn refresh_policy(&self) -> RefreshPolicy {
+        self.refresh_policy
+    }
+
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        if self.refresh_policy == policy {
+            return;
+        }
+
+        self.refresh_policy = policy;
+        self.update_refresh_timer(cx);
+        cx.notify();
+    }
+
+    fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        if !self.supports_auto_refresh() {
+            return;
+        }
+
+        let Some(duration) = self.refresh_policy.duration() else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let _ = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return;
+                    };
+
+                    entity.update(cx, |panel, cx| {
+                        if !panel.refresh_policy.is_auto()
+                            || !panel.supports_auto_refresh()
+                            || panel.runner.is_primary_active()
+                        {
+                            return;
+                        }
+
+                        panel.pending_refresh = true;
+                        cx.notify();
+                    });
+                });
+            }
+        }));
+    }
+
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
         self.result = result;
@@ -693,6 +797,12 @@ impl DataGridPanel {
         query: String,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_policy = RefreshPolicy::Manual;
+        self._refresh_timer = None;
+        self.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
+        });
+
         self.source = DataSource::QueryResult {
             result: result.clone(),
             original_query: query,

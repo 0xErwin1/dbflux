@@ -233,6 +233,30 @@ impl SqlQueryDocument {
         cx.notify();
     }
 
+    pub(super) fn process_pending_auto_refresh(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.pending_auto_refresh {
+            return;
+        }
+
+        self.pending_auto_refresh = false;
+
+        if !self.can_auto_refresh(cx) {
+            self.refresh_policy = dbflux_core::RefreshPolicy::Manual;
+            self._refresh_timer = None;
+            self.refresh_dropdown.update(cx, |dd, cx| {
+                dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
+            });
+            cx.toast_warning("Auto-refresh blocked: query modifies data", window);
+            return;
+        }
+
+        self.run_query_impl(false, window, cx);
+    }
+
     /// Process pending query result (called from render where we have window access).
     pub(super) fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.pending_result.take() else {

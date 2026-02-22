@@ -2,7 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
-use dbflux_core::{CollectionRef, QueryResult, TableRef, Value};
+use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef, Value};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -226,6 +226,15 @@ impl DataDocument {
             DataSource::Collection { profile_id, .. } => Some(*profile_id),
             DataSource::QueryResult { .. } => None,
         }
+    }
+
+    pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
+        self.data_grid.read(cx).refresh_policy()
+    }
+
+    pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        self.data_grid
+            .update(cx, |grid, cx| grid.set_refresh_policy(policy, cx));
     }
 
     /// Returns the table reference if this is a table document.

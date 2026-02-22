@@ -4,6 +4,19 @@ impl SqlQueryDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_executing = self.state == DocumentState::Executing;
+        let auto_refresh_enabled = self.refresh_policy.is_auto();
+        let refresh_label = if auto_refresh_enabled {
+            self.refresh_policy.label()
+        } else {
+            "Refresh"
+        };
+        let refresh_icon = if is_executing {
+            AppIcon::Loader
+        } else if auto_refresh_enabled {
+            AppIcon::Clock
+        } else {
+            AppIcon::RefreshCcw
+        };
 
         let (run_icon, run_label, run_enabled) = if is_executing {
             (AppIcon::X, "Cancel", true)
@@ -129,6 +142,52 @@ impl SqlQueryDocument {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child("Ctrl+Enter (selection/full)"),
+            )
+            .child(
+                div()
+                    .id("sql-refresh-control")
+                    .flex()
+                    .items_center()
+                    .gap_0()
+                    .h(Heights::BUTTON)
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.input)
+                    .rounded(Radii::SM)
+                    .child(
+                        div()
+                            .id("sql-refresh-action")
+                            .h_full()
+                            .px(Spacing::SM)
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_sm()
+                            .cursor_pointer()
+                            .text_color(theme.foreground)
+                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.cancel_query(cx);
+                                } else {
+                                    this.run_query(window, cx);
+                                }
+                            }))
+                            .child(
+                                svg()
+                                    .path(refresh_icon.path())
+                                    .size_3()
+                                    .text_color(theme.foreground),
+                            )
+                            .child(refresh_label),
+                    )
+                    .child(div().w(px(1.0)).h_full().bg(theme.input))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h_full()
+                            .child(self.refresh_dropdown.clone()),
+                    ),
             )
             .child(div().flex_1())
             .when_some(execution_time, |el, duration| {
@@ -587,6 +646,8 @@ impl Render for SqlQueryDocument {
         self.process_pending_result(window, cx);
 
         self.process_pending_set_query(window, cx);
+
+        self.process_pending_auto_refresh(window, cx);
 
         let toolbar = self.render_toolbar(cx).into_any_element();
         let editor_view = self.render_editor(window, cx).into_any_element();
