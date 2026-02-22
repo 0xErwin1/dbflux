@@ -10,7 +10,7 @@
 
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB) (Cargo.toml).
+- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis) (Cargo.toml).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -40,6 +40,7 @@ crates/
       data_grid_panel.rs    # Data grid with table/document view modes
       data_view.rs          # DataViewMode abstraction (Table vs Document)
     src/ui/editor.rs        # Code editor component
+    src/ui/sql_preview_modal.rs  # SQL/query preview modal (dual-mode: SQL and generic)
     src/ui/dangerous_query.rs  # Query safety analysis and confirmation
     src/ui/toast.rs         # Custom toast notification system
     src/ui/cell_editor_modal.rs  # Modal editor for JSON/long text cells
@@ -77,6 +78,10 @@ crates/
     src/schema.rs           # Schema types (tables, collections, indexes, FKs)
     src/schema_builder.rs   # Builder helpers for schema construction
     src/crud.rs             # CRUD mutation types for all database paradigms
+    src/key_value.rs        # Key-value operation types (Hash, Set, List, ZSet, Stream)
+    src/query_generator.rs  # QueryGenerator trait and MutationRequest routing
+    src/language_service.rs # Dangerous query detection (SQL, MongoDB, Redis)
+    src/session_facade.rs   # Session facade for connection management
     src/sql_dialect.rs      # SqlDialect trait for SQL flavor differences
     src/sql_generation.rs   # SQL INSERT/UPDATE/DELETE generation
     src/sql_query_builder.rs  # SqlQueryBuilder for safe query construction
@@ -90,6 +95,10 @@ crates/
   dbflux_driver_mongodb/    # MongoDB driver implementation
     src/driver.rs           # Connection, schema discovery, CRUD operations
     src/query_parser.rs     # MongoDB query syntax parser (db.collection.method())
+    src/query_generator.rs  # MongoDB shell query generator (insertOne, updateOne, etc.)
+  dbflux_driver_redis/      # Redis driver implementation
+    src/driver.rs           # Connection, key-value API, schema discovery
+    src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
   dbflux_ssh/               # SSH tunnel support
   dbflux_export/            # CSV export
 ```
@@ -134,6 +143,7 @@ crates/
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Error formatting**: `crates/dbflux_core/src/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
 - Core domain API: `crates/dbflux_core/src/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
+- **Query generation**: `crates/dbflux_core/src/query_generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`). The UI accesses generators through `Connection::query_generator()`.
 - Driver forms: `crates/dbflux_core/src/driver_form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
 
@@ -145,11 +155,12 @@ crates/
 
 ### CRUD Operations
 
-- **Mutation types**: `crates/dbflux_core/src/crud.rs` defines mutation types for all database paradigms:
+- **Mutation types**: `crates/dbflux_core/src/crud.rs` defines `MutationRequest` enum covering all database paradigms:
   - SQL: INSERT/UPDATE/DELETE with WHERE clauses
   - Document: insertOne/updateOne/deleteOne/deleteMany
-  - Key-Value: SET/DELETE with optional TTL
-- **Query safety**: `crates/dbflux/src/ui/dangerous_query.rs` detects dangerous queries (DELETE/DROP/TRUNCATE without WHERE) and prompts for confirmation before execution.
+  - Key-Value: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD and their remove counterparts, plus STREAM_ADD
+- **Key-value types**: `crates/dbflux_core/src/key_value.rs` defines Vec-based request structs for variadic Redis commands (e.g., `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
+- **Query safety**: `crates/dbflux_core/src/language_service.rs` detects dangerous queries across all languages (SQL DELETE/DROP/TRUNCATE, MongoDB deleteMany/drop, Redis FLUSHALL/FLUSHDB/KEYS) and prompts for confirmation before execution.
 
 ### Storage & Configuration
 
@@ -168,6 +179,13 @@ crates/
   - Collection browsing with pagination
   - Index discovery
   - Document CRUD operations
+  - Shell query generator (`MongoShellGenerator`) for insertOne/updateOne/deleteOne
+- **Redis**: `crates/dbflux_driver_redis/` — `redis` driver with:
+  - Key-value API for String, Hash, List, Set, SortedSet, and Stream types
+  - Variadic commands (HSET with multiple fields, SADD with multiple members, etc.)
+  - Keyspace (database index) support
+  - Key scanning, TTL management, rename, type discovery
+  - Command generator (`RedisCommandGenerator`) for all key-value mutation types
 
 ### Supporting Components
 
@@ -181,7 +199,8 @@ crates/
 - Startup: `main` creates `AppState` and `Workspace`, then opens the main window (crates/dbflux/src/main.rs).
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs). Supports both form-based configuration and direct URI input.
 - Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
-- View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB.
+- View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
+- Query preview: `SqlPreviewModal` operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/workspace.rs).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
 - History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/history.rs).
@@ -201,7 +220,8 @@ crates/
 - PostgreSQL: `tokio-postgres` client with optional TLS, cancellation support, lazy schema loading, and URI connection mode (crates/dbflux_driver_postgres/src/driver.rs).
 - MySQL/MariaDB: `mysql` crate with dual connection architecture (sync for schema, async for queries), lazy schema loading, and URI connection mode (crates/dbflux_driver_mysql/src/driver.rs).
 - SQLite: `rusqlite` file-based connections with lazy schema loading (crates/dbflux_driver_sqlite/src/driver.rs).
-- MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, and document CRUD (crates/dbflux_driver_mongodb/src/driver.rs).
+- MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, and shell query generation (crates/dbflux_driver_mongodb/src/driver.rs).
+- Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - SSH: `ssh2` sessions with local TCP forwarding (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords and SSH passphrases (crates/dbflux_core/src/secrets.rs).
 - CSV export: `csv::Writer` for result exports (crates/dbflux_export/src/csv.rs).
@@ -209,7 +229,7 @@ crates/
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, and `mongodb` drivers.
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers.
 - Runtime data (config dir via `dirs::config_dir`):
   - `profiles.json` and `ssh_tunnels.json` (crates/dbflux_core/src/store.rs).
   - `history.json` for query history (crates/dbflux_core/src/history.rs).

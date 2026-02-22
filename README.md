@@ -126,7 +126,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 # Or manually
 git clone https://github.com/0xErwin1/dbflux.git
 cd dbflux
-cargo build --release --features sqlite,postgres,mysql,mongodb
+cargo build --release --features sqlite,postgres,mysql,mongodb,redis
 ./target/release/dbflux
 ```
 
@@ -165,6 +165,8 @@ gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 - **PostgreSQL** with SSL/TLS modes (Disable, Prefer, Require)
 - **MySQL** / MariaDB
 - **SQLite** for local database files
+- **MongoDB** with collection browsing, document CRUD, and shell query generation
+- **Redis** with key browsing for all types (String, Hash, List, Set, Sorted Set, Stream)
 - SSH tunnel support with key, password, and agent authentication
 - Reusable SSH tunnel profiles
 
@@ -177,6 +179,8 @@ gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 - Multi-tab SQL editor with syntax highlighting
 - Virtualized data table with column resizing, horizontal scrolling, and sorting
 - Table browser with WHERE filters, custom LIMIT, and pagination
+- "Copy as Query" context menu to copy INSERT/UPDATE/DELETE as SQL, MongoDB shell, or Redis commands
+- Query preview modal with language-specific syntax highlighting
 - Command palette with fuzzy search
 - Custom toast notification system with auto-dismiss
 - Background task panel
@@ -235,13 +239,13 @@ xcode-select --install
 ### Building
 
 ```bash
-cargo build -p dbflux --release --features sqlite,postgres,mysql,mongodb
+cargo build -p dbflux --release --features sqlite,postgres,mysql,mongodb,redis
 ```
 
 ### Running
 
 ```bash
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis
 ```
 
 ### Commands
@@ -282,6 +286,7 @@ dbflux/
 │   ├── dbflux_driver_postgres/ # PostgreSQL driver
 │   ├── dbflux_driver_mysql/    # MySQL driver
 │   ├── dbflux_driver_mongodb/  # MongoDB driver
+│   ├── dbflux_driver_redis/   # Redis driver
 │   ├── dbflux_ssh/             # SSH tunnel support
 │   └── dbflux_export/          # Export functionality
 ├── resources/
