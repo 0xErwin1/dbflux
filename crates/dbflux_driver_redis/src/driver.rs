@@ -12,9 +12,9 @@ use dbflux_core::{
     KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
     ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryHandle,
     QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot,
-    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, TextPosition,
-    TextPositionRange, ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
-    sanitize_uri,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, ValidationResult, Value,
+    ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -31,6 +31,9 @@ pub static REDIS_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::KV_VALUE_SIZE.bits()
             | DriverCapabilities::KV_RENAME.bits()
             | DriverCapabilities::KV_BULK_GET.bits()
+            | DriverCapabilities::KV_STREAM_RANGE.bits()
+            | DriverCapabilities::KV_STREAM_ADD.bits()
+            | DriverCapabilities::KV_STREAM_DELETE.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::SSL.bits(),
@@ -1062,6 +1065,55 @@ impl KeyValueApi for RedisConnection {
             Ok(removed > 0)
         })
     }
+
+    // -- Stream operations --
+
+    fn stream_add(&self, request: &StreamAddRequest) -> Result<String, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let mut cmd = redis::cmd("XADD");
+            cmd.arg(&request.key);
+
+            if let Some(maxlen) = &request.maxlen {
+                cmd.arg("MAXLEN");
+                if maxlen.approximate {
+                    cmd.arg("~");
+                }
+                cmd.arg(maxlen.count);
+            }
+
+            match &request.id {
+                StreamEntryId::Auto => {
+                    cmd.arg("*");
+                }
+                StreamEntryId::Explicit(id) => {
+                    cmd.arg(id);
+                }
+            }
+
+            for (field, value) in &request.fields {
+                cmd.arg(field).arg(value);
+            }
+
+            let entry_id: String = cmd.query(conn).map_err(|e| format_redis_query_error(&e))?;
+
+            Ok(entry_id)
+        })
+    }
+
+    fn stream_delete(&self, request: &StreamDeleteRequest) -> Result<u64, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let mut cmd = redis::cmd("XDEL");
+            cmd.arg(&request.key);
+
+            for id in &request.ids {
+                cmd.arg(id);
+            }
+
+            let deleted: u64 = cmd.query(conn).map_err(|e| format_redis_query_error(&e))?;
+
+            Ok(deleted)
+        })
+    }
 }
 
 struct RedisErrorFormatter;
@@ -1352,7 +1404,34 @@ fn fetch_key_payload(
                 serde_json::to_vec(&items).map_err(|e| DbError::query_failed(e.to_string()))?;
             Ok((value, ValueRepr::Structured))
         }
-        KeyType::Stream | KeyType::Bytes => {
+        KeyType::Stream => {
+            let raw_entries: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
+                .arg(key)
+                .arg("-")
+                .arg("+")
+                .arg("COUNT")
+                .arg(50)
+                .query(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let entries: Vec<serde_json::Value> = raw_entries
+                .into_iter()
+                .map(|(id, fields)| {
+                    let mut map = serde_json::Map::new();
+                    for chunk in fields.chunks(2) {
+                        if let [f, v] = chunk {
+                            map.insert(f.clone(), serde_json::Value::String(v.clone()));
+                        }
+                    }
+                    serde_json::json!({ "id": id, "fields": map })
+                })
+                .collect();
+
+            let value =
+                serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
+            Ok((value, ValueRepr::Stream))
+        }
+        KeyType::Bytes => {
             let payload = redis::cmd("DUMP")
                 .arg(key)
                 .query::<Vec<u8>>(conn)

@@ -469,8 +469,8 @@ fn form_navigation_layer() -> KeymapLayer {
 
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
     layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
-    layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
-    layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 

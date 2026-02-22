@@ -258,16 +258,25 @@ bitflags! {
         /// Driver supports bulk key reads.
         const KV_BULK_GET = 1 << 39;
 
+        /// Driver supports reading stream entries (XRANGE or equivalent).
+        const KV_STREAM_RANGE = 1 << 40;
+
+        /// Driver supports appending stream entries (XADD or equivalent).
+        const KV_STREAM_ADD = 1 << 41;
+
+        /// Driver supports deleting stream entries by ID (XDEL or equivalent).
+        const KV_STREAM_DELETE = 1 << 42;
+
         /// Driver supports pub/sub.
-        const PUBSUB = 1 << 40;
+        const PUBSUB = 1 << 43;
 
         // === Graph-specific features ===
 
         /// Driver supports graph traversal queries.
-        const GRAPH_TRAVERSAL = 1 << 41;
+        const GRAPH_TRAVERSAL = 1 << 44;
 
         /// Driver supports edge properties.
-        const EDGE_PROPERTIES = 1 << 42;
+        const EDGE_PROPERTIES = 1 << 45;
     }
 }
 

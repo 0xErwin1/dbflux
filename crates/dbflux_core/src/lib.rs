@@ -68,7 +68,8 @@ pub use key_value::{
     KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest,
-    SetCondition, SetRemoveRequest, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
+    StreamMaxLen, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,

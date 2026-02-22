@@ -74,12 +74,12 @@ pub(crate) trait FormNavigation: Sized + 'static {
                 cx.notify();
                 true
             }
-            Command::FocusLeft => {
+            Command::FocusLeft | Command::ColumnLeft => {
                 self.focus_left(cx);
                 cx.notify();
                 true
             }
-            Command::FocusRight => {
+            Command::FocusRight | Command::ColumnRight => {
                 self.focus_right(cx);
                 cx.notify();
                 true

@@ -32,6 +32,7 @@ pub enum NewKeyType {
     Set,
     SortedSet,
     Json,
+    Stream,
 }
 
 impl NewKeyType {
@@ -43,6 +44,7 @@ impl NewKeyType {
             Self::Set,
             Self::SortedSet,
             Self::Json,
+            Self::Stream,
         ]
     }
 
@@ -54,6 +56,7 @@ impl NewKeyType {
             Self::Set => "Set",
             Self::SortedSet => "Sorted Set",
             Self::Json => "JSON",
+            Self::Stream => "Stream",
         }
     }
 }
@@ -65,6 +68,8 @@ pub enum NewKeyValue {
     ListMembers(Vec<String>),
     SetMembers(Vec<String>),
     ZSetMembers(Vec<(String, f64)>),
+    /// Stream: initial entry fields (field, value) pairs. At least one required.
+    StreamFields(Vec<(String, String)>),
 }
 
 // ---------------------------------------------------------------------------
@@ -285,12 +290,12 @@ impl NewKeyModal {
 
     fn add_value_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let field_placeholder = match self.selected_type {
-            NewKeyType::Hash => "Enter Field",
+            NewKeyType::Hash | NewKeyType::Stream => "Enter Field",
             NewKeyType::SortedSet => "Enter Member",
             _ => "Enter Member",
         };
         let value_placeholder = match self.selected_type {
-            NewKeyType::Hash => "Enter Value",
+            NewKeyType::Hash | NewKeyType::Stream => "Enter Value",
             NewKeyType::SortedSet => "Enter Score",
             _ => "Enter Value",
         };
@@ -412,6 +417,27 @@ impl NewKeyModal {
                     .collect();
                 NewKeyValue::ZSetMembers(members)
             }
+            NewKeyType::Stream => {
+                let fields: Vec<(String, String)> = self
+                    .value_rows
+                    .iter()
+                    .map(|row| {
+                        let f = row.field_input.read(cx).value().to_string();
+                        let v = row.value_input.read(cx).value().to_string();
+                        (f, v)
+                    })
+                    .filter(|(f, _)| !f.trim().is_empty())
+                    .collect();
+
+                if fields.is_empty() {
+                    self.error_message =
+                        Some("Stream requires at least one field/value pair".to_string());
+                    cx.notify();
+                    return;
+                }
+
+                NewKeyValue::StreamFields(fields)
+            }
         };
 
         cx.emit(NewKeyCreatedEvent {
@@ -429,12 +455,19 @@ impl NewKeyModal {
     fn needs_rows(&self) -> bool {
         matches!(
             self.selected_type,
-            NewKeyType::Hash | NewKeyType::List | NewKeyType::Set | NewKeyType::SortedSet
+            NewKeyType::Hash
+                | NewKeyType::List
+                | NewKeyType::Set
+                | NewKeyType::SortedSet
+                | NewKeyType::Stream
         )
     }
 
     fn needs_two_columns(&self) -> bool {
-        matches!(self.selected_type, NewKeyType::Hash | NewKeyType::SortedSet)
+        matches!(
+            self.selected_type,
+            NewKeyType::Hash | NewKeyType::SortedSet | NewKeyType::Stream
+        )
     }
 
     fn input_for_focus(&self, focus: ModalFocus) -> Option<&Entity<InputState>> {

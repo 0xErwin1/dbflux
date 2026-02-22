@@ -21,6 +21,8 @@ pub enum ValueRepr {
     Json,
     Binary,
     Structured,
+    /// Redis stream entries serialized as JSON array of `{id, fields}`.
+    Stream,
 }
 
 /// Metadata for a key in a key-value store.
@@ -441,5 +443,45 @@ pub struct ZSetAddRequest {
 pub struct ZSetRemoveRequest {
     pub key: String,
     pub member: String,
+    pub keyspace: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// Stream operations
+// ---------------------------------------------------------------------------
+
+/// How to generate the entry ID for `XADD`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum StreamEntryId {
+    /// Server-assigned (`*`).
+    #[default]
+    Auto,
+    /// Caller-supplied explicit ID (e.g. `"1526919030474-55"`).
+    Explicit(String),
+}
+
+/// Optional max-length trimming strategy for stream writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamMaxLen {
+    pub count: u64,
+    /// If `true`, use approximate trimming (`~`), which is cheaper.
+    pub approximate: bool,
+}
+
+/// Add an entry to a Stream key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamAddRequest {
+    pub key: String,
+    pub id: StreamEntryId,
+    pub fields: Vec<(String, String)>,
+    pub maxlen: Option<StreamMaxLen>,
+    pub keyspace: Option<u32>,
+}
+
+/// Delete entries from a Stream key by their IDs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamDeleteRequest {
+    pub key: String,
+    pub ids: Vec<String>,
     pub keyspace: Option<u32>,
 }

@@ -13,7 +13,7 @@ use crate::{
         KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
         KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
         ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
-        ZSetAddRequest, ZSetRemoveRequest,
+        StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
 };
 
@@ -370,6 +370,23 @@ pub trait KeyValueApi: Send + Sync {
     fn zset_remove(&self, _request: &ZSetRemoveRequest) -> Result<bool, DbError> {
         Err(DbError::NotSupported(
             "Sorted Set REMOVE not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- Stream operations --
+
+    /// Append an entry to a Stream key. Returns the server-assigned entry ID.
+    fn stream_add(&self, _request: &StreamAddRequest) -> Result<String, DbError> {
+        Err(DbError::NotSupported(
+            "Stream ADD not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Delete entries from a Stream key by their IDs.
+    /// Returns the number of entries actually deleted.
+    fn stream_delete(&self, _request: &StreamDeleteRequest) -> Result<u64, DbError> {
+        Err(DbError::NotSupported(
+            "Stream DELETE not supported by this driver".to_string(),
         ))
     }
 }

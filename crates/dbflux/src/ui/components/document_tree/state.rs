@@ -145,6 +145,49 @@ impl DocumentTreeState {
         cx.notify();
     }
 
+    /// Load documents from a list of `(label, Value)` pairs.
+    ///
+    /// Each pair becomes a root node in the tree. Useful for displaying
+    /// key-value structures (e.g., Redis Hash fields, Stream entries) without
+    /// constructing a full `QueryResult`.
+    pub fn load_from_values(&mut self, entries: Vec<(String, Value)>, cx: &mut Context<Self>) {
+        self.documents.clear();
+        self.raw_documents.clear();
+        self.expanded.clear();
+        self.expanded_values.clear();
+        self.cursor = None;
+        self.needs_rebuild = true;
+        self.raw_json_cache = None;
+        self.search_query = None;
+        self.search_matches.clear();
+        self.current_match_index = None;
+        self.search_visible = false;
+        self.editing_node = None;
+        self.inline_edit_input = None;
+
+        for (row_idx, (label, value)) in entries.iter().enumerate() {
+            let node_id = NodeId::root(row_idx);
+            let node_value = NodeValue::from_value(value);
+
+            self.raw_documents.push(value.clone());
+            self.documents
+                .push(TreeNode::new(node_id, label, node_value, None));
+        }
+
+        if self.documents.len() == 1
+            && let Some(node) = self.documents.first()
+        {
+            self.expanded.insert(node.id.clone());
+        }
+
+        if let Some(first) = self.documents.first() {
+            self.cursor = Some(first.id.clone());
+        }
+
+        self.rebuild_visible_nodes();
+        cx.notify();
+    }
+
     /// Extract the document value from a result row.
     fn extract_document_value(row: &[Value], columns: &[dbflux_core::ColumnMeta]) -> Value {
         // If there's a _document column, use that

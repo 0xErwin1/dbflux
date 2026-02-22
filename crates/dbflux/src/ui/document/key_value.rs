@@ -1,20 +1,26 @@
+use super::add_member_modal::{AddMemberEvent, AddMemberModal};
 use super::new_key_modal::{NewKeyCreatedEvent, NewKeyModal, NewKeyType, NewKeyValue};
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
+use crate::ui::components::document_tree::{
+    DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId, TreeDirection,
+};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyEntry, KeyGetRequest,
     KeyGetResult, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyType, ListEnd,
     ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetCondition,
-    SetRemoveRequest, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, Value, ValueRepr,
+    ZSetAddRequest, ZSetRemoveRequest,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Sizable};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -59,10 +65,6 @@ pub struct KeyValueDocument {
     member_edit_input: Option<Entity<InputState>>,
     member_edit_score_input: Option<Entity<InputState>>,
 
-    // Add member inputs (always visible at bottom of member list)
-    add_member_input: Entity<InputState>,
-    add_member_value_input: Entity<InputState>,
-
     // Member navigation (when ValuePanel is focused)
     selected_member_index: Option<usize>,
 
@@ -80,6 +82,16 @@ pub struct KeyValueDocument {
     new_key_modal: Entity<NewKeyModal>,
     pending_open_new_key_modal: bool,
 
+    // Add Member modal (Hash/Stream multi-field)
+    add_member_modal: Entity<AddMemberModal>,
+    pending_open_add_member_modal: Option<KeyType>,
+
+    // Document view mode for Hash/Stream
+    value_view_mode: KvValueViewMode,
+    document_tree_state: Option<Entity<DocumentTreeState>>,
+    document_tree: Option<Entity<DocumentTree>>,
+    _document_tree_subscription: Option<Subscription>,
+
     // Context menu
     context_menu: Option<KvContextMenu>,
     context_menu_focus: FocusHandle,
@@ -96,6 +108,13 @@ enum KeyValueFocusMode {
     ValuePanel,
     /// Any text input is focused (filter, rename, member edit, add member).
     TextInput,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum KvValueViewMode {
+    #[default]
+    Table,
+    Document,
 }
 
 /// Pending delete confirmation state for keys.
@@ -164,9 +183,6 @@ impl KeyValueDocument {
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter keys..."));
         let members_filter_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter members..."));
-        let add_member_input = cx.new(|cx| InputState::new(window, cx).placeholder("New member"));
-        let add_member_value_input = cx.new(|cx| InputState::new(window, cx).placeholder("Value"));
-
         let mut subscriptions = Vec::new();
 
         subscriptions.push(cx.subscribe_in(
@@ -198,28 +214,12 @@ impl KeyValueDocument {
             },
         ));
 
-        subscriptions.push(cx.subscribe_in(
-            &add_member_input,
-            window,
-            |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    if this.needs_value_column() {
-                        this.add_member_value_input
-                            .update(cx, |input, cx| input.focus(window, cx));
-                    } else {
-                        this.add_member_from_inputs(window, cx);
-                    }
-                }
-            },
-        ));
+        let add_member_modal = cx.new(AddMemberModal::new);
 
-        subscriptions.push(cx.subscribe_in(
-            &add_member_value_input,
-            window,
-            |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.add_member_from_inputs(window, cx);
-                }
+        subscriptions.push(cx.subscribe(
+            &add_member_modal,
+            |this: &mut Self, _, event: &AddMemberEvent, cx| {
+                this.handle_add_member_event(event.clone(), cx);
             },
         ));
 
@@ -249,8 +249,6 @@ impl KeyValueDocument {
             editing_member_index: None,
             member_edit_input: None,
             member_edit_score_input: None,
-            add_member_input,
-            add_member_value_input,
             selected_member_index: None,
             cached_members: Vec::new(),
             string_edit_input: None,
@@ -258,6 +256,12 @@ impl KeyValueDocument {
             pending_member_delete: None,
             new_key_modal,
             pending_open_new_key_modal: false,
+            add_member_modal,
+            pending_open_add_member_modal: None,
+            value_view_mode: KvValueViewMode::default(),
+            document_tree_state: None,
+            document_tree: None,
+            _document_tree_subscription: None,
             context_menu: None,
             context_menu_focus: cx.focus_handle(),
             panel_origin: Point::default(),
@@ -309,12 +313,23 @@ impl KeyValueDocument {
             return self.new_key_modal.read(cx).active_context();
         }
 
+        if self.add_member_modal.read(cx).is_visible() {
+            return self.add_member_modal.read(cx).active_context();
+        }
+
         if self.pending_key_delete.is_some() || self.pending_member_delete.is_some() {
             return ContextId::ConfirmModal;
         }
 
         if self.context_menu.is_some() {
             return ContextId::ContextMenu;
+        }
+
+        if self.is_document_view_active()
+            && let Some(ts) = &self.document_tree_state
+            && ts.read(cx).editing_node().is_some()
+        {
+            return ContextId::TextInput;
         }
 
         match self.focus_mode {
@@ -345,6 +360,20 @@ impl KeyValueDocument {
             return handled;
         }
 
+        if self.add_member_modal.read(cx).is_visible() {
+            let handled = self
+                .add_member_modal
+                .update(cx, |modal, cx| modal.dispatch_command(cmd, window, cx));
+
+            if !self.add_member_modal.read(cx).is_visible() {
+                self.focus_mode = KeyValueFocusMode::ValuePanel;
+                self.focus_handle.focus(window);
+                cx.notify();
+            }
+
+            return handled;
+        }
+
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
         }
@@ -364,6 +393,25 @@ impl KeyValueDocument {
             // -- Panel switching (h/l) --
             Command::ColumnLeft => {
                 if self.focus_mode == KeyValueFocusMode::ValuePanel {
+                    if self.is_document_view_active()
+                        && let Some(ts) = &self.document_tree_state
+                    {
+                        let cursor = ts.read(cx).cursor().cloned();
+                        let is_expanded = cursor
+                            .as_ref()
+                            .map(|id| ts.read(cx).is_expanded(id))
+                            .unwrap_or(false);
+                        let is_root = cursor
+                            .as_ref()
+                            .map(|id| id.parent().is_none())
+                            .unwrap_or(true);
+
+                        if is_expanded || !is_root {
+                            ts.update(cx, |s, cx| s.handle_left(cx));
+                            return true;
+                        }
+                    }
+
                     self.focus_mode = KeyValueFocusMode::List;
                     cx.notify();
                 }
@@ -372,10 +420,24 @@ impl KeyValueDocument {
             Command::ColumnRight => {
                 if self.focus_mode == KeyValueFocusMode::List && self.selected_value.is_some() {
                     self.focus_mode = KeyValueFocusMode::ValuePanel;
-                    if self.selected_member_index.is_none() && !self.cached_members.is_empty() {
+
+                    if self.is_document_view_active()
+                        && let Some(ts) = &self.document_tree_state
+                        && ts.read(cx).cursor().is_none()
+                    {
+                        ts.update(cx, |s, cx| s.move_to_first(cx));
+                    } else if self.selected_member_index.is_none()
+                        && !self.cached_members.is_empty()
+                    {
                         self.selected_member_index = Some(0);
                     }
+
                     cx.notify();
+                } else if self.focus_mode == KeyValueFocusMode::ValuePanel
+                    && self.is_document_view_active()
+                    && let Some(ts) = &self.document_tree_state
+                {
+                    ts.update(cx, |s, cx| s.handle_right(cx));
                 }
                 true
             }
@@ -383,7 +445,17 @@ impl KeyValueDocument {
             // -- Vertical navigation (j/k) --
             Command::SelectNext => {
                 match self.focus_mode {
-                    KeyValueFocusMode::ValuePanel => self.move_member_selection(1, cx),
+                    KeyValueFocusMode::ValuePanel => {
+                        if self.is_document_view_active() {
+                            if let Some(ts) = &self.document_tree_state {
+                                ts.update(cx, |s, cx| {
+                                    s.move_cursor(TreeDirection::Down, cx);
+                                });
+                            }
+                        } else {
+                            self.move_member_selection(1, cx);
+                        }
+                    }
                     _ => {
                         self.focus_mode = KeyValueFocusMode::List;
                         self.move_selection(1, cx);
@@ -393,7 +465,17 @@ impl KeyValueDocument {
             }
             Command::SelectPrev => {
                 match self.focus_mode {
-                    KeyValueFocusMode::ValuePanel => self.move_member_selection(-1, cx),
+                    KeyValueFocusMode::ValuePanel => {
+                        if self.is_document_view_active() {
+                            if let Some(ts) = &self.document_tree_state {
+                                ts.update(cx, |s, cx| {
+                                    s.move_cursor(TreeDirection::Up, cx);
+                                });
+                            }
+                        } else {
+                            self.move_member_selection(-1, cx);
+                        }
+                    }
                     _ => {
                         self.focus_mode = KeyValueFocusMode::List;
                         self.move_selection(-1, cx);
@@ -404,7 +486,11 @@ impl KeyValueDocument {
             Command::SelectFirst => {
                 match self.focus_mode {
                     KeyValueFocusMode::ValuePanel => {
-                        if !self.cached_members.is_empty() {
+                        if self.is_document_view_active() {
+                            if let Some(ts) = &self.document_tree_state {
+                                ts.update(cx, |s, cx| s.move_to_first(cx));
+                            }
+                        } else if !self.cached_members.is_empty() {
                             self.selected_member_index = Some(0);
                             cx.notify();
                         }
@@ -421,7 +507,11 @@ impl KeyValueDocument {
             Command::SelectLast => {
                 match self.focus_mode {
                     KeyValueFocusMode::ValuePanel => {
-                        if !self.cached_members.is_empty() {
+                        if self.is_document_view_active() {
+                            if let Some(ts) = &self.document_tree_state {
+                                ts.update(cx, |s, cx| s.move_to_last(cx));
+                            }
+                        } else if !self.cached_members.is_empty() {
                             self.selected_member_index = Some(self.cached_members.len() - 1);
                             cx.notify();
                         }
@@ -431,6 +521,18 @@ impl KeyValueDocument {
                             self.focus_mode = KeyValueFocusMode::List;
                             self.select_index(self.keys.len() - 1, cx);
                         }
+                    }
+                }
+                true
+            }
+            Command::ExpandCollapse => {
+                if self.focus_mode == KeyValueFocusMode::ValuePanel
+                    && self.is_document_view_active()
+                    && let Some(ts) = &self.document_tree_state
+                {
+                    let cursor = ts.read(cx).cursor().cloned();
+                    if let Some(id) = cursor {
+                        ts.update(cx, |s, cx| s.toggle_expand(&id, cx));
                     }
                 }
                 true
@@ -506,6 +608,16 @@ impl KeyValueDocument {
                     return true;
                 }
                 if self.focus_mode == KeyValueFocusMode::ValuePanel {
+                    if self.is_document_view_active() {
+                        if let Some(ts) = &self.document_tree_state {
+                            ts.update(cx, |s, cx| s.start_edit_at_cursor(window, cx));
+                        }
+                        return true;
+                    }
+
+                    if self.is_stream_type() {
+                        return true;
+                    }
                     if self.is_structured_type() {
                         if let Some(idx) = self.selected_member_index {
                             self.start_member_edit(idx, window, cx);
@@ -519,18 +631,34 @@ impl KeyValueDocument {
                 true
             }
             Command::ResultsNextPage | Command::PageDown => {
-                self.go_next_page(cx);
+                if self.focus_mode == KeyValueFocusMode::ValuePanel
+                    && self.is_document_view_active()
+                {
+                    if let Some(ts) = &self.document_tree_state {
+                        ts.update(cx, |s, cx| s.page_down(20, cx));
+                    }
+                } else {
+                    self.go_next_page(cx);
+                }
                 true
             }
             Command::ResultsPrevPage | Command::PageUp => {
-                self.go_prev_page(cx);
+                if self.focus_mode == KeyValueFocusMode::ValuePanel
+                    && self.is_document_view_active()
+                {
+                    if let Some(ts) = &self.document_tree_state {
+                        ts.update(cx, |s, cx| s.page_up(20, cx));
+                    }
+                } else {
+                    self.go_prev_page(cx);
+                }
                 true
             }
             Command::ResultsAddRow => {
                 if self.focus_mode == KeyValueFocusMode::ValuePanel && self.is_structured_type() {
-                    self.add_member_input
-                        .update(cx, |input, cx| input.focus(window, cx));
-                    self.focus_mode = KeyValueFocusMode::TextInput;
+                    if let Some(key_type) = self.selected_key_type() {
+                        self.pending_open_add_member_modal = Some(key_type);
+                    }
                 } else {
                     self.pending_open_new_key_modal = true;
                 }
@@ -593,7 +721,28 @@ impl KeyValueDocument {
     }
 
     fn build_value_menu_items(&self) -> Vec<KvMenuItem> {
-        if self.is_structured_type() {
+        if self.is_stream_type() {
+            vec![
+                KvMenuItem {
+                    label: "Copy Entry",
+                    action: KvMenuAction::CopyMember,
+                    icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Add Entry",
+                    action: KvMenuAction::AddMember,
+                    icon: AppIcon::Plus,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Delete Entry",
+                    action: KvMenuAction::DeleteMember,
+                    icon: AppIcon::Delete,
+                    is_danger: true,
+                },
+            ]
+        } else if self.is_structured_type() {
             vec![
                 KvMenuItem {
                     label: "Copy Member",
@@ -793,9 +942,9 @@ impl KeyValueDocument {
                 }
             }
             KvMenuAction::AddMember => {
-                self.add_member_input
-                    .update(cx, |input, cx| input.focus(window, cx));
-                self.focus_mode = KeyValueFocusMode::TextInput;
+                if let Some(key_type) = self.selected_key_type() {
+                    self.pending_open_add_member_modal = Some(key_type);
+                }
             }
             KvMenuAction::DeleteMember => {
                 if let Some(idx) = self.selected_member_index {
@@ -849,7 +998,7 @@ impl KeyValueDocument {
         if self.keys.is_empty() {
             self.selected_index = None;
             self.selected_value = None;
-            self.rebuild_cached_members();
+            self.rebuild_cached_members(cx);
             cx.notify();
             return;
         }
@@ -868,7 +1017,7 @@ impl KeyValueDocument {
         self.selected_value = None;
         self.selected_member_index = None;
         self.string_edit_input = None;
-        self.rebuild_cached_members();
+        self.rebuild_cached_members(cx);
         self.cancel_member_edit(cx);
         cx.notify();
         self.reload_selected_value(cx);
@@ -922,7 +1071,7 @@ impl KeyValueDocument {
         self.selected_value = None;
         self.last_error = None;
         self.string_edit_input = None;
-        self.rebuild_cached_members();
+        self.rebuild_cached_members(cx);
         self.cancel_rename(cx);
         self.cancel_member_edit(cx);
         cx.notify();
@@ -1006,7 +1155,7 @@ impl KeyValueDocument {
     fn reload_selected_value(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else {
             self.selected_value = None;
-            self.rebuild_cached_members();
+            self.rebuild_cached_members(cx);
             cx.notify();
             return;
         };
@@ -1053,14 +1202,22 @@ impl KeyValueDocument {
 
                     match result {
                         Ok(value) => {
+                            let key_type = value.entry.key_type;
+                            let is_hash_or_stream =
+                                matches!(key_type, Some(KeyType::Hash | KeyType::Stream));
                             this.selected_value = Some(value);
                             this.last_error = None;
-                            this.rebuild_cached_members();
+                            this.value_view_mode = if is_hash_or_stream {
+                                KvValueViewMode::Document
+                            } else {
+                                KvValueViewMode::Table
+                            };
+                            this.rebuild_cached_members(cx);
                         }
                         Err(error) => {
                             this.selected_value = None;
                             this.last_error = Some(error.to_string());
-                            this.rebuild_cached_members();
+                            this.rebuild_cached_members(cx);
                         }
                     }
 
@@ -1101,12 +1258,12 @@ impl KeyValueDocument {
             if self.keys.is_empty() {
                 self.selected_index = None;
                 self.selected_value = None;
-                self.rebuild_cached_members();
+                self.rebuild_cached_members(cx);
             } else {
                 let new_idx = pending.index.min(self.keys.len() - 1);
                 self.selected_index = Some(new_idx);
                 self.selected_value = None;
-                self.rebuild_cached_members();
+                self.rebuild_cached_members(cx);
                 self.reload_selected_value(cx);
             }
         }
@@ -1270,6 +1427,15 @@ impl KeyValueDocument {
                                 member: member.display,
                                 keyspace,
                             })?;
+                        }
+                        KeyType::Stream => {
+                            if let Some(id) = member.entry_id {
+                                api.stream_delete(&StreamDeleteRequest {
+                                    key,
+                                    ids: vec![id],
+                                    keyspace,
+                                })?;
+                            }
                         }
                         _ => {}
                     }
@@ -1719,19 +1885,9 @@ impl KeyValueDocument {
         cx.notify();
     }
 
-    fn add_member_from_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let member_text = self.add_member_input.read(cx).value().trim().to_string();
-        if member_text.is_empty() {
-            return;
-        }
+    // -- Add Member modal --
 
-        let value_text = self
-            .add_member_value_input
-            .read(cx)
-            .value()
-            .trim()
-            .to_string();
-
+    fn handle_add_member_event(&mut self, event: AddMemberEvent, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else {
             return;
         };
@@ -1739,40 +1895,14 @@ impl KeyValueDocument {
             return;
         };
         let Some(connection) = self.get_connection(cx) else {
+            self.last_error = Some("Connection is no longer active".to_string());
+            cx.notify();
             return;
         };
 
-        // Optimistic: add to cached members and clear inputs
-        let new_member = match key_type {
-            KeyType::Hash => MemberEntry {
-                display: value_text.clone(),
-                field: Some(member_text.clone()),
-                score: None,
-            },
-            KeyType::SortedSet => MemberEntry {
-                display: member_text.clone(),
-                field: None,
-                score: Some(value_text.parse::<f64>().unwrap_or(0.0)),
-            },
-            _ => MemberEntry {
-                display: member_text.clone(),
-                field: None,
-                score: None,
-            },
-        };
-        self.cached_members.push(new_member);
-
-        self.add_member_input.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-            state.focus(window, cx);
-        });
-        self.add_member_value_input.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-        });
-        cx.notify();
-
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
+        let fields = event.fields;
 
         cx.spawn(async move |_this, cx| {
             let result = cx
@@ -1784,34 +1914,51 @@ impl KeyValueDocument {
 
                     match key_type {
                         KeyType::Hash => {
-                            api.hash_set(&HashSetRequest {
-                                key,
-                                field: member_text,
-                                value: value_text,
-                                keyspace,
-                            })?;
+                            for (field, value) in &fields {
+                                api.hash_set(&HashSetRequest {
+                                    key: key.clone(),
+                                    field: field.clone(),
+                                    value: value.clone(),
+                                    keyspace,
+                                })?;
+                            }
                         }
                         KeyType::List => {
-                            api.list_push(&ListPushRequest {
-                                key,
-                                value: member_text,
-                                end: ListEnd::Tail,
-                                keyspace,
-                            })?;
+                            for (member, _) in &fields {
+                                api.list_push(&ListPushRequest {
+                                    key: key.clone(),
+                                    value: member.clone(),
+                                    end: ListEnd::Tail,
+                                    keyspace,
+                                })?;
+                            }
                         }
                         KeyType::Set => {
-                            api.set_add(&SetAddRequest {
-                                key,
-                                member: member_text,
-                                keyspace,
-                            })?;
+                            for (member, _) in &fields {
+                                api.set_add(&SetAddRequest {
+                                    key: key.clone(),
+                                    member: member.clone(),
+                                    keyspace,
+                                })?;
+                            }
                         }
                         KeyType::SortedSet => {
-                            let score = value_text.parse::<f64>().unwrap_or(0.0);
-                            api.zset_add(&ZSetAddRequest {
+                            for (member, score_str) in &fields {
+                                let score = score_str.parse::<f64>().unwrap_or(0.0);
+                                api.zset_add(&ZSetAddRequest {
+                                    key: key.clone(),
+                                    member: member.clone(),
+                                    score,
+                                    keyspace,
+                                })?;
+                            }
+                        }
+                        KeyType::Stream => {
+                            api.stream_add(&StreamAddRequest {
                                 key,
-                                member: member_text,
-                                score,
+                                id: StreamEntryId::Auto,
+                                fields,
+                                maxlen: None,
                                 keyspace,
                             })?;
                         }
@@ -1942,6 +2089,23 @@ impl KeyValueDocument {
                                 })?;
                             }
                         }
+                        NewKeyValue::StreamFields(fields) => {
+                            api.stream_add(&StreamAddRequest {
+                                key: event.key_name.clone(),
+                                id: StreamEntryId::Auto,
+                                fields,
+                                maxlen: None,
+                                keyspace,
+                            })?;
+
+                            if let Some(ttl) = event.ttl {
+                                api.expire_key(&dbflux_core::KeyExpireRequest {
+                                    key: event.key_name.clone(),
+                                    ttl_seconds: ttl,
+                                    keyspace,
+                                })?;
+                            }
+                        }
                     }
 
                     Ok::<(), DbError>(())
@@ -1975,25 +2139,216 @@ impl KeyValueDocument {
             .map(|conn| conn.connection.clone())
     }
 
-    fn rebuild_cached_members(&mut self) {
+    fn rebuild_cached_members(&mut self, cx: &mut Context<Self>) {
         self.cached_members = match &self.selected_value {
             Some(value) => parse_members(value),
             None => Vec::new(),
         };
+
+        if self.value_view_mode == KvValueViewMode::Document && self.supports_document_view() {
+            self.rebuild_document_tree(cx);
+        }
     }
 
     fn is_structured_type(&self) -> bool {
         matches!(
             self.selected_key_type(),
-            Some(KeyType::Hash | KeyType::List | KeyType::Set | KeyType::SortedSet)
+            Some(
+                KeyType::Hash | KeyType::List | KeyType::Set | KeyType::SortedSet | KeyType::Stream
+            )
         )
+    }
+
+    fn is_stream_type(&self) -> bool {
+        matches!(self.selected_key_type(), Some(KeyType::Stream))
     }
 
     fn needs_value_column(&self) -> bool {
         matches!(
             self.selected_key_type(),
-            Some(KeyType::Hash | KeyType::SortedSet)
+            Some(KeyType::Hash | KeyType::SortedSet | KeyType::Stream)
         )
+    }
+
+    fn supports_document_view(&self) -> bool {
+        matches!(
+            self.selected_key_type(),
+            Some(KeyType::Hash | KeyType::Stream)
+        )
+    }
+
+    fn is_document_view_active(&self) -> bool {
+        self.value_view_mode == KvValueViewMode::Document
+            && self.supports_document_view()
+            && self.document_tree_state.is_some()
+    }
+
+    fn toggle_value_view_mode(&mut self, cx: &mut Context<Self>) {
+        if !self.supports_document_view() {
+            return;
+        }
+
+        self.value_view_mode = match self.value_view_mode {
+            KvValueViewMode::Table => KvValueViewMode::Document,
+            KvValueViewMode::Document => KvValueViewMode::Table,
+        };
+
+        if self.value_view_mode == KvValueViewMode::Document {
+            self.rebuild_document_tree(cx);
+        } else {
+            self.document_tree = None;
+            self.document_tree_state = None;
+            self._document_tree_subscription = None;
+        }
+
+        cx.notify();
+    }
+
+    fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
+        let entries = self.members_to_tree_values();
+        if entries.is_empty() {
+            self.document_tree = None;
+            self.document_tree_state = None;
+            self._document_tree_subscription = None;
+            return;
+        }
+
+        let tree_state = cx.new(|cx| {
+            let mut state = DocumentTreeState::new(cx);
+            state.load_from_values(entries, cx);
+            state
+        });
+
+        let tree = cx.new(|cx| DocumentTree::new("kv-document-tree", tree_state.clone(), cx));
+
+        let subscription = cx.subscribe(
+            &tree_state,
+            |this, _state, event: &DocumentTreeEvent, cx| match event {
+                DocumentTreeEvent::Focused => {
+                    cx.emit(KeyValueDocumentEvent::RequestFocus);
+                }
+                DocumentTreeEvent::InlineEditCommitted { node_id, new_value } => {
+                    this.handle_tree_inline_edit(node_id, new_value, cx);
+                }
+                _ => {}
+            },
+        );
+
+        self.document_tree_state = Some(tree_state);
+        self.document_tree = Some(tree);
+        self._document_tree_subscription = Some(subscription);
+    }
+
+    fn handle_tree_inline_edit(
+        &mut self,
+        node_id: &NodeId,
+        new_value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(doc_index) = node_id.doc_index() else {
+            return;
+        };
+
+        if !matches!(self.selected_key_type(), Some(KeyType::Hash)) {
+            return;
+        }
+
+        let Some(member) = self.cached_members.get(doc_index).cloned() else {
+            return;
+        };
+        let Some(field_name) = &member.field else {
+            return;
+        };
+
+        if new_value == member.display {
+            return;
+        }
+
+        let field_name = field_name.clone();
+        let new_value = new_value.to_string();
+
+        if let Some(cached) = self.cached_members.get_mut(doc_index) {
+            cached.display = new_value.clone();
+        }
+        self.rebuild_document_tree(cx);
+
+        let Some(key) = self.selected_key() else {
+            return;
+        };
+        let Some(connection) = self.get_connection(cx) else {
+            return;
+        };
+
+        let keyspace = self.keyspace_index();
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let api = connection.key_value_api().ok_or_else(|| {
+                        DbError::NotSupported("Key-value API unavailable".to_string())
+                    })?;
+
+                    api.hash_set(&HashSetRequest {
+                        key,
+                        field: field_name,
+                        value: new_value,
+                        keyspace,
+                    })?;
+
+                    Ok::<(), DbError>(())
+                })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.last_error = None;
+                        this.reload_selected_value(cx);
+                    }
+                    Err(error) => {
+                        this.last_error = Some(error.to_string());
+                        cx.notify();
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Convert cached members into `(label, Value)` pairs for the document tree.
+    fn members_to_tree_values(&self) -> Vec<(String, Value)> {
+        let key_type = self.selected_key_type();
+
+        match key_type {
+            Some(KeyType::Hash) => self
+                .cached_members
+                .iter()
+                .map(|m| {
+                    let label = m.field.clone().unwrap_or_else(|| m.display.clone());
+                    let val = Value::Text(m.display.clone());
+                    (label, val)
+                })
+                .collect(),
+
+            Some(KeyType::Stream) => self
+                .cached_members
+                .iter()
+                .map(|m| {
+                    let fields_val = m
+                        .field
+                        .as_deref()
+                        .map(parse_json_to_value)
+                        .unwrap_or(Value::Null);
+
+                    (m.display.clone(), fields_val)
+                })
+                .collect(),
+
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -2005,11 +2360,16 @@ impl EventEmitter<KeyValueDocumentEvent> for KeyValueDocument {}
 
 impl Render for KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Handle deferred modal open before borrowing theme
+        // Handle deferred modal opens before borrowing theme
         if self.pending_open_new_key_modal {
             self.pending_open_new_key_modal = false;
             self.new_key_modal
                 .update(cx, |modal, cx| modal.open(window, cx));
+        }
+
+        if let Some(key_type) = self.pending_open_add_member_modal.take() {
+            self.add_member_modal
+                .update(cx, |modal, cx| modal.open(key_type, window, cx));
         }
 
         let theme = cx.theme();
@@ -2104,6 +2464,36 @@ impl Render for KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap(Spacing::XS)
+                            .when(is_structured, |d| {
+                                d.child(
+                                    icon_button_base("kv-add-member", AppIcon::Plus, theme)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                if let Some(key_type) = this.selected_key_type() {
+                                                    this.pending_open_add_member_modal =
+                                                        Some(key_type);
+                                                    cx.notify();
+                                                }
+                                            }),
+                                        ),
+                                )
+                            })
+                            .when(self.supports_document_view(), |d| {
+                                let toggle_icon = match self.value_view_mode {
+                                    KvValueViewMode::Table => AppIcon::Braces,
+                                    KvValueViewMode::Document => AppIcon::Table,
+                                };
+                                d.child(
+                                    icon_button_base("kv-toggle-view", toggle_icon, theme)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_value_view_mode(cx);
+                                            }),
+                                        ),
+                                )
+                            })
                             .child(
                                 icon_button_base("kv-refresh-val", AppIcon::RefreshCcw, theme)
                                     .on_mouse_down(
@@ -2161,7 +2551,37 @@ impl Render for KeyValueDocument {
                     .child(size_label),
             );
 
-            if is_structured {
+            if is_structured
+                && self.value_view_mode == KvValueViewMode::Document
+                && self.supports_document_view()
+            {
+                // -- Document tree view for Hash / Stream --
+                if let Some(tree) = &self.document_tree {
+                    panel = panel.child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .border_l_1()
+                            .border_color(theme.border)
+                            .child(tree.clone()),
+                    );
+                } else {
+                    panel = panel.child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_l_1()
+                            .border_color(theme.border)
+                            .text_color(theme.muted_foreground)
+                            .text_size(FontSizes::SM)
+                            .child("No data"),
+                    );
+                }
+            } else if is_structured {
+                // -- Table view for structured types --
+
                 // Members filter
                 panel = panel.child(
                     div()
@@ -2213,10 +2633,15 @@ impl Render for KeyValueDocument {
                     .text_size(FontSizes::XS)
                     .text_color(theme.muted_foreground);
 
-                header = header.child(div().flex_1().child("#"));
-                header = header.child(div().w(px(300.0)).child("Value"));
+                let is_stream = self.is_stream_type();
+                header = header.child(div().w(px(30.0)).child("#"));
+                header = header.child(div().flex_1().child(if is_stream { "ID" } else { "Value" }));
                 if needs_value_col {
-                    header = header.child(div().w(px(200.0)).child("Field/Score"));
+                    header = header.child(div().w(px(200.0)).child(if is_stream {
+                        "Fields"
+                    } else {
+                        "Field/Score"
+                    }));
                 }
                 header = header.child(div().w(Heights::ICON_MD));
 
@@ -2282,19 +2707,19 @@ impl Render for KeyValueDocument {
                             }
                         }
                     } else {
-                        row = row.child(
-                            div()
-                                .flex_1()
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.start_member_edit(idx, window, cx);
-                                    }),
-                                )
-                                .child(member.display.clone()),
-                        );
+                        let value_cell = div().flex_1().child(member.display.clone());
+
+                        row = row.child(if is_stream {
+                            value_cell
+                        } else {
+                            value_cell.cursor_pointer().on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.start_member_edit(idx, window, cx);
+                                }),
+                            )
+                        });
 
                         if needs_value_col {
                             row = row.child(
@@ -2327,50 +2752,7 @@ impl Render for KeyValueDocument {
                     members_list = members_list.child(row);
                 }
 
-                // Add member row
-                // Add member row placeholders are set at construction time
-
-                let mut add_row = div()
-                    .flex()
-                    .items_center()
-                    .px(Spacing::MD)
-                    .h(Heights::ROW)
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .gap(Spacing::SM)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.focus_mode = KeyValueFocusMode::TextInput;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    );
-
-                add_row = add_row.child(
-                    div()
-                        .flex_1()
-                        .child(Input::new(&self.add_member_input).small().w_full()),
-                );
-
-                if needs_value_col {
-                    add_row = add_row.child(
-                        div()
-                            .w(px(200.0))
-                            .child(Input::new(&self.add_member_value_input).small().w_full()),
-                    );
-                }
-
-                add_row = add_row.child(
-                    icon_button_base("add-member-btn", AppIcon::Plus, theme).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.add_member_from_inputs(window, cx);
-                        }),
-                    ),
-                );
-
-                panel = panel.child(members_list).child(add_row);
+                panel = panel.child(members_list);
             } else if let Some(input) = &self.string_edit_input {
                 // Inline editing for String/JSON values
                 panel = panel.child(
@@ -2752,6 +3134,9 @@ impl Render for KeyValueDocument {
             .when(self.new_key_modal.read(cx).is_visible(), |d| {
                 d.child(self.new_key_modal.clone())
             })
+            .when(self.add_member_modal.read(cx).is_visible(), |d| {
+                d.child(self.add_member_modal.clone())
+            })
             .when(has_pending_delete, |d| {
                 d.child(render_delete_confirm_modal(
                     &delete_title,
@@ -3092,7 +3477,7 @@ fn key_type_label(key_type: KeyType) -> &'static str {
 
 fn render_value_preview(value: &KeyGetResult) -> String {
     match value.repr {
-        ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured => {
+        ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured | ValueRepr::Stream => {
             let text = String::from_utf8_lossy(&value.value);
             let max_chars = 4000;
 
@@ -3122,14 +3507,21 @@ struct MemberEntry {
     display: String,
     field: Option<String>,
     score: Option<f64>,
+    /// Stream entry ID, used for XDEL targeting.
+    entry_id: Option<String>,
 }
 
 fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
+    if value.repr == ValueRepr::Stream {
+        return parse_stream_entries(&value.value);
+    }
+
     if value.repr != ValueRepr::Structured {
         return vec![MemberEntry {
             display: String::from_utf8_lossy(&value.value).to_string(),
             field: None,
             score: None,
+            entry_id: None,
         }];
     }
 
@@ -3138,6 +3530,7 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
             display: String::from_utf8_lossy(&value.value).to_string(),
             field: None,
             score: None,
+            entry_id: None,
         }];
     };
 
@@ -3153,6 +3546,7 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
                     display,
                     field: Some(k),
                     score: None,
+                    entry_id: None,
                 }
             })
             .collect(),
@@ -3172,6 +3566,7 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
                             display: member,
                             field: None,
                             score,
+                            entry_id: None,
                         }
                     } else {
                         MemberEntry {
@@ -3182,6 +3577,7 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
                             },
                             field: None,
                             score: None,
+                            entry_id: None,
                         }
                     }
                 }
@@ -3189,11 +3585,13 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
                     display: s,
                     field: None,
                     score: None,
+                    entry_id: None,
                 },
                 other => MemberEntry {
                     display: other.to_string(),
                     field: None,
                     score: None,
+                    entry_id: None,
                 },
             })
             .collect(),
@@ -3201,6 +3599,75 @@ fn parse_members(value: &KeyGetResult) -> Vec<MemberEntry> {
             display: String::from_utf8_lossy(&value.value).to_string(),
             field: None,
             score: None,
+            entry_id: None,
         }],
+    }
+}
+
+/// Parses stream entries from `[{"id":"...","fields":{...}}]` JSON into member rows.
+/// Each entry becomes a `MemberEntry` with `display = id` and `field = compact JSON of fields`.
+fn parse_stream_entries(raw: &[u8]) -> Vec<MemberEntry> {
+    let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(raw) else {
+        return vec![MemberEntry {
+            display: String::from_utf8_lossy(raw).to_string(),
+            field: None,
+            score: None,
+            entry_id: None,
+        }];
+    };
+
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?.to_string();
+            let fields = entry.get("fields")?;
+            let fields_str = serde_json::to_string(fields).ok()?;
+
+            Some(MemberEntry {
+                display: id.clone(),
+                field: Some(fields_str),
+                score: None,
+                entry_id: Some(id),
+            })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// JSON → Value conversion
+// ---------------------------------------------------------------------------
+
+/// Parse a JSON string into a `Value` tree. Falls back to `Value::Text` on error.
+fn parse_json_to_value(json_str: &str) -> Value {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return Value::Text(json_str.to_string());
+    };
+    serde_json_to_value(&parsed)
+}
+
+fn serde_json_to_value(jv: &serde_json::Value) -> Value {
+    match jv {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Text(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => Value::Text(s.clone()),
+        serde_json::Value::Array(arr) => {
+            Value::Array(arr.iter().map(serde_json_to_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let fields: BTreeMap<String, Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json_to_value(v)))
+                .collect();
+            Value::Document(fields)
+        }
     }
 }
