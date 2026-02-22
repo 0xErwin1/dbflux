@@ -10,9 +10,10 @@ use dbflux_core::{
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
     DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FormValues,
     FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM, PlaceholderStyle,
-    QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
-    TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
+    TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1003,6 +1004,12 @@ impl Connection for MongoConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &MongoDialect
+    }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        static GENERATOR: crate::query_generator::MongoShellGenerator =
+            crate::query_generator::MongoShellGenerator;
+        Some(&GENERATOR)
     }
 }
 

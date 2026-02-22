@@ -70,10 +70,41 @@ impl Sidebar {
                 items
             }
             SchemaNodeKind::Collection => {
-                vec![ContextMenuItem {
-                    label: "Open".into(),
-                    action: ContextMenuAction::Open,
-                }]
+                vec![
+                    ContextMenuItem {
+                        label: "Open".into(),
+                        action: ContextMenuAction::Open,
+                    },
+                    ContextMenuItem {
+                        label: "Generate Query".into(),
+                        action: ContextMenuAction::Submenu(vec![
+                            ContextMenuItem {
+                                label: "find".into(),
+                                action: ContextMenuAction::GenerateCollectionCode(
+                                    CollectionCodeKind::Find,
+                                ),
+                            },
+                            ContextMenuItem {
+                                label: "insertOne".into(),
+                                action: ContextMenuAction::GenerateCollectionCode(
+                                    CollectionCodeKind::InsertOne,
+                                ),
+                            },
+                            ContextMenuItem {
+                                label: "updateOne".into(),
+                                action: ContextMenuAction::GenerateCollectionCode(
+                                    CollectionCodeKind::UpdateOne,
+                                ),
+                            },
+                            ContextMenuItem {
+                                label: "deleteOne".into(),
+                                action: ContextMenuAction::GenerateCollectionCode(
+                                    CollectionCodeKind::DeleteOne,
+                                ),
+                            },
+                        ]),
+                    },
+                ]
             }
             SchemaNodeKind::Profile => {
                 let is_connected =
@@ -488,6 +519,9 @@ impl Sidebar {
             }
             ContextMenuAction::GenerateTypeSql(action) => {
                 self.generate_type_sql(&item_id, action, cx);
+            }
+            ContextMenuAction::GenerateCollectionCode(kind) => {
+                self.generate_collection_code(&item_id, kind, cx);
             }
         }
 

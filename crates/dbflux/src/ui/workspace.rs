@@ -156,6 +156,15 @@ impl Workspace {
                         modal.open(context, *generation_type, window, cx);
                     });
                 }
+                SidebarEvent::RequestQueryPreview {
+                    language,
+                    badge,
+                    query,
+                } => {
+                    this.sql_preview_modal.update(cx, |modal, cx| {
+                        modal.open_query_preview(*language, badge, query.clone(), window, cx);
+                    });
+                }
             },
         )
         .detach();

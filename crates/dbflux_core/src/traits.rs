@@ -15,6 +15,7 @@ use crate::{
         ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
+    query_generator::QueryGenerator,
 };
 
 bitflags! {
@@ -767,6 +768,10 @@ pub trait Connection: Send + Sync {
     /// Returns the code generator for this connection.
     fn code_generator(&self) -> &dyn CodeGenerator {
         &NoOpCodeGenerator
+    }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        None
     }
 
     /// Generate SQL using this connection's dialect.

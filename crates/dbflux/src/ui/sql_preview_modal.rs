@@ -3,8 +3,8 @@ use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::{
-    ColumnInfo, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, TableInfo,
-    Value,
+    ColumnInfo, QueryLanguage, SqlGenerationOptions, SqlGenerationRequest, SqlOperation,
+    SqlValueMode, TableInfo, Value,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -134,7 +134,8 @@ impl SqlPreviewContext {
     }
 }
 
-/// Modal for previewing and copying generated SQL.
+/// SQL mode: regeneration + options panel.
+/// Generic mode (`query_language` set): static text, no options.
 pub struct SqlPreviewModal {
     app_state: Entity<AppState>,
     visible: bool,
@@ -144,6 +145,9 @@ pub struct SqlPreviewModal {
     sql_display: Entity<InputState>,
     generated_sql: String,
     focus_handle: FocusHandle,
+
+    query_language: Option<QueryLanguage>,
+    badge_label: Option<String>,
 }
 
 impl SqlPreviewModal {
@@ -164,6 +168,8 @@ impl SqlPreviewModal {
             sql_display,
             generated_sql: String::new(),
             focus_handle: cx.focus_handle(),
+            query_language: None,
+            badge_label: None,
         }
     }
 
@@ -171,7 +177,7 @@ impl SqlPreviewModal {
         self.visible
     }
 
-    /// Open the modal with the given context and generation type.
+    /// Open in SQL mode with the given context and generation type.
     pub fn open(
         &mut self,
         context: SqlPreviewContext,
@@ -179,6 +185,17 @@ impl SqlPreviewModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.query_language.is_some() {
+            self.query_language = None;
+            self.badge_label = None;
+            self.sql_display = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("sql")
+                    .line_number(true)
+                    .soft_wrap(true)
+            });
+        }
+
         self.context = Some(context);
         self.generation_type = generation_type;
         self.visible = true;
@@ -187,9 +204,40 @@ impl SqlPreviewModal {
         cx.notify();
     }
 
+    /// Open in generic mode with static query text.
+    pub fn open_query_preview(
+        &mut self,
+        language: QueryLanguage,
+        badge: &str,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context = None;
+        self.query_language = Some(language);
+        self.badge_label = Some(badge.to_string());
+        self.visible = true;
+
+        self.generated_sql = query.clone();
+
+        self.sql_display = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .code_editor(language.editor_mode())
+                .line_number(true)
+                .soft_wrap(true);
+            state.set_value(&query, window, cx);
+            state
+        });
+
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.context = None;
+        self.query_language = None;
+        self.badge_label = None;
         self.generated_sql.clear();
         cx.notify();
     }
@@ -401,17 +449,27 @@ impl Render for SqlPreviewModal {
 
         let theme = cx.theme();
         let sql_display = self.sql_display.clone();
-        let generation_type = self.generation_type;
-        let is_ddl = generation_type.is_ddl();
-        let use_fqn = self.settings.use_fully_qualified_names;
-        let compact = self.settings.compact_sql;
+        let is_generic = self.query_language.is_some();
 
         let entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
             entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        // Type badge for header
+        // -- Title & badge --
+
+        let title = if is_generic {
+            "Query Preview"
+        } else {
+            "SQL Preview"
+        };
+
+        let badge_text: SharedString = if let Some(label) = &self.badge_label {
+            label.clone().into()
+        } else {
+            self.generation_type.label().into()
+        };
+
         let type_badge = div()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -419,15 +477,14 @@ impl Render for SqlPreviewModal {
             .bg(theme.secondary)
             .text_size(FontSizes::XS)
             .text_color(theme.muted_foreground)
-            .child(generation_type.label());
+            .child(badge_text);
 
         let mut frame = ModalFrame::new("sql-preview-modal", &self.focus_handle, close)
-            .title("SQL Preview")
+            .title(title)
             .icon(AppIcon::Code)
             .width(px(1000.0))
             .max_height(px(800.0))
             .header_extra(type_badge)
-            // SQL Editor
             .child(
                 div()
                     .flex_1()
@@ -438,8 +495,12 @@ impl Render for SqlPreviewModal {
                     .child(Input::new(&sql_display).w_full().h_full()),
             );
 
-        // Options (only for DML operations)
-        if !is_ddl {
+        // -- Options (SQL mode, DML only) --
+
+        if !is_generic && !self.generation_type.is_ddl() {
+            let use_fqn = self.settings.use_fully_qualified_names;
+            let compact = self.settings.compact_sql;
+
             frame = frame.child(
                 div()
                     .px(Spacing::MD)
@@ -499,88 +560,94 @@ impl Render for SqlPreviewModal {
             );
         }
 
-        // Footer
-        frame = frame.child(
-            div()
-                .px(Spacing::MD)
-                .py(Spacing::SM)
-                .border_t_1()
-                .border_color(theme.border)
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap(Spacing::SM)
-                .child(
-                    div()
-                        .id("refresh-btn")
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .px(Spacing::MD)
-                        .py(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(theme.secondary)
-                        .hover(|d| d.bg(theme.muted))
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.foreground)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.regenerate_sql(window, cx);
-                        }))
-                        .child(
-                            svg()
-                                .path(AppIcon::RefreshCcw.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child("Refresh"),
-                )
-                .child(
-                    div()
-                        .id("copy-btn")
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .px(Spacing::MD)
-                        .py(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(theme.primary)
-                        .hover(|d| d.opacity(0.9))
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.primary_foreground)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.copy_to_clipboard(cx);
-                            this.close(cx);
-                        }))
-                        .child(
-                            svg()
-                                .path(AppIcon::Layers.path())
-                                .size_4()
-                                .text_color(theme.primary_foreground),
-                        )
-                        .child("Copy"),
-                )
-                .child(
-                    div()
-                        .id("close-footer-btn")
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .px(Spacing::MD)
-                        .py(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(theme.secondary)
-                        .hover(|d| d.bg(theme.muted))
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.foreground)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close(cx);
-                        }))
-                        .child("Close"),
-                ),
-        );
+        // -- Footer --
+
+        let mut footer = div()
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(Spacing::SM);
+
+        if !is_generic {
+            footer = footer.child(
+                div()
+                    .id("refresh-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.muted))
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.regenerate_sql(window, cx);
+                    }))
+                    .child(
+                        svg()
+                            .path(AppIcon::RefreshCcw.path())
+                            .size_4()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child("Refresh"),
+            );
+        }
+
+        footer = footer
+            .child(
+                div()
+                    .id("copy-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.primary)
+                    .hover(|d| d.opacity(0.9))
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.primary_foreground)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.copy_to_clipboard(cx);
+                        this.close(cx);
+                    }))
+                    .child(
+                        svg()
+                            .path(AppIcon::Layers.path())
+                            .size_4()
+                            .text_color(theme.primary_foreground),
+                    )
+                    .child("Copy"),
+            )
+            .child(
+                div()
+                    .id("close-footer-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.muted))
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close(cx);
+                    }))
+                    .child("Close"),
+            );
+
+        frame = frame.child(footer);
 
         frame.render(cx)
     }

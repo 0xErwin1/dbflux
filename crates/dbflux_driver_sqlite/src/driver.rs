@@ -10,11 +10,12 @@ use dbflux_core::{
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest,
     DriverCapabilities, DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest,
     ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, PlaceholderStyle,
-    QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlQueryBuilder, TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_update_template,
+    QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -731,6 +732,11 @@ impl Connection for SqliteConnection {
 
     fn code_generator(&self) -> &dyn CodeGenerator {
         &SQLITE_CODE_GENERATOR
+    }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&SQLITE_DIALECT);
+        Some(&GENERATOR)
     }
 }
 

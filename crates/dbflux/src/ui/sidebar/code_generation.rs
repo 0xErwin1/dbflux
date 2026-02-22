@@ -607,4 +607,43 @@ impl Sidebar {
             cx.emit(SidebarEvent::GenerateSql(sql));
         }
     }
+
+    pub(super) fn generate_collection_code(
+        &mut self,
+        item_id: &str,
+        kind: CollectionCodeKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(SchemaNodeId::Collection { name, .. }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let badge = match kind {
+            CollectionCodeKind::Find => "find",
+            CollectionCodeKind::InsertOne => "insertOne",
+            CollectionCodeKind::UpdateOne => "updateOne",
+            CollectionCodeKind::DeleteOne => "deleteOne",
+        };
+
+        let query = match kind {
+            CollectionCodeKind::Find => {
+                format!("db.{name}.find({{}})")
+            }
+            CollectionCodeKind::InsertOne => {
+                format!("db.{name}.insertOne({{\n  \n}})")
+            }
+            CollectionCodeKind::UpdateOne => {
+                format!("db.{name}.updateOne(\n  {{ _id: \"\" }},\n  {{ $set: {{}} }}\n)")
+            }
+            CollectionCodeKind::DeleteOne => {
+                format!("db.{name}.deleteOne({{ _id: \"\" }})")
+            }
+        };
+
+        cx.emit(SidebarEvent::RequestQueryPreview {
+            language: QueryLanguage::MongoQuery,
+            badge: badge.to_string(),
+            query,
+        });
+    }
 }

@@ -369,20 +369,17 @@ pub enum ListEnd {
     Tail,
 }
 
-/// Set a field in a Hash key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HashSetRequest {
     pub key: String,
-    pub field: String,
-    pub value: String,
+    pub fields: Vec<(String, String)>,
     pub keyspace: Option<u32>,
 }
 
-/// Delete a field from a Hash key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HashDeleteRequest {
     pub key: String,
-    pub field: String,
+    pub fields: Vec<String>,
     pub keyspace: Option<u32>,
 }
 
@@ -395,11 +392,10 @@ pub struct ListSetRequest {
     pub keyspace: Option<u32>,
 }
 
-/// Push a value to the head or tail of a list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListPushRequest {
     pub key: String,
-    pub value: String,
+    pub values: Vec<String>,
     pub end: ListEnd,
     pub keyspace: Option<u32>,
 }
@@ -413,36 +409,31 @@ pub struct ListRemoveRequest {
     pub keyspace: Option<u32>,
 }
 
-/// Add a member to a Set key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetAddRequest {
     pub key: String,
-    pub member: String,
+    pub members: Vec<String>,
     pub keyspace: Option<u32>,
 }
 
-/// Remove a member from a Set key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetRemoveRequest {
     pub key: String,
-    pub member: String,
+    pub members: Vec<String>,
     pub keyspace: Option<u32>,
 }
 
-/// Add or update a member with a score in a Sorted Set key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZSetAddRequest {
     pub key: String,
-    pub member: String,
-    pub score: f64,
+    pub members: Vec<(String, f64)>,
     pub keyspace: Option<u32>,
 }
 
-/// Remove a member from a Sorted Set key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZSetRemoveRequest {
     pub key: String,
-    pub member: String,
+    pub members: Vec<String>,
     pub keyspace: Option<u32>,
 }
 

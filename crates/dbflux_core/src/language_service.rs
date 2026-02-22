@@ -125,6 +125,16 @@ pub enum DangerousQueryKind {
     MongoDropCollection,
     /// db.dropDatabase()
     MongoDropDatabase,
+
+    // Redis patterns
+    /// FLUSHALL — wipes all databases
+    RedisFlushAll,
+    /// FLUSHDB — wipes current database
+    RedisFlushDb,
+    /// DEL with multiple keys
+    RedisMultiDelete,
+    /// KEYS * — performance hazard on large databases
+    RedisKeysPattern,
 }
 
 impl DangerousQueryKind {
@@ -140,6 +150,12 @@ impl DangerousQueryKind {
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
             Self::MongoDropCollection => "drop() will permanently remove the collection",
             Self::MongoDropDatabase => "dropDatabase() will permanently remove the entire database",
+            Self::RedisFlushAll => "FLUSHALL will delete all keys in all databases",
+            Self::RedisFlushDb => "FLUSHDB will delete all keys in the current database",
+            Self::RedisMultiDelete => "DEL with multiple keys will delete them all",
+            Self::RedisKeysPattern => {
+                "KEYS with a pattern is a performance hazard on large databases"
+            }
         }
     }
 }
@@ -334,6 +350,46 @@ pub fn detect_dangerous_mongo(query: &str) -> Option<DangerousQueryKind> {
     }
 
     None
+}
+
+/// Detect dangerous Redis commands using keyword matching.
+pub fn detect_dangerous_redis(query: &str) -> Option<DangerousQueryKind> {
+    let normalized = query.trim().to_lowercase();
+
+    let first_word = normalized.split_whitespace().next().unwrap_or("");
+
+    if first_word == "flushall" {
+        return Some(DangerousQueryKind::RedisFlushAll);
+    }
+
+    if first_word == "flushdb" {
+        return Some(DangerousQueryKind::RedisFlushDb);
+    }
+
+    if first_word == "del" {
+        let args: Vec<&str> = normalized.split_whitespace().skip(1).collect();
+        if args.len() > 1 {
+            return Some(DangerousQueryKind::RedisMultiDelete);
+        }
+    }
+
+    if first_word == "keys" {
+        return Some(DangerousQueryKind::RedisKeysPattern);
+    }
+
+    None
+}
+
+pub struct RedisLanguageService;
+
+impl LanguageService for RedisLanguageService {
+    fn validate(&self, _query: &str) -> ValidationResult {
+        ValidationResult::Valid
+    }
+
+    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        detect_dangerous_redis(query)
+    }
 }
 
 /// Unified entry point: auto-detects language and checks for dangerous patterns.
@@ -1020,5 +1076,82 @@ mod tests {
     fn multiple_valid_statements_no_diagnostics() {
         let diags = sql_editor_diagnostics("SELECT 1; SELECT 2;");
         assert!(diags.is_empty());
+    }
+
+    // ==================== Redis tests ====================
+
+    #[test]
+    fn redis_flushall_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_redis("FLUSHALL"),
+            Some(DangerousQueryKind::RedisFlushAll)
+        );
+        assert_eq!(
+            detect_dangerous_redis("flushall"),
+            Some(DangerousQueryKind::RedisFlushAll)
+        );
+        assert_eq!(
+            detect_dangerous_redis("FLUSHALL ASYNC"),
+            Some(DangerousQueryKind::RedisFlushAll)
+        );
+    }
+
+    #[test]
+    fn redis_flushdb_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_redis("FLUSHDB"),
+            Some(DangerousQueryKind::RedisFlushDb)
+        );
+        assert_eq!(
+            detect_dangerous_redis("flushdb ASYNC"),
+            Some(DangerousQueryKind::RedisFlushDb)
+        );
+    }
+
+    #[test]
+    fn redis_del_multi_key_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_redis("DEL key1 key2"),
+            Some(DangerousQueryKind::RedisMultiDelete)
+        );
+        assert_eq!(
+            detect_dangerous_redis("del a b c"),
+            Some(DangerousQueryKind::RedisMultiDelete)
+        );
+    }
+
+    #[test]
+    fn redis_del_single_key_is_safe() {
+        assert_eq!(detect_dangerous_redis("DEL mykey"), None);
+    }
+
+    #[test]
+    fn redis_keys_is_dangerous() {
+        assert_eq!(
+            detect_dangerous_redis("KEYS *"),
+            Some(DangerousQueryKind::RedisKeysPattern)
+        );
+        assert_eq!(
+            detect_dangerous_redis("keys user:*"),
+            Some(DangerousQueryKind::RedisKeysPattern)
+        );
+    }
+
+    #[test]
+    fn redis_get_is_safe() {
+        assert_eq!(detect_dangerous_redis("GET mykey"), None);
+    }
+
+    #[test]
+    fn redis_set_is_safe() {
+        assert_eq!(detect_dangerous_redis("SET mykey myvalue"), None);
+    }
+
+    #[test]
+    fn redis_kind_messages_are_non_empty() {
+        assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
+        assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
+        assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
+        assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
     }
 }

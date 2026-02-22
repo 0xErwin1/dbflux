@@ -509,6 +509,10 @@ impl SqlQueryDocument {
                     DangerousQueryKind::MongoUpdateMany => "updateMany with empty filter",
                     DangerousQueryKind::MongoDropCollection => "drop() collection",
                     DangerousQueryKind::MongoDropDatabase => "dropDatabase()",
+                    DangerousQueryKind::RedisFlushAll => "FLUSHALL",
+                    DangerousQueryKind::RedisFlushDb => "FLUSHDB",
+                    DangerousQueryKind::RedisMultiDelete => "DEL (multiple keys)",
+                    DangerousQueryKind::RedisKeysPattern => "KEYS pattern",
                 };
                 (title, p.kind.message())
             })

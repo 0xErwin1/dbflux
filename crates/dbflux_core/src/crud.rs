@@ -1,4 +1,11 @@
-use crate::{Row, Value};
+use crate::{
+    Row, Value,
+    key_value::{
+        HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeySetRequest, ListPushRequest,
+        ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
+        StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
+    },
+};
 
 /// Unique identification of a record for UPDATE/DELETE operations.
 ///
@@ -442,6 +449,21 @@ pub enum MutationRequest {
     DocumentUpdate(DocumentUpdate),
     DocumentInsert(DocumentInsert),
     DocumentDelete(DocumentDelete),
+
+    // Key-value mutations (Redis-style)
+    KeyValueSet(KeySetRequest),
+    KeyValueDelete(KeyDeleteRequest),
+    KeyValueHashSet(HashSetRequest),
+    KeyValueHashDelete(HashDeleteRequest),
+    KeyValueListPush(ListPushRequest),
+    KeyValueListSet(ListSetRequest),
+    KeyValueListRemove(ListRemoveRequest),
+    KeyValueSetAdd(SetAddRequest),
+    KeyValueSetRemove(SetRemoveRequest),
+    KeyValueZSetAdd(ZSetAddRequest),
+    KeyValueZSetRemove(ZSetRemoveRequest),
+    KeyValueStreamAdd(StreamAddRequest),
+    KeyValueStreamDelete(StreamDeleteRequest),
 }
 
 impl MutationRequest {
@@ -482,6 +504,25 @@ impl MutationRequest {
         matches!(
             self,
             Self::DocumentUpdate(_) | Self::DocumentInsert(_) | Self::DocumentDelete(_)
+        )
+    }
+
+    pub fn is_key_value(&self) -> bool {
+        matches!(
+            self,
+            Self::KeyValueSet(_)
+                | Self::KeyValueDelete(_)
+                | Self::KeyValueHashSet(_)
+                | Self::KeyValueHashDelete(_)
+                | Self::KeyValueListPush(_)
+                | Self::KeyValueListSet(_)
+                | Self::KeyValueListRemove(_)
+                | Self::KeyValueSetAdd(_)
+                | Self::KeyValueSetRemove(_)
+                | Self::KeyValueZSetAdd(_)
+                | Self::KeyValueZSetRemove(_)
+                | Self::KeyValueStreamAdd(_)
+                | Self::KeyValueStreamDelete(_)
         )
     }
 }

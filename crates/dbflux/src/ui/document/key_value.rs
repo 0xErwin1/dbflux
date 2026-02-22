@@ -13,9 +13,9 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     CancelToken, DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyEntry,
     KeyGetRequest, KeyGetResult, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyType, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, RefreshPolicy, SetAddRequest, SetCondition,
-    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TaskKind, Value,
-    ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest, RefreshPolicy,
+    SetAddRequest, SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest,
+    StreamEntryId, TaskKind, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -185,6 +185,7 @@ enum KvMenuAction {
     DeleteMember,
     CopyValue,
     EditValue,
+    CopyAsCommand,
 }
 
 #[derive(Clone, Debug)]
@@ -865,11 +866,17 @@ impl KeyValueDocument {
     // -- Context menu --
 
     fn build_key_menu_items(&self) -> Vec<KvMenuItem> {
-        vec![
+        let mut items = vec![
             KvMenuItem {
                 label: "Copy Key",
                 action: KvMenuAction::CopyKey,
                 icon: AppIcon::Columns,
+                is_danger: false,
+            },
+            KvMenuItem {
+                label: "Copy as Command",
+                action: KvMenuAction::CopyAsCommand,
+                icon: AppIcon::Code,
                 is_danger: false,
             },
             KvMenuItem {
@@ -890,7 +897,13 @@ impl KeyValueDocument {
                 icon: AppIcon::Delete,
                 is_danger: true,
             },
-        ]
+        ];
+
+        if self.selected_value.is_none() {
+            items.retain(|item| item.action != KvMenuAction::CopyAsCommand);
+        }
+
+        items
     }
 
     fn build_value_menu_items(&self) -> Vec<KvMenuItem> {
@@ -900,6 +913,12 @@ impl KeyValueDocument {
                     label: "Copy Entry",
                     action: KvMenuAction::CopyMember,
                     icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Copy as Command",
+                    action: KvMenuAction::CopyAsCommand,
+                    icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
@@ -921,6 +940,12 @@ impl KeyValueDocument {
                     label: "Copy Member",
                     action: KvMenuAction::CopyMember,
                     icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Copy as Command",
+                    action: KvMenuAction::CopyAsCommand,
+                    icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
@@ -948,6 +973,12 @@ impl KeyValueDocument {
                     label: "Copy Value",
                     action: KvMenuAction::CopyValue,
                     icon: AppIcon::Columns,
+                    is_danger: false,
+                },
+                KvMenuItem {
+                    label: "Copy as Command",
+                    action: KvMenuAction::CopyAsCommand,
+                    icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
@@ -1132,6 +1163,9 @@ impl KeyValueDocument {
             }
             KvMenuAction::EditValue => {
                 self.start_string_edit(window, cx);
+            }
+            KvMenuAction::CopyAsCommand => {
+                self.handle_copy_as_command(target, cx);
             }
         }
 
@@ -1605,7 +1639,7 @@ impl KeyValueDocument {
                             if let Some(field) = member.field {
                                 api.hash_delete(&HashDeleteRequest {
                                     key,
-                                    field,
+                                    fields: vec![field],
                                     keyspace,
                                 })?;
                             }
@@ -1621,14 +1655,14 @@ impl KeyValueDocument {
                         KeyType::Set => {
                             api.set_remove(&SetRemoveRequest {
                                 key,
-                                member: member.display,
+                                members: vec![member.display],
                                 keyspace,
                             })?;
                         }
                         KeyType::SortedSet => {
                             api.zset_remove(&ZSetRemoveRequest {
                                 key,
-                                member: member.display,
+                                members: vec![member.display],
                                 keyspace,
                             })?;
                         }
@@ -2032,13 +2066,12 @@ impl KeyValueDocument {
                             {
                                 api.hash_delete(&HashDeleteRequest {
                                     key: key.clone(),
-                                    field: field_name.clone(),
+                                    fields: vec![field_name.clone()],
                                     keyspace,
                                 })?;
                                 api.hash_set(&HashSetRequest {
                                     key,
-                                    field: field_name.clone(),
-                                    value: new_value,
+                                    fields: vec![(field_name.clone(), new_value)],
                                     keyspace,
                                 })?;
                             }
@@ -2055,12 +2088,12 @@ impl KeyValueDocument {
                             if new_value != old_member.display {
                                 api.set_remove(&SetRemoveRequest {
                                     key: key.clone(),
-                                    member: old_member.display,
+                                    members: vec![old_member.display],
                                     keyspace,
                                 })?;
                                 api.set_add(&SetAddRequest {
                                     key,
-                                    member: new_value,
+                                    members: vec![new_value],
                                     keyspace,
                                 })?;
                             }
@@ -2071,14 +2104,13 @@ impl KeyValueDocument {
                             if new_value != old_member.display {
                                 api.zset_remove(&ZSetRemoveRequest {
                                     key: key.clone(),
-                                    member: old_member.display,
+                                    members: vec![old_member.display],
                                     keyspace,
                                 })?;
                             }
                             api.zset_add(&ZSetAddRequest {
                                 key,
-                                member: new_value,
-                                score,
+                                members: vec![(new_value, score)],
                                 keyspace,
                             })?;
                         }
@@ -2160,44 +2192,42 @@ impl KeyValueDocument {
 
                     match key_type {
                         KeyType::Hash => {
-                            for (field, value) in &fields {
-                                api.hash_set(&HashSetRequest {
-                                    key: key.clone(),
-                                    field: field.clone(),
-                                    value: value.clone(),
-                                    keyspace,
-                                })?;
-                            }
+                            api.hash_set(&HashSetRequest {
+                                key,
+                                fields,
+                                keyspace,
+                            })?;
                         }
                         KeyType::List => {
-                            for (member, _) in &fields {
-                                api.list_push(&ListPushRequest {
-                                    key: key.clone(),
-                                    value: member.clone(),
-                                    end: ListEnd::Tail,
-                                    keyspace,
-                                })?;
-                            }
+                            let values = fields.into_iter().map(|(member, _)| member).collect();
+                            api.list_push(&ListPushRequest {
+                                key,
+                                values,
+                                end: ListEnd::Tail,
+                                keyspace,
+                            })?;
                         }
                         KeyType::Set => {
-                            for (member, _) in &fields {
-                                api.set_add(&SetAddRequest {
-                                    key: key.clone(),
-                                    member: member.clone(),
-                                    keyspace,
-                                })?;
-                            }
+                            let members = fields.into_iter().map(|(member, _)| member).collect();
+                            api.set_add(&SetAddRequest {
+                                key,
+                                members,
+                                keyspace,
+                            })?;
                         }
                         KeyType::SortedSet => {
-                            for (member, score_str) in &fields {
-                                let score = score_str.parse::<f64>().unwrap_or(0.0);
-                                api.zset_add(&ZSetAddRequest {
-                                    key: key.clone(),
-                                    member: member.clone(),
-                                    score,
-                                    keyspace,
-                                })?;
-                            }
+                            let members = fields
+                                .into_iter()
+                                .map(|(member, score_str)| {
+                                    let score = score_str.parse::<f64>().unwrap_or(0.0);
+                                    (member, score)
+                                })
+                                .collect();
+                            api.zset_add(&ZSetAddRequest {
+                                key,
+                                members,
+                                keyspace,
+                            })?;
                         }
                         KeyType::Stream => {
                             api.stream_add(&StreamAddRequest {
@@ -2280,14 +2310,11 @@ impl KeyValueDocument {
                             })?;
                         }
                         NewKeyValue::HashFields(fields) => {
-                            for (field, value) in &fields {
-                                api.hash_set(&HashSetRequest {
-                                    key: event.key_name.clone(),
-                                    field: field.clone(),
-                                    value: value.clone(),
-                                    keyspace,
-                                })?;
-                            }
+                            api.hash_set(&HashSetRequest {
+                                key: event.key_name.clone(),
+                                fields,
+                                keyspace,
+                            })?;
                             if let Some(ttl) = event.ttl {
                                 api.expire_key(&dbflux_core::KeyExpireRequest {
                                     key: event.key_name.clone(),
@@ -2297,14 +2324,12 @@ impl KeyValueDocument {
                             }
                         }
                         NewKeyValue::ListMembers(members) => {
-                            for member in &members {
-                                api.list_push(&ListPushRequest {
-                                    key: event.key_name.clone(),
-                                    value: member.clone(),
-                                    end: ListEnd::Tail,
-                                    keyspace,
-                                })?;
-                            }
+                            api.list_push(&ListPushRequest {
+                                key: event.key_name.clone(),
+                                values: members,
+                                end: ListEnd::Tail,
+                                keyspace,
+                            })?;
                             if let Some(ttl) = event.ttl {
                                 api.expire_key(&dbflux_core::KeyExpireRequest {
                                     key: event.key_name.clone(),
@@ -2314,13 +2339,11 @@ impl KeyValueDocument {
                             }
                         }
                         NewKeyValue::SetMembers(members) => {
-                            for member in &members {
-                                api.set_add(&SetAddRequest {
-                                    key: event.key_name.clone(),
-                                    member: member.clone(),
-                                    keyspace,
-                                })?;
-                            }
+                            api.set_add(&SetAddRequest {
+                                key: event.key_name.clone(),
+                                members,
+                                keyspace,
+                            })?;
                             if let Some(ttl) = event.ttl {
                                 api.expire_key(&dbflux_core::KeyExpireRequest {
                                     key: event.key_name.clone(),
@@ -2330,14 +2353,11 @@ impl KeyValueDocument {
                             }
                         }
                         NewKeyValue::ZSetMembers(members) => {
-                            for (member, score) in &members {
-                                api.zset_add(&ZSetAddRequest {
-                                    key: event.key_name.clone(),
-                                    member: member.clone(),
-                                    score: *score,
-                                    keyspace,
-                                })?;
-                            }
+                            api.zset_add(&ZSetAddRequest {
+                                key: event.key_name.clone(),
+                                members,
+                                keyspace,
+                            })?;
                             if let Some(ttl) = event.ttl {
                                 api.expire_key(&dbflux_core::KeyExpireRequest {
                                     key: event.key_name.clone(),
@@ -2396,6 +2416,223 @@ impl KeyValueDocument {
             .connections()
             .get(&self.profile_id)
             .map(|conn| conn.connection.clone())
+    }
+
+    fn handle_copy_as_command(&self, target: KvMenuTarget, cx: &mut Context<Self>) {
+        let Some(conn) = self.get_connection(cx) else {
+            return;
+        };
+        let Some(generator) = conn.query_generator() else {
+            return;
+        };
+
+        let keyspace = self.keyspace_index();
+        let mutation = match target {
+            KvMenuTarget::Key => self.build_key_mutation(keyspace),
+            KvMenuTarget::Value => self.build_member_mutation(keyspace),
+        };
+
+        if let Some(mutation) = mutation
+            && let Some(generated) = generator.generate_mutation(&mutation)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(generated.text));
+        }
+    }
+
+    fn build_key_mutation(&self, keyspace: Option<u32>) -> Option<MutationRequest> {
+        let key = self.selected_key()?;
+        let value = self.selected_value.as_ref()?;
+        let key_type = value.entry.key_type?;
+
+        match key_type {
+            KeyType::String => {
+                let mut request = KeySetRequest::new(key, value.value.clone());
+                if let Some(ks) = keyspace {
+                    request = request.with_keyspace(ks);
+                }
+                Some(MutationRequest::KeyValueSet(request))
+            }
+
+            KeyType::Hash => {
+                let json = serde_json::from_slice::<serde_json::Value>(&value.value).ok()?;
+                let serde_json::Value::Object(map) = json else {
+                    return None;
+                };
+
+                let fields: Vec<(String, String)> = map
+                    .into_iter()
+                    .map(|(field, val)| {
+                        let val_str = match val {
+                            serde_json::Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        (field, val_str)
+                    })
+                    .collect();
+
+                if fields.is_empty() {
+                    return None;
+                }
+
+                Some(MutationRequest::KeyValueHashSet(HashSetRequest {
+                    key,
+                    fields,
+                    keyspace,
+                }))
+            }
+
+            KeyType::Set => {
+                let json = serde_json::from_slice::<serde_json::Value>(&value.value).ok()?;
+                let serde_json::Value::Array(items) = json else {
+                    return None;
+                };
+
+                let members: Vec<String> = items
+                    .into_iter()
+                    .map(|item| match item {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .collect();
+
+                if members.is_empty() {
+                    return None;
+                }
+
+                Some(MutationRequest::KeyValueSetAdd(SetAddRequest {
+                    key,
+                    members,
+                    keyspace,
+                }))
+            }
+
+            KeyType::List => {
+                let json = serde_json::from_slice::<serde_json::Value>(&value.value).ok()?;
+                let serde_json::Value::Array(items) = json else {
+                    return None;
+                };
+
+                let values: Vec<String> = items
+                    .into_iter()
+                    .map(|item| match item {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .collect();
+
+                if values.is_empty() {
+                    return None;
+                }
+
+                Some(MutationRequest::KeyValueListPush(ListPushRequest {
+                    key,
+                    values,
+                    end: ListEnd::Tail,
+                    keyspace,
+                }))
+            }
+
+            KeyType::SortedSet => {
+                let json = serde_json::from_slice::<serde_json::Value>(&value.value).ok()?;
+                let serde_json::Value::Array(items) = json else {
+                    return None;
+                };
+
+                let members: Vec<(String, f64)> = items
+                    .into_iter()
+                    .filter_map(|item| {
+                        let obj = item.as_object()?;
+                        let member = obj
+                            .get("member")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())?;
+                        let score = obj
+                            .get("score")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0);
+                        Some((member, score))
+                    })
+                    .collect();
+
+                if members.is_empty() {
+                    return None;
+                }
+
+                Some(MutationRequest::KeyValueZSetAdd(ZSetAddRequest {
+                    key,
+                    members,
+                    keyspace,
+                }))
+            }
+
+            KeyType::Stream | KeyType::Bytes | KeyType::Json | KeyType::Unknown => None,
+        }
+    }
+
+    fn build_member_mutation(&self, keyspace: Option<u32>) -> Option<MutationRequest> {
+        let key = self.selected_key()?;
+        let key_type = self.selected_key_type()?;
+        let member_idx = self.selected_member_index?;
+        let member = self.cached_members.get(member_idx)?;
+
+        match key_type {
+            KeyType::Hash => {
+                let field = member.field.clone()?;
+                Some(MutationRequest::KeyValueHashSet(HashSetRequest {
+                    key,
+                    fields: vec![(field, member.display.clone())],
+                    keyspace,
+                }))
+            }
+            KeyType::Set => Some(MutationRequest::KeyValueSetAdd(SetAddRequest {
+                key,
+                members: vec![member.display.clone()],
+                keyspace,
+            })),
+            KeyType::SortedSet => {
+                let score = member.score.unwrap_or(0.0);
+                Some(MutationRequest::KeyValueZSetAdd(ZSetAddRequest {
+                    key,
+                    members: vec![(member.display.clone(), score)],
+                    keyspace,
+                }))
+            }
+            KeyType::List => Some(MutationRequest::KeyValueListPush(ListPushRequest {
+                key,
+                values: vec![member.display.clone()],
+                end: ListEnd::Tail,
+                keyspace,
+            })),
+            KeyType::Stream => {
+                let entry_id = member.entry_id.as_ref()?;
+                let fields: Vec<(String, String)> = if let Some(field) = &member.field {
+                    vec![(field.clone(), member.display.clone())]
+                } else {
+                    vec![("value".to_string(), member.display.clone())]
+                };
+                Some(MutationRequest::KeyValueStreamAdd(StreamAddRequest {
+                    key,
+                    id: StreamEntryId::Explicit(entry_id.clone()),
+                    fields,
+                    maxlen: None,
+                    keyspace,
+                }))
+            }
+            KeyType::String => {
+                let value_bytes = self
+                    .selected_value
+                    .as_ref()
+                    .map(|v| v.value.clone())
+                    .unwrap_or_default();
+                let mut request = KeySetRequest::new(key, value_bytes);
+                if let Some(ks) = keyspace {
+                    request = request.with_keyspace(ks);
+                }
+                Some(MutationRequest::KeyValueSet(request))
+            }
+            KeyType::Bytes | KeyType::Json | KeyType::Unknown => None,
+        }
     }
 
     fn rebuild_cached_members(&mut self, cx: &mut Context<Self>) {
@@ -2561,8 +2798,7 @@ impl KeyValueDocument {
 
                     api.hash_set(&HashSetRequest {
                         key,
-                        field: field_name,
-                        value: new_value,
+                        fields: vec![(field_name, new_value)],
                         keyspace,
                     })?;
 
