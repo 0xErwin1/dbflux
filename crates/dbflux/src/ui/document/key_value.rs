@@ -24,6 +24,7 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Sizable};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,11 @@ pub struct KeyValueDocument {
     refresh_dropdown: Entity<Dropdown>,
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
+
+    // Live TTL countdown
+    ttl_state: TtlState,
+    ttl_display: String,
+    _ttl_countdown_timer: Option<Task<()>>,
 
     // Keys list (current page only)
     keys: Vec<KeyEntry>,
@@ -121,6 +127,14 @@ enum KvValueViewMode {
     #[default]
     Table,
     Document,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TtlState {
+    NoLimit,
+    Remaining { deadline: Instant },
+    Expired,
+    Missing,
 }
 
 /// Pending delete confirmation state for keys.
@@ -266,6 +280,9 @@ impl KeyValueDocument {
             refresh_dropdown,
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
+            ttl_state: TtlState::NoLimit,
+            ttl_display: String::new(),
+            _ttl_countdown_timer: None,
             filter_input,
             members_filter_input,
             focus_mode: KeyValueFocusMode::List,
@@ -361,6 +378,85 @@ impl KeyValueDocument {
                         doc.reload_keys(cx);
                     });
                 });
+            }
+        }));
+    }
+
+    // -- Live TTL countdown --
+
+    fn apply_ttl_from_entry(&mut self, entry: &KeyEntry, cx: &mut Context<Self>) {
+        self._ttl_countdown_timer = None;
+
+        match entry.ttl_seconds {
+            None | Some(-1) => {
+                self.ttl_state = TtlState::NoLimit;
+                self.ttl_display = "No limit".into();
+            }
+            Some(-2) => {
+                self.ttl_state = TtlState::Missing;
+                self.ttl_display = "Missing".into();
+            }
+            Some(0) => {
+                self.ttl_state = TtlState::Expired;
+                self.ttl_display = "Expired".into();
+            }
+            Some(secs) if secs > 0 => {
+                let deadline = Instant::now() + Duration::from_secs(secs as u64);
+                self.ttl_state = TtlState::Remaining { deadline };
+                self.ttl_display = format!("{}s", secs);
+                self.start_ttl_timer(cx);
+            }
+            _ => {
+                self.ttl_state = TtlState::NoLimit;
+                self.ttl_display = "No limit".into();
+            }
+        }
+    }
+
+    fn clear_ttl_state(&mut self) {
+        self._ttl_countdown_timer = None;
+        self.ttl_state = TtlState::NoLimit;
+        self.ttl_display = String::new();
+    }
+
+    fn tick_ttl(&mut self) {
+        let TtlState::Remaining { deadline } = self.ttl_state else {
+            return;
+        };
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+
+        if remaining.is_zero() {
+            self.ttl_state = TtlState::Expired;
+            self.ttl_display = "Expired".into();
+            self._ttl_countdown_timer = None;
+        } else {
+            self.ttl_display = format!("{}s", remaining.as_secs());
+        }
+    }
+
+    fn start_ttl_timer(&mut self, cx: &mut Context<Self>) {
+        self._ttl_countdown_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+
+                let should_stop = cx
+                    .update(|cx| {
+                        let Some(entity) = this.upgrade() else {
+                            return true;
+                        };
+
+                        entity.update(cx, |doc, cx| {
+                            doc.tick_ttl();
+                            cx.notify();
+                            doc.ttl_state == TtlState::Expired
+                        })
+                    })
+                    .unwrap_or(true);
+
+                if should_stop {
+                    break;
+                }
             }
         }));
     }
@@ -1075,6 +1171,7 @@ impl KeyValueDocument {
         if self.keys.is_empty() {
             self.selected_index = None;
             self.selected_value = None;
+            self.clear_ttl_state();
             self.rebuild_cached_members(cx);
             cx.notify();
             return;
@@ -1094,6 +1191,7 @@ impl KeyValueDocument {
         self.selected_value = None;
         self.selected_member_index = None;
         self.string_edit_input = None;
+        self.clear_ttl_state();
         self.rebuild_cached_members(cx);
         self.cancel_member_edit(cx);
         cx.notify();
@@ -1143,6 +1241,7 @@ impl KeyValueDocument {
         self.selected_value = None;
         self.last_error = None;
         self.string_edit_input = None;
+        self.clear_ttl_state();
         self.rebuild_cached_members(cx);
         self.cancel_rename(cx);
         self.cancel_member_edit(cx);
@@ -1289,6 +1388,7 @@ impl KeyValueDocument {
                             let key_type = value.entry.key_type;
                             let is_hash_or_stream =
                                 matches!(key_type, Some(KeyType::Hash | KeyType::Stream));
+                            this.apply_ttl_from_entry(&value.entry, cx);
                             this.selected_value = Some(value);
                             this.last_error = None;
                             this.value_view_mode = if is_hash_or_stream {
@@ -1300,6 +1400,7 @@ impl KeyValueDocument {
                         }
                         Err(error) => {
                             this.runner.fail_primary(task_id, error.to_string(), cx);
+                            this.clear_ttl_state();
                             this.selected_value = None;
                             this.last_error = Some(error.to_string());
                             this.rebuild_cached_members(cx);
@@ -1336,9 +1437,9 @@ impl KeyValueDocument {
             return;
         };
 
-        // Optimistic: remove from local list immediately
         if pending.index < self.keys.len() {
             self.keys.remove(pending.index);
+            self.clear_ttl_state();
 
             if self.keys.is_empty() {
                 self.selected_index = None;
@@ -2591,11 +2692,12 @@ impl Render for KeyValueDocument {
                 .key_type
                 .map(|t| key_type_label(t).to_string())
                 .unwrap_or_else(|| "Unknown".to_string());
-            let ttl_label = value
-                .entry
-                .ttl_seconds
-                .map(|ttl| format!("{}s", ttl))
-                .unwrap_or_else(|| "No limit".to_string());
+            let ttl_color = match self.ttl_state {
+                TtlState::Expired => theme.danger,
+                TtlState::Missing => theme.warning,
+                _ => theme.muted_foreground,
+            };
+
             let size_label = value
                 .entry
                 .size_bytes
@@ -2714,9 +2816,10 @@ impl Render for KeyValueDocument {
                                 svg()
                                     .path(AppIcon::Clock.path())
                                     .size(Heights::ICON_SM)
-                                    .text_color(theme.muted_foreground),
+                                    .text_color(ttl_color),
                             )
-                            .child(ttl_label),
+                            .text_color(ttl_color)
+                            .child(self.ttl_display.clone()),
                     )
                     .child(size_label),
             );

@@ -341,17 +341,12 @@ impl Render for Dropdown {
             });
 
         if self.compact_trigger {
-            trigger = trigger
-                .h_full()
-                .justify_center()
-                .px_2()
-                .text_sm()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("▾"),
-                );
+            trigger = trigger.h_full().justify_center().px_2().text_sm().child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("▾"),
+            );
         } else {
             trigger = trigger
                 .justify_between()
