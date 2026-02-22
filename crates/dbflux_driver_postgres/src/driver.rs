@@ -11,13 +11,13 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo,
-    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete,
-    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder,
-    SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, sanitize_uri,
+    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1311,6 +1311,11 @@ impl Connection for PostgresConnection {
 
     fn code_generator(&self) -> &dyn CodeGenerator {
         &POSTGRES_CODE_GENERATOR
+    }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
+        Some(&GENERATOR)
     }
 }
 

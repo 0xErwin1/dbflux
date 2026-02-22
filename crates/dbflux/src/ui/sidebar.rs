@@ -21,9 +21,9 @@ use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CollectionRef,
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
     CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
-    TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
+    DropIndexRequest, DropTypeRequest, QueryLanguage, ReindexRequest, SchemaCacheKey,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind,
+    SchemaSnapshot, TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -57,6 +57,11 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         table_info: TableInfo,
         generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+    },
+    RequestQueryPreview {
+        language: QueryLanguage,
+        badge: String,
+        query: String,
     },
 }
 
@@ -109,6 +114,7 @@ pub enum ContextMenuAction {
     GenerateIndexSql(IndexSqlAction),
     GenerateForeignKeySql(ForeignKeySqlAction),
     GenerateTypeSql(TypeSqlAction),
+    GenerateCollectionCode(CollectionCodeKind),
 }
 
 #[derive(Clone)]
@@ -129,6 +135,14 @@ pub enum TypeSqlAction {
     Create,
     AddEnumValue,
     Drop,
+}
+
+#[derive(Clone)]
+pub enum CollectionCodeKind {
+    Find,
+    InsertOne,
+    UpdateOne,
+    DeleteOne,
 }
 
 impl ContextMenuAction {
@@ -154,6 +168,7 @@ impl ContextMenuAction {
             Self::GenerateIndexSql(_) => Some(AppIcon::Code),
             Self::GenerateForeignKeySql(_) => Some(AppIcon::Code),
             Self::GenerateTypeSql(_) => Some(AppIcon::Code),
+            Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
         }
     }
 }

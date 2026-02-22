@@ -11,13 +11,13 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
     DriverFormDef, DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest,
     ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, MYSQL_FORM,
-    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert,
-    RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    TableInfo, Value, ViewInfo, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row, RowDelete,
+    RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1619,6 +1619,11 @@ impl Connection for MysqlConnection {
 
     fn code_generator(&self) -> &dyn CodeGenerator {
         &MYSQL_CODE_GENERATOR
+    }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MYSQL_DIALECT);
+        Some(&GENERATOR)
     }
 }
 

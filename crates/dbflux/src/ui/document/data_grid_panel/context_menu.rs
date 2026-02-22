@@ -9,7 +9,10 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{QueryRequest, Value};
+use dbflux_core::{
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, QueryRequest,
+    RowDelete, RowIdentity, RowInsert, RowPatch, Value,
+};
 use dbflux_export::{CsvExporter, Exporter};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
@@ -81,6 +84,7 @@ impl DataGridPanel {
             col,
             position,
             sql_submenu_open: false,
+            copy_query_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
@@ -106,6 +110,7 @@ impl DataGridPanel {
             col: 0,
             position,
             sql_submenu_open: false,
+            copy_query_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -140,6 +145,7 @@ impl DataGridPanel {
             col: 0,
             position,
             sql_submenu_open: false,
+            copy_query_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -190,66 +196,87 @@ impl DataGridPanel {
             .map(|m| m.is_document_view)
             .unwrap_or(false);
 
-        // Build the menu items list based on view mode
-        let menu_items: Vec<Option<ContextMenuAction>> = if is_document_view {
-            // Document view: Copy, View Document, [sep, Delete Document if editable]
-            if is_editable {
-                vec![
-                    Some(ContextMenuAction::Copy),
-                    Some(ContextMenuAction::EditInModal),
-                    None, // separator
-                    Some(ContextMenuAction::DeleteRow),
-                ]
+        let has_generate_sql = !is_document_view;
+        let has_copy_query = self.has_copy_query_support();
+
+        // Layout: [base items] [sep + GenSQL trigger]? [sep + CopyQuery trigger]?
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_count = base_items.len();
+
+        let copy_query_offset = if has_copy_query {
+            let after_gen_sql = if has_generate_sql {
+                base_count + 2
             } else {
-                vec![
-                    Some(ContextMenuAction::Copy),
-                    Some(ContextMenuAction::EditInModal),
-                ]
-            }
-        } else if is_editable {
-            // Table view (editable): Copy, Paste, Edit, EditModal, sep, SetDefault, SetNull, sep, AddRow, DupRow, DelRow, sep, GenSQL
-            vec![
-                Some(ContextMenuAction::Copy),
-                Some(ContextMenuAction::Paste),
-                Some(ContextMenuAction::Edit),
-                Some(ContextMenuAction::EditInModal),
-                None, // separator
-                Some(ContextMenuAction::SetDefault),
-                Some(ContextMenuAction::SetNull),
-                None, // separator
-                Some(ContextMenuAction::AddRow),
-                Some(ContextMenuAction::DuplicateRow),
-                Some(ContextMenuAction::DeleteRow),
-                None, // separator (before Generate SQL)
-                None, // Generate SQL trigger (special handling)
-            ]
+                base_count
+            };
+            after_gen_sql + 1
         } else {
-            // Table view (read-only): Copy, sep, GenSQL
-            vec![
-                Some(ContextMenuAction::Copy),
-                None, // separator (before Generate SQL)
-                None, // Generate SQL trigger
-            ]
+            0
         };
 
-        let item_count = menu_items.len();
-        let submenu_count = 4; // SELECT WHERE, INSERT, UPDATE, DELETE
-        let has_generate_sql = !is_document_view;
+        let total_count =
+            base_count + if has_generate_sql { 2 } else { 0 } + if has_copy_query { 2 } else { 0 };
+
+        let gen_sql_trigger_idx = if has_generate_sql {
+            Some(base_count + 1)
+        } else {
+            None
+        };
+
+        let copy_query_trigger_idx = if has_copy_query {
+            Some(copy_query_offset)
+        } else {
+            None
+        };
+
+        let any_submenu_open = self
+            .context_menu
+            .as_ref()
+            .map(|m| m.sql_submenu_open || m.copy_query_submenu_open)
+            .unwrap_or(false);
+
+        let active_submenu_count = if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|m| m.sql_submenu_open)
+        {
+            4 // SELECT WHERE, INSERT, UPDATE, DELETE
+        } else if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|m| m.copy_query_submenu_open)
+        {
+            3 // INSERT, UPDATE, DELETE
+        } else {
+            0
+        };
+
+        let is_separator = |idx: usize| -> bool {
+            if idx < base_count {
+                return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
+            }
+            if has_generate_sql && idx == base_count {
+                return true;
+            }
+            if has_copy_query && has_generate_sql && idx == base_count + 2 {
+                return true;
+            }
+            if has_copy_query && !has_generate_sql && idx == base_count {
+                return true;
+            }
+            false
+        };
 
         match cmd {
             Command::MenuDown => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open && has_generate_sql {
+                    if any_submenu_open {
                         menu.submenu_selected_index =
-                            (menu.submenu_selected_index + 1) % submenu_count;
+                            (menu.submenu_selected_index + 1) % active_submenu_count;
                     } else {
-                        menu.selected_index = (menu.selected_index + 1) % item_count;
-                        // Skip separators
-                        while menu.selected_index < item_count
-                            && menu_items[menu.selected_index].is_none()
-                            && (has_generate_sql || menu.selected_index != item_count - 1)
-                        {
-                            menu.selected_index = (menu.selected_index + 1) % item_count;
+                        menu.selected_index = (menu.selected_index + 1) % total_count;
+                        while is_separator(menu.selected_index) {
+                            menu.selected_index = (menu.selected_index + 1) % total_count;
                         }
                     }
                     cx.notify();
@@ -258,28 +285,20 @@ impl DataGridPanel {
             }
             Command::MenuUp => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open && has_generate_sql {
+                    if any_submenu_open {
                         menu.submenu_selected_index = if menu.submenu_selected_index == 0 {
-                            submenu_count - 1
+                            active_submenu_count - 1
                         } else {
                             menu.submenu_selected_index - 1
                         };
                     } else {
                         menu.selected_index = if menu.selected_index == 0 {
-                            item_count - 1
+                            total_count - 1
                         } else {
                             menu.selected_index - 1
                         };
-                        // Skip separators (going backwards)
-                        while menu.selected_index > 0
-                            && menu_items[menu.selected_index].is_none()
-                            && (has_generate_sql || menu.selected_index != item_count - 1)
-                        {
-                            menu.selected_index = if menu.selected_index == 0 {
-                                item_count - 1
-                            } else {
-                                menu.selected_index - 1
-                            };
+                        while is_separator(menu.selected_index) && menu.selected_index > 0 {
+                            menu.selected_index -= 1;
                         }
                     }
                     cx.notify();
@@ -288,8 +307,7 @@ impl DataGridPanel {
             }
             Command::MenuSelect => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open && has_generate_sql {
-                        // Execute submenu action
+                    if menu.sql_submenu_open {
                         let action = match menu.submenu_selected_index {
                             0 => ContextMenuAction::GenerateSelectWhere,
                             1 => ContextMenuAction::GenerateInsert,
@@ -297,13 +315,26 @@ impl DataGridPanel {
                             _ => ContextMenuAction::GenerateDelete,
                         };
                         self.handle_context_menu_action(action, window, cx);
-                    } else if has_generate_sql && menu.selected_index == item_count - 1 {
-                        // Last item is Generate SQL - open submenu (only for table view)
+                    } else if menu.copy_query_submenu_open {
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::CopyAsInsert,
+                            1 => ContextMenuAction::CopyAsUpdate,
+                            _ => ContextMenuAction::CopyAsDelete,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if gen_sql_trigger_idx == Some(menu.selected_index) {
                         menu.sql_submenu_open = true;
+                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
-                    } else if let Some(action) =
-                        menu_items.get(menu.selected_index).and_then(|a| *a)
+                    } else if copy_query_trigger_idx == Some(menu.selected_index) {
+                        menu.copy_query_submenu_open = true;
+                        menu.sql_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if menu.selected_index < base_count
+                        && let Some(item) = base_items.get(menu.selected_index)
+                        && let Some(action) = item.action
                     {
                         self.handle_context_menu_action(action, window, cx);
                     }
@@ -312,12 +343,11 @@ impl DataGridPanel {
             }
             Command::MenuBack | Command::Cancel => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open {
-                        // Close submenu
+                    if menu.sql_submenu_open || menu.copy_query_submenu_open {
                         menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
                         cx.notify();
                     } else {
-                        // Close menu and restore focus to active view
                         let is_document_view = menu.is_document_view;
                         self.context_menu = None;
                         self.restore_focus_after_context_menu(is_document_view, window, cx);
@@ -831,6 +861,7 @@ impl DataGridPanel {
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(ref mut menu) = this.context_menu {
                             menu.sql_submenu_open = !menu.sql_submenu_open;
+                            menu.copy_query_submenu_open = false;
                             menu.submenu_selected_index = 0;
                             cx.notify();
                         }
@@ -924,6 +955,172 @@ impl DataGridPanel {
                                             .child(
                                                 svg()
                                                     .path(AppIcon::Code.path())
+                                                    .size_4()
+                                                    .text_color(if is_submenu_selected {
+                                                        theme.accent_foreground
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    }),
+                                            )
+                                            .child(label)
+                                    })
+                                    .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        // -- Copy as Query submenu --
+        if self.has_copy_query_support() {
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            let copy_query_label = self.copy_query_submenu_label(cx);
+            let copy_submenu_open = menu.copy_query_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let copy_query_index = visual_index;
+            let copy_query_selected = selected_index == copy_query_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            menu_items.push(
+                div()
+                    .id("copy-query-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if copy_query_selected && !copy_submenu_open {
+                        theme.accent_foreground
+                    } else {
+                        submenu_fg
+                    })
+                    .when(copy_submenu_open, |d| d.bg(submenu_hover))
+                    .when(copy_query_selected && !copy_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!copy_query_selected && !copy_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != copy_query_index
+                            && !menu.copy_query_submenu_open
+                        {
+                            menu.selected_index = copy_query_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.copy_query_submenu_open = !menu.copy_query_submenu_open;
+                            menu.sql_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(svg().path(AppIcon::Columns.path()).size_4().text_color(
+                                if copy_query_selected && !copy_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                },
+                            ))
+                            .child(copy_query_label),
+                    )
+                    .child(
+                        svg()
+                            .path(AppIcon::ChevronRight.path())
+                            .size_4()
+                            .text_color(if copy_query_selected && !copy_submenu_open {
+                                theme.accent_foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .when(copy_submenu_open, |d: Stateful<Div>| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(140.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    [
+                                        ("INSERT", ContextMenuAction::CopyAsInsert),
+                                        ("UPDATE", ContextMenuAction::CopyAsUpdate),
+                                        ("DELETE", ContextMenuAction::CopyAsDelete),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(idx, (label, action))| {
+                                        let is_submenu_selected = idx == submenu_selected_index;
+                                        div()
+                                            .id(SharedString::from(format!("copy-{}", label)))
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .h(Heights::ROW_COMPACT)
+                                            .px(Spacing::SM)
+                                            .mx(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            })
+                                            .when(is_submenu_selected, |d| d.bg(theme.accent))
+                                            .when(!is_submenu_selected, |d| {
+                                                d.hover(|d| d.bg(submenu_hover))
+                                            })
+                                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                if let Some(ref mut menu) = this.context_menu
+                                                    && menu.submenu_selected_index != idx
+                                                {
+                                                    menu.submenu_selected_index = idx;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.handle_context_menu_action(action, window, cx);
+                                            }))
+                                            .child(
+                                                svg()
+                                                    .path(AppIcon::Columns.path())
                                                     .size_4()
                                                     .text_color(if is_submenu_selected {
                                                         theme.accent_foreground
@@ -1069,6 +1266,11 @@ impl DataGridPanel {
             }
             ContextMenuAction::GenerateDelete => {
                 self.handle_generate_sql(menu.row, SqlGenerateKind::Delete, cx)
+            }
+            ContextMenuAction::CopyAsInsert
+            | ContextMenuAction::CopyAsUpdate
+            | ContextMenuAction::CopyAsDelete => {
+                self.handle_copy_as_query(menu.row, action, cx);
             }
         }
 
@@ -1757,6 +1959,271 @@ impl DataGridPanel {
             pk_indices,
             generation_type,
         });
+    }
+
+    // -- Copy as Query --
+
+    fn copy_query_submenu_label(&self, cx: &App) -> &'static str {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => profile_id,
+            DataSource::Collection { profile_id, .. } => profile_id,
+            DataSource::QueryResult { .. } => return "Copy as Query",
+        };
+
+        let language = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(profile_id)
+            .map(|c| c.connection.metadata().query_language);
+
+        match language {
+            Some(dbflux_core::QueryLanguage::Sql) => "Copy as SQL",
+            Some(dbflux_core::QueryLanguage::MongoQuery) => "Copy as Query",
+            Some(dbflux_core::QueryLanguage::RedisCommands) => "Copy as Command",
+            _ => "Copy as Query",
+        }
+    }
+
+    fn has_copy_query_support(&self) -> bool {
+        matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
+    }
+
+    pub(super) fn handle_copy_as_query(
+        &mut self,
+        visual_row: usize,
+        action: ContextMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            DataSource::Collection { profile_id, .. } => *profile_id,
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else {
+            return;
+        };
+
+        let Some(generator) = conn.query_generator() else {
+            return;
+        };
+
+        let mutation = match &self.source {
+            DataSource::Table { table, .. } => {
+                self.build_sql_mutation(visual_row, table, action, cx)
+            }
+            DataSource::Collection { collection, .. } => {
+                self.build_document_mutation(visual_row, collection, action, cx)
+            }
+            DataSource::QueryResult { .. } => None,
+        };
+
+        let Some(mutation) = mutation else {
+            return;
+        };
+
+        if let Some(generated) = generator.generate_mutation(&mutation) {
+            cx.write_to_clipboard(ClipboardItem::new_string(generated.text));
+        }
+    }
+
+    fn build_sql_mutation(
+        &self,
+        visual_row: usize,
+        table: &dbflux_core::TableRef,
+        action: ContextMenuAction,
+        cx: &App,
+    ) -> Option<MutationRequest> {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
+
+        let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
+                .unwrap_or_default(),
+            None => return None,
+        };
+
+        if row_values.is_empty() || col_names.len() != row_values.len() {
+            return None;
+        }
+
+        let pk_indices = state.pk_columns();
+
+        match action {
+            ContextMenuAction::CopyAsInsert => {
+                let insert = RowInsert::new(
+                    table.name.clone(),
+                    table.schema.clone(),
+                    col_names,
+                    row_values,
+                );
+                Some(MutationRequest::SqlInsert(insert))
+            }
+
+            ContextMenuAction::CopyAsUpdate => {
+                if pk_indices.is_empty() {
+                    return None;
+                }
+
+                let pk_columns: Vec<String> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| model.columns.get(idx).map(|c| c.title.to_string()))
+                    .collect();
+
+                let pk_values: Vec<Value> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| row_values.get(idx).cloned())
+                    .collect();
+
+                let identity = RowIdentity::new(pk_columns, pk_values);
+
+                let changes: Vec<(String, Value)> = col_names
+                    .into_iter()
+                    .zip(row_values)
+                    .enumerate()
+                    .filter(|(idx, _)| !pk_indices.contains(idx))
+                    .map(|(_, pair)| pair)
+                    .collect();
+
+                let patch =
+                    RowPatch::new(identity, table.name.clone(), table.schema.clone(), changes);
+                Some(MutationRequest::SqlUpdate(patch))
+            }
+
+            ContextMenuAction::CopyAsDelete => {
+                if pk_indices.is_empty() {
+                    return None;
+                }
+
+                let pk_columns: Vec<String> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| model.columns.get(idx).map(|c| c.title.to_string()))
+                    .collect();
+
+                let pk_values: Vec<Value> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| row_values.get(idx).cloned())
+                    .collect();
+
+                let identity = RowIdentity::new(pk_columns, pk_values);
+                let delete = RowDelete::new(identity, table.name.clone(), table.schema.clone());
+                Some(MutationRequest::SqlDelete(delete))
+            }
+
+            _ => None,
+        }
+    }
+
+    fn build_document_mutation(
+        &self,
+        visual_row: usize,
+        collection: &dbflux_core::CollectionRef,
+        action: ContextMenuAction,
+        cx: &App,
+    ) -> Option<MutationRequest> {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
+                .unwrap_or_default(),
+            None => return None,
+        };
+
+        if row_values.is_empty() {
+            return None;
+        }
+
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
+
+        let filter = match &id_value {
+            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
+            Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
+            _ => return None,
+        };
+
+        match action {
+            ContextMenuAction::CopyAsInsert => {
+                let mut doc = serde_json::Map::new();
+                for (col_idx, val) in row_values.iter().enumerate() {
+                    if let Some(col) = self.result.columns.get(col_idx)
+                        && !matches!(val, Value::Null)
+                    {
+                        doc.insert(col.name.clone(), value_to_json(val));
+                    }
+                }
+
+                let insert = DocumentInsert::one(collection.name.clone(), doc.into())
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentInsert(insert))
+            }
+
+            ContextMenuAction::CopyAsUpdate => {
+                let mut set_fields = serde_json::Map::new();
+                for (col_idx, val) in row_values.iter().enumerate() {
+                    if col_idx == id_col_idx {
+                        continue;
+                    }
+                    if let Some(col) = self.result.columns.get(col_idx) {
+                        set_fields.insert(col.name.clone(), value_to_json(val));
+                    }
+                }
+
+                let update_doc = serde_json::json!({"$set": set_fields});
+                let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentUpdate(update))
+            }
+
+            ContextMenuAction::CopyAsDelete => {
+                let delete = DocumentDelete::new(collection.name.clone(), filter)
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentDelete(delete))
+            }
+
+            _ => None,
+        }
     }
 
     pub(super) fn cell_value_to_value(

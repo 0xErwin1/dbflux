@@ -77,6 +77,12 @@ pub enum ContextMenuAction {
     GenerateUpdate,
     /// Generate DELETE statement with row's primary key.
     GenerateDelete,
+    /// Copy INSERT to clipboard via query generator.
+    CopyAsInsert,
+    /// Copy UPDATE to clipboard via query generator.
+    CopyAsUpdate,
+    /// Copy DELETE to clipboard via query generator.
+    CopyAsDelete,
 }
 
 /// Events emitted by the DataTable component.

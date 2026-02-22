@@ -10,11 +10,11 @@ use dbflux_core::{
     KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
     KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
     KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot,
-    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
-    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, ValidationResult, Value,
-    ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy,
+    SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
+    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -635,6 +635,12 @@ impl Connection for RedisConnection {
         static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
         &DIALECT
     }
+
+    fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+        static GENERATOR: crate::command_generator::RedisCommandGenerator =
+            crate::command_generator::RedisCommandGenerator;
+        Some(&GENERATOR)
+    }
 }
 
 impl KeyValueApi for RedisConnection {
@@ -947,20 +953,24 @@ impl KeyValueApi for RedisConnection {
 
     fn hash_set(&self, request: &HashSetRequest) -> Result<(), DbError> {
         self.with_connection(request.keyspace, |conn| {
-            redis::cmd("HSET")
-                .arg(&request.key)
-                .arg(&request.field)
-                .arg(&request.value)
-                .query::<()>(conn)
+            let mut cmd = redis::cmd("HSET");
+            cmd.arg(&request.key);
+            for (field, value) in &request.fields {
+                cmd.arg(field).arg(value);
+            }
+            cmd.query::<()>(conn)
                 .map_err(|e| format_redis_query_error(&e))
         })
     }
 
     fn hash_delete(&self, request: &HashDeleteRequest) -> Result<bool, DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let removed = redis::cmd("HDEL")
-                .arg(&request.key)
-                .arg(&request.field)
+            let mut cmd = redis::cmd("HDEL");
+            cmd.arg(&request.key);
+            for field in &request.fields {
+                cmd.arg(field);
+            }
+            let removed = cmd
                 .query::<u64>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
             Ok(removed > 0)
@@ -987,10 +997,12 @@ impl KeyValueApi for RedisConnection {
                 ListEnd::Tail => "RPUSH",
             };
 
-            redis::cmd(cmd_name)
-                .arg(&request.key)
-                .arg(&request.value)
-                .query::<()>(conn)
+            let mut cmd = redis::cmd(cmd_name);
+            cmd.arg(&request.key);
+            for value in &request.values {
+                cmd.arg(value);
+            }
+            cmd.query::<()>(conn)
                 .map_err(|e| format_redis_query_error(&e))
         })
     }
@@ -1011,9 +1023,12 @@ impl KeyValueApi for RedisConnection {
 
     fn set_add(&self, request: &SetAddRequest) -> Result<bool, DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let added = redis::cmd("SADD")
-                .arg(&request.key)
-                .arg(&request.member)
+            let mut cmd = redis::cmd("SADD");
+            cmd.arg(&request.key);
+            for member in &request.members {
+                cmd.arg(member);
+            }
+            let added = cmd
                 .query::<u64>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
             Ok(added > 0)
@@ -1022,9 +1037,12 @@ impl KeyValueApi for RedisConnection {
 
     fn set_remove(&self, request: &SetRemoveRequest) -> Result<bool, DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let removed = redis::cmd("SREM")
-                .arg(&request.key)
-                .arg(&request.member)
+            let mut cmd = redis::cmd("SREM");
+            cmd.arg(&request.key);
+            for member in &request.members {
+                cmd.arg(member);
+            }
+            let removed = cmd
                 .query::<u64>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
             Ok(removed > 0)
@@ -1035,10 +1053,12 @@ impl KeyValueApi for RedisConnection {
 
     fn zset_add(&self, request: &ZSetAddRequest) -> Result<bool, DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let added = redis::cmd("ZADD")
-                .arg(&request.key)
-                .arg(request.score)
-                .arg(&request.member)
+            let mut cmd = redis::cmd("ZADD");
+            cmd.arg(&request.key);
+            for (member, score) in &request.members {
+                cmd.arg(*score).arg(member);
+            }
+            let added = cmd
                 .query::<u64>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
             Ok(added > 0)
@@ -1047,9 +1067,12 @@ impl KeyValueApi for RedisConnection {
 
     fn zset_remove(&self, request: &ZSetRemoveRequest) -> Result<bool, DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let removed = redis::cmd("ZREM")
-                .arg(&request.key)
-                .arg(&request.member)
+            let mut cmd = redis::cmd("ZREM");
+            cmd.arg(&request.key);
+            for member in &request.members {
+                cmd.arg(member);
+            }
+            let removed = cmd
                 .query::<u64>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
             Ok(removed > 0)
@@ -1750,8 +1773,8 @@ impl LanguageService for RedisLanguageService {
         }
     }
 
-    fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
-        None
+    fn detect_dangerous(&self, query: &str) -> Option<dbflux_core::DangerousQueryKind> {
+        dbflux_core::detect_dangerous_redis(query)
     }
 
     fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {

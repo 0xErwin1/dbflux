@@ -27,6 +27,10 @@ pub struct DangerousQuerySuppressions {
     mongo_update_many: bool,
     mongo_drop_collection: bool,
     mongo_drop_database: bool,
+    redis_flush_all: bool,
+    redis_flush_db: bool,
+    redis_multi_delete: bool,
+    redis_keys_pattern: bool,
 }
 
 impl DangerousQuerySuppressions {
@@ -42,6 +46,10 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::MongoUpdateMany => self.mongo_update_many,
             DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection,
             DangerousQueryKind::MongoDropDatabase => self.mongo_drop_database,
+            DangerousQueryKind::RedisFlushAll => self.redis_flush_all,
+            DangerousQueryKind::RedisFlushDb => self.redis_flush_db,
+            DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete,
+            DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern,
         }
     }
 
@@ -57,6 +65,10 @@ impl DangerousQuerySuppressions {
             DangerousQueryKind::MongoUpdateMany => self.mongo_update_many = true,
             DangerousQueryKind::MongoDropCollection => self.mongo_drop_collection = true,
             DangerousQueryKind::MongoDropDatabase => self.mongo_drop_database = true,
+            DangerousQueryKind::RedisFlushAll => self.redis_flush_all = true,
+            DangerousQueryKind::RedisFlushDb => self.redis_flush_db = true,
+            DangerousQueryKind::RedisMultiDelete => self.redis_multi_delete = true,
+            DangerousQueryKind::RedisKeysPattern => self.redis_keys_pattern = true,
         }
     }
 }

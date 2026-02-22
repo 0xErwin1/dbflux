@@ -228,9 +228,11 @@ struct TableContextMenu {
     position: Point<Pixels>,
     /// Whether the SQL generation submenu is open.
     sql_submenu_open: bool,
+    /// Whether the "Copy as Query" submenu is open.
+    copy_query_submenu_open: bool,
     /// Currently selected menu item index (for keyboard navigation).
     selected_index: usize,
-    /// Selected index within the SQL submenu (0-3).
+    /// Selected index within the active submenu.
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
@@ -992,6 +994,7 @@ impl DataGridPanel {
                             col: *col,
                             position: *position,
                             sql_submenu_open: false,
+                            copy_query_submenu_open: false,
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
@@ -1099,6 +1102,7 @@ impl DataGridPanel {
                         col: 0,
                         position: *position,
                         sql_submenu_open: false,
+                        copy_query_submenu_open: false,
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,

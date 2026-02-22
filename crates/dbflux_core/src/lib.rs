@@ -14,6 +14,7 @@ mod key_value;
 mod language_service;
 mod profile;
 mod query;
+mod query_generator;
 mod query_safety;
 mod refresh_policy;
 mod saved_query;
@@ -75,13 +76,15 @@ pub use key_value::{
 };
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
-    SqlLanguageService, TextPosition, TextPositionRange, TextRange, ValidationResult,
-    detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_sql, strip_leading_comments,
+    RedisLanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
+    ValidationResult, detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis,
+    detect_dangerous_sql, strip_leading_comments,
 };
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
+pub use query_generator::{GeneratedQuery, MutationCategory, QueryGenerator, SqlMutationGenerator};
 pub use query_safety::is_safe_read_query;
 pub use refresh_policy::RefreshPolicy;
 pub use saved_query::{SavedQuery, SavedQueryStore};
