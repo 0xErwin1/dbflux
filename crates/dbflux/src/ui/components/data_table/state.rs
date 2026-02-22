@@ -482,32 +482,30 @@ impl DataTableState {
             return false;
         }
 
-        let (initial_value, needs_modal) = match row_source {
+        let (initial_value, needs_modal, is_json_cell) = match row_source {
             Some(VisualRowSource::Base(base_idx)) => {
-                // Base row - check EditBuffer first, fall back to model
                 let base_cell = self.model.cell(base_idx, coord.col);
                 let base = base_cell.unwrap_or(&null_cell);
                 let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
 
-                (cell.edit_text(), cell.needs_modal_editor())
+                (cell.edit_text(), cell.needs_modal_editor(), cell.is_json())
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
-                // Pending insert - get from pending_inserts
                 if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
                     if coord.col < insert_data.len() {
                         let cell = &insert_data[coord.col];
-                        (cell.edit_text(), cell.needs_modal_editor())
+                        (cell.edit_text(), cell.needs_modal_editor(), cell.is_json())
                     } else {
-                        (String::new(), false)
+                        (String::new(), false, false)
                     }
                 } else {
-                    (String::new(), false)
+                    (String::new(), false, false)
                 }
             }
             None => return false,
         };
 
-        let is_json = column_kind == ColumnKind::Json;
+        let is_json = column_kind == ColumnKind::Json || is_json_cell;
         if is_json || needs_modal {
             cx.emit(DataTableEvent::ModalEditRequested {
                 row: coord.row,

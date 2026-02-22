@@ -665,7 +665,7 @@ impl Connection for MongoConnection {
 
         let db = client.database(db_name);
 
-        let result = execute_mongo_query(&db, &query)?;
+        let result = execute_mongo_query(&client, &db, &query)?;
 
         let query_time = start.elapsed();
 
@@ -675,13 +675,9 @@ impl Connection for MongoConnection {
             result.rows.len()
         );
 
-        Ok(QueryResult {
-            columns: result.columns,
-            rows: result.rows,
-            affected_rows: result.affected_rows,
-            execution_time: query_time,
-            is_document_result: true,
-        })
+        let mut qr = QueryResult::json(result.columns, result.rows, query_time);
+        qr.affected_rows = result.affected_rows;
+        Ok(qr)
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -971,13 +967,9 @@ impl Connection for MongoConnection {
             query_time.as_secs_f64() * 1000.0,
         );
 
-        Ok(QueryResult {
-            columns: internal.columns,
-            rows: internal.rows,
-            affected_rows: internal.affected_rows,
-            execution_time: query_time,
-            is_document_result: true,
-        })
+        let mut qr = QueryResult::json(internal.columns, internal.rows, query_time);
+        qr.affected_rows = internal.affected_rows;
+        Ok(qr)
     }
 
     fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
@@ -1032,7 +1024,7 @@ impl LanguageService for MongoLanguageService {
         {
             return ValidationResult::WrongLanguage {
                 expected: QueryLanguage::MongoQuery,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() syntax."
+                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
                     .to_string(),
             };
         }
@@ -1041,7 +1033,7 @@ impl LanguageService for MongoLanguageService {
             Ok(_) => ValidationResult::Valid,
             Err(e) => ValidationResult::SyntaxError(
                 Diagnostic::error(format!("Invalid MongoDB query: {}", e))
-                    .with_hint("Use db.collection.method() syntax"),
+                    .with_hint("Use db.collection.method() or db.method() syntax"),
             ),
         }
     }
@@ -1065,7 +1057,7 @@ impl LanguageService for MongoLanguageService {
         {
             return vec![EditorDiagnostic {
                 severity: DiagnosticSeverity::Error,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() syntax."
+                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
                     .to_string(),
                 range: full_first_line_range(query),
             }];
@@ -1180,10 +1172,10 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Parsed MongoDB query from JSON input or shell syntax.
 pub struct MongoQuery {
     pub database: Option<String>,
-    pub collection: String,
+    /// `None` for database-level commands (`db.getName()`, `db.stats()`, etc.).
+    pub collection: Option<String>,
     pub operation: MongoOperation,
 }
 
@@ -1231,6 +1223,26 @@ pub enum MongoOperation {
         upsert: bool,
     },
     Drop,
+
+    // -- Database-level operations (db.method()) --
+    GetName,
+    GetCollectionNames,
+    GetCollectionInfos,
+    DbStats,
+    ServerStatus,
+    CreateCollection {
+        name: String,
+    },
+    DropDatabase,
+    RunCommand {
+        command: Document,
+    },
+    AdminCommand {
+        command: Document,
+    },
+    Version,
+    HostInfo,
+    CurrentOp,
 }
 
 pub fn json_to_bson_doc(val: &serde_json::Value) -> Result<Document, DbError> {
@@ -1301,8 +1313,17 @@ struct QueryResultInternal {
     affected_rows: Option<u64>,
 }
 
-fn execute_mongo_query(db: &Database, query: &MongoQuery) -> Result<QueryResultInternal, DbError> {
-    let collection = db.collection::<Document>(&query.collection);
+fn execute_mongo_query(
+    client: &Client,
+    db: &Database,
+    query: &MongoQuery,
+) -> Result<QueryResultInternal, DbError> {
+    if query.collection.is_none() {
+        return execute_db_operation(client, db, &query.operation);
+    }
+
+    let collection_name = query.collection.as_deref().unwrap_or_default();
+    let collection = db.collection::<Document>(collection_name);
 
     match &query.operation {
         MongoOperation::Find {
@@ -1588,6 +1609,195 @@ fn execute_mongo_query(db: &Database, query: &MongoQuery) -> Result<QueryResultI
                 affected_rows: None,
             })
         }
+
+        MongoOperation::GetName
+        | MongoOperation::GetCollectionNames
+        | MongoOperation::GetCollectionInfos
+        | MongoOperation::DbStats
+        | MongoOperation::ServerStatus
+        | MongoOperation::CreateCollection { .. }
+        | MongoOperation::DropDatabase
+        | MongoOperation::RunCommand { .. }
+        | MongoOperation::AdminCommand { .. }
+        | MongoOperation::Version
+        | MongoOperation::HostInfo
+        | MongoOperation::CurrentOp => {
+            unreachable!("db-level ops handled before collection dispatch")
+        }
+    }
+}
+
+fn execute_db_operation(
+    client: &Client,
+    db: &Database,
+    operation: &MongoOperation,
+) -> Result<QueryResultInternal, DbError> {
+    match operation {
+        MongoOperation::GetName => {
+            let name = db.name().to_string();
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "name".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Text(name)]],
+                affected_rows: None,
+            })
+        }
+
+        MongoOperation::GetCollectionNames => {
+            let names = db
+                .list_collection_names()
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let rows = names.into_iter().map(|n| vec![Value::Text(n)]).collect();
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "collection".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows,
+                affected_rows: None,
+            })
+        }
+
+        MongoOperation::GetCollectionInfos => {
+            let cursor = db
+                .list_collections()
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let specs: Vec<mongodb::results::CollectionSpecification> = cursor
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let documents: Vec<Document> = specs
+                .into_iter()
+                .map(|spec| {
+                    let mut doc = Document::new();
+                    doc.insert("name", spec.name);
+                    doc.insert("type", format!("{:?}", spec.collection_type));
+                    if let Ok(bson) = bson::to_bson(&spec.options) {
+                        doc.insert("options", bson);
+                    }
+                    doc
+                })
+                .collect();
+
+            documents_to_result(documents)
+        }
+
+        MongoOperation::DbStats => {
+            let result = db
+                .run_command(doc! { "dbStats": 1 })
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        MongoOperation::ServerStatus => {
+            let result = db
+                .run_command(doc! { "serverStatus": 1 })
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        MongoOperation::CreateCollection { name } => {
+            db.create_collection(name)
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "result".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Text(format!("Collection '{}' created", name))]],
+                affected_rows: None,
+            })
+        }
+
+        MongoOperation::DropDatabase => {
+            db.drop().run().map_err(|e| format_mongo_query_error(&e))?;
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "result".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Text("Database dropped".to_string())]],
+                affected_rows: None,
+            })
+        }
+
+        MongoOperation::RunCommand { command } => {
+            let result = db
+                .run_command(command.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        MongoOperation::AdminCommand { command } => {
+            let admin_db = client.database("admin");
+            let result = admin_db
+                .run_command(command.clone())
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        MongoOperation::Version => {
+            let result = db
+                .run_command(doc! { "buildInfo": 1 })
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            let version = result.get_str("version").unwrap_or("unknown").to_string();
+
+            Ok(QueryResultInternal {
+                columns: vec![ColumnMeta {
+                    name: "version".to_string(),
+                    type_name: "Text".to_string(),
+                    nullable: false,
+                }],
+                rows: vec![vec![Value::Text(version)]],
+                affected_rows: None,
+            })
+        }
+
+        MongoOperation::HostInfo => {
+            let result = db
+                .run_command(doc! { "hostInfo": 1 })
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        MongoOperation::CurrentOp => {
+            let result = db
+                .run_command(doc! { "currentOp": 1 })
+                .run()
+                .map_err(|e| format_mongo_query_error(&e))?;
+
+            documents_to_result(vec![result])
+        }
+
+        _ => Err(DbError::query_failed(
+            "Operation requires a collection target".to_string(),
+        )),
     }
 }
 
@@ -1757,7 +1967,7 @@ mod tests {
     fn test_parse_find_query() {
         let json = r#"{"collection": "users", "filter": {"name": "John"}}"#;
         let query = parse_query(json).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::Find { .. }));
     }
 
@@ -1765,7 +1975,7 @@ mod tests {
     fn test_parse_aggregate_query() {
         let json = r#"{"collection": "orders", "aggregate": [{"$match": {"status": "active"}}]}"#;
         let query = parse_query(json).unwrap();
-        assert_eq!(query.collection, "orders");
+        assert_eq!(query.collection.as_deref(), Some("orders"));
         assert!(matches!(query.operation, MongoOperation::Aggregate { .. }));
     }
 
@@ -1773,7 +1983,7 @@ mod tests {
     fn test_parse_count_query() {
         let json = r#"{"collection": "products", "count": {}}"#;
         let query = parse_query(json).unwrap();
-        assert_eq!(query.collection, "products");
+        assert_eq!(query.collection.as_deref(), Some("products"));
         assert!(matches!(query.operation, MongoOperation::Count { .. }));
     }
 

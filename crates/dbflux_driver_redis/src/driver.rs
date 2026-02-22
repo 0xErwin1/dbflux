@@ -520,17 +520,7 @@ impl Connection for RedisConnection {
                 .map_err(|e| format_redis_query_error(&e))
         })?;
 
-        Ok(QueryResult {
-            columns: vec![ColumnMeta {
-                name: "result".to_string(),
-                type_name: "redis".to_string(),
-                nullable: false,
-            }],
-            rows: vec![vec![Value::Text(format!("{:?}", value))]],
-            affected_rows: None,
-            execution_time: start.elapsed(),
-            is_document_result: false,
-        })
+        Ok(redis_value_to_result(value, start.elapsed()))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1176,6 +1166,178 @@ impl ConnectionErrorFormatter for RedisErrorFormatter {
         }
 
         FormattedError::new(source)
+    }
+}
+
+// -- Redis Value → QueryResult --
+
+fn redis_value_to_result(value: redis::Value, execution_time: std::time::Duration) -> QueryResult {
+    match value {
+        redis::Value::Nil => QueryResult::text("(nil)".to_string(), execution_time),
+
+        redis::Value::Int(i) => QueryResult::text(format!("(integer) {}", i), execution_time),
+
+        redis::Value::BulkString(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(s) => QueryResult::text(s, execution_time),
+            Err(_) => QueryResult::binary(bytes, execution_time),
+        },
+
+        redis::Value::SimpleString(s) => QueryResult::text(s, execution_time),
+
+        redis::Value::Array(items) => redis_array_to_result(items, execution_time),
+
+        redis::Value::Map(entries) => {
+            let mut lines = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                let key_str = redis_value_to_display(&k);
+                let val_str = redis_value_to_display(&v);
+                lines.push(format!("{}: {}", key_str, val_str));
+            }
+            QueryResult::text(lines.join("\n"), execution_time)
+        }
+
+        redis::Value::Boolean(b) => QueryResult::text(
+            if b { "(true)" } else { "(false)" }.to_string(),
+            execution_time,
+        ),
+
+        redis::Value::Double(f) => QueryResult::text(format!("(double) {}", f), execution_time),
+
+        redis::Value::BigNumber(n) => {
+            QueryResult::text(format!("(big number) {}", n), execution_time)
+        }
+
+        redis::Value::VerbatimString { format: _, text } => QueryResult::text(text, execution_time),
+
+        redis::Value::Set(items) => redis_array_to_result(items, execution_time),
+
+        redis::Value::Okay => QueryResult::text("OK".to_string(), execution_time),
+
+        redis::Value::ServerError(e) => QueryResult::text(
+            format!("(error) {}", e.details().unwrap_or("unknown")),
+            execution_time,
+        ),
+
+        redis::Value::Push { kind: _, data } => redis_array_to_result(data, execution_time),
+
+        redis::Value::Attribute {
+            data,
+            attributes: _,
+        } => redis_value_to_result(*data, execution_time),
+    }
+}
+
+/// Try to present a redis array as a table (if elements are uniform key-value pairs)
+/// or fall back to numbered text lines.
+fn redis_array_to_result(
+    items: Vec<redis::Value>,
+    execution_time: std::time::Duration,
+) -> QueryResult {
+    if items.is_empty() {
+        return QueryResult::text("(empty array)".to_string(), execution_time);
+    }
+
+    // Check if all items are simple scalars → table with index + value columns
+    let all_scalar = items.iter().all(|v| {
+        matches!(
+            v,
+            redis::Value::Int(_)
+                | redis::Value::BulkString(_)
+                | redis::Value::SimpleString(_)
+                | redis::Value::Nil
+                | redis::Value::Boolean(_)
+                | redis::Value::Double(_)
+                | redis::Value::Okay
+        )
+    });
+
+    if all_scalar {
+        let columns = vec![
+            ColumnMeta {
+                name: "#".to_string(),
+                type_name: "int".to_string(),
+                nullable: false,
+            },
+            ColumnMeta {
+                name: "value".to_string(),
+                type_name: "redis".to_string(),
+                nullable: true,
+            },
+        ];
+
+        let rows: Vec<Vec<Value>> = items
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| vec![Value::Int(i as i64), redis_scalar_to_value(v)])
+            .collect();
+
+        return QueryResult::table(columns, rows, None, execution_time);
+    }
+
+    // Fallback: numbered text dump
+    let lines: Vec<String> = items
+        .iter()
+        .enumerate()
+        .map(|(i, v)| format!("{}) {}", i + 1, redis_value_to_display(v)))
+        .collect();
+
+    QueryResult::text(lines.join("\n"), execution_time)
+}
+
+fn redis_scalar_to_value(v: redis::Value) -> Value {
+    match v {
+        redis::Value::Nil => Value::Null,
+        redis::Value::Int(i) => Value::Int(i),
+        redis::Value::BulkString(bytes) => match String::from_utf8(bytes) {
+            Ok(s) => Value::Text(s),
+            Err(e) => Value::Bytes(e.into_bytes()),
+        },
+        redis::Value::SimpleString(s) => Value::Text(s),
+        redis::Value::Boolean(b) => Value::Bool(b),
+        redis::Value::Double(f) => Value::Float(f),
+        redis::Value::Okay => Value::Text("OK".to_string()),
+        _ => Value::Text(redis_value_to_display(&v)),
+    }
+}
+
+fn redis_value_to_display(v: &redis::Value) -> String {
+    match v {
+        redis::Value::Nil => "(nil)".to_string(),
+        redis::Value::Int(i) => i.to_string(),
+        redis::Value::BulkString(bytes) => {
+            String::from_utf8(bytes.clone()).unwrap_or_else(|_| format!("<{} bytes>", bytes.len()))
+        }
+        redis::Value::SimpleString(s) => s.clone(),
+        redis::Value::Array(items) | redis::Value::Set(items) => {
+            let inner: Vec<String> = items.iter().map(redis_value_to_display).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        redis::Value::Map(entries) => {
+            let inner: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        redis_value_to_display(k),
+                        redis_value_to_display(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        redis::Value::Boolean(b) => b.to_string(),
+        redis::Value::Double(f) => f.to_string(),
+        redis::Value::BigNumber(n) => n.to_string(),
+        redis::Value::VerbatimString { text, .. } => text.clone(),
+        redis::Value::Okay => "OK".to_string(),
+        redis::Value::ServerError(e) => {
+            format!("ERR {}", e.details().unwrap_or("unknown"))
+        }
+        redis::Value::Push { data, .. } => {
+            let inner: Vec<String> = data.iter().map(redis_value_to_display).collect();
+            format!("PUSH[{}]", inner.join(", "))
+        }
+        redis::Value::Attribute { data, .. } => redis_value_to_display(data),
     }
 }
 

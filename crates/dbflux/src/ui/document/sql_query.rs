@@ -25,7 +25,8 @@ use gpui_component::input::{
 };
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{
-    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, InsertTextFormat,
+    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
+    InsertTextFormat, Position as LspPosition, Range as LspRange, TextEdit,
 };
 use std::cmp::min;
 use std::collections::{BTreeSet, HashMap, HashSet};

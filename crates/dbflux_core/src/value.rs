@@ -152,6 +152,48 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn to_json_string(&self) -> String {
+        match self {
+            Value::Json(s) => s.clone(),
+            other => {
+                let json_value = Self::to_serde_json(other);
+                serde_json::to_string(&json_value).unwrap_or_else(|_| self.as_display_string())
+            }
+        }
+    }
+
+    fn to_serde_json(value: &Value) -> serde_json::Value {
+        match value {
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(*b),
+            Value::Int(i) => serde_json::json!(*i),
+            Value::Float(f) => serde_json::json!(*f),
+            Value::Text(s) => serde_json::Value::String(s.clone()),
+            Value::Bytes(b) => {
+                let hex: String = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+                serde_json::json!({"$binary": {"hex": hex}})
+            }
+            Value::Json(j) => {
+                serde_json::from_str(j).unwrap_or(serde_json::Value::String(j.clone()))
+            }
+            Value::Decimal(d) => serde_json::Value::String(d.clone()),
+            Value::DateTime(dt) => serde_json::json!({"$date": dt.to_rfc3339()}),
+            Value::Date(d) => serde_json::Value::String(d.to_string()),
+            Value::Time(t) => serde_json::Value::String(t.to_string()),
+            Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(Self::to_serde_json).collect())
+            }
+            Value::Document(doc) => {
+                let map: serde_json::Map<String, serde_json::Value> = doc
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::to_serde_json(v)))
+                    .collect();
+                serde_json::Value::Object(map)
+            }
+            Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+        }
+    }
 }
 
 impl PartialOrd for Value {

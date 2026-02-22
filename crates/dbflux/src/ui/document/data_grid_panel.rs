@@ -5,6 +5,7 @@ mod query;
 mod render;
 mod utils;
 
+use super::result_view::ResultViewMode;
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppState;
 use crate::ui::cell_editor_modal::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
@@ -316,6 +317,11 @@ pub struct DataGridPanel {
     // View mode configuration
     view_config: super::data_view::DataViewConfig,
 
+    // Result view mode for QueryResult sources (Text/Json/Raw/Table)
+    result_view_mode: ResultViewMode,
+    derived_json: Option<String>,
+    derived_text: Option<String>,
+
     // Document tree for MongoDB document view
     document_tree: Option<Entity<DocumentTree>>,
     document_tree_state: Option<Entity<DocumentTreeState>>,
@@ -589,6 +595,7 @@ impl DataGridPanel {
         .detach();
 
         let view_config = super::data_view::DataViewConfig::for_source(&source);
+        let result_view_mode = ResultViewMode::Table;
 
         let supports_auto_refresh = matches!(
             &source,
@@ -680,6 +687,9 @@ impl DataGridPanel {
             pending_modal_open: None,
             panel_origin: Point::default(),
             view_config,
+            result_view_mode,
+            derived_json: None,
+            derived_text: None,
             document_tree: None,
             document_tree_state: None,
             document_tree_subscription: None,
@@ -723,6 +733,95 @@ impl DataGridPanel {
     /// Check if view mode toggle is available for the current source.
     pub fn can_toggle_view(&self) -> bool {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
+    }
+
+    pub fn set_result_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
+        if self.result_view_mode == mode {
+            return;
+        }
+
+        self.result_view_mode = mode;
+        cx.notify();
+    }
+
+    fn uses_result_view(&self) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. }) && !self.result_view_mode.is_table()
+    }
+
+    pub(super) fn derived_text(&mut self) -> &str {
+        if self.derived_text.is_none() {
+            self.derived_text = Some(self.compute_derived_text());
+        }
+        self.derived_text.as_deref().unwrap_or("")
+    }
+
+    pub(super) fn derived_json(&mut self) -> &str {
+        if self.derived_json.is_none() {
+            self.derived_json = Some(self.compute_derived_json());
+        }
+        self.derived_json.as_deref().unwrap_or("")
+    }
+
+    fn compute_derived_text(&self) -> String {
+        if let Some(body) = &self.result.text_body {
+            return body.clone();
+        }
+
+        // Fall back to rendering rows as text
+        self.result
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|v| v.as_display_string())
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn compute_derived_json(&self) -> String {
+        use utils::value_to_json;
+
+        if let Some(body) = &self.result.text_body {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) {
+                return serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| body.clone());
+            }
+            return body.clone();
+        }
+
+        // Build JSON from rows
+        let json_rows: Vec<serde_json::Value> = self
+            .result
+            .rows
+            .iter()
+            .map(|row| {
+                if self.result.columns.is_empty() {
+                    // Single-value rows
+                    if row.len() == 1 {
+                        value_to_json(&row[0])
+                    } else {
+                        serde_json::Value::Array(row.iter().map(value_to_json).collect())
+                    }
+                } else {
+                    let obj: serde_json::Map<String, serde_json::Value> = self
+                        .result
+                        .columns
+                        .iter()
+                        .zip(row.iter())
+                        .map(|(col, val)| (col.name.clone(), value_to_json(val)))
+                        .collect();
+                    serde_json::Value::Object(obj)
+                }
+            })
+            .collect();
+
+        if json_rows.len() == 1 {
+            serde_json::to_string_pretty(&json_rows[0]).unwrap_or_default()
+        } else {
+            serde_json::to_string_pretty(&json_rows).unwrap_or_default()
+        }
     }
 
     pub fn supports_auto_refresh(&self) -> bool {
@@ -784,6 +883,10 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
+        self.result_view_mode = ResultViewMode::default_for_shape(&result.shape);
+        self.derived_json = None;
+        self.derived_text = None;
         self.result = result;
         self.rebuild_table(None, cx);
         self.state = GridState::Ready;
@@ -940,9 +1043,9 @@ impl DataGridPanel {
         self.data_table = Some(data_table);
         self.table_subscription = Some(subscription);
 
-        // Build document tree for collections OR document query results
+        // Build document tree for collections OR JSON-shaped query results
         let should_build_tree = self.source.is_collection()
-            || matches!(&self.source, DataSource::QueryResult { result, .. } if result.is_document_result);
+            || matches!(&self.source, DataSource::QueryResult { result, .. } if result.shape.is_json());
 
         if should_build_tree {
             self.rebuild_document_tree(cx);

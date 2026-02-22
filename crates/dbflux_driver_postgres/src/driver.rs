@@ -886,13 +886,7 @@ impl Connection for PostgresConnection {
             columns.len()
         );
 
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: None,
-            execution_time: total_time,
-            is_document_result: false,
-        })
+        Ok(QueryResult::table(columns, result_rows, None, total_time))
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {

@@ -1,6 +1,7 @@
 use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
 use crate::ui::components::data_table::SortState as TableSortState;
-use crate::ui::document::DataViewMode;
+use crate::ui::document::data_view::DataViewMode;
+use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -102,13 +103,16 @@ impl Render for DataGridPanel {
             focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
         let focus_handle = self.focus_handle.clone();
 
-        let has_data = !self.result.rows.is_empty();
+        let has_data = !self.result.rows.is_empty()
+            || self.result.text_body.is_some()
+            || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
         let muted_fg = theme.muted_foreground;
 
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
+        let uses_result_view = self.uses_result_view();
 
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
@@ -266,10 +270,11 @@ impl Render for DataGridPanel {
                         ),
                 )
             })
-            // Grid or Document View
+            // Grid, Document, or Result View
             .child({
                 let view_mode = self.view_config.mode;
                 let use_document_view = view_mode == DataViewMode::Document && has_data;
+                let result_view_mode = self.result_view_mode;
 
                 div()
                     .flex_1()
@@ -282,7 +287,7 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(!has_data, |d| {
+                    .when(!has_data && !uses_result_view, |d| {
                         d.flex().items_center().justify_center().child(
                             div()
                                 .text_size(FontSizes::BASE)
@@ -290,10 +295,13 @@ impl Render for DataGridPanel {
                                 .child(if is_loading { "Loading..." } else { "No data" }),
                         )
                     })
-                    .when(has_data && use_document_view, |d| {
+                    .when(uses_result_view, |d| {
+                        d.child(self.render_result_view(result_view_mode, &theme, cx))
+                    })
+                    .when(!uses_result_view && has_data && use_document_view, |d| {
                         d.child(self.render_document_view(&theme, cx))
                     })
-                    .when(has_data && !use_document_view, |d| {
+                    .when(!uses_result_view && has_data && !use_document_view, |d| {
                         d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
                     })
             })
@@ -308,6 +316,7 @@ impl Render for DataGridPanel {
                 can_next,
                 sort_info,
                 has_data,
+                uses_result_view,
                 &theme,
                 cx,
             ))
@@ -544,11 +553,11 @@ impl DataGridPanel {
                 d.child(
                     div()
                         .id("view-toggle-btn")
-                        .w(Heights::ICON_MD)
-                        .h(Heights::ICON_MD)
+                        .h_full()
+                        .px(Spacing::SM)
                         .flex()
                         .items_center()
-                        .justify_center()
+                        .gap(Spacing::XS)
                         .rounded(Radii::SM)
                         .text_color(theme.muted_foreground)
                         .cursor_pointer()
@@ -565,7 +574,6 @@ impl DataGridPanel {
                         .child(
                             div()
                                 .text_size(FontSizes::XS)
-                                .ml(Spacing::XS)
                                 .text_color(theme.muted_foreground)
                                 .child(mode.label()),
                         ),
@@ -990,6 +998,141 @@ impl DataGridPanel {
         }
     }
 
+    // -- Result View Renderers --
+
+    pub(super) fn render_result_view(
+        &mut self,
+        mode: ResultViewMode,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut container = div().size_full();
+
+        match mode {
+            ResultViewMode::Table => {
+                container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
+            }
+            ResultViewMode::Text => {
+                let text = self.derived_text().to_string();
+                container = container.child(self.render_text_view(&text, theme));
+            }
+            ResultViewMode::Json => {
+                let json = self.derived_json().to_string();
+                container = container.child(self.render_json_view(&json, theme));
+            }
+            ResultViewMode::Raw => {
+                let bytes = self.result.raw_bytes.clone();
+                let text_body = self.result.text_body.clone();
+                container = container.child(self.render_raw_view(
+                    bytes.as_deref(),
+                    text_body.as_deref(),
+                    theme,
+                    cx,
+                ));
+            }
+        }
+
+        container
+    }
+
+    fn render_text_view(
+        &self,
+        text: &str,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        self.render_line_based_view("result-text-view", text, theme)
+    }
+
+    fn render_json_view(
+        &self,
+        json: &str,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        self.render_line_based_view("result-json-view", json, theme)
+    }
+
+    fn render_line_based_view(
+        &self,
+        id: &'static str,
+        content: &str,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        const MAX_LINES: usize = 5000;
+
+        let fg = theme.foreground;
+
+        let line_count = content.lines().count();
+        let truncated = line_count > MAX_LINES;
+
+        let display_text: SharedString = if truncated {
+            let capped: String = content
+                .lines()
+                .take(MAX_LINES)
+                .collect::<Vec<_>>()
+                .join("\n");
+            SharedString::from(capped)
+        } else {
+            SharedString::from(content.to_string())
+        };
+
+        div()
+            .id(id)
+            .size_full()
+            .p(Spacing::MD)
+            .overflow_y_scroll()
+            .overflow_x_scroll()
+            .bg(theme.background)
+            .child(
+                div()
+                    .font_family("monospace")
+                    .text_size(FontSizes::SM)
+                    .text_color(fg)
+                    .whitespace_nowrap()
+                    .child(display_text),
+            )
+            .when(truncated, |d| {
+                d.child(
+                    div()
+                        .px(Spacing::MD)
+                        .pb(Spacing::SM)
+                        .text_size(FontSizes::XS)
+                        .text_color(theme.muted_foreground)
+                        .child(format!("(truncated at {} lines)", MAX_LINES)),
+                )
+            })
+    }
+
+    fn render_raw_view(
+        &self,
+        raw_bytes: Option<&[u8]>,
+        text_body: Option<&str>,
+        theme: &gpui_component::theme::Theme,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let hex_dump = if let Some(bytes) = raw_bytes {
+            format_hex_dump(bytes)
+        } else if let Some(text) = text_body {
+            text.to_string()
+        } else {
+            "(empty)".to_string()
+        };
+
+        div()
+            .id("result-raw-view")
+            .size_full()
+            .p(Spacing::MD)
+            .overflow_y_scroll()
+            .bg(theme.background)
+            .child(
+                div()
+                    .font_family("monospace")
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .whitespace_nowrap()
+                    .child(hex_dump),
+            )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_status_bar(
         &self,
@@ -1002,9 +1145,23 @@ impl DataGridPanel {
         can_next: bool,
         sort_info: Option<(String, SortDirection, bool)>,
         has_data: bool,
+        uses_result_view: bool,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let result_shape_label = if uses_result_view {
+            Some(self.result.shape.clone())
+        } else {
+            None
+        };
+
+        let available_modes = if uses_result_view {
+            ResultViewMode::available_for_shape(&self.result.shape)
+        } else {
+            vec![]
+        };
+        let current_result_mode = self.result_view_mode;
+
         div()
             .flex()
             .items_center()
@@ -1014,12 +1171,56 @@ impl DataGridPanel {
             .border_t_1()
             .border_color(theme.border)
             .bg(theme.tab_bar)
-            // Left: row count and sort info
+            // Left: row count / shape info and sort info
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
+                    // Result view mode selector (for non-Table shapes)
+                    .when(available_modes.len() > 1, |d| {
+                        d.child(div().flex().items_center().gap_0().children(
+                            available_modes.iter().enumerate().map(|(i, mode)| {
+                                let mode = *mode;
+                                let is_active = mode == current_result_mode;
+                                div()
+                                    .id(ElementId::Name(format!("result-view-{}", i).into()))
+                                    .px(Spacing::SM)
+                                    .text_size(FontSizes::XS)
+                                    .cursor_pointer()
+                                    .rounded(Radii::SM)
+                                    .when(is_active, |d| {
+                                        d.bg(theme.accent.opacity(0.15))
+                                            .text_color(theme.foreground)
+                                            .font_weight(FontWeight::MEDIUM)
+                                    })
+                                    .when(!is_active, |d| {
+                                        d.text_color(theme.muted_foreground).hover(|d| {
+                                            d.bg(theme.secondary).text_color(theme.foreground)
+                                        })
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_result_view_mode(mode, cx);
+                                    }))
+                                    .child(mode.label())
+                            }),
+                        ))
+                    })
+                    // Shape badge
+                    .when_some(result_shape_label, |d, shape| {
+                        let label = match &shape {
+                            dbflux_core::QueryResultShape::Table => "table",
+                            dbflux_core::QueryResultShape::Json => "json",
+                            dbflux_core::QueryResultShape::Text => "text",
+                            dbflux_core::QueryResultShape::Binary => "binary",
+                        };
+                        d.child(
+                            div()
+                                .text_size(FontSizes::XS)
+                                .text_color(theme.muted_foreground)
+                                .child(label.to_string()),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
@@ -1180,5 +1381,58 @@ impl DataGridPanel {
                             .child(exec_time.to_string())
                     }),
             )
+    }
+}
+
+fn format_hex_dump(data: &[u8]) -> String {
+    const BYTES_PER_LINE: usize = 16;
+
+    let mut lines = Vec::new();
+
+    for (offset, chunk) in data.chunks(BYTES_PER_LINE).enumerate() {
+        let hex_part: String = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if i == 8 {
+                    format!("  {:02x}", b)
+                } else {
+                    format!(" {:02x}", b)
+                }
+            })
+            .collect();
+
+        let padding = if chunk.len() < BYTES_PER_LINE {
+            let missing = BYTES_PER_LINE - chunk.len();
+            let extra_gap = if chunk.len() <= 8 { 1 } else { 0 };
+            " ".repeat(missing * 3 + extra_gap)
+        } else {
+            String::new()
+        };
+
+        let ascii_part: String = chunk
+            .iter()
+            .map(|b| {
+                if b.is_ascii_graphic() || *b == b' ' {
+                    *b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+
+        lines.push(format!(
+            "{:08x} {}{}  |{}|",
+            offset * BYTES_PER_LINE,
+            hex_part,
+            padding,
+            ascii_part
+        ));
+    }
+
+    if lines.is_empty() {
+        "(empty)".to_string()
+    } else {
+        lines.join("\n")
     }
 }

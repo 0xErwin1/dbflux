@@ -395,13 +395,7 @@ impl Connection for SqliteConnection {
             }
         }
 
-        Ok(QueryResult {
-            columns,
-            rows,
-            affected_rows: None,
-            execution_time: start.elapsed(),
-            is_document_result: false,
-        })
+        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {

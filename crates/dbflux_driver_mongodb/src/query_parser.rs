@@ -1,7 +1,7 @@
 //! MongoDB shell syntax parser.
 //!
-//! Parses `db.collection.method(...)` style queries and converts them to internal
-//! `MongoQuery` representation. Falls back to JSON format for backward compatibility.
+//! Parses `db.collection.method(...)` and `db.method(...)` style queries into
+//! `MongoQuery`. Falls back to JSON format for backward compatibility.
 
 use bson::Document;
 use dbflux_core::DbError;
@@ -41,10 +41,9 @@ impl From<MongoParseError> for DbError {
 }
 
 /// Validate MongoDB query syntax without executing.
-/// Returns collection name on success, error on parse failure.
 pub fn validate_query(input: &str) -> Result<String, DbError> {
     let query = parse_query(input)?;
-    Ok(query.collection)
+    Ok(query.collection.unwrap_or_default())
 }
 
 /// Like `validate_query`, but returns positional `MongoParseError`s.
@@ -68,9 +67,10 @@ fn parse_query_positional(input: &str) -> Result<MongoQuery, MongoParseError> {
 
 /// Parse a query string into a MongoQuery.
 ///
-/// Supports two formats:
-/// 1. Shell syntax: `db.collection.method({...})`
-/// 2. JSON format: `{"collection": "...", "filter": {...}}`
+/// Supports three forms:
+/// 1. Shell collection syntax: `db.collection.method({...})`
+/// 2. Shell database syntax: `db.method({...})`
+/// 3. JSON format: `{"collection": "...", "filter": {...}}`
 pub fn parse_query(input: &str) -> Result<MongoQuery, DbError> {
     let trimmed = input.trim();
 
@@ -83,24 +83,29 @@ pub fn parse_query(input: &str) -> Result<MongoQuery, DbError> {
     parse_json_format(trimmed)
 }
 
-/// Parse mongo shell syntax: `db.collection.method(...)`
+/// Parse mongo shell syntax: `db.collection.method(...)` or `db.method(...)`
 fn parse_shell_syntax(input: &str) -> Result<MongoQuery, DbError> {
-    // Strip "db." prefix
     let rest = input
         .strip_prefix("db.")
         .ok_or_else(|| DbError::query_failed("Expected 'db.' prefix".to_string()))?;
 
-    // Find the first '.' after collection name to get collection and method
+    if is_db_level_call(rest) {
+        let (method_name, args_str) = parse_method_call(rest)?;
+        let operation = parse_db_operation(method_name, args_str)?;
+        return Ok(MongoQuery {
+            database: None,
+            collection: None,
+            operation,
+        });
+    }
+
     let (collection, method_call) = split_collection_and_method(rest)?;
-
-    // Parse method name and arguments
     let (method_name, args_str) = parse_method_call(method_call)?;
-
     let operation = parse_operation(method_name, args_str)?;
 
     Ok(MongoQuery {
         database: None,
-        collection: collection.to_string(),
+        collection: Some(collection.to_string()),
         operation,
     })
 }
@@ -114,6 +119,30 @@ fn parse_shell_syntax_positional(
     })?;
     let rest_offset = base_offset + 3;
 
+    if is_db_level_call(rest) {
+        let method_offset = rest_offset;
+        let (method_name, args_str) = parse_method_call(rest)
+            .map_err(|e| MongoParseError::from_db_error(e, method_offset))?;
+
+        let method_name_len = method_name.len();
+        let args_offset = method_offset + method_name_len + 1;
+
+        let operation = parse_db_operation(method_name, args_str).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Unsupported database method") {
+                MongoParseError::new(msg, method_offset, method_name_len)
+            } else {
+                MongoParseError::new(msg, args_offset, args_str.len())
+            }
+        })?;
+
+        return Ok(MongoQuery {
+            database: None,
+            collection: None,
+            operation,
+        });
+    }
+
     let (collection, method_call) = split_collection_and_method(rest)
         .map_err(|e| MongoParseError::from_db_error(e, rest_offset))?;
 
@@ -125,12 +154,12 @@ fn parse_shell_syntax_positional(
         ));
     }
 
-    let method_offset = rest_offset + collection.len() + 1; // +1 for the dot
+    let method_offset = rest_offset + collection.len() + 1;
     let (method_name, args_str) = parse_method_call(method_call)
         .map_err(|e| MongoParseError::from_db_error(e, method_offset))?;
 
     let method_name_len = method_name.len();
-    let args_offset = method_offset + method_name_len + 1; // +1 for '('
+    let args_offset = method_offset + method_name_len + 1;
 
     let operation = parse_operation(method_name, args_str).map_err(|e| {
         let msg = e.to_string();
@@ -143,9 +172,136 @@ fn parse_shell_syntax_positional(
 
     Ok(MongoQuery {
         database: None,
-        collection: collection.to_string(),
+        collection: Some(collection.to_string()),
         operation,
     })
+}
+
+const DB_LEVEL_METHODS: &[&str] = &[
+    "getName",
+    "getCollectionNames",
+    "getCollectionInfos",
+    "stats",
+    "serverStatus",
+    "createCollection",
+    "dropDatabase",
+    "runCommand",
+    "adminCommand",
+    "version",
+    "hostInfo",
+    "currentOp",
+];
+
+/// True when `rest` (after `db.`) is `method(...)` rather than `collection.method(...)`.
+///
+/// Paren before any dot means there's no collection segment. We also require
+/// the identifier to be in `DB_LEVEL_METHODS` so that `db.myCollection(` isn't
+/// misread as a db method.
+fn is_db_level_call(rest: &str) -> bool {
+    let paren_pos = match rest.find('(') {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let dot_pos = rest.find('.');
+    let paren_before_dot = match dot_pos {
+        Some(d) => paren_pos < d,
+        None => true,
+    };
+
+    if !paren_before_dot {
+        return false;
+    }
+
+    let method_name = &rest[..paren_pos];
+    DB_LEVEL_METHODS.contains(&method_name)
+}
+
+fn parse_db_operation(method_name: &str, args_str: &str) -> Result<MongoOperation, DbError> {
+    match method_name {
+        "getName" => {
+            expect_no_args("getName", args_str)?;
+            Ok(MongoOperation::GetName)
+        }
+        "getCollectionNames" => {
+            expect_no_args("getCollectionNames", args_str)?;
+            Ok(MongoOperation::GetCollectionNames)
+        }
+        "getCollectionInfos" => {
+            expect_no_args("getCollectionInfos", args_str)?;
+            Ok(MongoOperation::GetCollectionInfos)
+        }
+        "stats" => {
+            expect_no_args("stats", args_str)?;
+            Ok(MongoOperation::DbStats)
+        }
+        "serverStatus" => {
+            expect_no_args("serverStatus", args_str)?;
+            Ok(MongoOperation::ServerStatus)
+        }
+        "createCollection" => {
+            let args = parse_arguments(args_str)?;
+            let name = args.first().ok_or_else(|| {
+                DbError::query_failed("createCollection requires a collection name".to_string())
+            })?;
+
+            let name = name.trim().trim_matches('"').trim_matches('\'').to_string();
+            if name.is_empty() {
+                return Err(DbError::query_failed(
+                    "createCollection requires a non-empty name".to_string(),
+                ));
+            }
+
+            Ok(MongoOperation::CreateCollection { name })
+        }
+        "dropDatabase" => {
+            expect_no_args("dropDatabase", args_str)?;
+            Ok(MongoOperation::DropDatabase)
+        }
+        "runCommand" => {
+            let args = parse_arguments(args_str)?;
+            let doc_str = args.first().ok_or_else(|| {
+                DbError::query_failed("runCommand requires a command document".to_string())
+            })?;
+            let command = parse_relaxed_json(doc_str)?;
+            Ok(MongoOperation::RunCommand { command })
+        }
+        "adminCommand" => {
+            let args = parse_arguments(args_str)?;
+            let doc_str = args.first().ok_or_else(|| {
+                DbError::query_failed("adminCommand requires a command document".to_string())
+            })?;
+            let command = parse_relaxed_json(doc_str)?;
+            Ok(MongoOperation::AdminCommand { command })
+        }
+        "version" => {
+            expect_no_args("version", args_str)?;
+            Ok(MongoOperation::Version)
+        }
+        "hostInfo" => {
+            expect_no_args("hostInfo", args_str)?;
+            Ok(MongoOperation::HostInfo)
+        }
+        "currentOp" => {
+            expect_no_args("currentOp", args_str)?;
+            Ok(MongoOperation::CurrentOp)
+        }
+        _ => Err(DbError::query_failed(format!(
+            "Unsupported database method: {}. Supported: {}",
+            method_name,
+            DB_LEVEL_METHODS.join(", ")
+        ))),
+    }
+}
+
+fn expect_no_args(method: &str, args_str: &str) -> Result<(), DbError> {
+    if !args_str.trim().is_empty() {
+        return Err(DbError::query_failed(format!(
+            "{} does not take arguments",
+            method
+        )));
+    }
+    Ok(())
 }
 
 /// Split "collection.method(...)" into collection name and "method(...)"
@@ -734,7 +890,7 @@ fn parse_json_format(input: &str) -> Result<MongoQuery, DbError> {
 
     Ok(MongoQuery {
         database,
-        collection,
+        collection: Some(collection),
         operation,
     })
 }
@@ -746,21 +902,21 @@ mod tests {
     #[test]
     fn test_parse_find() {
         let query = parse_query(r#"db.users.find({"name": "John"})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::Find { .. }));
     }
 
     #[test]
     fn test_parse_find_empty() {
         let query = parse_query("db.users.find()").unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::Find { .. }));
     }
 
     #[test]
     fn test_parse_find_with_projection() {
         let query = parse_query(r#"db.users.find({"active": true}, {"name": 1})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(
             matches!(
                 query.operation,
@@ -777,7 +933,7 @@ mod tests {
     #[test]
     fn test_parse_find_one() {
         let query = parse_query(r#"db.users.findOne({"_id": "123"})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(
             matches!(query.operation, MongoOperation::Find { limit: Some(1), .. }),
             "Expected Find operation with limit=1, got: {:?}",
@@ -789,35 +945,35 @@ mod tests {
     fn test_parse_aggregate() {
         let query =
             parse_query(r#"db.orders.aggregate([{"$match": {"status": "active"}}])"#).unwrap();
-        assert_eq!(query.collection, "orders");
+        assert_eq!(query.collection.as_deref(), Some("orders"));
         assert!(matches!(query.operation, MongoOperation::Aggregate { .. }));
     }
 
     #[test]
     fn test_parse_count() {
         let query = parse_query(r#"db.products.count({"active": true})"#).unwrap();
-        assert_eq!(query.collection, "products");
+        assert_eq!(query.collection.as_deref(), Some("products"));
         assert!(matches!(query.operation, MongoOperation::Count { .. }));
     }
 
     #[test]
     fn test_parse_count_documents() {
         let query = parse_query("db.products.countDocuments()").unwrap();
-        assert_eq!(query.collection, "products");
+        assert_eq!(query.collection.as_deref(), Some("products"));
         assert!(matches!(query.operation, MongoOperation::Count { .. }));
     }
 
     #[test]
     fn test_parse_insert_one() {
         let query = parse_query(r#"db.users.insertOne({"name": "Alice", "age": 30})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::InsertOne { .. }));
     }
 
     #[test]
     fn test_parse_insert_many() {
         let query = parse_query(r#"db.users.insertMany([{"name": "A"}, {"name": "B"}])"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         if let MongoOperation::InsertMany { documents } = &query.operation {
             assert_eq!(documents.len(), 2);
         } else {
@@ -829,7 +985,7 @@ mod tests {
     fn test_parse_update_one() {
         let query = parse_query(r#"db.users.updateOne({"_id": "123"}, {"$set": {"name": "Bob"}})"#)
             .unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::UpdateOne { .. }));
     }
 
@@ -838,7 +994,7 @@ mod tests {
         let query =
             parse_query(r#"db.users.updateMany({"active": false}, {"$set": {"archived": true}})"#)
                 .unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::UpdateMany { .. }));
     }
 
@@ -848,7 +1004,7 @@ mod tests {
             r#"db.users.replaceOne({"_id": "123"}, {"_id": "123", "name": "New Name"})"#,
         )
         .unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::ReplaceOne { .. }));
     }
 
@@ -858,47 +1014,47 @@ mod tests {
             r#"{"collection": "users", "replace": {"filter": {"_id": "123"}, "replacement": {"name": "New"}}}"#,
         )
         .unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::ReplaceOne { .. }));
     }
 
     #[test]
     fn test_parse_delete_one() {
         let query = parse_query(r#"db.users.deleteOne({"_id": "123"})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::DeleteOne { .. }));
     }
 
     #[test]
     fn test_parse_delete_many() {
         let query = parse_query(r#"db.users.deleteMany({"archived": true})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::DeleteMany { .. }));
     }
 
     #[test]
     fn test_parse_drop() {
         let query = parse_query("db.temp_collection.drop()").unwrap();
-        assert_eq!(query.collection, "temp_collection");
+        assert_eq!(query.collection.as_deref(), Some("temp_collection"));
         assert!(matches!(query.operation, MongoOperation::Drop));
     }
 
     #[test]
     fn test_parse_collection_with_dots() {
         let query = parse_query("db.system.users.find()").unwrap();
-        assert_eq!(query.collection, "system.users");
+        assert_eq!(query.collection.as_deref(), Some("system.users"));
     }
 
     #[test]
     fn test_parse_relaxed_json_unquoted_keys() {
         let query = parse_query(r#"db.users.find({name: "John", active: true})"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
     }
 
     #[test]
     fn test_parse_json_format_backward_compat() {
         let query = parse_query(r#"{"collection": "users", "filter": {"name": "John"}}"#).unwrap();
-        assert_eq!(query.collection, "users");
+        assert_eq!(query.collection.as_deref(), Some("users"));
         assert!(matches!(query.operation, MongoOperation::Find { .. }));
     }
 
@@ -906,7 +1062,7 @@ mod tests {
     fn test_parse_json_format_aggregate() {
         let query =
             parse_query(r#"{"collection": "orders", "aggregate": [{"$match": {}}]}"#).unwrap();
-        assert_eq!(query.collection, "orders");
+        assert_eq!(query.collection.as_deref(), Some("orders"));
         assert!(matches!(query.operation, MongoOperation::Aggregate { .. }));
     }
 
@@ -917,8 +1073,136 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_collection() {
+    fn test_collection_method_without_collection() {
         let result = parse_query("db.find()");
         assert!(result.is_err());
+    }
+
+    // -- Database-level commands --
+
+    #[test]
+    fn test_parse_get_name() {
+        let query = parse_query("db.getName()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::GetName));
+    }
+
+    #[test]
+    fn test_parse_get_collection_names() {
+        let query = parse_query("db.getCollectionNames()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(
+            query.operation,
+            MongoOperation::GetCollectionNames
+        ));
+    }
+
+    #[test]
+    fn test_parse_get_collection_infos() {
+        let query = parse_query("db.getCollectionInfos()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(
+            query.operation,
+            MongoOperation::GetCollectionInfos
+        ));
+    }
+
+    #[test]
+    fn test_parse_db_stats() {
+        let query = parse_query("db.stats()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::DbStats));
+    }
+
+    #[test]
+    fn test_parse_server_status() {
+        let query = parse_query("db.serverStatus()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::ServerStatus));
+    }
+
+    #[test]
+    fn test_parse_create_collection() {
+        let query = parse_query(r#"db.createCollection("newCol")"#).unwrap();
+        assert!(query.collection.is_none());
+        if let MongoOperation::CreateCollection { name } = &query.operation {
+            assert_eq!(name, "newCol");
+        } else {
+            panic!("Expected CreateCollection, got: {:?}", query.operation);
+        }
+    }
+
+    #[test]
+    fn test_parse_drop_database() {
+        let query = parse_query("db.dropDatabase()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::DropDatabase));
+    }
+
+    #[test]
+    fn test_parse_run_command() {
+        let query = parse_query(r#"db.runCommand({"ping": 1})"#).unwrap();
+        assert!(query.collection.is_none());
+        if let MongoOperation::RunCommand { command } = &query.operation {
+            assert!(command.contains_key("ping"));
+        } else {
+            panic!("Expected RunCommand, got: {:?}", query.operation);
+        }
+    }
+
+    #[test]
+    fn test_parse_admin_command() {
+        let query = parse_query(r#"db.adminCommand({"listDatabases": 1})"#).unwrap();
+        assert!(query.collection.is_none());
+        if let MongoOperation::AdminCommand { command } = &query.operation {
+            assert!(command.contains_key("listDatabases"));
+        } else {
+            panic!("Expected AdminCommand, got: {:?}", query.operation);
+        }
+    }
+
+    #[test]
+    fn test_parse_version() {
+        let query = parse_query("db.version()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::Version));
+    }
+
+    #[test]
+    fn test_parse_host_info() {
+        let query = parse_query("db.hostInfo()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::HostInfo));
+    }
+
+    #[test]
+    fn test_parse_current_op() {
+        let query = parse_query("db.currentOp()").unwrap();
+        assert!(query.collection.is_none());
+        assert!(matches!(query.operation, MongoOperation::CurrentOp));
+    }
+
+    #[test]
+    fn test_parse_get_name_with_args_fails() {
+        let result = parse_query(r#"db.getName("arg")"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unsupported_db_method() {
+        let result = parse_query("db.unknownDbMethod()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_db_level_validation_no_errors() {
+        let errors = validate_query_positional("db.getName()");
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_db_level_validation_run_command() {
+        let errors = validate_query_positional(r#"db.runCommand({"ping": 1})"#);
+        assert!(errors.is_empty());
     }
 }
