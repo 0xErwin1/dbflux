@@ -1,4 +1,4 @@
-use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount, RunningQuery};
+use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
 use crate::ui::components::data_table::SortState as TableSortState;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{
@@ -62,11 +62,6 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.running_query.is_some() {
-            cx.toast_error("A query is already running", window);
-            return;
-        }
-
         let filter_value = self.filter_input.read(cx).value();
         let filter = if filter_value.trim().is_empty() {
             None
@@ -114,7 +109,6 @@ impl DataGridPanel {
             return;
         };
 
-        // Use the database from the active connection if the table doesn't have a schema set
         let mut browse_request = request.clone();
         if browse_request.table.schema.is_none()
             && let Some(ref db) = active_database
@@ -127,22 +121,16 @@ impl DataGridPanel {
             browse_request.table.qualified_name()
         );
 
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
-            state.start_task(
-                TaskKind::Query,
-                format!("SELECT * FROM {}", table.qualified_name()),
-            )
-        });
+        let (task_id, cancel_token) = self.runner.start_primary(
+            TaskKind::Query,
+            format!("SELECT * FROM {}", table.qualified_name()),
+            cx,
+        );
 
-        self.running_query = Some(RunningQuery {
-            task_id,
-            cancel_token: cancel_token.clone(),
-        });
         self.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
-        let app_state = self.app_state.clone();
         let conn_for_cleanup = conn.clone();
 
         let table_for_spawn = table.clone();
@@ -157,10 +145,6 @@ impl DataGridPanel {
             let result = task.await;
 
             cx.update(|cx| {
-                entity.update(cx, |panel, _cx| {
-                    panel.running_query = None;
-                });
-
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -177,11 +161,8 @@ impl DataGridPanel {
                             query_result.execution_time
                         );
 
-                        app_state.update(cx, |state, _| {
-                            state.complete_task(task_id);
-                        });
-
                         entity.update(cx, |panel, cx| {
+                            panel.runner.complete_primary(task_id, cx);
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -196,11 +177,8 @@ impl DataGridPanel {
                     Err(e) => {
                         log::error!("Query failed: {}", e);
 
-                        app_state.update(cx, |state, _| {
-                            state.fail_task(task_id, e.to_string());
-                        });
-
                         entity.update(cx, |panel, cx| {
+                            panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.state = GridState::Error;
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),
@@ -230,11 +208,6 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.running_query.is_some() {
-            cx.toast_error("A query is already running", window);
-            return;
-        }
-
         let limit_value = self.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
@@ -294,22 +267,16 @@ impl DataGridPanel {
             collection.database, collection.name
         );
 
-        let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
-            state.start_task(
-                TaskKind::Query,
-                format!("find {}.{}", collection.database, collection.name),
-            )
-        });
+        let (task_id, cancel_token) = self.runner.start_primary(
+            TaskKind::Query,
+            format!("find {}.{}", collection.database, collection.name),
+            cx,
+        );
 
-        self.running_query = Some(RunningQuery {
-            task_id,
-            cancel_token: cancel_token.clone(),
-        });
         self.state = GridState::Loading;
         cx.notify();
 
         let entity = cx.entity().clone();
-        let app_state = self.app_state.clone();
         let conn_for_cleanup = conn.clone();
         let collection_for_spawn = collection.clone();
         let pagination_for_spawn = pagination.clone();
@@ -322,10 +289,6 @@ impl DataGridPanel {
             let result = task.await;
 
             cx.update(|cx| {
-                entity.update(cx, |panel, _cx| {
-                    panel.running_query = None;
-                });
-
                 if cancel_token.is_cancelled() {
                     log::info!("Query was cancelled, discarding result");
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
@@ -342,11 +305,8 @@ impl DataGridPanel {
                             query_result.execution_time
                         );
 
-                        app_state.update(cx, |state, _| {
-                            state.complete_task(task_id);
-                        });
-
                         entity.update(cx, |panel, cx| {
+                            panel.runner.complete_primary(task_id, cx);
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
@@ -360,11 +320,8 @@ impl DataGridPanel {
                     Err(e) => {
                         log::error!("Collection query failed: {}", e);
 
-                        app_state.update(cx, |state, _| {
-                            state.fail_task(task_id, e.to_string());
-                        });
-
                         entity.update(cx, |panel, cx| {
+                            panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.state = GridState::Error;
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Query failed: {}", e),

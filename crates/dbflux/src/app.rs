@@ -617,6 +617,17 @@ impl AppState {
         self.facade.tasks.start(kind, description)
     }
 
+    pub fn start_task_for_profile(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        profile_id: Option<Uuid>,
+    ) -> (TaskId, CancelToken) {
+        self.facade
+            .tasks
+            .start_for_profile(kind, description, profile_id)
+    }
+
     pub fn complete_task(&mut self, id: TaskId) {
         self.facade.tasks.complete(id);
     }

@@ -4,7 +4,7 @@ use crate::ui::components::document_tree::NodeId;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{
     CollectionRef, DocumentFilter, DocumentUpdate, Pagination, RowDelete, RowIdentity, RowInsert,
-    RowPatch, RowState, TableRef, Value,
+    RowPatch, RowState, TableRef, TaskKind, Value,
 };
 use gpui::*;
 use std::collections::BTreeMap;
@@ -238,6 +238,10 @@ impl DataGridPanel {
         let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
             .with_database(collection.database.clone());
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Update document field", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
         let profile_id = *profile_id;
@@ -256,6 +260,12 @@ impl DataGridPanel {
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .ok();
                 return;
             };
 
@@ -268,6 +278,7 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
+                            panel.runner.complete_mutation(task_id, cx);
                             panel.apply_inline_value_to_result(&node_id, &inline_value);
 
                             if let Some(tree_state) = panel.document_tree_state.clone() {
@@ -286,6 +297,7 @@ impl DataGridPanel {
                             });
                         }
                         Err(error) => {
+                            panel.runner.fail_mutation(task_id, error.to_string(), cx);
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Failed to update document: {}", error),
                                 is_error: true,
@@ -403,6 +415,8 @@ impl DataGridPanel {
             cx.notify();
         });
 
+        let (task_id, _cancel_token) = self.runner.start_mutation(TaskKind::Query, "Save row", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
 
@@ -422,6 +436,8 @@ impl DataGridPanel {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+
                         if let Some(table_state) = &panel.table_state {
                             table_state.update(cx, |state, cx| {
                                 state.edit_buffer_mut().set_row_state(
@@ -444,6 +460,10 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
+                    match &result {
+                        Ok(_) => panel.runner.complete_mutation(task_id, cx),
+                        Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
+                    }
                     panel.handle_save_result(row_idx, result, cx);
                 });
             })
@@ -511,6 +531,10 @@ impl DataGridPanel {
             cx.notify();
         });
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Save document", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
 
@@ -530,6 +554,8 @@ impl DataGridPanel {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+
                         if let Some(table_state) = &panel.table_state {
                             table_state.update(cx, |state, cx| {
                                 state.edit_buffer_mut().set_row_state(
@@ -552,6 +578,10 @@ impl DataGridPanel {
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
+                    match &result {
+                        Ok(_) => panel.runner.complete_mutation(task_id, cx),
+                        Err(e) => panel.runner.fail_mutation(task_id, e.to_string(), cx),
+                    }
                     panel.handle_save_result(row_idx, result, cx);
                 });
             })
@@ -655,6 +685,10 @@ impl DataGridPanel {
         let insert = dbflux_core::DocumentInsert::one(collection.name.clone(), doc.into())
             .with_database(collection.database.clone());
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Insert document", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
         let table_state_clone = table_state.clone();
@@ -673,6 +707,12 @@ impl DataGridPanel {
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .ok();
                 return;
             };
 
@@ -685,6 +725,8 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
+                            panel.runner.complete_mutation(task_id, cx);
+
                             table_state_clone.update(cx, |state, cx| {
                                 state
                                     .edit_buffer_mut()
@@ -699,6 +741,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
+                            panel.runner.fail_mutation(task_id, e.to_string(), cx);
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Insert failed: {}", e),
                                 is_error: true,
@@ -775,6 +818,10 @@ impl DataGridPanel {
             values,
         );
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Insert row", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
         let table_state_clone = table_state.clone();
@@ -793,6 +840,12 @@ impl DataGridPanel {
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .ok();
                 return;
             };
 
@@ -805,6 +858,8 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
+                            panel.runner.complete_mutation(task_id, cx);
+
                             table_state_clone.update(cx, |state, cx| {
                                 state
                                     .edit_buffer_mut()
@@ -819,6 +874,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
+                            panel.runner.fail_mutation(task_id, e.to_string(), cx);
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Insert failed: {}", e),
                                 is_error: true,
@@ -925,6 +981,10 @@ impl DataGridPanel {
         let delete = dbflux_core::DocumentDelete::new(collection.name.clone(), filter)
             .with_database(collection.database.clone());
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Delete document", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
         let table_state_clone = table_state.clone();
@@ -943,6 +1003,12 @@ impl DataGridPanel {
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .ok();
                 return;
             };
 
@@ -955,6 +1021,8 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
+                            panel.runner.complete_mutation(task_id, cx);
+
                             table_state_clone.update(cx, |state, cx| {
                                 state.edit_buffer_mut().unmark_delete(row_idx);
                                 cx.notify();
@@ -967,6 +1035,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             log::error!("[DELETE] Failed: {}", e);
+                            panel.runner.fail_mutation(task_id, e.to_string(), cx);
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Delete failed: {}", e),
                                 is_error: true,
@@ -1039,6 +1108,10 @@ impl DataGridPanel {
         let identity = RowIdentity::new(pk_columns, pk_values);
         let delete = RowDelete::new(identity, table_ref.name.clone(), table_ref.schema.clone());
 
+        let (task_id, _cancel_token) =
+            self.runner
+                .start_mutation(TaskKind::Query, "Delete row", cx);
+
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
         let table_state_clone = table_state.clone();
@@ -1057,6 +1130,12 @@ impl DataGridPanel {
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .ok();
                 return;
             };
 
@@ -1069,6 +1148,8 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     match result {
                         Ok(_) => {
+                            panel.runner.complete_mutation(task_id, cx);
+
                             table_state_clone.update(cx, |state, cx| {
                                 state.edit_buffer_mut().unmark_delete(row_idx);
                                 cx.notify();
@@ -1081,6 +1162,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             log::error!("[DELETE] Failed: {}", e);
+                            panel.runner.fail_mutation(task_id, e.to_string(), cx);
                             panel.pending_toast = Some(PendingToast {
                                 message: format!("Delete failed: {}", e),
                                 is_error: true,

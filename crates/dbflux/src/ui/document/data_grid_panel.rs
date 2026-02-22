@@ -5,6 +5,7 @@ mod query;
 mod render;
 mod utils;
 
+use super::task_runner::DocumentTaskRunner;
 use crate::app::AppState;
 use crate::ui::cell_editor_modal::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
 use crate::ui::components::data_table::{
@@ -17,8 +18,7 @@ use crate::ui::document_preview_modal::{
 };
 use crate::ui::toast::PendingToast;
 use dbflux_core::{
-    CancelToken, CollectionRef, OrderByColumn, Pagination, QueryResult, SortDirection, TableRef,
-    TaskId, Value,
+    CollectionRef, OrderByColumn, Pagination, QueryResult, SortDirection, TableRef, Value,
 };
 use gpui::*;
 use gpui_component::Sizable;
@@ -181,13 +181,6 @@ struct LocalSortState {
     direction: SortDirection,
 }
 
-struct RunningQuery {
-    #[allow(dead_code)]
-    task_id: TaskId,
-    #[allow(dead_code)]
-    cancel_token: CancelToken,
-}
-
 struct PendingRequery {
     profile_id: Uuid,
     table: TableRef,
@@ -281,8 +274,8 @@ pub struct DataGridPanel {
     pk_columns: Vec<String>,
 
     // Async state
+    runner: DocumentTaskRunner,
     state: GridState,
-    running_query: Option<RunningQuery>,
     pending_requery: Option<PendingRequery>,
     pending_total_count: Option<PendingTotalCount>,
     pending_rebuild: bool,
@@ -590,6 +583,22 @@ impl DataGridPanel {
 
         let view_config = super::data_view::DataViewConfig::for_source(&source);
 
+        let runner = {
+            let mut r = DocumentTaskRunner::new(app_state.clone());
+
+            let pid = match &source {
+                DataSource::Table { profile_id, .. } => Some(*profile_id),
+                DataSource::Collection { profile_id, .. } => Some(*profile_id),
+                DataSource::QueryResult { .. } => None,
+            };
+
+            if let Some(pid) = pid {
+                r.set_profile_id(pid);
+            }
+
+            r
+        };
+
         Self {
             source,
             app_state,
@@ -602,8 +611,8 @@ impl DataGridPanel {
             local_sort_state: None,
             original_row_order: None,
             pk_columns,
+            runner,
             state: GridState::Ready,
-            running_query: None,
             pending_requery: None,
             pending_total_count: None,
             pending_rebuild: false,
