@@ -2,6 +2,144 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.0] – 2026-02-23
+
+### Added
+
+#### MongoDB Support
+
+* MongoDB driver with collection browsing, CRUD operations, and schema introspection
+* Document tree view with keyboard navigation, search, and value expansion
+* MongoDB query parsing and validation with positional diagnostics
+* MongoDB shell query generator for "Copy as Query" support
+* Document view context menu with language-aware editor
+
+#### Redis Support
+
+* Redis driver with key-value API integration
+* Key-value document browser with keyboard-navigable new-key modal
+* Support for all Redis data types: String, Hash, Set, Sorted Set, List, Stream
+* Context menu and real pagination for the key browser
+* Live TTL countdown display
+* Add Member modal for collection types
+* Redis key completions and command arity validation in the editor
+
+#### Script Documents
+
+* File-backed query documents with Open (`Ctrl+O`), Save (`Ctrl+S`), and Save As (`Ctrl+Shift+S`)
+* Execution context bar with connection, database, and schema dropdowns per tab
+* Scripts folder in the sidebar with file and folder management
+
+#### Session Persistence
+
+* Auto-save on a 2-second debounce after each keystroke
+* Scratch files for untitled tabs, shadow files for file-backed tabs (explicit `Ctrl+S` still writes the original)
+* Full session restore on startup from `~/.local/share/dbflux/sessions/`
+* Conflict detection: warns when original file was modified externally while a shadow existed
+* Tabs close without unsaved-changes warnings
+
+#### Per-Database Connections
+
+* PostgreSQL supports multiple databases open simultaneously in the sidebar
+* Query tabs target a specific database connection instead of sharing a single switchable one
+
+#### Document System
+
+* Tab-based document architecture with `DocumentHandle` and `TabManager`
+* SQL query documents with multiple result tabs (MRU ordering)
+* Collapsible, resizable sidebar dock and bottom dock panels
+* History modal integrated with document-based focus system
+
+#### Editor Enhancements
+
+* Language-aware autocompletion (SQL tables/columns, MongoDB collections, Redis keys)
+* Live query diagnostics with positional error markers
+* Redis command arity validation in the editor
+
+#### Data Grid
+
+* Inline cell editing with focus handling
+* Modal editor for JSON and long text values (`CellEditorModal`)
+* Context menu with CRUD operations and SQL generation
+* Keyboard navigation in context menus
+* Column resizing via drag
+* Support for empty tables in the data grid
+* Row insert and duplicate without requiring a primary key
+
+#### Query Generation
+
+* Unified query generation with "Copy as Query" and preview modal
+* `QueryGenerator` trait implemented by PostgreSQL, MySQL, SQLite, MongoDB, and Redis drivers
+* `SqlDialect` trait for SQL flavor differences across drivers
+
+#### Export
+
+* Multi-format export: CSV, JSON, Text, and Binary
+* Export generalized by result shape instead of hardcoded CSV
+
+#### Auto-Refresh
+
+* Interval-based auto-refresh with unified refresh split button
+* `DocumentTaskRunner` for unified async task tracking
+
+#### Connection Manager
+
+* URI connection mode for PostgreSQL and MySQL
+* Bidirectional sync between connection URI and individual form fields
+
+#### Query Safety
+
+* Dangerous query detection for SQL, MongoDB, and Redis commands
+* Confirmation dialog with query preview before destructive operations
+
+#### Sidebar
+
+* Schema-level indexes, foreign keys, and data types in the tree
+* Schema-level metadata support for MySQL and SQLite
+* Context menus for indexes, foreign keys, and custom types
+* `q`/`e` keys to switch between Connections and Scripts tabs
+* Inline rename in the tree (both tabs)
+* Default focus to sidebar on startup when no tabs are open
+
+#### Packaging & CI
+
+* macOS release builds with `.app` bundle (`Info.plist`)
+* Windows release builds with Inno Setup installer
+* MongoDB and Redis feature flags enabled in default builds
+
+### Changed
+
+* `CellValue` pre-computes display text at construction time (avoids allocation during render)
+* Lazy loading for PostgreSQL and SQLite drivers (shallow metadata first, details on demand)
+* Sidebar uses `SchemaNodeId` parsing instead of stale underscore prefixes
+* Custom toast implementation replaces `gpui-component` toast
+* AppState decomposed into focused sub-managers in `dbflux_core`
+* Architecture decoupled: core traits, driver capabilities, and error formatting extracted
+* Oversized UI modules split into focused submodules (sidebar, SQL query, modals, SSH form)
+* Active context detection improved in data grids
+* Document focus restored correctly across menus and modals
+* Scripts tab styling matches connections tab (icon and label colors)
+* Removed force-close flow (double `Ctrl+W` warning, pending force close state)
+
+### Performance
+
+* Fixed catastrophic 1 FPS rendering issue in the data table
+* Row-level event handlers replace per-cell closures in tables
+* Background executor used consistently for all database operations
+
+### Fixed
+
+* Document focus restored across menus and modals
+* Redis database state handling and UI interaction bugs
+* SSH tunnel form mouse focus syncs with keyboard state
+* Settings sync between SSH form fields
+* Panics and unwraps eliminated across UI and driver code
+* Empty query results now return column metadata correctly
+* DDL queries show preview modal and editor height is correct
+* Sidebar "New File"/"New Folder" creates inside the selected folder instead of at root
+* Reveal in File Manager works on macOS and Windows (not just Linux)
+* Opening an already-open script activates its tab instead of closing it
+
 ## [0.2.0] – 2026-01-30
 
 ### Added
@@ -154,6 +292,4 @@ Initial release of DBFlux.
 
 ### Known Limitations
 
-- Export limited to CSV format (JSON, SQL, Excel planned)
-- No query autocompletion
 - No dark/light theme toggle (uses system default)

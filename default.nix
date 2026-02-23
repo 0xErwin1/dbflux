@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> {}
 , craneLib ? null
-, version ? "0.2.0"
+, version ? "0.3.0"
 }:
 
 let
@@ -121,7 +121,7 @@ let
     craneLib.buildPackage (commonArgs // {
       pname = "dbflux";
       inherit version cargoArtifacts;
-      cargoExtraArgs = "-p dbflux --features sqlite,postgres,mysql";
+      cargoExtraArgs = "-p dbflux --features sqlite,postgres,mysql,mongodb,redis";
       postInstall = postInstallScript;
     });
 
@@ -140,7 +140,7 @@ let
 
     ZSTD_SYS_USE_PKG_CONFIG = "1";
 
-    buildFeatures = [ "sqlite" "postgres" "mysql" ];
+    buildFeatures = [ "sqlite" "postgres" "mysql" "mongodb" "redis" ];
     cargoBuildFlags = [ "-p" "dbflux" ];
     cargoTestFlags = [ "-p" "dbflux" ];
 

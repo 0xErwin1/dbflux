@@ -20,7 +20,7 @@ permissions:
   contents: write
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mongodb"
+  FEATURES: "sqlite,postgres,mysql,mongodb,redis"
 
 jobs:
   build-linux:
