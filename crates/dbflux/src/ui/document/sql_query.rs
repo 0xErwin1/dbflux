@@ -141,6 +141,13 @@ pub struct SqlQueryDocument {
     // Pending file I/O
     _pending_save: Option<Task<()>>,
 
+    // Session persistence (auto-save to disk)
+    scratch_path: Option<PathBuf>,
+    shadow_path: Option<PathBuf>,
+    _auto_save_debounce: Option<Task<()>>,
+    show_saved_label: bool,
+    _saved_label_timer: Option<Task<()>>,
+
     // Pending error to show as toast (set from async context without window access)
     pending_error: Option<String>,
 }
@@ -219,6 +226,7 @@ impl SqlQueryDocument {
                     } else {
                         this.mark_dirty(cx);
                     }
+                    this.schedule_auto_save(cx);
                     this.schedule_diagnostic_refresh(cx);
                 }
                 InputEvent::Focus => {
@@ -278,6 +286,13 @@ impl SqlQueryDocument {
             },
         );
 
+        let doc_id = DocumentId::new();
+
+        let scratch_path = app_state
+            .read(cx)
+            .session_store()
+            .map(|store| store.scratch_path(&doc_id.0.to_string(), query_language.default_extension()));
+
         let initial_database = connection_id.and_then(|id| {
             let connections = app_state.read(cx).connections();
             let connected = connections.get(&id)?;
@@ -313,7 +328,7 @@ impl SqlQueryDocument {
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
 
         Self {
-            id: DocumentId::new(),
+            id: doc_id,
             title: "Query 1".to_string(),
             state: DocumentState::Clean,
             connection_id,
@@ -355,6 +370,11 @@ impl SqlQueryDocument {
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
             _pending_save: None,
+            scratch_path,
+            shadow_path: None,
+            _auto_save_debounce: None,
+            show_saved_label: false,
+            _saved_label_timer: None,
             pending_error: None,
         }
     }
@@ -452,6 +472,15 @@ impl SqlQueryDocument {
     fn mark_dirty(&mut self, cx: &mut Context<Self>) {
         if !self.is_dirty {
             self.is_dirty = true;
+
+            if self.is_file_backed() && self.shadow_path.is_none() {
+                self.shadow_path = self
+                    .app_state
+                    .read(cx)
+                    .session_store()
+                    .map(|store| store.shadow_path(&self.id.0.to_string()));
+            }
+
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
@@ -461,6 +490,13 @@ impl SqlQueryDocument {
         if self.is_dirty {
             self.is_dirty = false;
             self.original_content = self.input_state.read(cx).value().to_string();
+
+            if let Some(shadow) = self.shadow_path.take()
+                && let Some(store) = self.app_state.read(cx).session_store()
+            {
+                store.delete(&shadow);
+            }
+
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
@@ -504,6 +540,34 @@ impl SqlQueryDocument {
     #[allow(dead_code)]
     pub fn exec_ctx(&self) -> &ExecutionContext {
         &self.exec_ctx
+    }
+
+    pub fn scratch_path(&self) -> Option<&PathBuf> {
+        self.scratch_path.as_ref()
+    }
+
+    pub fn shadow_path(&self) -> Option<&PathBuf> {
+        self.shadow_path.as_ref()
+    }
+
+    /// Override session paths (used during session restore).
+    pub fn set_session_paths(
+        &mut self,
+        scratch: Option<PathBuf>,
+        shadow: Option<PathBuf>,
+    ) {
+        self.scratch_path = scratch;
+        self.shadow_path = shadow;
+    }
+
+    /// Mark the document as dirty without assigning a new shadow path.
+    /// Used during session restore when we already have the shadow from the manifest.
+    pub fn restore_dirty(&mut self, cx: &mut Context<Self>) {
+        if !self.is_dirty {
+            self.is_dirty = true;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
     }
 
     pub fn can_close(&self, cx: &App) -> bool {

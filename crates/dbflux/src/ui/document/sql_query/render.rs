@@ -198,6 +198,14 @@ impl SqlQueryDocument {
                         .child(format!("{:.2}s", duration.as_secs_f64())),
                 )
             })
+            .when(self.show_saved_label, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Saved"),
+                )
+            })
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

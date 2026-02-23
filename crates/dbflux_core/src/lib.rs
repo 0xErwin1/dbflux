@@ -22,6 +22,7 @@ mod refresh_policy;
 mod saved_query;
 mod schema;
 mod scripts_directory;
+mod session_store;
 mod schema_builder;
 pub mod schema_node_id;
 mod secrets;
@@ -93,6 +94,7 @@ pub use query_safety::is_safe_read_query;
 pub use refresh_policy::RefreshPolicy;
 pub use recent_files::{RecentFile, RecentFilesStore};
 pub use scripts_directory::{ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries};
+pub use session_store::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
