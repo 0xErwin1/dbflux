@@ -203,7 +203,8 @@ gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 
 ### Export
 
-- CSV export for query results
+- Shape-based export: CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64)
+- Export format determined by result type (table, JSON, text, binary)
 
 ## Development
 
@@ -288,7 +289,7 @@ dbflux/
 │   ├── dbflux_driver_mongodb/  # MongoDB driver
 │   ├── dbflux_driver_redis/   # Redis driver
 │   ├── dbflux_ssh/             # SSH tunnel support
-│   └── dbflux_export/          # Export functionality
+│   └── dbflux_export/          # Export (CSV, JSON, Text, Binary)
 ├── resources/
 │   ├── desktop/                # Linux desktop entry
 │   ├── icons/                  # Application icons (SVG)

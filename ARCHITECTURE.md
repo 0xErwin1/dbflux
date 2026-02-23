@@ -12,7 +12,7 @@
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis) (Cargo.toml).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
-- Export: `csv` + `hex` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
+- Export: `csv` + `hex` + `base64` + `serde_json` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
 - Logging: `log`, `env_logger` (crates/dbflux/src/main.rs).
 
@@ -100,7 +100,7 @@ crates/
     src/driver.rs           # Connection, key-value API, schema discovery
     src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
   dbflux_ssh/               # SSH tunnel support
-  dbflux_export/            # CSV export
+  dbflux_export/            # Export (CSV, JSON, Text, Binary)
 ```
 
 ## Core Components
@@ -191,7 +191,7 @@ crates/
 
 - Toast system: `crates/dbflux/src/ui/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` establishes SSH sessions and runs a local port forwarder.
-- Export: `crates/dbflux_export/src/lib.rs` exposes the CSV exporter interface.
+- Export: `crates/dbflux_export/src/lib.rs` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver.
 - Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets.
 
 ## Data Flow
@@ -224,7 +224,7 @@ crates/
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - SSH: `ssh2` sessions with local TCP forwarding (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords and SSH passphrases (crates/dbflux_core/src/secrets.rs).
-- CSV export: `csv::Writer` for result exports (crates/dbflux_export/src/csv.rs).
+- Export: shape-based multi-format export — CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64) via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 
 ## Configuration
 

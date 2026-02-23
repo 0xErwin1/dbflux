@@ -18,7 +18,7 @@ crates/
 ├── dbflux_driver_mongodb/     # MongoDB driver
 ├── dbflux_driver_redis/       # Redis driver
 ├── dbflux_ssh/                # SSH tunnel support
-└── dbflux_export/             # CSV export
+└── dbflux_export/             # Export (CSV, JSON, Text, Binary)
 ```
 
 ## Build & Run Commands
