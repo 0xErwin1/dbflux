@@ -209,7 +209,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runs_on: macos-15-large
+            runs_on: macos-15-intel
             target: x86_64-apple-darwin
           - arch: arm64
             runs_on: macos-14
@@ -275,6 +275,7 @@ jobs:
             --icon "DBFlux.app" 200 190 \
             --hide-extension "DBFlux.app" \
             --app-drop-link 600 185 \
+            --no-internet-enable \
             --skip-jenkins \
             dbflux-macos-${{ matrix.arch }}.dmg \
             DBFlux.app
@@ -381,7 +382,8 @@ jobs:
           Copy-Item target/x86_64-pc-windows-msvc/release/dbflux.exe installer/dbflux.exe
           Copy-Item dbflux.ico installer/dbflux.ico
           Copy-Item resources/windows/installer.iss installer/installer.iss
-          Copy-Item LICENSE installer/LICENSE
+          Copy-Item LICENSE-MIT installer/LICENSE-MIT
+          Copy-Item LICENSE-APACHE installer/LICENSE-APACHE
 
       - name: Get version
         id: version
@@ -389,7 +391,7 @@ jobs:
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $version = "${{ github.event.inputs.version }}"
-          else
+          } else {
             $version = "$env:GITHUB_REF_NAME"
           }
 
@@ -400,7 +402,7 @@ jobs:
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
         with:
           path: installer/installer.iss
-          options: /DMyAppVersion=${{ steps.version.outputs.version }} /O+
+          options: /DMyAppVersion=${{ steps.version.outputs.version }}
 
       - name: Generate installer checksum
         run: |

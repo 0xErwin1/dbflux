@@ -16,7 +16,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
-LicenseFile=LICENSE
+LicenseFile=LICENSE-MIT
 OutputDir=output
 OutputBaseFilename=dbflux-windows-amd64-setup
 SetupIconFile=dbflux.ico
@@ -40,6 +40,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "dbflux.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dbflux.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
+Source: "LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\dbflux.ico"
