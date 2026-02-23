@@ -163,7 +163,7 @@ impl Value {
         }
     }
 
-    fn to_serde_json(value: &Value) -> serde_json::Value {
+    pub fn to_serde_json(value: &Value) -> serde_json::Value {
         match value {
             Value::Null => serde_json::Value::Null,
             Value::Bool(b) => serde_json::Value::Bool(*b),

@@ -1,20 +1,12 @@
-use crate::{ExportError, Exporter};
+use crate::ExportError;
 use csv::Writer;
 use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::io::Write;
 
 pub struct CsvExporter;
 
-impl Exporter for CsvExporter {
-    fn name(&self) -> &'static str {
-        "CSV"
-    }
-
-    fn extension(&self) -> &'static str {
-        "csv"
-    }
-
-    fn export(&self, result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
+impl CsvExporter {
+    pub fn export(&self, result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
         match &result.shape {
             QueryResultShape::Text => {
                 if let Some(body) = &result.text_body {

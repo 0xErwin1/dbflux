@@ -1347,31 +1347,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .when(has_data, |d| {
-                        d.child(
-                            div()
-                                .id("export-csv")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px(Spacing::XS)
-                                .rounded(Radii::SM)
-                                .text_size(FontSizes::XS)
-                                .cursor_pointer()
-                                .text_color(theme.muted_foreground)
-                                .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.export_results(window, cx);
-                                }))
-                                .child(
-                                    svg()
-                                        .path(AppIcon::FileSpreadsheet.path())
-                                        .size_4()
-                                        .text_color(theme.muted_foreground),
-                                )
-                                .child("Export CSV"),
-                        )
-                    })
+                    .when(has_data, |d| d.child(self.render_export_button(theme, cx)))
                     .child({
                         let mut muted = theme.muted_foreground;
                         muted.a = 0.5;
@@ -1381,6 +1357,112 @@ impl DataGridPanel {
                             .child(exec_time.to_string())
                     }),
             )
+    }
+
+    fn render_export_button(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let formats = dbflux_export::available_formats(&self.result.shape);
+        let menu_open = self.export_menu_open;
+
+        let label = if formats.len() == 1 {
+            format!("Export {}", formats[0].name())
+        } else {
+            "Export".to_string()
+        };
+
+        div()
+            .id("export-trigger")
+            .relative()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px(Spacing::XS)
+            .rounded(Radii::SM)
+            .text_size(FontSizes::XS)
+            .cursor_pointer()
+            .text_color(theme.muted_foreground)
+            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.export_results(window, cx);
+            }))
+            .child(
+                svg()
+                    .path(AppIcon::FileSpreadsheet.path())
+                    .size_4()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(label)
+            .when(formats.len() > 1, |d| {
+                d.child(
+                    svg()
+                        .path(AppIcon::ChevronDown.path())
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                )
+            })
+            .when(menu_open, |d| {
+                d.child(self.render_export_menu(formats, theme, cx))
+            })
+    }
+
+    fn render_export_menu(
+        &self,
+        formats: &[dbflux_export::ExportFormat],
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let items: Vec<AnyElement> = formats
+            .iter()
+            .enumerate()
+            .map(|(idx, &format)| {
+                div()
+                    .id(SharedString::from(format!("export-{}", idx)))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.export_with_format(format, window, cx);
+                    }))
+                    .child(format.name())
+                    .into_any_element()
+            })
+            .collect();
+
+        deferred(
+            div()
+                .absolute()
+                .bottom_full()
+                .right_0()
+                .mb(Spacing::XS)
+                .w(px(160.0))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(Radii::MD)
+                .shadow_lg()
+                .py(Spacing::XS)
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.export_menu_open = false;
+                    cx.notify();
+                }))
+                .children(items),
+        )
+        .with_priority(1)
     }
 }
 

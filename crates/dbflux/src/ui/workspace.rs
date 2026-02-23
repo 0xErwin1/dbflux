@@ -279,7 +279,7 @@ impl Workspace {
             PaletteCommand::new("next_tab", "Next Tab", "Tabs").with_shortcut("Ctrl+Tab"),
             PaletteCommand::new("prev_tab", "Previous Tab", "Tabs").with_shortcut("Ctrl+Shift+Tab"),
             // Results
-            PaletteCommand::new("export_results", "Export Results to CSV", "Results")
+            PaletteCommand::new("export_results", "Export Results", "Results")
                 .with_shortcut("Ctrl+E"),
             // Connections
             PaletteCommand::new(

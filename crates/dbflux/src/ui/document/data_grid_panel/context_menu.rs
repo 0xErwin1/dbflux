@@ -13,7 +13,7 @@ use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, QueryRequest,
     RowDelete, RowIdentity, RowInsert, RowPatch, Value,
 };
-use dbflux_export::{CsvExporter, Exporter};
+use dbflux_export::ExportFormat;
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 use gpui_component::ActiveTheme;
@@ -363,31 +363,45 @@ impl DataGridPanel {
     // === Export ===
 
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.result.rows.is_empty() {
+        if self.result.rows.is_empty()
+            && self.result.text_body.is_none()
+            && self.result.raw_bytes.is_none()
+        {
             cx.toast_error("No results to export", window);
             return;
         }
 
+        let formats = dbflux_export::available_formats(&self.result.shape);
+
+        if formats.len() == 1 {
+            self.export_with_format(formats[0], window, cx);
+        } else {
+            self.export_menu_open = !self.export_menu_open;
+            cx.notify();
+        }
+    }
+
+    pub fn export_with_format(
+        &mut self,
+        format: ExportFormat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_menu_open = false;
+
         let result = self.result.clone();
-        let suggested_name = match &self.source {
-            DataSource::Table { table, .. } => format!("{}.csv", table.name),
-            DataSource::Collection { collection, .. } => format!("{}.csv", collection.name),
-            DataSource::QueryResult { .. } => {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                format!("result_{}.csv", timestamp)
-            }
-        };
+        let base_name = self.export_base_name();
+        let extension = format.extension();
+        let suggested_name = format!("{}.{}", base_name, extension);
+        let format_name = format.name();
 
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
             let file_handle = rfd::AsyncFileDialog::new()
-                .set_title("Export as CSV")
+                .set_title(format!("Export as {}", format_name))
                 .set_file_name(&suggested_name)
-                .add_filter("CSV", &["csv"])
+                .add_filter(format_name, &[extension])
                 .save_file()
                 .await;
 
@@ -400,7 +414,7 @@ impl DataGridPanel {
             let export_result = (|| {
                 let file = File::create(&path)?;
                 let mut writer = BufWriter::new(file);
-                CsvExporter.export(&result, &mut writer)?;
+                dbflux_export::export(&result, format, &mut writer)?;
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
@@ -419,6 +433,20 @@ impl DataGridPanel {
             .ok();
         })
         .detach();
+    }
+
+    fn export_base_name(&self) -> String {
+        match &self.source {
+            DataSource::Table { table, .. } => table.name.clone(),
+            DataSource::Collection { collection, .. } => collection.name.clone(),
+            DataSource::QueryResult { .. } => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("result_{}", timestamp)
+            }
+        }
     }
 
     pub(super) fn build_context_menu_items(

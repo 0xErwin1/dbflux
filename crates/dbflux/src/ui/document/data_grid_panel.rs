@@ -332,6 +332,8 @@ pub struct DataGridPanel {
     // Document preview modal for viewing/editing full documents
     document_preview_modal: Entity<DocumentPreviewModal>,
     pending_document_preview: Option<PendingDocumentPreview>,
+
+    export_menu_open: bool,
 }
 
 impl DataGridPanel {
@@ -697,6 +699,7 @@ impl DataGridPanel {
             document_tree_subscription: None,
             document_preview_modal,
             pending_document_preview: None,
+            export_menu_open: false,
         }
     }
 
