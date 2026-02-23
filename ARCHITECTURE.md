@@ -34,6 +34,13 @@ crates/
       handle.rs             # DocumentHandle for entity management
       types.rs              # DocumentId, DocumentKind, DocumentState
       sql_query.rs          # Query editor with language-aware syntax (SQL/MongoDB/etc)
+      sql_query/file_ops.rs # Auto-save, scratch/shadow file management
+      sql_query/context_bar.rs  # Execution context dropdowns (connection/database/schema)
+      sql_query/render.rs   # Toolbar and editor rendering
+      sql_query/execution.rs # Query execution flow
+      sql_query/completion.rs # Language-aware autocompletion
+      sql_query/diagnostics.rs # Live query diagnostics
+      sql_query/focus.rs    # Internal focus management
       data_document.rs      # Standalone data browsing document
       tab_manager.rs        # MRU tab ordering and activation
       tab_bar.rs            # Visual tab bar rendering
@@ -81,6 +88,9 @@ crates/
     src/key_value.rs        # Key-value operation types (Hash, Set, List, ZSet, Stream)
     src/query_generator.rs  # QueryGenerator trait and MutationRequest routing
     src/language_service.rs # Dangerous query detection (SQL, MongoDB, Redis)
+    src/session_store.rs    # Session persistence (scratch/shadow files, manifest)
+    src/scripts_directory.rs # Scripts folder tree (file/folder CRUD)
+    src/execution_context.rs # Per-tab execution context (connection/database/schema)
     src/session_facade.rs   # Session facade for connection management
     src/sql_dialect.rs      # SqlDialect trait for SQL flavor differences
     src/sql_generation.rs   # SQL INSERT/UPDATE/DELETE generation
@@ -116,7 +126,9 @@ crates/
 `crates/dbflux/src/ui/document/` implements a tab-based document architecture:
 
 - `DocumentHandle` manages document lifecycle as GPUI entities
-- `SqlQueryDocument` provides language-aware query editing (SQL/MongoDB/etc) with multiple result tabs (Ctrl+Enter to run, Ctrl+Shift+Enter for new tab)
+- `SqlQueryDocument` provides language-aware query editing (SQL/MongoDB/etc) with multiple result tabs (Ctrl+Enter to run, Ctrl+Shift+Enter for new tab). Supports file-backed script documents with execution context dropdowns (connection/database/schema).
+- Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Explicit Ctrl+S writes to the original file. Tabs close without warnings.
+- Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files.
 - `DataDocument` enables standalone data browsing independent of queries
 - `TabManager` tracks MRU (Most Recently Used) order for tab switching
 - `DataGridPanel` renders data with switchable view modes (Table for SQL, Document tree for MongoDB)
@@ -130,7 +142,7 @@ crates/
 
 ### Schema & Navigation
 
-- Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays connection tree with folder organization, drag-drop reordering, multi-selection, and schema browser with lazy loading. Shows tables/collections, columns, indexes per database category.
+- Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
 - Sidebar dock: `crates/dbflux/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection_tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
@@ -166,6 +178,9 @@ crates/
 
 - Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH profiles and keyring integration.
 - Storage: `crates/dbflux_core/src/store.rs`, `crates/dbflux_core/src/history.rs`, and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
+- Session persistence: `crates/dbflux_core/src/session_store.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
+- Scripts directory: `crates/dbflux_core/src/scripts_directory.rs` manages a user scripts folder with file/folder CRUD, import, and move operations.
+- Execution context: `crates/dbflux_core/src/execution_context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
 - History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 
 ### Driver Implementations
@@ -196,7 +211,7 @@ crates/
 
 ## Data Flow
 
-- Startup: `main` creates `AppState` and `Workspace`, then opens the main window (crates/dbflux/src/main.rs).
+- Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/workspace.rs).
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs). Supports both form-based configuration and direct URI input.
 - Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
 - View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
@@ -229,21 +244,25 @@ crates/
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers.
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
 - Runtime data (config dir via `dirs::config_dir`):
   - `profiles.json` and `ssh_tunnels.json` (crates/dbflux_core/src/store.rs).
   - `history.json` for query history (crates/dbflux_core/src/history.rs).
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/saved_query.rs).
+- Session data (data dir via `dirs::data_dir`):
+  - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/session_store.rs).
+  - `sessions/*.sql` scratch and shadow files for auto-save (crates/dbflux_core/src/session_store.rs).
+  - `scripts/` user scripts folder (crates/dbflux_core/src/scripts_directory.rs).
 - Secrets: passwords stored in OS keyring; references derived from profile IDs (crates/dbflux_core/src/secrets.rs).
 
 ## Build & Deploy
 
-- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb` or `--release` (AGENTS.md).
-- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb` (AGENTS.md).
+- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis` or `--release` (AGENTS.md).
+- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
 - Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
 - Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.
 - Arch Linux: `makepkg -si` using scripts/PKGBUILD.
 - Linux installer: `curl -fsSL .../install.sh | bash` downloads and installs release.
-- Releases: GitHub Actions workflow builds Linux amd64/arm64 using native ARM runners (no cross-compilation), with optional GPG signing, publishes to GitHub Releases.
+- Releases: GitHub Actions workflow builds Linux amd64/arm64, macOS amd64/arm64, and Windows amd64, with optional GPG signing, publishes to GitHub Releases.
 - Deployment model: desktop GUI app; no server runtime in this repo.

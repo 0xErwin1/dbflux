@@ -25,9 +25,9 @@ crates/
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis    # Run app
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
@@ -353,6 +353,9 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_core/src/crud.rs`                         | CRUD mutation types for all database paradigms      |
 | `crates/dbflux_core/src/key_value.rs`                    | Key-value operation types (Hash, Set, List, ZSet)   |
 | `crates/dbflux_core/src/sql_dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
+| `crates/dbflux_core/src/session_store.rs`                | Session persistence (scratch/shadow files, manifest)|
+| `crates/dbflux_core/src/scripts_directory.rs`            | Scripts folder tree (file/folder CRUD)              |
+| `crates/dbflux_core/src/execution_context.rs`            | Per-tab execution context (connection/database)     |
 | `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
 | `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |
 | `crates/dbflux_driver_mongodb/src/query_generator.rs`    | MongoDB shell query generator                       |
