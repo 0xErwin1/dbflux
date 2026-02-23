@@ -11,7 +11,7 @@ use crate::ui::command_palette::{
 };
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    DataDocument, DocumentHandle, DocumentId, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
+    DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::shutdown_overlay::ShutdownOverlay;
@@ -80,10 +80,6 @@ pub struct Workspace {
     pending_focus: Option<FocusTarget>,
     pending_open_script: Option<PendingOpenScript>,
     needs_focus_restore: bool,
-
-    /// Tracks the last tab close attempt that was blocked by unsaved changes.
-    /// If the user closes the same tab again within 3 seconds, we force-close it.
-    pending_force_close: Option<(DocumentId, std::time::Instant)>,
 
     focus_target: FocusTarget,
     keymap: &'static KeymapStack,
@@ -259,7 +255,12 @@ impl Workspace {
                             modal.open(context, *generation_type, window, cx);
                         });
                     }
-                    _ => {}
+                    TabManagerEvent::Opened(_)
+                    | TabManagerEvent::Closed(_)
+                    | TabManagerEvent::Activated(_)
+                    | TabManagerEvent::Reordered => {
+                        this.write_session_manifest(cx);
+                    }
                 }
             },
         )
@@ -268,7 +269,7 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
-        Self {
+        let mut workspace = Self {
             app_state,
             sidebar,
             sidebar_dock,
@@ -286,11 +287,14 @@ impl Workspace {
             pending_focus: None,
             pending_open_script: None,
             needs_focus_restore: false,
-            pending_force_close: None,
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
-        }
+        };
+
+        workspace.restore_session(window, cx);
+
+        workspace
     }
 
     fn default_commands() -> Vec<PaletteCommand> {

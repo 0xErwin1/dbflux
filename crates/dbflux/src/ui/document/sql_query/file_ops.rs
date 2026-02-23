@@ -71,6 +71,12 @@ impl SqlQueryDocument {
                 Ok(()) => {
                     cx.update(|cx| {
                         entity.update(cx, |doc, cx| {
+                            if let Some(scratch) = doc.scratch_path.take()
+                                && let Some(store) = doc.app_state.read(cx).session_store()
+                            {
+                                store.delete(&scratch);
+                            }
+
                             doc.path = Some(path.clone());
                             doc.mark_clean(cx);
                         });
@@ -88,6 +94,112 @@ impl SqlQueryDocument {
             }
         }));
     }
+
+    // === Auto-save (session persistence) ===
+
+    /// Write scratch content to disk so session restore can find it.
+    pub fn initial_auto_save(&self, cx: &App) {
+        if self.is_file_backed() {
+            return;
+        }
+
+        let Some(target) = self.scratch_path.as_ref() else {
+            return;
+        };
+
+        let content = self.build_file_content(cx);
+
+        if let Err(e) = std::fs::write(target, &content) {
+            log::error!("Initial auto-save failed for {}: {}", target.display(), e);
+        }
+    }
+
+    /// Schedule an auto-save after a 2-second debounce. Resets on each call.
+    pub fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
+        let target = if self.is_file_backed() {
+            self.shadow_path.clone()
+        } else {
+            self.scratch_path.clone()
+        };
+
+        let Some(target) = target else {
+            return;
+        };
+
+        let content = self.build_file_content(cx);
+        let entity = cx.entity().clone();
+
+        self._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+
+            let write_result = cx
+                .background_executor()
+                .spawn({
+                    let target = target.clone();
+                    async move { std::fs::write(&target, &content) }
+                })
+                .await;
+
+            match write_result {
+                Ok(()) => {
+                    log::debug!("Auto-saved to {}", target.display());
+                    cx.update(|cx| {
+                        entity.update(cx, |doc, cx| {
+                            doc.show_saved_label(cx);
+                        });
+                    })
+                    .ok();
+                }
+                Err(e) => {
+                    log::error!("Auto-save failed for {}: {}", target.display(), e);
+                }
+            }
+        }));
+    }
+
+    fn show_saved_label(&mut self, cx: &mut Context<Self>) {
+        self.show_saved_label = true;
+        cx.notify();
+
+        self._saved_label_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |doc, cx| {
+                        doc.show_saved_label = false;
+                        cx.notify();
+                    });
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Flush auto-save content synchronously (called before closing a tab).
+    pub fn flush_auto_save(&self, cx: &App) {
+        let target = if self.is_file_backed() {
+            self.shadow_path.as_ref()
+        } else {
+            self.scratch_path.as_ref()
+        };
+
+        let Some(target) = target else {
+            return;
+        };
+
+        let content = self.build_file_content(cx);
+
+        if let Err(e) = std::fs::write(target, &content) {
+            log::error!("Flush auto-save failed for {}: {}", target.display(), e);
+        }
+    }
+
+    // === Explicit save (Ctrl+S) ===
 
     /// Build the full file content, prepending execution context metadata.
     fn build_file_content(&self, cx: &App) -> String {

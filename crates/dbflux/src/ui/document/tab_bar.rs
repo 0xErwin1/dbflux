@@ -90,15 +90,10 @@ impl TabBar {
     ) -> impl IntoElement {
         let id = meta.id;
         let is_active = active_id == Some(id);
-        let is_modified = meta.state == DocumentState::Modified;
         let is_executing = meta.state == DocumentState::Executing;
         let is_drop_target = drop_target_index == Some(idx);
 
-        let title = if is_modified {
-            format!("{}*", meta.title)
-        } else {
-            meta.title.clone()
-        };
+        let title = meta.title.clone();
 
         let tab_manager = self.tab_manager.clone();
 
@@ -174,19 +169,16 @@ impl TabBar {
                     .child(title),
             )
             // Spinner or close button
-            .child(self.render_tab_action(id, is_executing, is_modified, cx))
+            .child(self.render_tab_action(id, is_executing, cx))
     }
 
     fn render_tab_action(
         &self,
         id: DocumentId,
         is_executing: bool,
-        is_modified: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // Cache theme colors before creating closures
         let accent = cx.theme().accent;
-        let warning = cx.theme().warning;
         let secondary = cx.theme().secondary;
         let muted_fg = cx.theme().muted_foreground;
 
@@ -198,22 +190,12 @@ impl TabBar {
             .justify_center()
             .rounded(Radii::SM)
             .child(if is_executing {
-                // Loader icon while executing
                 svg()
                     .path(AppIcon::Loader.path())
                     .size(px(12.0))
                     .text_color(accent)
                     .into_any_element()
-            } else if is_modified {
-                // Dot to indicate modified
-                div()
-                    .w(px(8.0))
-                    .h(px(8.0))
-                    .rounded_full()
-                    .bg(warning)
-                    .into_any_element()
             } else {
-                // Close button
                 div()
                     .id(ElementId::Name(format!("tab-close-{}", id.0).into()))
                     .w(px(16.0))

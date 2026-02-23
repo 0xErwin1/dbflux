@@ -434,38 +434,20 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    /// Attempts to close the active tab. If the document has unsaved changes,
-    /// shows a warning toast on the first attempt. If closed again within 3
-    /// seconds, force-closes regardless of unsaved changes.
+    /// Closes the active tab.
     pub(super) fn close_active_tab(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::toast::ToastExt;
-
         let active_id = self.tab_manager.read(cx).active_id();
         let Some(doc_id) = active_id else {
             return;
         };
 
-        // Check if this is a repeat close within the grace period
-        if let Some((prev_id, timestamp)) = self.pending_force_close.take()
-            && prev_id == doc_id
-            && timestamp.elapsed() < std::time::Duration::from_secs(3)
-        {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.force_close(doc_id, cx);
-            });
-            return;
-        }
-
-        let closed = self.tab_manager.update(cx, |mgr, cx| mgr.close(doc_id, cx));
-
-        if !closed {
-            self.pending_force_close = Some((doc_id, std::time::Instant::now()));
-            cx.toast_warning("Unsaved changes. Close again to discard.", window);
-        }
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.close(doc_id, cx);
+        });
     }
 
     /// Opens a file dialog to pick a script file and opens it in a new tab.
@@ -555,7 +537,7 @@ impl Workspace {
 
         if let Some(id) = already_open {
             tab_manager.update(cx, |mgr, cx| {
-                mgr.activate(id, cx);
+                mgr.close(id, cx);
             });
             return;
         }
@@ -699,6 +681,7 @@ impl Workspace {
 
         let doc = cx
             .new(|cx| SqlQueryDocument::new(self.app_state.clone(), window, cx).with_title(title));
+        doc.read(cx).initial_auto_save(cx);
         let handle = DocumentHandle::sql_query(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
@@ -731,6 +714,7 @@ impl Workspace {
             doc.set_content(&sql, window, cx);
             doc
         });
+        doc.read(cx).initial_auto_save(cx);
         let handle = DocumentHandle::sql_query(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
@@ -738,5 +722,207 @@ impl Workspace {
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    // === Session persistence ===
+
+    /// Write the current tab state to the session manifest.
+    pub(super) fn write_session_manifest(&self, cx: &App) {
+        use dbflux_core::{SessionManifest, SessionTab, SessionTabKind};
+
+        let Some(store) = self.app_state.read(cx).session_store() else {
+            return;
+        };
+
+        let manager = self.tab_manager.read(cx);
+        let mut tabs = Vec::new();
+
+        for doc_handle in manager.documents() {
+            let DocumentHandle::SqlQuery { entity, .. } = doc_handle else {
+                continue;
+            };
+
+            let doc = entity.read(cx);
+
+            let kind = if let Some(path) = doc.path() {
+                SessionTabKind::FileBacked {
+                    file_path: path.clone(),
+                    shadow_path: doc.shadow_path().cloned(),
+                }
+            } else if let Some(scratch) = doc.scratch_path() {
+                SessionTabKind::Scratch {
+                    scratch_path: scratch.clone(),
+                    title: doc.title(),
+                }
+            } else {
+                continue;
+            };
+
+            tabs.push(SessionTab {
+                id: doc.id().0.to_string(),
+                kind,
+                language: SessionTab::language_key(doc.query_language()),
+                exec_ctx: doc.exec_ctx().clone(),
+            });
+        }
+
+        let active_index = manager.active_index();
+
+        let manifest = SessionManifest {
+            version: 1,
+            active_index,
+            tabs,
+        };
+
+        if let Err(e) = store.save_manifest(&manifest) {
+            log::error!("Failed to save session manifest: {}", e);
+        }
+    }
+
+    /// Restore tabs from the session manifest on startup.
+    pub(super) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use dbflux_core::SessionTabKind;
+
+        let manifest = {
+            let app = self.app_state.read(cx);
+            let Some(store) = app.session_store() else {
+                return;
+            };
+
+            let Some(manifest) = store.load_manifest() else {
+                return;
+            };
+
+            store.cleanup_orphans(&manifest);
+            manifest
+        };
+
+        if manifest.tabs.is_empty() {
+            return;
+        }
+
+        for tab in &manifest.tabs {
+            let language = tab.query_language();
+
+            let (content, path, scratch_path, shadow_path) = match &tab.kind {
+                SessionTabKind::Scratch {
+                    scratch_path,
+                    title: _,
+                } => {
+                    let content = std::fs::read_to_string(scratch_path).unwrap_or_default();
+                    (content, None, Some(scratch_path.clone()), None)
+                }
+                SessionTabKind::FileBacked {
+                    file_path,
+                    shadow_path,
+                } => {
+                    let content = if let Some(shadow) = shadow_path {
+                        // Shadow exists: check for conflict
+                        let shadow_content =
+                            std::fs::read_to_string(shadow).unwrap_or_default();
+                        let original_modified = std::fs::metadata(file_path)
+                            .ok()
+                            .and_then(|m| m.modified().ok());
+                        let shadow_modified = std::fs::metadata(shadow)
+                            .ok()
+                            .and_then(|m| m.modified().ok());
+
+                        if let (Some(orig_t), Some(shad_t)) =
+                            (original_modified, shadow_modified)
+                        {
+                            if orig_t > shad_t {
+                                // Original was modified after shadow — external edit.
+                                // Prefer the original file content (user can undo).
+                                log::warn!(
+                                    "External edit detected for {}: using original file",
+                                    file_path.display()
+                                );
+                                std::fs::read_to_string(file_path).unwrap_or(shadow_content)
+                            } else {
+                                shadow_content
+                            }
+                        } else {
+                            shadow_content
+                        }
+                    } else {
+                        std::fs::read_to_string(file_path).unwrap_or_default()
+                    };
+
+                    (
+                        content,
+                        Some(file_path.clone()),
+                        None,
+                        shadow_path.clone(),
+                    )
+                }
+            };
+
+            let connection_id = tab
+                .exec_ctx
+                .connection_id
+                .filter(|id| self.app_state.read(cx).connections().contains_key(id));
+
+            let exec_ctx = tab.exec_ctx.clone();
+
+            let body = Self::strip_annotation_header(&content, language);
+
+            let title = match &tab.kind {
+                SessionTabKind::Scratch { title, .. } => title.clone(),
+                SessionTabKind::FileBacked { file_path, .. } => file_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Untitled")
+                    .to_string(),
+            };
+
+            let doc = cx.new(|cx| {
+                let mut doc = SqlQueryDocument::new_with_language(
+                    self.app_state.clone(),
+                    connection_id,
+                    language,
+                    window,
+                    cx,
+                );
+
+                doc.set_session_paths(scratch_path, shadow_path);
+
+                if let Some(p) = path {
+                    doc = doc.with_path(p);
+                }
+
+                doc = doc.with_title(title).with_exec_ctx(exec_ctx);
+                doc.set_content(body, window, cx);
+
+                // If there was a shadow, the tab had unsaved changes — mark dirty
+                if matches!(&tab.kind, SessionTabKind::FileBacked { shadow_path: Some(_), .. }) {
+                    doc.restore_dirty(cx);
+                }
+
+                doc
+            });
+
+            let handle = DocumentHandle::sql_query(doc, cx);
+
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.open(handle, cx);
+            });
+        }
+
+        // Restore active tab
+        if let Some(active_idx) = manifest.active_index {
+            let docs: Vec<_> = self
+                .tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .map(|d| d.id())
+                .collect();
+
+            if let Some(id) = docs.get(active_idx) {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(*id, cx);
+                });
+            }
+        }
     }
 }

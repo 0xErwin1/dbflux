@@ -3,9 +3,7 @@
 use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
 use super::sql_query::SqlQueryDocument;
-use super::types::{
-    DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,
-};
+use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use dbflux_core::{RefreshPolicy, Value};
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
@@ -157,14 +155,9 @@ impl DocumentHandle {
         }
     }
 
-    /// Title with modified indicator.
+    /// Title for display in the tab bar.
     pub fn tab_title(&self, cx: &App) -> String {
-        let meta = self.meta_snapshot(cx);
-        if meta.state == DocumentState::Modified {
-            format!("{}*", meta.title)
-        } else {
-            meta.title
-        }
+        self.meta_snapshot(cx).title
     }
 
     /// Can this document be closed? (checks unsaved changes)
@@ -173,6 +166,12 @@ impl DocumentHandle {
             Self::SqlQuery { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
+        }
+    }
+
+    pub fn flush_auto_save(&self, cx: &App) {
+        if let Self::SqlQuery { entity, .. } = self {
+            entity.read(cx).flush_auto_save(cx);
         }
     }
 

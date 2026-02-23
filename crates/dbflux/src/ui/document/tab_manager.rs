@@ -86,26 +86,13 @@ impl TabManager {
         cx.notify();
     }
 
-    /// Closes a document by ID. Returns false if the document has unsaved changes.
+    /// Closes a document by ID.
     pub fn close(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
         let Some(idx) = self.index_of(id) else {
             return false;
         };
 
-        if !self.documents[idx].can_close(cx) {
-            return false;
-        }
-
-        self.remove_document(idx, id, cx);
-        true
-    }
-
-    /// Closes a document by ID, skipping the unsaved changes check.
-    pub fn force_close(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
-        let Some(idx) = self.index_of(id) else {
-            return false;
-        };
-
+        self.documents[idx].flush_auto_save(cx);
         self.remove_document(idx, id, cx);
         true
     }

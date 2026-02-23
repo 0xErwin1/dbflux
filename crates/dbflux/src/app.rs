@@ -1,8 +1,8 @@
 use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
     RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    ScriptsDirectory, SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId,
-    TaskKind, TaskSnapshot,
+    ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
+    TaskId, TaskKind, TaskSnapshot,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -40,6 +40,7 @@ pub struct AppState {
     pub settings_window: Option<WindowHandle<Root>>,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
+    session_store: Option<SessionStore>,
 }
 
 impl AppState {
@@ -80,11 +81,16 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
             .ok();
 
+        let session_store = SessionStore::new()
+            .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
+            .ok();
+
         Self {
             facade: SessionFacade::new(drivers),
             settings_window: None,
             recent_files,
             scripts_directory,
+            session_store,
         }
     }
 
@@ -685,6 +691,12 @@ impl AppState {
         if let Some(dir) = self.scripts_directory.as_mut() {
             dir.refresh();
         }
+    }
+
+    // --- SessionStore ---
+
+    pub fn session_store(&self) -> Option<&SessionStore> {
+        self.session_store.as_ref()
     }
 
     // --- TaskManager ---
