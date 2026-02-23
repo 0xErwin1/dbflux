@@ -1,7 +1,8 @@
 use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
     RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    ScriptsDirectory, SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId,
+    TaskKind, TaskSnapshot,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -38,6 +39,7 @@ pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
     recent_files: Option<RecentFilesStore>,
+    scripts_directory: Option<ScriptsDirectory>,
 }
 
 impl AppState {
@@ -74,10 +76,15 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
             .ok();
 
+        let scripts_directory = ScriptsDirectory::new()
+            .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
+            .ok();
+
         Self {
             facade: SessionFacade::new(drivers),
             settings_window: None,
             recent_files,
+            scripts_directory,
         }
     }
 
@@ -643,6 +650,7 @@ impl AppState {
 
     // --- RecentFilesStore ---
 
+    #[allow(dead_code)]
     pub fn recent_files(&self) -> &[dbflux_core::RecentFile] {
         self.recent_files
             .as_ref()
@@ -660,6 +668,22 @@ impl AppState {
     pub fn remove_recent_file(&mut self, path: &PathBuf) {
         if let Some(store) = self.recent_files.as_mut() {
             store.remove(path);
+        }
+    }
+
+    // --- ScriptsDirectory ---
+
+    pub fn scripts_directory(&self) -> Option<&ScriptsDirectory> {
+        self.scripts_directory.as_ref()
+    }
+
+    pub fn scripts_directory_mut(&mut self) -> Option<&mut ScriptsDirectory> {
+        self.scripts_directory.as_mut()
+    }
+
+    pub fn refresh_scripts(&mut self) {
+        if let Some(dir) = self.scripts_directory.as_mut() {
+            dir.refresh();
         }
     }
 

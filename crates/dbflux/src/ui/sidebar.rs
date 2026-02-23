@@ -36,6 +36,12 @@ use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Connections,
+    Scripts,
+}
+
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
@@ -118,6 +124,14 @@ pub enum ContextMenuAction {
     GenerateForeignKeySql(ForeignKeySqlAction),
     GenerateTypeSql(TypeSqlAction),
     GenerateCollectionCode(CollectionCodeKind),
+    // Script actions
+    OpenScript,
+    RenameScript,
+    DeleteScript,
+    NewScriptFile,
+    NewScriptFolder,
+    RevealInFileManager,
+    CopyPath,
 }
 
 #[derive(Clone)]
@@ -172,6 +186,13 @@ impl ContextMenuAction {
             Self::GenerateForeignKeySql(_) => Some(AppIcon::Code),
             Self::GenerateTypeSql(_) => Some(AppIcon::Code),
             Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
+            Self::OpenScript => Some(AppIcon::Eye),
+            Self::RenameScript => Some(AppIcon::Pencil),
+            Self::DeleteScript => Some(AppIcon::Delete),
+            Self::NewScriptFile => Some(AppIcon::ScrollText),
+            Self::NewScriptFolder => Some(AppIcon::Folder),
+            Self::RevealInFileManager => Some(AppIcon::Folder),
+            Self::CopyPath => None,
         }
     }
 }
@@ -190,6 +211,33 @@ impl SidebarDragState {
         let mut ids = vec![self.node_id];
         ids.extend(self.additional_nodes.iter().copied());
         ids
+    }
+}
+
+#[derive(Clone)]
+struct ScriptsDragState {
+    path: std::path::PathBuf,
+    name: String,
+}
+
+struct ScriptsDragPreview {
+    label: String,
+}
+
+impl Render for ScriptsDragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .bg(theme.sidebar)
+            .border_1()
+            .border_color(theme.drag_border)
+            .rounded(Radii::SM)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .text_size(FontSizes::SM)
+            .text_color(theme.foreground)
+            .shadow_md()
+            .child(self.label.clone())
     }
 }
 
@@ -313,6 +361,10 @@ enum TableDetailsStatus {
 pub struct Sidebar {
     app_state: Entity<AppState>,
     tree_state: Entity<TreeState>,
+    active_tab: SidebarTab,
+    scripts_tree_state: Entity<TreeState>,
+    scripts_search_input: Entity<InputState>,
+    scripts_search_query: String,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
     visible_entry_count: usize,
@@ -325,10 +377,9 @@ pub struct Sidebar {
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     _subscriptions: Vec<Subscription>,
-    /// ID currently being renamed (folder or profile)
     editing_id: Option<Uuid>,
-    /// Type of item being renamed
     editing_is_folder: bool,
+    editing_script_path: Option<std::path::PathBuf>,
     /// Input state for rename
     rename_input: Entity<InputState>,
     /// Item ID pending rename (set by context menu, processed in render)
@@ -349,6 +400,7 @@ pub struct Sidebar {
     delete_confirm_modal: Option<DeleteConfirmState>,
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
+    scripts_drop_target: Option<String>,
 }
 
 use crate::ui::toast::PendingToast;
@@ -367,10 +419,16 @@ impl Sidebar {
         let visible_entry_count = Self::count_visible_entries(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
 
+        let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
+        let scripts_tree_state = cx.new(|cx| TreeState::new(cx).items(scripts_items));
+        let scripts_search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter scripts..."));
+
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
         let app_state_subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
             this.refresh_tree(cx);
+            this.refresh_scripts_tree(cx);
         });
 
         let rename_subscription = cx.subscribe_in(
@@ -387,9 +445,25 @@ impl Sidebar {
             },
         );
 
+        let scripts_search_entity = scripts_search_input.clone();
+        let scripts_search_subscription = cx.subscribe_in(
+            &scripts_search_entity,
+            window,
+            |this, input_state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.scripts_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_scripts_tree(cx);
+                }
+            },
+        );
+
         Self {
             app_state,
             tree_state,
+            active_tab: SidebarTab::Connections,
+            scripts_tree_state,
+            scripts_search_input,
+            scripts_search_query: String::new(),
             pending_toast: None,
             connections_focused: false,
             visible_entry_count,
@@ -397,9 +471,14 @@ impl Sidebar {
             context_menu: None,
             pending_action: None,
             active_databases: HashMap::new(),
-            _subscriptions: vec![app_state_subscription, rename_subscription],
+            _subscriptions: vec![
+                app_state_subscription,
+                rename_subscription,
+                scripts_search_subscription,
+            ],
             editing_id: None,
             editing_is_folder: false,
+            editing_script_path: None,
             rename_input,
             pending_rename_item: None,
             drop_target: None,
@@ -410,6 +489,7 @@ impl Sidebar {
             pending_delete_item: None,
             delete_confirm_modal: None,
             add_menu_open: false,
+            scripts_drop_target: None,
         }
     }
 
@@ -420,8 +500,54 @@ impl Sidebar {
         }
     }
 
+    pub fn active_tab(&self) -> SidebarTab {
+        self.active_tab
+    }
+
+    pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if self.active_tab != tab {
+            self.active_tab = tab;
+            cx.notify();
+        }
+    }
+
+    fn build_initial_scripts_tree(state: &AppState) -> Vec<TreeItem> {
+        match state.scripts_directory() {
+            Some(dir) => Self::build_scripts_tree_items(dir.entries()),
+            None => Vec::new(),
+        }
+    }
+
+    fn refresh_scripts_tree(&mut self, cx: &mut Context<Self>) {
+        let state = self.app_state.read(cx);
+        let entries = match state.scripts_directory() {
+            Some(dir) => {
+                dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query)
+            }
+            None => Vec::new(),
+        };
+
+        let items = Self::build_scripts_tree_items(&entries);
+        self.scripts_tree_state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+        });
+        cx.notify();
+    }
+
+    fn active_tree_state(&self) -> &Entity<TreeState> {
+        match self.active_tab {
+            SidebarTab::Connections => &self.tree_state,
+            SidebarTab::Scripts => &self.scripts_tree_state,
+        }
+    }
+
     pub fn execute(&mut self, cx: &mut Context<Self>) {
-        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        let tree = match self.active_tab {
+            SidebarTab::Connections => &self.tree_state,
+            SidebarTab::Scripts => &self.scripts_tree_state,
+        };
+
+        let entry = tree.read(cx).selected_entry().cloned();
         if let Some(entry) = entry {
             let item_id = entry.item().id.to_string();
             self.execute_item(&item_id, cx);
@@ -496,10 +622,9 @@ impl Sidebar {
     ) {
         cx.emit(SidebarEvent::RequestFocus);
 
-        // Ctrl+Click: toggle item in multi-selection
-        if with_ctrl && click_count == 1 {
+        // Ctrl+Click: toggle item in multi-selection (connections tab only)
+        if with_ctrl && click_count == 1 && self.active_tab == SidebarTab::Connections {
             self.toggle_selection(item_id, cx);
-            // Also update tree selection to the clicked item
             if let Some(idx) = self.find_item_index(item_id, cx) {
                 self.tree_state.update(cx, |state, cx| {
                     state.set_selected_index(Some(idx), cx);
@@ -513,7 +638,8 @@ impl Sidebar {
         self.clear_selection(cx);
 
         if let Some(idx) = self.find_item_index(item_id, cx) {
-            self.tree_state.update(cx, |state, cx| {
+            let tree = self.active_tree_state().clone();
+            tree.update(cx, |state, cx| {
                 state.set_selected_index(Some(idx), cx);
             });
         }

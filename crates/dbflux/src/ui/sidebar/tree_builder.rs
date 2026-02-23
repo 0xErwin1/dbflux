@@ -50,40 +50,49 @@ impl Sidebar {
 
     pub(super) fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
-        let mut items = Self::build_tree_nodes_recursive(&root_nodes, state);
+        Self::build_tree_nodes_recursive(&root_nodes, state)
+    }
 
-        let recent_files = state.recent_files();
-        if !recent_files.is_empty() {
-            let script_children: Vec<TreeItem> = recent_files
-                .iter()
-                .map(|entry| {
-                    let display_name = entry
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| entry.path.to_string_lossy().to_string());
+    /// Build tree items for the Scripts tab from ScriptsDirectory entries.
+    pub(super) fn build_scripts_tree_items(
+        entries: &[dbflux_core::ScriptEntry],
+    ) -> Vec<TreeItem> {
+        entries
+            .iter()
+            .map(Self::script_entry_to_tree_item)
+            .collect()
+    }
 
-                    TreeItem::new(
-                        SchemaNodeId::ScriptFile {
-                            path: entry.path.to_string_lossy().to_string(),
-                        }
-                        .to_string(),
-                        display_name,
-                    )
-                })
-                .collect();
+    fn script_entry_to_tree_item(entry: &dbflux_core::ScriptEntry) -> TreeItem {
+        match entry {
+            dbflux_core::ScriptEntry::Folder {
+                path,
+                name,
+                children,
+            } => {
+                let id = SchemaNodeId::ScriptsFolder {
+                    path: Some(path.to_string_lossy().to_string()),
+                }
+                .to_string();
 
-            items.push(
-                TreeItem::new(
-                    SchemaNodeId::ScriptsFolder.to_string(),
-                    format!("Scripts ({})", script_children.len()),
-                )
-                .expanded(true)
-                .children(script_children),
-            );
+                let child_items: Vec<TreeItem> = children
+                    .iter()
+                    .map(Self::script_entry_to_tree_item)
+                    .collect();
+
+                TreeItem::new(id, name.clone())
+                    .expanded(true)
+                    .children(child_items)
+            }
+            dbflux_core::ScriptEntry::File { path, name, .. } => {
+                let id = SchemaNodeId::ScriptFile {
+                    path: path.to_string_lossy().to_string(),
+                }
+                .to_string();
+
+                TreeItem::new(id, name.clone())
+            }
         }
-
-        items
     }
 
     fn build_tree_nodes_recursive(
@@ -340,8 +349,23 @@ impl Sidebar {
     }
 
     pub(super) fn find_item_index(&self, item_id: &str, cx: &Context<Self>) -> Option<usize> {
-        let items = self.build_tree_items_with_overrides(cx);
-        Self::find_item_index_in_tree(&items, item_id, &mut 0)
+        match self.active_tab {
+            SidebarTab::Connections => {
+                let items = self.build_tree_items_with_overrides(cx);
+                Self::find_item_index_in_tree(&items, item_id, &mut 0)
+            }
+            SidebarTab::Scripts => {
+                let state = self.app_state.read(cx);
+                let entries = match state.scripts_directory() {
+                    Some(dir) => {
+                        dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query)
+                    }
+                    None => return None,
+                };
+                let items = Self::build_scripts_tree_items(&entries);
+                Self::find_item_index_in_tree(&items, item_id, &mut 0)
+            }
+        }
     }
 
     pub(super) fn find_item_index_in_tree(

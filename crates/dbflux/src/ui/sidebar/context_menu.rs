@@ -6,7 +6,7 @@ impl Sidebar {
     }
 
     pub fn open_item_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        let entry = self.active_tree_state().read(cx).selected_entry().cloned();
 
         let Some(entry) = entry else {
             return;
@@ -310,6 +310,68 @@ impl Sidebar {
                 }
             }
 
+            SchemaNodeKind::ScriptsFolder => {
+                let mut items = vec![
+                    ContextMenuItem {
+                        label: "New File".into(),
+                        action: ContextMenuAction::NewScriptFile,
+                    },
+                    ContextMenuItem {
+                        label: "New Folder".into(),
+                        action: ContextMenuAction::NewScriptFolder,
+                    },
+                ];
+
+                // Only show rename/delete for subfolders, not the root
+                if let Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) = parse_node_id(item_id)
+                {
+                    items.push(ContextMenuItem {
+                        label: "Rename".into(),
+                        action: ContextMenuAction::RenameScript,
+                    });
+                    items.push(ContextMenuItem {
+                        label: "Delete".into(),
+                        action: ContextMenuAction::DeleteScript,
+                    });
+                }
+
+                items.push(ContextMenuItem {
+                    label: "Reveal in File Manager".into(),
+                    action: ContextMenuAction::RevealInFileManager,
+                });
+                items.push(ContextMenuItem {
+                    label: "Copy Path".into(),
+                    action: ContextMenuAction::CopyPath,
+                });
+
+                items
+            }
+
+            SchemaNodeKind::ScriptFile => {
+                vec![
+                    ContextMenuItem {
+                        label: "Open".into(),
+                        action: ContextMenuAction::OpenScript,
+                    },
+                    ContextMenuItem {
+                        label: "Rename".into(),
+                        action: ContextMenuAction::RenameScript,
+                    },
+                    ContextMenuItem {
+                        label: "Delete".into(),
+                        action: ContextMenuAction::DeleteScript,
+                    },
+                    ContextMenuItem {
+                        label: "Reveal in File Manager".into(),
+                        action: ContextMenuAction::RevealInFileManager,
+                    },
+                    ContextMenuItem {
+                        label: "Copy Path".into(),
+                        action: ContextMenuAction::CopyPath,
+                    },
+                ]
+            }
+
             _ => vec![],
         }
     }
@@ -545,6 +607,29 @@ impl Sidebar {
             ContextMenuAction::GenerateCollectionCode(kind) => {
                 self.generate_collection_code(&item_id, kind, cx);
             }
+            ContextMenuAction::OpenScript => {
+                self.execute_item(&item_id, cx);
+            }
+            ContextMenuAction::RenameScript => {
+                self.pending_rename_item = Some(item_id.clone());
+            }
+            ContextMenuAction::DeleteScript => {
+                self.show_delete_confirm_modal(&item_id, cx);
+            }
+            ContextMenuAction::NewScriptFile => {
+                let parent = Self::parent_dir_from_item_id(&item_id);
+                self.create_script_file_in(parent, cx);
+            }
+            ContextMenuAction::NewScriptFolder => {
+                let parent = Self::parent_dir_from_item_id(&item_id);
+                self.create_script_folder_in(parent, cx);
+            }
+            ContextMenuAction::RevealInFileManager => {
+                self.reveal_in_file_manager(&item_id);
+            }
+            ContextMenuAction::CopyPath => {
+                self.copy_path_to_clipboard(&item_id, cx);
+            }
         }
 
         // Close menu after executing action
@@ -612,7 +697,11 @@ impl Sidebar {
         let row_height = px(28.0);
         let menu_x = px(180.0);
 
-        let index = self.tree_state.read(cx).selected_index().unwrap_or(0);
+        let index = self
+            .active_tree_state()
+            .read(cx)
+            .selected_index()
+            .unwrap_or(0);
         let y = header_height + (row_height * (index as f32));
 
         Point::new(menu_x, y)

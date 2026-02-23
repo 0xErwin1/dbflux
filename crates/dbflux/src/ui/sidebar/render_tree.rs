@@ -9,6 +9,10 @@ pub(super) struct TreeRenderParams {
     pub multi_selection: HashSet<String>,
     pub pending_delete: Option<String>,
     pub drop_target: Option<DropTarget>,
+    pub scripts_drop_target: Option<String>,
+    pub editing_id: Option<Uuid>,
+    pub editing_script_path: Option<std::path::PathBuf>,
+    pub rename_input: Entity<InputState>,
     pub color_teal: Hsla,
     pub color_yellow: Hsla,
     pub color_blue: Hsla,
@@ -102,6 +106,24 @@ pub(super) fn render_tree_item(
     );
 
     let label_color = resolve_label_color(node_kind, theme, params);
+
+    let is_being_renamed = match &parsed_id {
+        Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+            params.editing_id.as_ref() == Some(node_id)
+        }
+        Some(SchemaNodeId::Profile { profile_id }) => {
+            params.editing_id.as_ref() == Some(profile_id)
+        }
+        Some(SchemaNodeId::ScriptFile { path }) => params
+            .editing_script_path
+            .as_ref()
+            .is_some_and(|p| p == std::path::Path::new(path)),
+        Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => params
+            .editing_script_path
+            .as_ref()
+            .is_some_and(|ep| ep == std::path::Path::new(p)),
+        _ => false,
+    };
 
     let is_table_or_view = matches!(
         node_kind,
@@ -241,32 +263,50 @@ pub(super) fn render_tree_item(
                                 .child(unicode_icon)
                         }),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .text_size(FontSizes::SM)
-                        .text_color(label_color)
-                        .when(node_kind == SchemaNodeKind::Profile && is_active, |d| {
-                            d.font_weight(FontWeight::SEMIBOLD)
-                        })
-                        .when(is_active_database, |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .when(
-                            matches!(
-                                node_kind,
-                                SchemaNodeKind::TablesFolder
-                                    | SchemaNodeKind::ViewsFolder
-                                    | SchemaNodeKind::TypesFolder
-                                    | SchemaNodeKind::ColumnsFolder
-                                    | SchemaNodeKind::IndexesFolder
-                                    | SchemaNodeKind::ForeignKeysFolder
-                                    | SchemaNodeKind::ConstraintsFolder
+                .when(is_being_renamed, |el| {
+                    let rename_input = params.rename_input.clone();
+                    el.child(
+                        div()
+                            .flex_1()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                Input::new(&rename_input)
+                                    .xsmall()
+                                    .appearance(false)
+                                    .cleanable(false),
                             ),
-                            |d| d.font_weight(FontWeight::MEDIUM),
-                        )
-                        .child(item.label.clone()),
-                )
+                    )
+                })
+                .when(!is_being_renamed, |el| {
+                    el.child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(FontSizes::SM)
+                            .text_color(label_color)
+                            .when(node_kind == SchemaNodeKind::Profile && is_active, |d| {
+                                d.font_weight(FontWeight::SEMIBOLD)
+                            })
+                            .when(is_active_database, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            .when(
+                                matches!(
+                                    node_kind,
+                                    SchemaNodeKind::TablesFolder
+                                        | SchemaNodeKind::ViewsFolder
+                                        | SchemaNodeKind::TypesFolder
+                                        | SchemaNodeKind::ColumnsFolder
+                                        | SchemaNodeKind::IndexesFolder
+                                        | SchemaNodeKind::ForeignKeysFolder
+                                        | SchemaNodeKind::ConstraintsFolder
+                                ),
+                                |d| d.font_weight(FontWeight::MEDIUM),
+                            )
+                            .child(item.label.clone()),
+                    )
+                })
                 .when(
                     matches!(
                         node_kind,
@@ -426,6 +466,96 @@ pub(super) fn render_tree_item(
                         el
                     }
                 })
+                // Scripts drag source (files and subfolders, not root)
+                .when(
+                    matches!(
+                        node_kind,
+                        SchemaNodeKind::ScriptFile | SchemaNodeKind::ScriptsFolder
+                    ) && !matches!(&parsed_id, Some(SchemaNodeId::ScriptsFolder { path: None })),
+                    |el| {
+                        let drag_path = match &parsed_id {
+                            Some(SchemaNodeId::ScriptFile { path }) => {
+                                Some(std::path::PathBuf::from(path))
+                            }
+                            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                                Some(std::path::PathBuf::from(p))
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(path) = drag_path {
+                            let label = item.label.to_string();
+                            el.on_drag(
+                                ScriptsDragState {
+                                    path,
+                                    name: label.clone(),
+                                },
+                                |state, _, _, cx| {
+                                    cx.new(|_| ScriptsDragPreview {
+                                        label: state.name.clone(),
+                                    })
+                                },
+                            )
+                        } else {
+                            el
+                        }
+                    },
+                )
+                // Scripts folder drop target (move into)
+                .when(node_kind == SchemaNodeKind::ScriptsFolder, |el| {
+                    let sidebar_for_drop = sidebar_entity.clone();
+                    let sidebar_for_move = sidebar_entity.clone();
+                    let item_id_for_drop = item_id.to_string();
+                    let item_id_for_move = item_id.to_string();
+                    let drop_target_bg = theme.drop_target;
+
+                    let is_scripts_drop = params
+                        .scripts_drop_target
+                        .as_ref()
+                        .is_some_and(|t| t == item_id.as_ref());
+
+                    let el = if is_scripts_drop {
+                        el.bg(drop_target_bg)
+                    } else {
+                        el
+                    };
+
+                    el.drag_over::<ScriptsDragState>(move |style, state, _, cx| {
+                        // Don't allow dropping onto itself
+                        let target_path = match parse_node_id(&item_id_for_move) {
+                            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                                Some(std::path::PathBuf::from(p))
+                            }
+                            Some(SchemaNodeId::ScriptsFolder { path: None }) => {
+                                dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
+                            }
+                            _ => None,
+                        };
+
+                        let is_same = target_path.as_ref().is_some_and(|t| state.path == *t);
+
+                        let is_self_or_child = state.path.is_dir()
+                            && target_path
+                                .as_ref()
+                                .is_some_and(|t| t.starts_with(&state.path));
+
+                        if !is_same && !is_self_or_child {
+                            sidebar_for_move.update(cx, |this, cx| {
+                                this.scripts_drop_target = Some(item_id_for_move.clone());
+                                cx.notify();
+                            });
+                            style.bg(drop_target_bg)
+                        } else {
+                            style
+                        }
+                    })
+                    .on_drop(move |state: &ScriptsDragState, _, cx| {
+                        sidebar_for_drop.update(cx, |this, cx| {
+                            this.scripts_drop_target = None;
+                            this.handle_script_drop(state, &item_id_for_drop, cx);
+                        });
+                    })
+                })
                 // Menu button for items that have context menus
                 .when(
                     matches!(
@@ -441,6 +571,8 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::ForeignKey
                             | SchemaNodeKind::SchemaForeignKey
                             | SchemaNodeKind::CustomType
+                            | SchemaNodeKind::ScriptsFolder
+                            | SchemaNodeKind::ScriptFile
                     ),
                     |el| {
                         let sidebar_for_menu = sidebar_entity.clone();
@@ -490,6 +622,8 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::ForeignKey
                             | SchemaNodeKind::SchemaForeignKey
                             | SchemaNodeKind::CustomType
+                            | SchemaNodeKind::ScriptsFolder
+                            | SchemaNodeKind::ScriptFile
                     ),
                     |el| {
                         let sidebar_for_ctx = sidebar_entity.clone();
@@ -577,8 +711,8 @@ fn resolve_node_icon(
         SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
-        SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", params.color_blue),
-        SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", params.color_blue),
+        SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
+        SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -636,8 +770,8 @@ fn resolve_label_color(
         SchemaNodeKind::Constraint => params.color_yellow,
         SchemaNodeKind::CollectionsFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
-        SchemaNodeKind::ScriptsFolder => params.color_gray,
-        SchemaNodeKind::ScriptFile => params.color_blue,
+        SchemaNodeKind::ScriptsFolder => theme.foreground,
+        SchemaNodeKind::ScriptFile => theme.foreground,
         _ => theme.muted_foreground,
     }
 }

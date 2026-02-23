@@ -8,7 +8,8 @@ impl Sidebar {
 
         self.pending_delete_item = None;
 
-        self.tree_state.update(cx, |state, cx| {
+        let tree = self.active_tree_state().clone();
+        tree.update(cx, |state, cx| {
             let next = match state.selected_index() {
                 Some(current) => (current + 1).min(self.visible_entry_count.saturating_sub(1)),
                 None => 0,
@@ -26,7 +27,8 @@ impl Sidebar {
 
         self.pending_delete_item = None;
 
-        self.tree_state.update(cx, |state, cx| {
+        let tree = self.active_tree_state().clone();
+        tree.update(cx, |state, cx| {
             let prev = match state.selected_index() {
                 Some(current) => current.saturating_sub(1),
                 None => self.visible_entry_count.saturating_sub(1),
@@ -42,7 +44,8 @@ impl Sidebar {
             return;
         }
 
-        self.tree_state.update(cx, |state, cx| {
+        let tree = self.active_tree_state().clone();
+        tree.update(cx, |state, cx| {
             state.set_selected_index(Some(0), cx);
             state.scroll_to_item(0, gpui::ScrollStrategy::Center);
         });
@@ -55,7 +58,8 @@ impl Sidebar {
         }
 
         let last = self.visible_entry_count.saturating_sub(1);
-        self.tree_state.update(cx, |state, cx| {
+        let tree = self.active_tree_state().clone();
+        tree.update(cx, |state, cx| {
             state.set_selected_index(Some(last), cx);
             state.scroll_to_item(last, gpui::ScrollStrategy::Center);
         });
@@ -204,6 +208,10 @@ impl Sidebar {
     }
 
     pub fn move_selected_items(&mut self, direction: i32, cx: &mut Context<Self>) {
+        if self.active_tab == SidebarTab::Scripts {
+            return;
+        }
+
         if self.multi_selection.is_empty() {
             return;
         }

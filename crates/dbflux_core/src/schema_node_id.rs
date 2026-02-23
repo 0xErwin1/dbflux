@@ -187,7 +187,9 @@ pub enum SchemaNodeId {
     },
 
     // Scripts section (not connection-bound)
-    ScriptsFolder,
+    ScriptsFolder {
+        path: Option<String>,
+    },
     ScriptFile {
         path: String,
     },
@@ -271,14 +273,16 @@ impl SchemaNodeId {
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
             Self::BaseType { .. } => SchemaNodeKind::BaseType,
             Self::Placeholder { .. } => SchemaNodeKind::Placeholder,
-            Self::ScriptsFolder => SchemaNodeKind::ScriptsFolder,
+            Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
         }
     }
 
     pub fn profile_id(&self) -> Option<Uuid> {
         match self {
-            Self::ConnectionFolder { .. } | Self::ScriptsFolder | Self::ScriptFile { .. } => None,
+            Self::ConnectionFolder { .. }
+            | Self::ScriptsFolder { .. }
+            | Self::ScriptFile { .. } => None,
             Self::Profile { profile_id, .. }
             | Self::Database { profile_id, .. }
             | Self::Loading { profile_id, .. }
@@ -610,9 +614,10 @@ impl fmt::Display for SchemaNodeId {
             } => {
                 write!(f, "{}|{}|{}|{}", P_PLACEHOLDER, profile_id, schema, table)
             }
-            Self::ScriptsFolder => {
-                write!(f, "{}", P_SCRIPTS_FOLDER)
-            }
+            Self::ScriptsFolder { path } => match path {
+                Some(p) => write!(f, "{}|{}", P_SCRIPTS_FOLDER, p),
+                None => write!(f, "{}", P_SCRIPTS_FOLDER),
+            },
             Self::ScriptFile { path } => {
                 write!(f, "{}|{}", P_SCRIPT_FILE, path)
             }
@@ -651,7 +656,13 @@ impl FromStr for SchemaNodeId {
 
         // Handle single-token variants first
         if prefix == P_SCRIPTS_FOLDER && parts.len() == 1 {
-            return Ok(Self::ScriptsFolder);
+            return Ok(Self::ScriptsFolder { path: None });
+        }
+
+        // ScriptsFolder with path — path may contain pipes, rejoin everything after prefix
+        if prefix == P_SCRIPTS_FOLDER && parts.len() >= 2 {
+            let path = parts[1..].join("|");
+            return Ok(Self::ScriptsFolder { path: Some(path) });
         }
 
         if parts.len() < 2 {
@@ -1277,7 +1288,10 @@ mod tests {
             table: "users".into(),
         });
 
-        roundtrip(SchemaNodeId::ScriptsFolder);
+        roundtrip(SchemaNodeId::ScriptsFolder { path: None });
+        roundtrip(SchemaNodeId::ScriptsFolder {
+            path: Some("/home/user/scripts/migrations".into()),
+        });
         roundtrip(SchemaNodeId::ScriptFile {
             path: "/home/user/scripts/query.sql".into(),
         });
