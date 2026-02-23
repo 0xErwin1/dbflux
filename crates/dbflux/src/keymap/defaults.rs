@@ -110,6 +110,14 @@ fn sidebar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Sidebar);
 
     layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("q", Modifiers::none()),
+        Command::SidebarNextTab,
+    );
+    layer.bind(
+        KeyChord::new("e", Modifiers::none()),
+        Command::SidebarNextTab,
+    );
 
     // Panel navigation (Ctrl+hjkl)
     layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);

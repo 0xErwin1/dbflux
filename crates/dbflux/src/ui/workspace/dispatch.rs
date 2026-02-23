@@ -519,6 +519,15 @@ impl CommandDispatcher for Workspace {
                 }
             }
 
+            Command::SidebarNextTab => {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |s, cx| s.cycle_tab(cx));
+                    true
+                } else {
+                    false
+                }
+            }
+
             Command::FocusSearch => {
                 if self.focus_target == FocusTarget::Document {
                     if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {

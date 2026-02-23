@@ -83,6 +83,7 @@ pub enum Command {
     MenuBack,
 
     // === Sidebar ===
+    SidebarNextTab,
     RefreshSchema,
     OpenConnectionManager,
     Disconnect,
@@ -169,6 +170,7 @@ impl Command {
             Command::MenuSelect => "Menu Select",
             Command::MenuBack => "Menu Back",
 
+            Command::SidebarNextTab => "Sidebar Next Tab",
             Command::RefreshSchema => "Refresh Schema",
             Command::OpenConnectionManager => "Open Connection Manager",
             Command::Disconnect => "Disconnect",
@@ -251,11 +253,12 @@ impl Command {
             | Command::MenuSelect
             | Command::MenuBack => "Results",
 
-            Command::RefreshSchema
+            Command::SidebarNextTab
+            | Command::RefreshSchema
             | Command::OpenConnectionManager
             | Command::Disconnect
             | Command::OpenItemMenu
-            | Command::CreateFolder => "Connections",
+            | Command::CreateFolder => "Sidebar",
 
             Command::ToggleEditor
             | Command::ToggleResults
