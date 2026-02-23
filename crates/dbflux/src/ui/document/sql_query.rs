@@ -490,6 +490,7 @@ impl SqlQueryDocument {
         if self.is_dirty {
             self.is_dirty = false;
             self.original_content = self.input_state.read(cx).value().to_string();
+            self._auto_save_debounce = None;
 
             if let Some(shadow) = self.shadow_path.take()
                 && let Some(store) = self.app_state.read(cx).session_store()

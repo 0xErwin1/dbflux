@@ -537,7 +537,7 @@ impl Workspace {
 
         if let Some(id) = already_open {
             tab_manager.update(cx, |mgr, cx| {
-                mgr.close(id, cx);
+                mgr.activate(id, cx);
             });
             return;
         }
@@ -766,7 +766,9 @@ impl Workspace {
             });
         }
 
-        let active_index = manager.active_index();
+        let active_index = manager.active_id().and_then(|active_id| {
+            tabs.iter().position(|tab| tab.id == active_id.0.to_string())
+        });
 
         let manifest = SessionManifest {
             version: 1,
