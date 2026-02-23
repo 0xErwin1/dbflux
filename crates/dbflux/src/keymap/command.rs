@@ -60,6 +60,8 @@ pub enum Command {
     ToggleHistoryDropdown,
     OpenSavedQueries,
     SaveQuery,
+    SaveFileAs,
+    OpenScriptFile,
 
     // === Results ===
     ExportResults,
@@ -147,7 +149,9 @@ impl Command {
             Command::CancelQuery => "Cancel Query",
             Command::ToggleHistoryDropdown => "Toggle History Dropdown",
             Command::OpenSavedQueries => "Open Saved Queries",
-            Command::SaveQuery => "Save Query",
+            Command::SaveQuery => "Save",
+            Command::SaveFileAs => "Save File As",
+            Command::OpenScriptFile => "Open Script File",
 
             Command::ExportResults => "Export Results",
             Command::ResultsNextPage => "Results Next Page",
@@ -228,7 +232,9 @@ impl Command {
             | Command::CancelQuery
             | Command::ToggleHistoryDropdown
             | Command::OpenSavedQueries
-            | Command::SaveQuery => "Editor",
+            | Command::SaveQuery
+            | Command::SaveFileAs
+            | Command::OpenScriptFile => "Editor",
 
             Command::ExportResults
             | Command::ResultsNextPage
@@ -267,6 +273,7 @@ impl Command {
             self,
             Command::ToggleCommandPalette
                 | Command::NewQueryTab
+                | Command::OpenScriptFile
                 | Command::CloseCurrentTab
                 | Command::NextTab
                 | Command::PrevTab
@@ -305,6 +312,6 @@ mod tests {
             Command::OpenSavedQueries.display_name(),
             "Open Saved Queries"
         );
-        assert_eq!(Command::SaveQuery.display_name(), "Save Query");
+        assert_eq!(Command::SaveQuery.display_name(), "Save");
     }
 }

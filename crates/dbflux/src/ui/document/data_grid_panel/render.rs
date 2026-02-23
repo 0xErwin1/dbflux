@@ -23,6 +23,7 @@ impl Render for DataGridPanel {
         if let Some(requery) = self.pending_requery.take() {
             self.run_table_query(
                 requery.profile_id,
+                requery.database,
                 requery.table,
                 requery.pagination,
                 requery.order_by,

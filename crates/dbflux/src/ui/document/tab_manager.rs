@@ -86,32 +86,38 @@ impl TabManager {
         cx.notify();
     }
 
-    /// Closes a document by ID.
+    /// Closes a document by ID. Returns false if the document has unsaved changes.
     pub fn close(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
         let Some(idx) = self.index_of(id) else {
             return false;
         };
 
-        // Check if can be closed (unsaved changes check)
         if !self.documents[idx].can_close(cx) {
             return false;
         }
 
-        // Remove document
+        self.remove_document(idx, id, cx);
+        true
+    }
+
+    /// Closes a document by ID, skipping the unsaved changes check.
+    pub fn force_close(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
+        let Some(idx) = self.index_of(id) else {
+            return false;
+        };
+
+        self.remove_document(idx, id, cx);
+        true
+    }
+
+    fn remove_document(&mut self, idx: usize, id: DocumentId, cx: &mut Context<Self>) {
         self.documents.remove(idx);
-
-        // Clean up subscription
         self.subscriptions.remove(&id);
-
-        // Remove from MRU
         self.mru_order.retain(|&i| i != id);
-
-        // Adjust active index
         self.active_index = self.compute_new_active_after_close(idx);
 
         cx.emit(TabManagerEvent::Closed(id));
         cx.notify();
-        true
     }
 
     /// Computes the new active index after closing a tab.

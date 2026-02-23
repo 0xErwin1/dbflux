@@ -56,13 +56,13 @@ impl Sidebar {
             return TableDetailsStatus::NotFound;
         };
 
-        // First check the table_details cache for detailed info
-        let cache_key = (parts.schema_name.clone(), parts.object_name.clone());
+        let cache_db = parts.cache_database();
+        let cache_key = (cache_db.to_string(), parts.object_name.clone());
+
         if conn.table_details.contains_key(&cache_key) {
             return TableDetailsStatus::Ready;
         }
 
-        // Check database_schemas for a table that already has columns loaded
         if let Some(db_schema) = conn.database_schemas.get(&parts.schema_name)
             && let Some(table) = db_schema
                 .tables
@@ -73,8 +73,14 @@ impl Sidebar {
             return TableDetailsStatus::Ready;
         }
 
-        // Check schema.schemas (PostgreSQL/SQLite path)
-        if let Some(ref schema) = conn.schema {
+        let target_schema = parts
+            .database
+            .as_deref()
+            .and_then(|db| conn.database_connections.get(db))
+            .and_then(|dc| dc.schema.as_ref())
+            .or(conn.schema.as_ref());
+
+        if let Some(schema) = target_schema {
             for db_schema in schema.schemas() {
                 if db_schema.name == parts.schema_name
                     && let Some(table) = db_schema
@@ -100,9 +106,12 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) {
+        let cache_db = parts.cache_database().to_string();
+
         let params = match self.app_state.read(cx).prepare_fetch_table_details(
             parts.profile_id,
-            &parts.schema_name,
+            &cache_db,
+            Some(&parts.schema_name),
             &parts.object_name,
         ) {
             Ok(p) => p,
@@ -124,7 +133,7 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
         let profile_id = parts.profile_id;
-        let db_name = parts.schema_name.clone();
+        let db_name = cache_db.clone();
         let table_name = parts.object_name.clone();
 
         let task = cx

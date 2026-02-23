@@ -653,6 +653,11 @@ impl Render for SqlQueryDocument {
 
         self.process_pending_auto_refresh(window, cx);
 
+        if let Some(error) = self.pending_error.take() {
+            cx.toast_error(error, window);
+        }
+
+        let context_bar = self.render_context_bar(cx).into_any_element();
         let toolbar = self.render_toolbar(cx).into_any_element();
         let editor_view = self.render_editor(window, cx).into_any_element();
         let results_view = self.render_results(window, cx).into_any_element();
@@ -668,6 +673,7 @@ impl Render for SqlQueryDocument {
             .flex_col()
             .bg(bg)
             .track_focus(&self.focus_handle)
+            .child(context_bar)
             .child(toolbar)
             .child(
                 div().flex_1().overflow_hidden().child(match self.layout {

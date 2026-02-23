@@ -50,7 +50,40 @@ impl Sidebar {
 
     pub(super) fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
-        Self::build_tree_nodes_recursive(&root_nodes, state)
+        let mut items = Self::build_tree_nodes_recursive(&root_nodes, state);
+
+        let recent_files = state.recent_files();
+        if !recent_files.is_empty() {
+            let script_children: Vec<TreeItem> = recent_files
+                .iter()
+                .map(|entry| {
+                    let display_name = entry
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| entry.path.to_string_lossy().to_string());
+
+                    TreeItem::new(
+                        SchemaNodeId::ScriptFile {
+                            path: entry.path.to_string_lossy().to_string(),
+                        }
+                        .to_string(),
+                        display_name,
+                    )
+                })
+                .collect();
+
+            items.push(
+                TreeItem::new(
+                    SchemaNodeId::ScriptsFolder.to_string(),
+                    format!("Scripts ({})", script_children.len()),
+                )
+                .expanded(true)
+                .children(script_children),
+            );
+        }
+
+        items
     }
 
     fn build_tree_nodes_recursive(
@@ -181,6 +214,7 @@ impl Sidebar {
                                 Self::build_db_schema_content(
                                     profile_id,
                                     &db.name,
+                                    None,
                                     db_schema,
                                     &connected.table_details,
                                     &connected.schema_types,
@@ -198,19 +232,43 @@ impl Sidebar {
                                 "Loading...".to_string(),
                             )]
                         } else {
-                            // Empty placeholder - schema not loaded yet
+                        Vec::new()
+                    }
+                    } else if let Some(db_conn) = connected.database_connections.get(&db.name) {
+                        if let Some(ref db_schema) = db_conn.schema {
+                            Self::build_schema_children(
+                                profile_id,
+                                &db.name,
+                                Some(&db.name),
+                                db_schema,
+                                &connected.table_details,
+                                &connected.schema_types,
+                                &connected.schema_indexes,
+                                &connected.schema_foreign_keys,
+                            )
+                        } else {
                             Vec::new()
                         }
                     } else if db.is_current {
                         Self::build_schema_children(
                             profile_id,
                             &db.name,
+                            Some(&db.name),
                             schema,
                             &connected.table_details,
                             &connected.schema_types,
                             &connected.schema_indexes,
                             &connected.schema_foreign_keys,
                         )
+                    } else if is_pending {
+                        vec![TreeItem::new(
+                            SchemaNodeId::Loading {
+                                profile_id,
+                                database: db.name.clone(),
+                            }
+                            .to_string(),
+                            "Loading...".to_string(),
+                        )]
                     } else {
                         Vec::new()
                     };
@@ -221,10 +279,11 @@ impl Sidebar {
                         db.name.clone()
                     };
 
+                    let has_per_db_conn = connected.database_connections.contains_key(&db.name);
                     let is_expanded = if uses_lazy_loading {
                         is_active_db
                     } else {
-                        db.is_current
+                        db.is_current || has_per_db_conn
                     };
 
                     profile_children.push(
@@ -251,6 +310,7 @@ impl Sidebar {
                 profile_children = Self::build_schema_children(
                     profile_id,
                     database_name,
+                    None,
                     schema,
                     &connected.table_details,
                     &connected.schema_types,
@@ -306,9 +366,11 @@ impl Sidebar {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_schema_children(
         profile_id: Uuid,
         database_name: &str,
+        target_database: Option<&str>,
         snapshot: &dbflux_core::SchemaSnapshot,
         table_details: &HashMap<(String, String), TableInfo>,
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
@@ -321,6 +383,7 @@ impl Sidebar {
             let schema_content = Self::build_db_schema_content(
                 profile_id,
                 database_name,
+                target_database,
                 db_schema,
                 table_details,
                 schema_types,
@@ -447,9 +510,11 @@ impl Sidebar {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_db_schema_content(
         profile_id: Uuid,
         database_name: &str,
+        target_database: Option<&str>,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
@@ -463,7 +528,15 @@ impl Sidebar {
             let table_children: Vec<TreeItem> = db_schema
                 .tables
                 .iter()
-                .map(|table| Self::build_table_item(profile_id, schema_name, table, table_details))
+                .map(|table| {
+                    Self::build_table_item(
+                        profile_id,
+                        target_database,
+                        schema_name,
+                        table,
+                        table_details,
+                    )
+                })
                 .collect();
 
             content.push(
@@ -488,6 +561,7 @@ impl Sidebar {
                     TreeItem::new(
                         SchemaNodeId::View {
                             profile_id,
+                            database: target_database.map(str::to_string),
                             schema: schema_name.to_string(),
                             name: view.name.clone(),
                         }
@@ -765,6 +839,7 @@ impl Sidebar {
 
     fn build_table_item(
         profile_id: Uuid,
+        target_database: Option<&str>,
         schema_name: &str,
         table: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
@@ -957,6 +1032,7 @@ impl Sidebar {
         TreeItem::new(
             SchemaNodeId::Table {
                 profile_id,
+                database: target_database.map(str::to_string),
                 schema: schema_name.to_string(),
                 name: table.name.clone(),
             }

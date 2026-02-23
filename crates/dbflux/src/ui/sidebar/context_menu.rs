@@ -374,23 +374,45 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        if let Some(conn) = state.connections().get(&profile_id) {
-            conn.database_schemas.contains_key(&name)
-        } else {
-            false
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        if conn.database_schemas.contains_key(&name) {
+            return true;
         }
+
+        if conn.database_connections.contains_key(&name) {
+            return true;
+        }
+
+        conn.schema
+            .as_ref()
+            .and_then(|s| s.current_database())
+            .is_some_and(|current| current == name)
     }
 
+    /// Whether a database node supports Close (not available for the primary database).
     pub(super) fn database_supports_close(&self, item_id: &str, cx: &App) -> bool {
-        let Some(SchemaNodeId::Database { profile_id, .. }) = parse_node_id(item_id) else {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
             return false;
         };
 
         let state = self.app_state.read(cx);
-        if let Some(conn) = state.connections().get(&profile_id) {
-            conn.connection.schema_loading_strategy() == SchemaLoadingStrategy::LazyPerDatabase
-        } else {
-            false
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        let strategy = conn.connection.schema_loading_strategy();
+
+        match strategy {
+            SchemaLoadingStrategy::LazyPerDatabase => {
+                conn.database_schemas.contains_key(&name)
+            }
+            SchemaLoadingStrategy::ConnectionPerDatabase => {
+                conn.database_connections.contains_key(&name)
+            }
+            _ => false,
         }
     }
 

@@ -78,6 +78,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::Database
                 | SchemaNodeKind::Profile
+                | SchemaNodeKind::ScriptsFolder
         );
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -537,7 +538,11 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
+                if is_connected {
+                    "\u{25CF}"
+                } else {
+                    "\u{25CB}"
+                }
             } else {
                 ""
             };
@@ -572,6 +577,8 @@ fn resolve_node_icon(
         SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", params.color_blue),
+        SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", params.color_blue),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -629,6 +636,8 @@ fn resolve_label_color(
         SchemaNodeKind::Constraint => params.color_yellow,
         SchemaNodeKind::CollectionsFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
+        SchemaNodeKind::ScriptsFolder => params.color_gray,
+        SchemaNodeKind::ScriptFile => params.color_blue,
         _ => theme.muted_foreground,
     }
 }

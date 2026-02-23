@@ -9,6 +9,7 @@ mod driver_capabilities;
 mod driver_form;
 mod error;
 mod error_formatter;
+mod execution_context;
 mod history;
 mod key_value;
 mod language_service;
@@ -16,6 +17,7 @@ mod profile;
 mod query;
 mod query_generator;
 mod query_safety;
+mod recent_files;
 mod refresh_policy;
 mod saved_query;
 mod schema;
@@ -61,6 +63,7 @@ pub use driver_form::{
     MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
+pub use execution_context::ExecutionContext;
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
@@ -87,6 +90,7 @@ pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultS
 pub use query_generator::{GeneratedQuery, MutationCategory, QueryGenerator, SqlMutationGenerator};
 pub use query_safety::is_safe_read_query;
 pub use refresh_policy::RefreshPolicy;
+pub use recent_files::{RecentFile, RecentFilesStore};
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
@@ -133,7 +137,7 @@ pub use sql_query_builder::SqlQueryBuilder;
 
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
+    ConnectionManager, DatabaseConnection, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
     FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
     FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
     FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,

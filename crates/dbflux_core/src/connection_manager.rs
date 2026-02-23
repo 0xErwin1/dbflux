@@ -181,6 +181,13 @@ impl RedisKeyCache {
     }
 }
 
+/// Per-database connection with its own schema snapshot.
+/// Used by `ConnectionPerDatabase` drivers (e.g. PostgreSQL).
+pub struct DatabaseConnection {
+    pub connection: Arc<dyn Connection>,
+    pub schema: Option<SchemaSnapshot>,
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -194,6 +201,8 @@ pub struct ConnectedProfile {
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
+    /// Per-database connections keyed by database name (`ConnectionPerDatabase` drivers).
+    pub database_connections: HashMap<String, DatabaseConnection>,
 }
 
 impl ConnectedProfile {
@@ -284,6 +293,32 @@ impl ConnectedProfile {
     pub fn invalidate_database_schema(&mut self, database: &str) -> Option<DbSchemaInfo> {
         self.database_schemas.remove(database)
     }
+
+    /// Look up a per-database connection (for `ConnectionPerDatabase` drivers).
+    pub fn database_connection(&self, database: &str) -> Option<&DatabaseConnection> {
+        self.database_connections.get(database)
+    }
+
+    /// Store a per-database connection and its schema.
+    pub fn add_database_connection(&mut self, database: String, db_conn: DatabaseConnection) {
+        self.database_connections.insert(database, db_conn);
+    }
+
+    /// Returns the per-database connection if one exists, otherwise the primary.
+    pub fn connection_for_database(&self, database: &str) -> Arc<dyn Connection> {
+        self.database_connections
+            .get(database)
+            .map(|dc| dc.connection.clone())
+            .unwrap_or_else(|| self.connection.clone())
+    }
+
+    /// Returns the per-database schema if available, otherwise the primary.
+    pub fn schema_for_target_database(&self, database: &str) -> Option<&SchemaSnapshot> {
+        self.database_connections
+            .get(database)
+            .and_then(|dc| dc.schema.as_ref())
+            .or(self.schema.as_ref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -365,6 +400,7 @@ impl ConnectionManager {
                 schema_foreign_keys: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
+                database_connections: HashMap::new(),
             },
         );
         self.active_connection_id = Some(id);
@@ -568,6 +604,22 @@ impl ConnectionManager {
         }
     }
 
+    /// Store a per-database connection for a `ConnectionPerDatabase` driver.
+    pub fn add_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.add_database_connection(
+                database,
+                DatabaseConnection { connection, schema },
+            );
+        }
+    }
+
     // --- Pending operations ---
 
     pub fn is_operation_pending(&self, profile_id: Uuid, database: Option<&str>) -> bool {
@@ -693,6 +745,57 @@ impl ConnectionManager {
         })
     }
 
+    /// Prepare a per-database connection without replacing the primary.
+    /// Rejects only if a connection to this database already exists.
+    pub fn prepare_database_connection(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+    ) -> Result<SwitchDatabaseParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        if connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::ConnectionPerDatabase {
+            return Err("Per-database connections only supported for ConnectionPerDatabase drivers".to_string());
+        }
+
+        if connected.database_connections.contains_key(database) {
+            return Err(format!("Already connected to database '{}'", database));
+        }
+
+        let kind = connected.profile.kind();
+        let mut new_profile = connected.profile.clone();
+
+        match &mut new_profile.config {
+            DbConfig::Postgres { database: db, .. } => {
+                *db = database.to_string();
+            }
+            _ => {
+                return Err("Unsupported database config for per-database connections".to_string());
+            }
+        }
+
+        let driver = self
+            .drivers
+            .get(&kind)
+            .cloned()
+            .ok_or_else(|| format!("{:?} driver not available", kind))?;
+
+        let original_profile = connected.profile.clone();
+
+        Ok(SwitchDatabaseParams {
+            profile_id,
+            database: database.to_string(),
+            new_profile,
+            original_profile,
+            driver,
+            secret_store: secret_store.clone(),
+        })
+    }
+
     pub fn apply_switch_database(
         &mut self,
         profile_id: Uuid,
@@ -700,6 +803,14 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
+        // Preserve per-database connections from the old profile so that
+        // query tabs targeting other databases keep working.
+        let prev_db_connections = self
+            .connections
+            .get_mut(&profile_id)
+            .map(|old| std::mem::take(&mut old.database_connections))
+            .unwrap_or_default();
+
         self.connections.insert(
             profile_id,
             ConnectedProfile {
@@ -713,6 +824,7 @@ impl ConnectionManager {
                 schema_foreign_keys: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
+                database_connections: prev_db_connections,
             },
         );
     }
@@ -752,6 +864,7 @@ impl ConnectionManager {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Result<FetchTableDetailsParams, String> {
         let connected = self
@@ -767,8 +880,9 @@ impl ConnectionManager {
         Ok(FetchTableDetailsParams {
             profile_id,
             database: database.to_string(),
+            schema: schema.map(String::from),
             table: table.to_string(),
-            connection: connected.connection.clone(),
+            connection: connected.connection_for_database(database),
         })
     }
 
@@ -1070,6 +1184,7 @@ pub struct FetchDatabaseSchemaResult {
 pub struct FetchTableDetailsParams {
     pub profile_id: Uuid,
     pub database: String,
+    pub schema: Option<String>,
     pub table: String,
     pub connection: Arc<dyn Connection>,
 }
@@ -1079,7 +1194,7 @@ impl FetchTableDetailsParams {
     pub fn execute(self) -> Result<FetchTableDetailsResult, String> {
         let details = self
             .connection
-            .table_details(&self.database, None, &self.table)
+            .table_details(&self.database, self.schema.as_deref(), &self.table)
             .map_err(|e| e.to_string())?;
 
         Ok(FetchTableDetailsResult {

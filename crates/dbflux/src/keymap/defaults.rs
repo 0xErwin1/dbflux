@@ -53,6 +53,12 @@ fn global_layer() -> KeymapLayer {
         );
     }
 
+    // File operations
+    layer.bind(
+        KeyChord::new("o", Modifiers::ctrl()),
+        Command::OpenScriptFile,
+    );
+
     // Query execution
     layer.bind(KeyChord::new("enter", Modifiers::ctrl()), Command::RunQuery);
     layer.bind(
@@ -220,6 +226,10 @@ fn editor_layer() -> KeymapLayer {
         Command::OpenSavedQueries,
     );
     layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+    layer.bind(
+        KeyChord::new("s", Modifiers::ctrl_shift()),
+        Command::SaveFileAs,
+    );
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);

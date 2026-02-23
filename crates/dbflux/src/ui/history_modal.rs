@@ -6,9 +6,9 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -143,6 +143,7 @@ impl HistoryModal {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     pub fn open_save(&mut self, sql: String, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
         self.mode = ModalMode::Save { sql };

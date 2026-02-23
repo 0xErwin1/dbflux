@@ -40,9 +40,7 @@ impl Workspace {
 
             // Tabs
             "close_tab" => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.close_active(cx);
-                });
+                self.close_active_tab(window, cx);
             }
             "next_tab" => {
                 self.tab_manager.update(cx, |mgr, cx| {
@@ -114,6 +112,16 @@ impl Workspace {
             }
             "open_settings" => {
                 self.open_settings(cx);
+            }
+
+            // File operations
+            "open_script_file" => {
+                self.open_script_file(window, cx);
+            }
+            "save_file_as" => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::SaveFileAs, window, cx);
+                }
             }
 
             _ => {
@@ -247,12 +255,12 @@ impl Workspace {
         cx.toast_info("Refreshing schema...", window);
     }
 
-    /// Opens a table in a new DataDocument tab (v0.3).
-    /// If the table is already open, focuses the existing tab instead.
+    /// Opens a table in a new DataDocument tab, or focuses the existing one.
     pub(super) fn open_table_document(
         &mut self,
         profile_id: uuid::Uuid,
         table: dbflux_core::TableRef,
+        database: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -295,6 +303,7 @@ impl Workspace {
             DataDocument::new_for_table(
                 profile_id,
                 table.clone(),
+                database.clone(),
                 self.app_state.clone(),
                 window,
                 cx,
@@ -425,7 +434,257 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    /// Creates a new SQL query tab (v0.3).
+    /// Attempts to close the active tab. If the document has unsaved changes,
+    /// shows a warning toast on the first attempt. If closed again within 3
+    /// seconds, force-closes regardless of unsaved changes.
+    pub(super) fn close_active_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::toast::ToastExt;
+
+        let active_id = self.tab_manager.read(cx).active_id();
+        let Some(doc_id) = active_id else {
+            return;
+        };
+
+        // Check if this is a repeat close within the grace period
+        if let Some((prev_id, timestamp)) = self.pending_force_close.take()
+            && prev_id == doc_id
+            && timestamp.elapsed() < std::time::Duration::from_secs(3)
+        {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.force_close(doc_id, cx);
+            });
+            return;
+        }
+
+        let closed = self.tab_manager.update(cx, |mgr, cx| mgr.close(doc_id, cx));
+
+        if !closed {
+            self.pending_force_close = Some((doc_id, std::time::Instant::now()));
+            cx.toast_warning("Unsaved changes. Close again to discard.", window);
+        }
+    }
+
+    /// Opens a file dialog to pick a script file and opens it in a new tab.
+    pub(super) fn open_script_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let tab_manager = self.tab_manager.clone();
+
+        cx.spawn(async move |this, cx| {
+            let file_handle = rfd::AsyncFileDialog::new()
+                .set_title("Open Script")
+                .add_filter("SQL Files", &["sql"])
+                .add_filter("JavaScript (MongoDB)", &["js", "mongodb"])
+                .add_filter("Redis", &["redis", "red"])
+                .add_filter("All Files", &["*"])
+                .pick_file()
+                .await;
+
+            let Some(handle) = file_handle else {
+                return;
+            };
+
+            let path = handle.path().to_path_buf();
+
+            // Check if this file is already open
+            let already_open = cx
+                .update(|cx| {
+                    tab_manager
+                        .read(cx)
+                        .documents()
+                        .iter()
+                        .find(|doc| doc.is_file(&path, cx))
+                        .map(|doc| doc.id())
+                })
+                .ok()
+                .flatten();
+
+            if let Some(id) = already_open {
+                cx.update(|cx| {
+                    tab_manager.update(cx, |mgr, cx| {
+                        mgr.activate(id, cx);
+                    });
+                })
+                .ok();
+                return;
+            }
+
+            // Read file content on background thread
+            let read_path = path.clone();
+            let content = cx
+                .background_executor()
+                .spawn(async move { std::fs::read_to_string(&read_path) })
+                .await;
+
+            let content = match content {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("Failed to read file {}: {}", path.display(), e);
+                    return;
+                }
+            };
+
+            cx.update(|cx| {
+                this.update(cx, |ws, cx| {
+                    ws.open_script_with_content(path, content, cx);
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens a script file from a known path (e.g., from sidebar recent files).
+    pub(super) fn open_script_from_path(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_manager = self.tab_manager.clone();
+
+        // Check if already open
+        let already_open = tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| doc.is_file(&path, cx))
+            .map(|doc| doc.id());
+
+        if let Some(id) = already_open {
+            tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            let read_path = path.clone();
+            let content = cx
+                .background_executor()
+                .spawn(async move { std::fs::read_to_string(&read_path) })
+                .await;
+
+            let content = match content {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("Failed to read file {}: {}", path.display(), e);
+                    return;
+                }
+            };
+
+            cx.update(|cx| {
+                this.update(cx, |ws, cx| {
+                    ws.open_script_with_content(path, content, cx);
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens a script file from a known path and content (called after file read).
+    fn open_script_with_content(
+        &mut self,
+        path: std::path::PathBuf,
+        content: String,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_core::{ExecutionContext, QueryLanguage};
+
+        let language = QueryLanguage::from_path(&path).unwrap_or(QueryLanguage::Sql);
+        let exec_ctx = ExecutionContext::parse_from_content(&content, language);
+
+        // Determine connection from exec_ctx or fall back to active
+        let connection_id = exec_ctx
+            .connection_id
+            .filter(|id| self.app_state.read(cx).connections().contains_key(id))
+            .or_else(|| self.app_state.read(cx).active_connection_id());
+
+        // Strip annotation header from content before setting editor text
+        let body = Self::strip_annotation_header(&content, language);
+
+        // Track in recent files
+        self.app_state.update(cx, |state, cx| {
+            state.record_recent_file(path.clone());
+            cx.emit(AppStateChanged);
+        });
+
+        // We need window access; use pending_open_script pattern
+        self.pending_open_script = Some(PendingOpenScript {
+            path,
+            body: body.to_string(),
+            language,
+            connection_id,
+            exec_ctx,
+        });
+        cx.notify();
+    }
+
+    /// Strip leading annotation comments from file content.
+    fn strip_annotation_header(content: &str, language: QueryLanguage) -> &str {
+        let prefix = language.comment_prefix();
+        let mut end = 0;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+
+            if trimmed.is_empty() {
+                end += line.len() + 1;
+                continue;
+            }
+
+            if let Some(after_prefix) = trimmed.strip_prefix(prefix)
+                && after_prefix.trim().starts_with('@')
+            {
+                end += line.len() + 1;
+                continue;
+            }
+
+            break;
+        }
+
+        if end >= content.len() {
+            ""
+        } else {
+            &content[end..]
+        }
+    }
+
+    pub(super) fn finalize_open_script(
+        &mut self,
+        pending: PendingOpenScript,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let doc = cx.new(|cx| {
+            let mut doc = SqlQueryDocument::new_with_language(
+                self.app_state.clone(),
+                pending.connection_id,
+                pending.language,
+                window,
+                cx,
+            )
+            .with_path(pending.path)
+            .with_exec_ctx(pending.exec_ctx);
+
+            doc.set_content(&pending.body, window, cx);
+            doc
+        });
+
+        let handle = DocumentHandle::sql_query(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Creates a new SQL query tab.
     pub(super) fn new_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Count existing query tabs for naming
         let query_count = self

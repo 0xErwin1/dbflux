@@ -11,7 +11,7 @@ use crate::ui::command_palette::{
 };
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
+    DataDocument, DocumentHandle, DocumentId, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::shutdown_overlay::ShutdownOverlay;
@@ -23,11 +23,13 @@ use crate::ui::toast::{ToastGlobal, ToastHost};
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
+use dbflux_core::{ExecutionContext, QueryLanguage};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::resizable::{resizable_panel, v_resizable};
+use std::path::PathBuf;
 
 /// State for collapsible panels (tasks panel).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -49,6 +51,15 @@ impl PanelState {
     }
 }
 
+/// Deferred until render (needs `Window` access).
+pub(super) struct PendingOpenScript {
+    pub path: PathBuf,
+    pub body: String,
+    pub language: QueryLanguage,
+    pub connection_id: Option<uuid::Uuid>,
+    pub exec_ctx: ExecutionContext,
+}
+
 pub struct Workspace {
     app_state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
@@ -67,7 +78,12 @@ pub struct Workspace {
     pending_command: Option<&'static str>,
     pending_sql: Option<String>,
     pending_focus: Option<FocusTarget>,
+    pending_open_script: Option<PendingOpenScript>,
     needs_focus_restore: bool,
+
+    /// Tracks the last tab close attempt that was blocked by unsaved changes.
+    /// If the user closes the same tab again within 3 seconds, we force-close it.
+    pending_force_close: Option<(DocumentId, std::time::Instant)>,
 
     focus_target: FocusTarget,
     keymap: &'static KeymapStack,
@@ -127,8 +143,18 @@ impl Workspace {
                     this.pending_focus = Some(FocusTarget::Sidebar);
                     cx.notify();
                 }
-                SidebarEvent::OpenTable { profile_id, table } => {
-                    this.open_table_document(*profile_id, table.clone(), window, cx);
+                SidebarEvent::OpenTable {
+                    profile_id,
+                    table,
+                    database,
+                } => {
+                    this.open_table_document(
+                        *profile_id,
+                        table.clone(),
+                        database.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenCollection {
                     profile_id,
@@ -164,6 +190,9 @@ impl Workspace {
                     this.sql_preview_modal.update(cx, |modal, cx| {
                         modal.open_query_preview(*language, badge, query.clone(), window, cx);
                     });
+                }
+                SidebarEvent::OpenScript { path } => {
+                    this.open_script_from_path(path.clone(), cx);
                 }
             },
         )
@@ -255,7 +284,9 @@ impl Workspace {
             pending_command: None,
             pending_sql: None,
             pending_focus: None,
+            pending_open_script: None,
             needs_focus_restore: false,
+            pending_force_close: None,
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
@@ -270,6 +301,10 @@ impl Workspace {
             PaletteCommand::new("run_query_in_new_tab", "Run Query in New Tab", "Editor")
                 .with_shortcut("Ctrl+Shift+Enter"),
             PaletteCommand::new("save_query", "Save Query", "Editor").with_shortcut("Ctrl+S"),
+            PaletteCommand::new("save_file_as", "Save File As", "Editor")
+                .with_shortcut("Ctrl+Shift+S"),
+            PaletteCommand::new("open_script_file", "Open Script File", "Editor")
+                .with_shortcut("Ctrl+O"),
             PaletteCommand::new("open_history", "Open Query History", "Editor")
                 .with_shortcut("Ctrl+P"),
             PaletteCommand::new("cancel_query", "Cancel Running Query", "Editor")

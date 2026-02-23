@@ -62,6 +62,9 @@ actions!(
         // Results toolbar
         FocusToolbar,
         TogglePanel,
+        // File operations
+        OpenScriptFile,
+        SaveFileAs,
     ]
 );
 

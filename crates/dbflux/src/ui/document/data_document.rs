@@ -38,17 +38,18 @@ pub enum DataDocumentEvent {
 }
 
 impl DataDocument {
-    /// Create a document for browsing a table.
     pub fn new_for_table(
         profile_id: Uuid,
         table: TableRef,
+        database: Option<String>,
         app_state: Entity<AppState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let title = table.qualified_name();
-        let data_grid =
-            cx.new(|cx| DataGridPanel::new_for_table(profile_id, table, app_state, window, cx));
+        let data_grid = cx.new(|cx| {
+            DataGridPanel::new_for_table(profile_id, table, database, app_state, window, cx)
+        });
 
         let subscription =
             cx.subscribe(

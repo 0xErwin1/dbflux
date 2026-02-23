@@ -39,10 +39,10 @@ use uuid::Uuid;
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
-    /// Request to open a table in a new DataDocument tab
     OpenTable {
         profile_id: Uuid,
         table: TableRef,
+        database: Option<String>,
     },
     OpenCollection {
         profile_id: Uuid,
@@ -62,6 +62,9 @@ pub enum SidebarEvent {
         language: QueryLanguage,
         badge: String,
         query: String,
+    },
+    OpenScript {
+        path: std::path::PathBuf,
     },
 }
 
@@ -238,6 +241,7 @@ pub struct ContextMenuState {
 /// Parsed components from a tree item ID (table or view).
 struct ItemIdParts {
     profile_id: Uuid,
+    database: Option<String>,
     schema_name: String,
     object_name: String,
 }
@@ -247,20 +251,34 @@ impl ItemIdParts {
         match node_id {
             SchemaNodeId::Table {
                 profile_id,
-                schema,
-                name,
-            }
-            | SchemaNodeId::View {
-                profile_id,
+                database,
                 schema,
                 name,
             } => Some(Self {
                 profile_id: *profile_id,
+                database: database.clone(),
+                schema_name: schema.clone(),
+                object_name: name.clone(),
+            }),
+            SchemaNodeId::View {
+                profile_id,
+                database,
+                schema,
+                name,
+            } => Some(Self {
+                profile_id: *profile_id,
+                database: database.clone(),
                 schema_name: schema.clone(),
                 object_name: name.clone(),
             }),
             _ => None,
         }
+    }
+
+    /// Cache key "database" component: database name for per-DB connections,
+    /// schema name for primary connections (legacy behavior).
+    fn cache_database(&self) -> &str {
+        self.database.as_deref().unwrap_or(&self.schema_name)
     }
 }
 
@@ -437,6 +455,11 @@ impl Sidebar {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
+            SchemaNodeId::ScriptFile { path } => {
+                cx.emit(SidebarEvent::OpenScript {
+                    path: std::path::PathBuf::from(path),
+                });
+            }
             SchemaNodeId::Database { .. } => {
                 self.handle_database_click(item_id, cx);
 
@@ -517,16 +540,22 @@ impl Sidebar {
         match parse_node_id(item_id) {
             Some(SchemaNodeId::Table {
                 profile_id,
+                database,
                 schema,
                 name,
             })
             | Some(SchemaNodeId::View {
                 profile_id,
+                database,
                 schema,
                 name,
             }) => {
                 let table = TableRef::with_schema(&schema, &name);
-                cx.emit(SidebarEvent::OpenTable { profile_id, table });
+                cx.emit(SidebarEvent::OpenTable {
+                    profile_id,
+                    table,
+                    database,
+                });
             }
             _ => {}
         }
@@ -580,6 +609,7 @@ mod tests {
     fn table_id_roundtrip() {
         let id = SchemaNodeId::Table {
             profile_id: test_uuid(),
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         };
@@ -592,6 +622,7 @@ mod tests {
     fn view_id_roundtrip() {
         let id = SchemaNodeId::View {
             profile_id: test_uuid(),
+            database: None,
             schema: "analytics".into(),
             name: "monthly_stats".into(),
         };
@@ -604,6 +635,7 @@ mod tests {
     fn table_with_special_chars_in_name() {
         let id = SchemaNodeId::Table {
             profile_id: test_uuid(),
+            database: None,
             schema: "public".into(),
             name: "user_accounts_archive".into(),
         };
@@ -628,6 +660,7 @@ mod tests {
     fn parse_node_kind_returns_correct_kind() {
         let table_id = SchemaNodeId::Table {
             profile_id: test_uuid(),
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         }
@@ -645,19 +678,38 @@ mod tests {
     fn item_id_parts_from_table_node() {
         let id = SchemaNodeId::Table {
             profile_id: test_uuid(),
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         };
         let parts = ItemIdParts::from_node_id(&id).unwrap();
         assert_eq!(parts.profile_id, test_uuid());
+        assert_eq!(parts.database, None);
         assert_eq!(parts.schema_name, "public");
         assert_eq!(parts.object_name, "users");
+        assert_eq!(parts.cache_database(), "public");
+    }
+
+    #[test]
+    fn item_id_parts_from_table_with_database() {
+        let id = SchemaNodeId::Table {
+            profile_id: test_uuid(),
+            database: Some("miniflux".into()),
+            schema: "public".into(),
+            name: "entries".into(),
+        };
+        let parts = ItemIdParts::from_node_id(&id).unwrap();
+        assert_eq!(parts.database.as_deref(), Some("miniflux"));
+        assert_eq!(parts.schema_name, "public");
+        assert_eq!(parts.object_name, "entries");
+        assert_eq!(parts.cache_database(), "miniflux");
     }
 
     #[test]
     fn item_id_parts_from_view_node() {
         let id = SchemaNodeId::View {
             profile_id: test_uuid(),
+            database: None,
             schema: "analytics".into(),
             name: "monthly_stats".into(),
         };

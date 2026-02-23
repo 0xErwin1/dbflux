@@ -340,9 +340,19 @@ impl DataGridPanel {
 
         match &self.source {
             DataSource::Table {
-                profile_id, table, ..
+                profile_id,
+                database,
+                table,
+                ..
             } => {
-                self.save_table_row(*profile_id, table.clone(), row_idx, &changes_ref, cx);
+                self.save_table_row(
+                    *profile_id,
+                    database.clone(),
+                    table.clone(),
+                    row_idx,
+                    &changes_ref,
+                    cx,
+                );
             }
             DataSource::Collection {
                 profile_id,
@@ -358,6 +368,7 @@ impl DataGridPanel {
     pub(super) fn save_table_row(
         &mut self,
         profile_id: Uuid,
+        database: Option<String>,
         table_ref: TableRef,
         row_idx: usize,
         changes: &[(usize, &crate::ui::components::data_table::model::CellValue)],
@@ -423,11 +434,11 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
+                    Self::resolve_connection_from_state(
+                        app_state.read(cx),
+                        profile_id,
+                        database.as_deref(),
+                    )
                 })
                 .ok()
                 .flatten();
@@ -437,16 +448,6 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
-
-                        if let Some(table_state) = &panel.table_state {
-                            table_state.update(cx, |state, cx| {
-                                state.edit_buffer_mut().set_row_state(
-                                    row_idx,
-                                    RowState::Error("No connection".to_string()),
-                                );
-                                cx.notify();
-                            });
-                        }
                     });
                 })
                 .ok();
@@ -641,9 +642,18 @@ impl DataGridPanel {
                 self.commit_insert_collection(*profile_id, collection.clone(), insert_idx, cx);
             }
             DataSource::Table {
-                profile_id, table, ..
+                profile_id,
+                database,
+                table,
+                ..
             } => {
-                self.commit_insert_table(*profile_id, table.clone(), insert_idx, cx);
+                self.commit_insert_table(
+                    *profile_id,
+                    database.clone(),
+                    table.clone(),
+                    insert_idx,
+                    cx,
+                );
             }
             DataSource::QueryResult { .. } => {}
         }
@@ -759,6 +769,7 @@ impl DataGridPanel {
     pub(super) fn commit_insert_table(
         &mut self,
         profile_id: Uuid,
+        database: Option<String>,
         table_ref: TableRef,
         insert_idx: usize,
         cx: &mut Context<Self>,
@@ -829,11 +840,11 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
+                    Self::resolve_connection_from_state(
+                        app_state.read(cx),
+                        profile_id,
+                        database.as_deref(),
+                    )
                 })
                 .ok()
                 .flatten();
@@ -917,10 +928,19 @@ impl DataGridPanel {
 
         if confirm.is_table
             && let DataSource::Table {
-                profile_id, table, ..
+                profile_id,
+                database,
+                table,
+                ..
             } = &self.source
         {
-            self.commit_delete_table(*profile_id, table.clone(), confirm.row_idx, cx);
+            self.commit_delete_table(
+                *profile_id,
+                database.clone(),
+                table.clone(),
+                confirm.row_idx,
+                cx,
+            );
         }
 
         self.focus_active_view(window, cx);
@@ -1053,6 +1073,7 @@ impl DataGridPanel {
     pub(super) fn commit_delete_table(
         &mut self,
         profile_id: Uuid,
+        database: Option<String>,
         table_ref: TableRef,
         row_idx: usize,
         cx: &mut Context<Self>,
@@ -1119,11 +1140,11 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
+                    Self::resolve_connection_from_state(
+                        app_state.read(cx),
+                        profile_id,
+                        database.as_deref(),
+                    )
                 })
                 .ok()
                 .flatten();

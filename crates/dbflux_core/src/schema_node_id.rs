@@ -79,11 +79,13 @@ pub enum SchemaNodeId {
     // Object variants
     Table {
         profile_id: Uuid,
+        database: Option<String>,
         schema: String,
         name: String,
     },
     View {
         profile_id: Uuid,
+        database: Option<String>,
         schema: String,
         name: String,
     },
@@ -183,6 +185,12 @@ pub enum SchemaNodeId {
         schema: String,
         table: String,
     },
+
+    // Scripts section (not connection-bound)
+    ScriptsFolder,
+    ScriptFile {
+        path: String,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -221,6 +229,8 @@ pub enum SchemaNodeKind {
     EnumValue,
     BaseType,
     Placeholder,
+    ScriptsFolder,
+    ScriptFile,
 }
 
 impl SchemaNodeId {
@@ -261,12 +271,14 @@ impl SchemaNodeId {
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
             Self::BaseType { .. } => SchemaNodeKind::BaseType,
             Self::Placeholder { .. } => SchemaNodeKind::Placeholder,
+            Self::ScriptsFolder => SchemaNodeKind::ScriptsFolder,
+            Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
         }
     }
 
     pub fn profile_id(&self) -> Option<Uuid> {
         match self {
-            Self::ConnectionFolder { .. } => None,
+            Self::ConnectionFolder { .. } | Self::ScriptsFolder | Self::ScriptFile { .. } => None,
             Self::Profile { profile_id, .. }
             | Self::Database { profile_id, .. }
             | Self::Loading { profile_id, .. }
@@ -338,6 +350,8 @@ const P_COLL_INDEX: &str = "CI";
 const P_ENUM_VALUE: &str = "EV";
 const P_BASE_TYPE: &str = "BT";
 const P_PLACEHOLDER: &str = "PH";
+const P_SCRIPTS_FOLDER: &str = "SCF";
+const P_SCRIPT_FILE: &str = "SCR";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -440,18 +454,22 @@ impl fmt::Display for SchemaNodeId {
             }
             Self::Table {
                 profile_id,
+                database,
                 schema,
                 name,
-            } => {
-                write!(f, "{}|{}|{}|{}", P_TABLE, profile_id, schema, name)
-            }
+            } => match database {
+                Some(db) => write!(f, "{}|{}|{}|{}|{}", P_TABLE, profile_id, schema, name, db),
+                None => write!(f, "{}|{}|{}|{}", P_TABLE, profile_id, schema, name),
+            },
             Self::View {
                 profile_id,
+                database,
                 schema,
                 name,
-            } => {
-                write!(f, "{}|{}|{}|{}", P_VIEW, profile_id, schema, name)
-            }
+            } => match database {
+                Some(db) => write!(f, "{}|{}|{}|{}|{}", P_VIEW, profile_id, schema, name, db),
+                None => write!(f, "{}|{}|{}|{}", P_VIEW, profile_id, schema, name),
+            },
             Self::Collection {
                 profile_id,
                 database,
@@ -592,6 +610,12 @@ impl fmt::Display for SchemaNodeId {
             } => {
                 write!(f, "{}|{}|{}|{}", P_PLACEHOLDER, profile_id, schema, table)
             }
+            Self::ScriptsFolder => {
+                write!(f, "{}", P_SCRIPTS_FOLDER)
+            }
+            Self::ScriptFile { path } => {
+                write!(f, "{}|{}", P_SCRIPT_FILE, path)
+            }
         }
     }
 }
@@ -619,11 +643,20 @@ impl FromStr for SchemaNodeId {
         };
 
         let parts: Vec<&str> = s.splitn(6, '|').collect();
-        if parts.len() < 2 {
+        if parts.is_empty() {
             return Err(err());
         }
 
         let prefix = parts[0];
+
+        // Handle single-token variants first
+        if prefix == P_SCRIPTS_FOLDER && parts.len() == 1 {
+            return Ok(Self::ScriptsFolder);
+        }
+
+        if parts.len() < 2 {
+            return Err(err());
+        }
 
         match prefix {
             P_CONN_FOLDER => {
@@ -762,8 +795,10 @@ impl FromStr for SchemaNodeId {
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
                 let schema = parts.get(2).ok_or_else(err)?.to_string();
                 let name = parts.get(3).ok_or_else(err)?.to_string();
+                let database = parts.get(4).map(|s| s.to_string());
                 Ok(Self::Table {
                     profile_id,
+                    database,
                     schema,
                     name,
                 })
@@ -774,8 +809,10 @@ impl FromStr for SchemaNodeId {
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
                 let schema = parts.get(2).ok_or_else(err)?.to_string();
                 let name = parts.get(3).ok_or_else(err)?.to_string();
+                let database = parts.get(4).map(|s| s.to_string());
                 Ok(Self::View {
                     profile_id,
+                    database,
                     schema,
                     name,
                 })
@@ -987,6 +1024,15 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_SCRIPT_FILE => {
+                // Path may contain pipe characters, so rejoin everything after the prefix
+                let path = parts[1..].join("|");
+                if path.is_empty() {
+                    return Err(err());
+                }
+                Ok(Self::ScriptFile { path })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1014,6 +1060,8 @@ impl SchemaNodeKind {
                 | Self::SchemaForeignKeysFolder
                 | Self::CollectionsFolder
                 | Self::CustomType
+                | Self::ScriptsFolder
+                | Self::ScriptFile
         )
     }
 
@@ -1034,13 +1082,14 @@ impl SchemaNodeKind {
                 | Self::CollectionsFolder
                 | Self::Database
                 | Self::CustomType
+                | Self::ScriptsFolder
         )
     }
 
     pub fn shows_pointer_cursor(&self) -> bool {
         matches!(
             self,
-            Self::Profile | Self::Database | Self::ConnectionFolder
+            Self::Profile | Self::Database | Self::ConnectionFolder | Self::ScriptFile
         )
     }
 }
@@ -1119,11 +1168,25 @@ mod tests {
         });
         roundtrip(SchemaNodeId::Table {
             profile_id: uuid,
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         });
+        roundtrip(SchemaNodeId::Table {
+            profile_id: uuid,
+            database: Some("miniflux".into()),
+            schema: "public".into(),
+            name: "entries".into(),
+        });
         roundtrip(SchemaNodeId::View {
             profile_id: uuid,
+            database: None,
+            schema: "public".into(),
+            name: "active_users".into(),
+        });
+        roundtrip(SchemaNodeId::View {
+            profile_id: uuid,
+            database: Some("miniflux".into()),
             schema: "public".into(),
             name: "active_users".into(),
         });
@@ -1213,6 +1276,18 @@ mod tests {
             schema: "public".into(),
             table: "users".into(),
         });
+
+        roundtrip(SchemaNodeId::ScriptsFolder);
+        roundtrip(SchemaNodeId::ScriptFile {
+            path: "/home/user/scripts/query.sql".into(),
+        });
+    }
+
+    #[test]
+    fn test_script_file_path_with_pipes() {
+        roundtrip(SchemaNodeId::ScriptFile {
+            path: "/home/user/dir|with|pipes/query.sql".into(),
+        });
     }
 
     #[test]
@@ -1221,6 +1296,7 @@ mod tests {
 
         roundtrip(SchemaNodeId::Table {
             profile_id: uuid,
+            database: None,
             schema: "my_schema".into(),
             name: "user_accounts".into(),
         });
@@ -1236,6 +1312,7 @@ mod tests {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
         let id = SchemaNodeId::Table {
             profile_id: uuid,
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         };
@@ -1249,6 +1326,7 @@ mod tests {
         assert_eq!(
             SchemaNodeId::Table {
                 profile_id: uuid,
+                database: None,
                 schema: "public".into(),
                 name: "users".into()
             }
@@ -1273,14 +1351,27 @@ mod tests {
     #[test]
     fn test_display_format() {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
         let id = SchemaNodeId::Table {
             profile_id: uuid,
+            database: None,
             schema: "public".into(),
             name: "users".into(),
         };
         assert_eq!(
             id.to_string(),
             "T|12345678-1234-1234-1234-123456789abc|public|users"
+        );
+
+        let id_with_db = SchemaNodeId::Table {
+            profile_id: uuid,
+            database: Some("miniflux".into()),
+            schema: "public".into(),
+            name: "entries".into(),
+        };
+        assert_eq!(
+            id_with_db.to_string(),
+            "T|12345678-1234-1234-1234-123456789abc|public|entries|miniflux"
         );
     }
 }

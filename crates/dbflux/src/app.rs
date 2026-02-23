@@ -1,11 +1,12 @@
 use dbflux_core::{
     CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
-    SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SecretStore, SessionFacade,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
@@ -36,6 +37,7 @@ pub use dbflux_core::{
 pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
+    recent_files: Option<RecentFilesStore>,
 }
 
 impl AppState {
@@ -68,9 +70,14 @@ impl AppState {
             drivers.insert(DbKind::Redis, Arc::new(RedisDriver::new()));
         }
 
+        let recent_files = RecentFilesStore::new()
+            .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
+            .ok();
+
         Self {
             facade: SessionFacade::new(drivers),
             settings_window: None,
+            recent_files,
         }
     }
 
@@ -340,6 +347,19 @@ impl AppState {
             .apply_connect_profile(profile, connection, schema);
     }
 
+    pub fn prepare_database_connection(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<SwitchDatabaseParams, String> {
+        self.facade.connections.prepare_database_connection(
+            profile_id,
+            database,
+            &self.facade.secrets.secret_store_arc(),
+        )
+    }
+
+    #[allow(dead_code)]
     pub fn prepare_switch_database(
         &self,
         profile_id: Uuid,
@@ -352,6 +372,7 @@ impl AppState {
         )
     }
 
+    #[allow(dead_code)]
     pub fn apply_switch_database(
         &mut self,
         profile_id: Uuid,
@@ -365,6 +386,18 @@ impl AppState {
             connection,
             schema,
         );
+    }
+
+    pub fn add_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
+        self.facade
+            .connections
+            .add_database_connection(profile_id, database, connection, schema);
     }
 
     pub fn prepare_fetch_database_schema(
@@ -382,11 +415,12 @@ impl AppState {
         &self,
         profile_id: Uuid,
         database: &str,
+        schema: Option<&str>,
         table: &str,
     ) -> Result<FetchTableDetailsParams, String> {
         self.facade
             .connections
-            .prepare_fetch_table_details(profile_id, database, table)
+            .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
     pub fn prepare_fetch_schema_types(
@@ -605,6 +639,28 @@ impl AppState {
 
     pub fn saved_queries(&self) -> &[SavedQuery] {
         self.facade.saved_queries.queries()
+    }
+
+    // --- RecentFilesStore ---
+
+    pub fn recent_files(&self) -> &[dbflux_core::RecentFile] {
+        self.recent_files
+            .as_ref()
+            .map(|store| store.entries())
+            .unwrap_or(&[])
+    }
+
+    pub fn record_recent_file(&mut self, path: PathBuf) {
+        if let Some(store) = self.recent_files.as_mut() {
+            store.record_open(path);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_recent_file(&mut self, path: &PathBuf) {
+        if let Some(store) = self.recent_files.as_mut() {
+            store.remove(path);
+        }
     }
 
     // --- TaskManager ---

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::sql_preview_modal::SqlGenerationType;
 
 impl Sidebar {
     pub(super) fn get_code_generators_for_item(
@@ -105,14 +106,25 @@ impl Sidebar {
             return;
         };
 
-        // Try to find view in database_schemas (MySQL/MariaDB)
         let view_from_db_schemas = conn
             .database_schemas
             .get(&parts.schema_name)
             .and_then(|db_schema| db_schema.views.iter().find(|v| v.name == parts.object_name));
 
-        // Fall back to schema.schemas (PostgreSQL/SQLite)
-        let view = view_from_db_schemas.or_else(|| Self::find_view_for_item(&parts, &conn.schema));
+        let view_from_per_db = || {
+            parts
+                .database
+                .as_deref()
+                .and_then(|db| conn.database_connections.get(db))
+                .and_then(|dc| dc.schema.as_ref())
+                .and_then(|schema| {
+                    Self::find_view_in_schema(&parts.schema_name, &parts.object_name, schema)
+                })
+        };
+
+        let view = view_from_db_schemas
+            .or_else(view_from_per_db)
+            .or_else(|| Self::find_view_for_item(&parts, &conn.schema));
 
         let Some(view) = view else {
             log::warn!(
@@ -151,8 +163,6 @@ impl Sidebar {
         generator_id: &str,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::sql_preview_modal::SqlGenerationType;
-
         let Some(parts) = parse_node_id(item_id)
             .as_ref()
             .and_then(ItemIdParts::from_node_id)
@@ -160,29 +170,63 @@ impl Sidebar {
             return;
         };
 
-        let state = self.app_state.read(cx);
-        let Some(conn) = state.connections().get(&parts.profile_id) else {
+        let generation_type = SqlGenerationType::from_generator_id(generator_id);
+
+        let resolved = {
+            let state = self.app_state.read(cx);
+            let Some(conn) = state.connections().get(&parts.profile_id) else {
+                return;
+            };
+
+            let cache_db = parts.cache_database();
+            let cache_key = (cache_db.to_string(), parts.object_name.clone());
+
+            if let Some(table) = conn.table_details.get(&cache_key) {
+                Some(table.clone())
+            } else {
+                let from_db_schemas = conn
+                    .database_schemas
+                    .get(&parts.schema_name)
+                    .and_then(|ds| ds.tables.iter().find(|t| t.name == parts.object_name));
+
+                let from_per_db = || {
+                    parts
+                        .database
+                        .as_deref()
+                        .and_then(|db| conn.database_connections.get(db))
+                        .and_then(|dc| dc.schema.as_ref())
+                        .and_then(|s| {
+                            Self::find_table_in_schema(&parts.schema_name, &parts.object_name, s)
+                        })
+                };
+
+                from_db_schemas
+                    .or_else(from_per_db)
+                    .or_else(|| Self::find_table_for_item(&parts, &conn.schema))
+                    .cloned()
+            }
+        };
+
+        let Some(table) = resolved else {
+            log::warn!(
+                "Code generation for '{}' failed: table not found",
+                parts.object_name
+            );
             return;
         };
 
-        // Try to convert to SqlGenerationType for preview modal
-        let generation_type = SqlGenerationType::from_generator_id(generator_id);
+        if let Some(gen_type) = generation_type {
+            cx.emit(SidebarEvent::RequestSqlPreview {
+                profile_id: parts.profile_id,
+                table_info: table,
+                generation_type: gen_type,
+            });
+            return;
+        }
 
-        // First check the table_details cache (populated by ensure_table_details)
-        let cache_key = (parts.schema_name.clone(), parts.object_name.clone());
-        if let Some(table) = conn.table_details.get(&cache_key) {
-            // For supported types, use the SQL preview modal
-            if let Some(gen_type) = generation_type {
-                cx.emit(SidebarEvent::RequestSqlPreview {
-                    profile_id: parts.profile_id,
-                    table_info: table.clone(),
-                    generation_type: gen_type,
-                });
-                return;
-            }
-
-            // For unsupported types (CREATE TABLE, DROP, TRUNCATE), use driver generation
-            match conn.connection.generate_code(generator_id, table) {
+        let state = self.app_state.read(cx);
+        if let Some(conn) = state.connections().get(&parts.profile_id) {
+            match conn.connection.generate_code(generator_id, &table) {
                 Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
                 Err(e) => {
                     log::error!("Code generation failed: {}", e);
@@ -193,54 +237,35 @@ impl Sidebar {
                     cx.notify();
                 }
             }
-            return;
         }
+    }
 
-        // Fallback: search in database_schemas (MySQL/MariaDB)
-        let table_from_db_schemas =
-            conn.database_schemas
-                .get(&parts.schema_name)
-                .and_then(|db_schema| {
-                    db_schema
-                        .tables
-                        .iter()
-                        .find(|t| t.name == parts.object_name)
-                });
-
-        // Fall back to schema.schemas (PostgreSQL/SQLite)
-        let table =
-            table_from_db_schemas.or_else(|| Self::find_table_for_item(&parts, &conn.schema));
-
-        let Some(table) = table else {
-            log::warn!(
-                "Code generation for '{}' failed: table not found",
-                parts.object_name
-            );
-            return;
-        };
-
-        // For supported types, use the SQL preview modal
-        if let Some(gen_type) = generation_type {
-            cx.emit(SidebarEvent::RequestSqlPreview {
-                profile_id: parts.profile_id,
-                table_info: table.clone(),
-                generation_type: gen_type,
-            });
-            return;
-        }
-
-        // For unsupported types, use driver generation
-        match conn.connection.generate_code(generator_id, table) {
-            Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),
-            Err(e) => {
-                log::error!("Code generation failed: {}", e);
-                self.pending_toast = Some(PendingToast {
-                    message: format!("Code generation failed: {}", e),
-                    is_error: true,
-                });
-                cx.notify();
+    /// Search for a table within a specific schema of a `SchemaSnapshot`.
+    fn find_table_in_schema<'a>(
+        schema_name: &str,
+        table_name: &str,
+        snapshot: &'a SchemaSnapshot,
+    ) -> Option<&'a TableInfo> {
+        for db_schema in snapshot.schemas() {
+            if db_schema.name == schema_name {
+                return db_schema.tables.iter().find(|t| t.name == table_name);
             }
         }
+        snapshot.tables().iter().find(|t| t.name == table_name)
+    }
+
+    /// Search for a view within a specific schema of a `SchemaSnapshot`.
+    fn find_view_in_schema<'a>(
+        schema_name: &str,
+        view_name: &str,
+        snapshot: &'a SchemaSnapshot,
+    ) -> Option<&'a ViewInfo> {
+        for db_schema in snapshot.schemas() {
+            if db_schema.name == schema_name {
+                return db_schema.views.iter().find(|v| v.name == view_name);
+            }
+        }
+        snapshot.views().iter().find(|v| v.name == view_name)
     }
 
     pub(super) fn get_current_database(conn: &ConnectedProfile) -> String {

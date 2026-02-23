@@ -51,6 +51,7 @@ pub enum DataSourceKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocumentIcon {
     Sql,
+    Script,
     Table,
     Redis,
     RedisKey,
@@ -63,6 +64,7 @@ impl DocumentIcon {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Sql => "file-code",
+            Self::Script => "file-text",
             Self::Table => "table",
             Self::Redis => "database",
             Self::RedisKey => "key",

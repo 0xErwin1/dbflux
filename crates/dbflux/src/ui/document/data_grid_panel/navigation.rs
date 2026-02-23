@@ -28,12 +28,14 @@ impl DataGridPanel {
         let table_info = match &self.source {
             DataSource::Table {
                 profile_id,
+                database,
                 table,
                 pagination,
                 total_rows,
                 ..
             } => Some((
                 *profile_id,
+                database.clone(),
                 table.clone(),
                 pagination.reset_offset(),
                 *total_rows,
@@ -42,7 +44,7 @@ impl DataGridPanel {
             DataSource::QueryResult { .. } => None,
         };
 
-        if let Some((profile_id, table, new_pagination, total_rows)) = table_info {
+        if let Some((profile_id, database, table, new_pagination, total_rows)) = table_info {
             // Server-side sort: update source and queue re-query
             let new_order_by = vec![OrderByColumn {
                 name: col_name,
@@ -59,6 +61,7 @@ impl DataGridPanel {
             // Update source immediately for UI consistency
             self.source = DataSource::Table {
                 profile_id,
+                database: database.clone(),
                 table: table.clone(),
                 pagination: new_pagination.clone(),
                 order_by: new_order_by.clone(),
@@ -68,6 +71,7 @@ impl DataGridPanel {
             // Queue re-query
             self.pending_requery = Some(PendingRequery {
                 profile_id,
+                database,
                 table,
                 pagination: new_pagination,
                 order_by: new_order_by,
@@ -87,6 +91,7 @@ impl DataGridPanel {
         let table_info = match &self.source {
             DataSource::Table {
                 profile_id,
+                database,
                 table,
                 pagination,
                 total_rows,
@@ -96,6 +101,7 @@ impl DataGridPanel {
                     Self::get_primary_key_columns(&self.app_state, *profile_id, table, cx);
                 Some((
                     *profile_id,
+                    database.clone(),
                     table.clone(),
                     pagination.reset_offset(),
                     *total_rows,
@@ -106,7 +112,9 @@ impl DataGridPanel {
             DataSource::QueryResult { .. } => None,
         };
 
-        if let Some((profile_id, table, new_pagination, total_rows, pk_order)) = table_info {
+        if let Some((profile_id, database, table, new_pagination, total_rows, pk_order)) =
+            table_info
+        {
             let filter_value = self.filter_input.read(cx).value();
             let filter = if filter_value.trim().is_empty() {
                 None
@@ -116,6 +124,7 @@ impl DataGridPanel {
 
             self.source = DataSource::Table {
                 profile_id,
+                database: database.clone(),
                 table: table.clone(),
                 pagination: new_pagination.clone(),
                 order_by: pk_order.clone(),
@@ -124,6 +133,7 @@ impl DataGridPanel {
 
             self.pending_requery = Some(PendingRequery {
                 profile_id,
+                database,
                 table,
                 pagination: new_pagination,
                 order_by: pk_order,
@@ -211,6 +221,7 @@ impl DataGridPanel {
         match &self.source {
             DataSource::Table {
                 profile_id,
+                database,
                 table,
                 pagination,
                 order_by,
@@ -218,6 +229,7 @@ impl DataGridPanel {
             } => {
                 self.run_table_query(
                     *profile_id,
+                    database.clone(),
                     table.clone(),
                     pagination.next_page(),
                     order_by.clone(),
@@ -253,6 +265,7 @@ impl DataGridPanel {
         match &self.source {
             DataSource::Table {
                 profile_id,
+                database,
                 table,
                 order_by,
                 total_rows,
@@ -260,6 +273,7 @@ impl DataGridPanel {
             } => {
                 self.run_table_query(
                     *profile_id,
+                    database.clone(),
                     table.clone(),
                     prev,
                     order_by.clone(),

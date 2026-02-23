@@ -108,16 +108,39 @@ impl SqlQueryDocument {
             return;
         };
 
-        let connection = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&conn_id)
-            .map(|c| c.connection.clone());
+        let connection = {
+            let connections = self.app_state.read(cx).connections();
+            let Some(connected) = connections.get(&conn_id) else {
+                cx.toast_error("Connection not found", window);
+                return;
+            };
 
-        let Some(connection) = connection else {
-            cx.toast_error("Connection not found", window);
-            return;
+            let strategy = connected.connection.schema_loading_strategy();
+            if strategy == SchemaLoadingStrategy::ConnectionPerDatabase {
+                if let Some(ref target_db) = self.exec_ctx.database {
+                    let is_primary = connected
+                        .schema
+                        .as_ref()
+                        .and_then(|s| s.current_database())
+                        .is_some_and(|current| current == target_db);
+
+                    if is_primary {
+                        connected.connection.clone()
+                    } else if let Some(db_conn) = connected.database_connection(target_db) {
+                        db_conn.connection.clone()
+                    } else {
+                        cx.toast_error(
+                            format!("Connecting to database '{}', please wait...", target_db),
+                            window,
+                        );
+                        return;
+                    }
+                } else {
+                    connected.connection.clone()
+                }
+            } else {
+                connected.connection.clone()
+            }
         };
 
         self.run_in_new_tab = in_new_tab;
@@ -144,11 +167,16 @@ impl SqlQueryDocument {
         cx.notify();
 
         let active_database = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&conn_id)
-            .and_then(|c| c.active_database.clone());
+            .exec_ctx
+            .database
+            .clone()
+            .or_else(|| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&conn_id)
+                    .and_then(|c| c.active_database.clone())
+            });
 
         let request = QueryRequest::new(query.clone()).with_database(active_database);
 
@@ -288,7 +316,10 @@ impl SqlQueryDocument {
                 let (database, connection_name) = self
                     .connection_id
                     .and_then(|id| self.app_state.read(cx).connections().get(&id))
-                    .map(|c| (c.active_database.clone(), Some(c.profile.name.clone())))
+                    .map(|c| {
+                        let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                        (db, Some(c.profile.name.clone()))
+                    })
                     .unwrap_or((None, None));
 
                 let history_entry = HistoryEntry::new(
@@ -414,7 +445,17 @@ impl SqlQueryDocument {
             if let Some(conn_id) = self.connection_id
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
-                let conn = connected.connection.clone();
+                let conn = self
+                    .exec_ctx
+                    .database
+                    .as_deref()
+                    .filter(|_| {
+                        connected.connection.schema_loading_strategy()
+                            == SchemaLoadingStrategy::ConnectionPerDatabase
+                    })
+                    .map(|db| connected.connection_for_database(db))
+                    .unwrap_or_else(|| connected.connection.clone());
+
                 let cancel_handle = conn.cancel_handle();
                 if let Err(e) = cancel_handle.cancel() {
                     log::warn!("Failed to send cancel via handle: {}", e);

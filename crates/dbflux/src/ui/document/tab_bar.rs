@@ -110,6 +110,7 @@ impl TabBar {
             super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal.path(),
             super::types::DocumentIcon::Mongo => AppIcon::Database.path(),
             super::types::DocumentIcon::Collection => AppIcon::Folder.path(),
+            super::types::DocumentIcon::Script => AppIcon::ScrollText.path(),
         };
 
         div()

@@ -68,6 +68,16 @@ impl DocumentHandle {
         }
     }
 
+    /// Checks if this document is backed by the given file path.
+    pub fn is_file(&self, path: &std::path::Path, cx: &App) -> bool {
+        match self {
+            Self::SqlQuery { entity, .. } => {
+                entity.read(cx).path().map(|p| p.as_path()) == Some(path)
+            }
+            _ => false,
+        }
+    }
+
     /// Checks if this is a table document matching the given table.
     pub fn is_table(&self, table: &dbflux_core::TableRef, cx: &App) -> bool {
         match self {
@@ -100,11 +110,16 @@ impl DocumentHandle {
         match self {
             Self::SqlQuery { id, entity } => {
                 let doc = entity.read(cx);
+                let icon = if doc.is_file_backed() {
+                    DocumentIcon::Script
+                } else {
+                    DocumentIcon::Sql
+                };
                 DocumentMetaSnapshot {
                     id: *id,
                     kind: DocumentKind::Script,
                     title: doc.title(),
-                    icon: DocumentIcon::Sql,
+                    icon,
                     state: doc.state(),
                     closable: true,
                     connection_id: doc.connection_id(),

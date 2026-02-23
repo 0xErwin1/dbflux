@@ -83,6 +83,10 @@ impl Render for Workspace {
             self.set_focus(target, window, cx);
         }
 
+        if let Some(pending) = self.pending_open_script.take() {
+            self.finalize_open_script(pending, window, cx);
+        }
+
         if self.needs_focus_restore {
             self.needs_focus_restore = false;
             self.focus_handle.focus(window);
@@ -311,10 +315,8 @@ impl Render for Workspace {
                 this.new_query_tab(window, cx);
             }))
             .on_action(
-                cx.listener(|this, _: &keymap::CloseCurrentTab, _window, cx| {
-                    this.tab_manager.update(cx, |mgr, cx| {
-                        mgr.close_active(cx);
-                    });
+                cx.listener(|this, _: &keymap::CloseCurrentTab, window, cx| {
+                    this.close_active_tab(window, cx);
                 }),
             )
             .on_action(cx.listener(|this, _: &keymap::NextTab, _window, cx| {
@@ -448,6 +450,14 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _window, cx| {
                 this.toggle_sidebar(cx);
+            }))
+            .on_action(cx.listener(|this, _: &keymap::OpenScriptFile, window, cx| {
+                this.open_script_file(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &keymap::SaveFileAs, window, cx| {
+                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::SaveFileAs, window, cx);
+                }
             }))
             // List navigation actions - propagate if not handled so editor can receive keys
             .on_action(cx.listener(|this, _: &keymap::SelectNext, window, cx| {

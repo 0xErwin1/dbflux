@@ -355,6 +355,48 @@ pub enum QueryLanguage {
 }
 
 impl QueryLanguage {
+    /// Infer the query language from a file path's extension.
+    ///
+    /// Returns `None` for unrecognised extensions so the caller can fall back
+    /// to a connection-derived language or refuse to open the file.
+    pub fn from_path(path: &std::path::Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?.to_lowercase();
+        match ext.as_str() {
+            "sql" => Some(Self::Sql),
+            "js" | "mongodb" => Some(Self::MongoQuery),
+            "redis" | "red" => Some(Self::RedisCommands),
+            "cypher" | "cyp" => Some(Self::Cypher),
+            "influxql" | "flux" => Some(Self::InfluxQuery),
+            "cql" => Some(Self::Cql),
+            _ => None,
+        }
+    }
+
+    /// Default file extension for "Save As" dialogs.
+    pub fn default_extension(&self) -> &'static str {
+        match self {
+            Self::Sql | Self::Cql => "sql",
+            Self::MongoQuery => "js",
+            Self::RedisCommands => "redis",
+            Self::Cypher => "cypher",
+            Self::InfluxQuery => "influxql",
+            Self::Custom(_) => "txt",
+        }
+    }
+
+    /// All recognized file extensions for Open dialogs.
+    pub fn file_dialog_extensions(&self) -> &[&'static str] {
+        match self {
+            Self::Sql => &["sql"],
+            Self::MongoQuery => &["js", "mongodb"],
+            Self::RedisCommands => &["redis", "red"],
+            Self::Cypher => &["cypher", "cyp"],
+            Self::InfluxQuery => &["influxql", "flux"],
+            Self::Cql => &["cql"],
+            Self::Custom(_) => &["txt"],
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             QueryLanguage::Sql => "SQL",

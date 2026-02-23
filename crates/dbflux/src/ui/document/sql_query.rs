@@ -2,7 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
-use crate::app::AppState;
+use crate::app::{AppState, AppStateChanged};
 use crate::keymap::{Command, ContextId};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
@@ -11,8 +11,9 @@ use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    EditorDiagnostic as CoreEditorDiagnostic, HistoryEntry, QueryRequest, QueryResult,
-    RefreshPolicy, ValidationResult, detect_dangerous_query,
+    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
+    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
+    ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -30,14 +31,17 @@ use lsp_types::{
 };
 use std::cmp::min;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
 mod completion;
+mod context_bar;
 mod diagnostics;
 mod execution;
+mod file_ops;
 mod focus;
 mod render;
 
@@ -84,6 +88,19 @@ pub struct SqlQueryDocument {
     original_content: String,
     saved_query_id: Option<Uuid>,
 
+    // File backing
+    path: Option<PathBuf>,
+    is_dirty: bool,
+    suppress_dirty: bool,
+    query_language: QueryLanguage,
+
+    // Execution context (per-document, independent of global connection)
+    exec_ctx: ExecutionContext,
+    connection_dropdown: Entity<Dropdown>,
+    database_dropdown: Entity<Dropdown>,
+    schema_dropdown: Entity<Dropdown>,
+    _context_subscriptions: Vec<Subscription>,
+
     // Execution
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
@@ -120,6 +137,12 @@ pub struct SqlQueryDocument {
     // Diagnostic debounce: incremental request id to discard stale results.
     diagnostic_request_id: u64,
     _diagnostic_debounce: Option<Task<()>>,
+
+    // Pending file I/O
+    _pending_save: Option<Task<()>>,
+
+    // Pending error to show as toast (set from async context without window access)
+    pending_error: Option<String>,
 }
 
 struct PendingQueryResult {
@@ -155,8 +178,19 @@ impl SqlQueryDocument {
         let query_language = connection_id
             .and_then(|id| app_state.read(cx).connections().get(&id))
             .map(|conn| conn.connection.metadata().query_language)
-            .unwrap_or(dbflux_core::QueryLanguage::Sql);
+            .unwrap_or(QueryLanguage::Sql);
 
+        Self::new_with_language(app_state, connection_id, query_language, window, cx)
+    }
+
+    /// Create a document with an explicit language (used when opening files).
+    pub fn new_with_language(
+        app_state: Entity<AppState>,
+        connection_id: Option<Uuid>,
+        query_language: QueryLanguage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let editor_mode = query_language.editor_mode();
         let placeholder = query_language.placeholder();
 
@@ -180,6 +214,11 @@ impl SqlQueryDocument {
             window,
             |this, _input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    if this.suppress_dirty {
+                        this.suppress_dirty = false;
+                    } else {
+                        this.mark_dirty(cx);
+                    }
                     this.schedule_diagnostic_refresh(cx);
                 }
                 InputEvent::Focus => {
@@ -239,6 +278,40 @@ impl SqlQueryDocument {
             },
         );
 
+        let initial_database = connection_id.and_then(|id| {
+            let connections = app_state.read(cx).connections();
+            let connected = connections.get(&id)?;
+
+            connected
+                .active_database
+                .clone()
+                .or_else(|| {
+                    connected
+                        .schema
+                        .as_ref()
+                        .and_then(|s| s.current_database().map(String::from))
+                })
+        });
+
+        let mut exec_ctx = ExecutionContext {
+            connection_id,
+            database: initial_database,
+            ..Default::default()
+        };
+
+        // Pre-select "public" schema when available (PostgreSQL default).
+        let schema_items = Self::schema_items_for_connection(&app_state, &exec_ctx, cx);
+        if schema_items.iter().any(|item| item.value.as_ref() == "public") {
+            exec_ctx.schema = Some("public".to_string());
+        }
+
+        let (connection_dropdown, conn_sub) =
+            Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
+        let (database_dropdown, db_sub) =
+            Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
+        let (schema_dropdown, schema_sub) =
+            Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
+
         Self {
             id: DocumentId::new(),
             title: "Query 1".to_string(),
@@ -249,6 +322,15 @@ impl SqlQueryDocument {
             _input_subscriptions: vec![input_change_sub],
             original_content: String::new(),
             saved_query_id: None,
+            path: None,
+            is_dirty: false,
+            suppress_dirty: false,
+            query_language,
+            exec_ctx,
+            connection_dropdown,
+            database_dropdown,
+            schema_dropdown,
+            _context_subscriptions: vec![conn_sub, db_sub, schema_sub],
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
@@ -272,6 +354,8 @@ impl SqlQueryDocument {
             pending_dangerous_query: None,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
+            _pending_save: None,
+            pending_error: None,
         }
     }
 
@@ -318,12 +402,14 @@ impl SqlQueryDocument {
         }));
     }
 
-    /// Sets the document content.
+    /// Sets the document content (without marking dirty).
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
+        self.suppress_dirty = true;
         self.input_state
             .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
         self.original_content = sql_owned;
+        self.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
     }
 
@@ -333,6 +419,53 @@ impl SqlQueryDocument {
         self
     }
 
+    /// Attach a file path (used after opening or "Save As").
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.path = Some(path);
+        self
+    }
+
+    /// Set the execution context (e.g. parsed from file header).
+    pub fn with_exec_ctx(mut self, ctx: ExecutionContext) -> Self {
+        if let Some(conn_id) = ctx.connection_id {
+            self.connection_id = Some(conn_id);
+            self.exec_ctx = ctx;
+        }
+        self
+    }
+
+    // === File backing ===
+
+    pub fn path(&self) -> Option<&PathBuf> {
+        self.path.as_ref()
+    }
+
+    pub fn is_file_backed(&self) -> bool {
+        self.path.is_some()
+    }
+
+    #[allow(dead_code)]
+    pub fn query_language(&self) -> QueryLanguage {
+        self.query_language
+    }
+
+    fn mark_dirty(&mut self, cx: &mut Context<Self>) {
+        if !self.is_dirty {
+            self.is_dirty = true;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
+    }
+
+    fn mark_clean(&mut self, cx: &mut Context<Self>) {
+        if self.is_dirty {
+            self.is_dirty = false;
+            self.original_content = self.input_state.read(cx).value().to_string();
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
+    }
+
     // === Accessors for DocumentHandle ===
 
     pub fn id(&self) -> DocumentId {
@@ -340,7 +473,20 @@ impl SqlQueryDocument {
     }
 
     pub fn title(&self) -> String {
-        self.title.clone()
+        if let Some(path) = &self.path {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Untitled");
+
+            if self.is_dirty {
+                format!("{}*", name)
+            } else {
+                name.to_string()
+            }
+        } else {
+            self.title.clone()
+        }
     }
 
     pub fn state(&self) -> DocumentState {
@@ -355,12 +501,20 @@ impl SqlQueryDocument {
         self.connection_id
     }
 
+    #[allow(dead_code)]
+    pub fn exec_ctx(&self) -> &ExecutionContext {
+        &self.exec_ctx
+    }
+
     pub fn can_close(&self, cx: &App) -> bool {
         !self.has_unsaved_changes(cx)
     }
 
-    /// Returns true if the editor content differs from the original content.
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
+        if self.is_file_backed() {
+            return self.is_dirty;
+        }
+
         let current = self.input_state.read(cx).value();
         current != self.original_content
     }
@@ -534,13 +688,16 @@ impl SqlQueryDocument {
                 true
             }
             Command::SaveQuery => {
-                let sql = self.input_state.read(cx).value().to_string();
-                if sql.trim().is_empty() {
-                    cx.toast_warning("Enter a query to save", window);
+                if self.is_file_backed() {
+                    self.save_file(window, cx);
                 } else {
-                    self.history_modal
-                        .update(cx, |modal, cx| modal.open_save(sql, window, cx));
+                    self.save_file_as(window, cx);
                 }
+                true
+            }
+
+            Command::SaveFileAs => {
+                self.save_file_as(window, cx);
                 true
             }
 

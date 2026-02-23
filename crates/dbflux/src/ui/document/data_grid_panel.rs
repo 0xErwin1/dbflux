@@ -36,6 +36,7 @@ pub enum DataSource {
     /// Table with server-side pagination and sorting.
     Table {
         profile_id: Uuid,
+        database: Option<String>,
         table: TableRef,
         pagination: Pagination,
         order_by: Vec<OrderByColumn>,
@@ -60,6 +61,14 @@ pub enum DataSource {
 impl DataSource {
     pub fn is_table(&self) -> bool {
         matches!(self, DataSource::Table { .. })
+    }
+
+    #[allow(dead_code)]
+    pub fn database(&self) -> Option<&str> {
+        match self {
+            DataSource::Table { database, .. } => database.as_deref(),
+            _ => None,
+        }
     }
 
     pub fn is_collection(&self) -> bool {
@@ -187,6 +196,7 @@ struct LocalSortState {
 
 struct PendingRequery {
     profile_id: Uuid,
+    database: Option<String>,
     table: TableRef,
     pagination: Pagination,
     order_by: Vec<OrderByColumn>,
@@ -337,10 +347,10 @@ pub struct DataGridPanel {
 }
 
 impl DataGridPanel {
-    /// Create a new panel for browsing a table (server-side pagination).
     pub fn new_for_table(
         profile_id: Uuid,
         table: TableRef,
+        database: Option<String>,
         app_state: Entity<AppState>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -351,6 +361,7 @@ impl DataGridPanel {
 
         let source = DataSource::Table {
             profile_id,
+            database,
             table: table.clone(),
             pagination,
             order_by,
@@ -400,14 +411,19 @@ impl DataGridPanel {
         table: &TableRef,
         cx: &mut Context<Self>,
     ) {
-        let database = {
+        let source_database = match &self.source {
+            DataSource::Table { database, .. } => database.clone(),
+            _ => None,
+        };
+
+        let database = source_database.unwrap_or_else(|| {
             let state = self.app_state.read(cx);
             state
                 .connections()
                 .get(&profile_id)
                 .and_then(|c| c.active_database.clone())
                 .unwrap_or_else(|| "default".to_string())
-        };
+        });
 
         log::info!(
             "[PK] Fetching table details for PK columns: {}.{}",
@@ -418,6 +434,7 @@ impl DataGridPanel {
         let params = match self.app_state.read(cx).prepare_fetch_table_details(
             profile_id,
             &database,
+            table.schema.as_deref(),
             &table.name,
         ) {
             Ok(p) => p,
@@ -1229,6 +1246,66 @@ impl DataGridPanel {
 
     pub fn source(&self) -> &DataSource {
         &self.source
+    }
+
+    pub(super) fn resolve_connection_from_state(
+        app_state: &crate::app::AppState,
+        profile_id: uuid::Uuid,
+        database: Option<&str>,
+    ) -> Option<std::sync::Arc<dyn dbflux_core::Connection>> {
+        let connected = app_state.connections().get(&profile_id)?;
+
+        match database {
+            Some(db) => Some(connected.connection_for_database(db)),
+            None => Some(connected.connection.clone()),
+        }
+    }
+
+    /// Resolves the correct connection for query execution.
+    ///
+    /// For `ConnectionPerDatabase` drivers, checks whether the target database
+    /// matches the primary connection. If not, looks up the per-database
+    /// connection cache.
+    pub(super) fn resolve_connection(
+        &self,
+        profile_id: uuid::Uuid,
+        database: Option<&str>,
+        cx: &App,
+    ) -> Result<std::sync::Arc<dyn dbflux_core::Connection>, String> {
+        let state = self.app_state.read(cx);
+        let connected = state
+            .connections()
+            .get(&profile_id)
+            .ok_or_else(|| "Connection not found".to_string())?;
+
+        let Some(target_db) = database else {
+            return Ok(connected.connection.clone());
+        };
+
+        let strategy = connected.connection.schema_loading_strategy();
+        if strategy != dbflux_core::SchemaLoadingStrategy::ConnectionPerDatabase {
+            return Ok(connected.connection.clone());
+        }
+
+        let is_primary = connected
+            .schema
+            .as_ref()
+            .and_then(|s| s.current_database())
+            .is_some_and(|current| current == target_db);
+
+        if is_primary {
+            return Ok(connected.connection.clone());
+        }
+
+        connected
+            .database_connection(target_db)
+            .map(|dc| dc.connection.clone())
+            .ok_or_else(|| {
+                format!(
+                    "No connection to database '{}'. Please expand it in the sidebar first.",
+                    target_db
+                )
+            })
     }
 }
 

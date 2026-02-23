@@ -78,6 +78,14 @@ impl StatusBar {
         }
     }
 
+    fn single_line(text: &str) -> String {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn format_completed_task(task: &dbflux_core::TaskSnapshot) -> String {
         let status_icon = match &task.status {
             dbflux_core::TaskStatus::Completed => "✓",
@@ -89,7 +97,7 @@ impl StatusBar {
         format!(
             "{} {} ({})",
             status_icon,
-            task.description,
+            Self::single_line(&task.description),
             Self::format_elapsed(task.elapsed_secs)
         )
     }
@@ -126,8 +134,11 @@ impl Render for StatusBar {
             .child(
                 div()
                     .flex()
+                    .flex_1()
                     .items_center()
                     .gap_2()
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
                     .child(
                         div()
                             .flex()
@@ -138,6 +149,7 @@ impl Render for StatusBar {
                             .child(connection_info),
                     )
                     .when_some(current_task.cloned(), |this, task| {
+                        let description = Self::single_line(&task.description);
                         this.child(
                             div()
                                 .flex()
@@ -146,7 +158,7 @@ impl Render for StatusBar {
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .child("|")
-                                .child(task.description.clone())
+                                .child(description)
                                 .child(div().text_xs().text_color(cx.theme().accent).child(
                                     format!("({})", Self::format_elapsed(task.elapsed_secs)),
                                 )),
@@ -169,6 +181,7 @@ impl Render for StatusBar {
                 div()
                     .id("tasks-toggle")
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .gap_1()
                     .px_2()

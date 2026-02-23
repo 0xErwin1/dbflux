@@ -29,6 +29,10 @@ impl CommandDispatcher for Workspace {
                 self.new_query_tab(window, cx);
                 true
             }
+            Command::OpenScriptFile => {
+                self.open_script_file(window, cx);
+                true
+            }
             Command::RunQuery => {
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(Command::RunQuery, window, cx);
@@ -144,9 +148,7 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::CloseCurrentTab => {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.close_active(cx);
-                });
+                self.close_active_tab(window, cx);
                 // Focus the newly active document if any
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.focus(window, cx);
@@ -448,6 +450,13 @@ impl CommandDispatcher for Workspace {
                 // Route to active document
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(Command::SaveQuery, window, cx);
+                }
+                true
+            }
+
+            Command::SaveFileAs => {
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    doc.dispatch_command(Command::SaveFileAs, window, cx);
                 }
                 true
             }

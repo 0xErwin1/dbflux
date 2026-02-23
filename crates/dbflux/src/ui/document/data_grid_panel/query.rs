@@ -15,6 +15,7 @@ impl DataGridPanel {
         match &self.source {
             DataSource::Table {
                 profile_id,
+                database,
                 table,
                 pagination,
                 order_by,
@@ -22,6 +23,7 @@ impl DataGridPanel {
             } => {
                 self.run_table_query(
                     *profile_id,
+                    database.clone(),
                     table.clone(),
                     pagination.clone(),
                     order_by.clone(),
@@ -55,6 +57,7 @@ impl DataGridPanel {
     pub(super) fn run_table_query(
         &mut self,
         profile_id: Uuid,
+        database: Option<String>,
         table: TableRef,
         pagination: Pagination,
         order_by: Vec<OrderByColumn>,
@@ -93,20 +96,20 @@ impl DataGridPanel {
             request = request.with_filter(f.clone());
         }
 
-        let (conn, active_database) = {
-            let state = self.app_state.read(cx);
-            match state.connections().get(&profile_id) {
-                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
-                None => {
-                    cx.toast_error("Connection not found", window);
-                    return;
-                }
+        let conn = match self.resolve_connection(profile_id, database.as_deref(), cx) {
+            Ok(c) => c,
+            Err(msg) => {
+                cx.toast_error(msg, window);
+                return;
             }
         };
 
-        let Some(conn) = conn else {
-            cx.toast_error("Connection not available", window);
-            return;
+        let active_database = {
+            let state = self.app_state.read(cx);
+            state
+                .connections()
+                .get(&profile_id)
+                .and_then(|c| c.active_database.clone())
         };
 
         let mut browse_request = request.clone();
@@ -195,7 +198,7 @@ impl DataGridPanel {
 
         // Fetch total count if not known
         if total_rows.is_none() {
-            self.fetch_total_count(profile_id, table, filter, cx);
+            self.fetch_total_count(profile_id, database, table, filter, cx);
         }
     }
 
@@ -389,14 +392,19 @@ impl DataGridPanel {
             pos.map(|column_ix| TableSortState::new(column_ix, col.direction))
         });
 
-        // Preserve existing total_rows if not provided
-        let existing_total = match &self.source {
-            DataSource::Table { total_rows, .. } => *total_rows,
-            _ => None,
+        // Preserve existing total_rows and database if not provided
+        let (existing_total, existing_database) = match &self.source {
+            DataSource::Table {
+                total_rows,
+                database,
+                ..
+            } => (*total_rows, database.clone()),
+            _ => (None, None),
         };
 
         self.source = DataSource::Table {
             profile_id,
+            database: existing_database,
             table,
             pagination,
             order_by,
@@ -414,20 +422,14 @@ impl DataGridPanel {
     pub(super) fn fetch_total_count(
         &mut self,
         profile_id: Uuid,
+        database: Option<String>,
         table: TableRef,
         filter: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let conn = {
-            let state = self.app_state.read(cx);
-            state
-                .connections()
-                .get(&profile_id)
-                .map(|c| c.connection.clone())
-        };
-
-        let Some(conn) = conn else {
-            return;
+        let conn = match self.resolve_connection(profile_id, database.as_deref(), cx) {
+            Ok(c) => c,
+            Err(_) => return,
         };
 
         let mut count_request = TableCountRequest::new(table.clone());

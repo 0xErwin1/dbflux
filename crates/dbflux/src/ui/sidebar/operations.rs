@@ -41,10 +41,9 @@ impl Sidebar {
 
         self.app_state.update(cx, |state, cx| {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
-                // Remove the database schema
                 conn.database_schemas.remove(&db_name);
+                conn.database_connections.remove(&db_name);
 
-                // If this was the active database, clear it
                 if conn.active_database.as_deref() == Some(db_name.as_str()) {
                     conn.active_database = None;
                 }
@@ -429,7 +428,7 @@ impl Sidebar {
                 return Err("Operation already pending".to_string());
             }
 
-            let result = state.prepare_switch_database(profile_id, db_name);
+            let result = state.prepare_database_connection(profile_id, db_name);
 
             if result.is_ok() && !state.start_pending_operation(profile_id, Some(db_name)) {
                 return Err("Operation started by another thread".to_string());
@@ -440,7 +439,7 @@ impl Sidebar {
         }) {
             Ok(p) => p,
             Err(e) => {
-                log::info!("Switch database skipped: {}", e);
+                log::info!("Database connection skipped: {}", e);
                 return;
             }
         };
@@ -448,7 +447,7 @@ impl Sidebar {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::SwitchDatabase,
-                format!("Switching to database: {}", db_name),
+                format!("Connecting to database: {}", db_name),
             );
             cx.emit(AppStateChanged);
             result
@@ -468,7 +467,7 @@ impl Sidebar {
 
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
-                    log::info!("Switch database task was cancelled, discarding result");
+                    log::info!("Database connection task was cancelled, discarding result");
                     app_state.update(cx, |state, cx| {
                         state.finish_pending_operation(profile_id, Some(&db_name_owned));
                         cx.emit(AppStateChanged);
@@ -491,7 +490,7 @@ impl Sidebar {
                             state.fail_task(task_id, e.clone());
                         });
                         Some(PendingToast {
-                            message: format!("Failed to switch database: {}", e),
+                            message: format!("Failed to connect to database: {}", e),
                             is_error: true,
                         })
                     }
@@ -501,11 +500,15 @@ impl Sidebar {
                     state.finish_pending_operation(profile_id, Some(&db_name_owned));
 
                     if let Ok(res) = result {
-                        state.apply_switch_database(
-                            res.profile_id,
-                            res.original_profile,
+                        state.add_database_connection(
+                            profile_id,
+                            db_name_owned.clone(),
                             res.connection,
                             res.schema,
+                        );
+                        state.set_active_database(
+                            profile_id,
+                            Some(db_name_owned.clone()),
                         );
                     }
 
