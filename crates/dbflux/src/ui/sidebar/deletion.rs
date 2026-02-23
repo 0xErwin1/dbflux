@@ -7,7 +7,7 @@ impl Sidebar {
             return;
         }
 
-        let Some(entry) = self.tree_state.read(cx).selected_entry().cloned() else {
+        let Some(entry) = self.active_tree_state().read(cx).selected_entry().cloned() else {
             return;
         };
 
@@ -16,8 +16,15 @@ impl Sidebar {
 
         if matches!(
             kind,
-            SchemaNodeKind::ConnectionFolder | SchemaNodeKind::Profile
+            SchemaNodeKind::ConnectionFolder
+                | SchemaNodeKind::Profile
+                | SchemaNodeKind::ScriptFile
+                | SchemaNodeKind::ScriptsFolder
         ) {
+            // Don't allow deleting the scripts root folder
+            if let Some(SchemaNodeId::ScriptsFolder { path: None }) = parse_node_id(&item_id) {
+                return;
+            }
             self.pending_delete_item = Some(item_id);
             cx.notify();
         }
@@ -59,6 +66,20 @@ impl Sidebar {
                 } else {
                     return;
                 }
+            }
+            Some(SchemaNodeId::ScriptFile { ref path }) => {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone());
+                (name, false)
+            }
+            Some(SchemaNodeId::ScriptsFolder { path: Some(ref p) }) => {
+                let name = std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.clone());
+                (name, true)
             }
             _ => return,
         };
@@ -103,6 +124,14 @@ impl Sidebar {
             }
             Some(SchemaNodeId::Profile { profile_id }) => {
                 self.delete_profile(profile_id, cx);
+            }
+            Some(SchemaNodeId::ScriptFile { path }) => {
+                self.delete_script(std::path::Path::new(&path), cx);
+                return;
+            }
+            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                self.delete_script(std::path::Path::new(&p), cx);
+                return;
             }
             _ => {}
         }

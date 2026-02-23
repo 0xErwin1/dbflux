@@ -503,7 +503,16 @@ impl CommandDispatcher for Workspace {
 
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {
-                    self.sidebar.update(cx, |s, cx| s.create_root_folder(cx));
+                    self.sidebar.update(cx, |s, cx| {
+                        match s.active_tab() {
+                            crate::ui::sidebar::SidebarTab::Connections => {
+                                s.create_root_folder(cx);
+                            }
+                            crate::ui::sidebar::SidebarTab::Scripts => {
+                                s.create_script_folder(cx);
+                            }
+                        }
+                    });
                     true
                 } else {
                     false

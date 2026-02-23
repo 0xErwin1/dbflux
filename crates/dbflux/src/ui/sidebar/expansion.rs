@@ -2,7 +2,8 @@ use super::*;
 
 impl Sidebar {
     pub fn expand_collapse(&mut self, cx: &mut Context<Self>) {
-        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        let tree = self.active_tree_state().clone();
+        let entry = tree.read(cx).selected_entry().cloned();
         if let Some(entry) = entry
             && entry.is_folder()
         {
@@ -13,7 +14,8 @@ impl Sidebar {
     }
 
     pub fn collapse(&mut self, cx: &mut Context<Self>) {
-        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        let tree = self.active_tree_state().clone();
+        let entry = tree.read(cx).selected_entry().cloned();
         if let Some(entry) = entry
             && entry.is_folder()
             && entry.is_expanded()
@@ -24,7 +26,8 @@ impl Sidebar {
     }
 
     pub fn expand(&mut self, cx: &mut Context<Self>) {
-        let entry = self.tree_state.read(cx).selected_entry().cloned();
+        let tree = self.active_tree_state().clone();
+        let entry = tree.read(cx).selected_entry().cloned();
         if let Some(entry) = entry
             && entry.is_folder()
             && !entry.is_expanded()
