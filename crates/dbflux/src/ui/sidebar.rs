@@ -511,6 +511,14 @@ impl Sidebar {
         }
     }
 
+    pub fn cycle_tab(&mut self, cx: &mut Context<Self>) {
+        let next = match self.active_tab {
+            SidebarTab::Connections => SidebarTab::Scripts,
+            SidebarTab::Scripts => SidebarTab::Connections,
+        };
+        self.set_active_tab(next, cx);
+    }
+
     fn build_initial_scripts_tree(state: &AppState) -> Vec<TreeItem> {
         match state.scripts_directory() {
             Some(dir) => Self::build_scripts_tree_items(dir.entries()),

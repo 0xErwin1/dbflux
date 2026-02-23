@@ -294,6 +294,10 @@ impl Workspace {
 
         workspace.restore_session(window, cx);
 
+        if workspace.tab_manager.read(cx).is_empty() {
+            workspace.pending_focus = Some(FocusTarget::Sidebar);
+        }
+
         workspace
     }
 
