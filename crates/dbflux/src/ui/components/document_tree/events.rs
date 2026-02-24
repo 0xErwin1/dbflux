@@ -1,4 +1,4 @@
-use super::node::NodeId;
+use super::node::{NodeId, NodeValue};
 
 /// Direction for cursor navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,9 +40,11 @@ pub enum DocumentTreeEvent {
     /// Search mode was closed.
     SearchClosed,
 
-    /// User requested context menu on a document.
+    /// User requested context menu on a document node.
     ContextMenuRequested {
         doc_index: usize,
         position: gpui::Point<gpui::Pixels>,
+        node_id: NodeId,
+        node_value: Option<NodeValue>,
     },
 }
