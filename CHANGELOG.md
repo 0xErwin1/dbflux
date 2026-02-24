@@ -2,6 +2,22 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.1] – 2026-02-24
+
+### Fixed
+
+* Table expansion in sidebar now loads and displays columns, indexes, and foreign keys instead of showing a stuck "Loading..." placeholder
+* Concurrent table expansions no longer overwrite each other (replaced single pending action slot with per-item map)
+* Failed schema fetches now collapse the table node instead of leaving it stuck in loading state
+* Cache key mismatch between tree builder and fetch path that prevented details from ever appearing for per-database connections
+
+### Added
+
+* Collapsed sidebar now shows separate buttons for Connections and Scripts tabs
+* FileCode icon registered in asset source
+
+---
+
 ## [0.3.0] – 2026-02-23
 
 ### Added

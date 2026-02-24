@@ -1604,7 +1604,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbflux"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dbflux_core",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitflags 2.10.0",
  "chrono",
