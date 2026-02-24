@@ -2,6 +2,30 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.2] – 2026-02-24
+
+### Added
+
+* Filter submenu in data grid context menu for SQL databases (=, <>, >, <, IS NULL, IS NOT NULL, Remove filter)
+* Order submenu in data grid context menu for SQL databases (ASC, DESC, Remove order)
+* MongoDB filter submenu in document tree context menu with Extended JSON values, `$and` composition, and NULL semantics (`$exists` guard)
+* ListFilter and ArrowUpDown icons
+* Empty state for the sidebar connections tab ("No connections yet" hint)
+
+### Changed
+
+* CI release workflow extracts changelog section from CHANGELOG.md instead of using hardcoded text
+
+### Fixed
+
+* GPUI newline panic: escape control characters in `Value::Json` preview in document tree
+* GPUI newline panic: escape control characters in `Value::Text` and catch-all rendering in document card view
+* GPUI newline panic: use compact JSON (no newlines) when composing MongoDB filters for the single-line filter input
+* Toolbar clear-filter button now re-runs the query after clearing (was only calling `cx.notify()` without `refresh()`)
+* Refactored icon asset loading to use `ALL_ICONS` lookup table instead of match arms
+
+---
+
 ## [0.3.1] – 2026-02-24
 
 ### Fixed
