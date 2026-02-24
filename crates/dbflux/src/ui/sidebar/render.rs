@@ -144,37 +144,72 @@ impl Sidebar {
         &self,
         tree_params: TreeRenderParams,
         sidebar_entity: &Entity<Self>,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let has_entries = self.visible_entry_count > 0;
+        let theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
 
-        div().flex_1().flex().flex_col().overflow_hidden().child(
-            div()
-                .flex_1()
-                .overflow_hidden()
-                .on_drop(move |state: &SidebarDragState, _, cx| {
-                    sidebar_for_root_drop.update(cx, |this, cx| {
-                        this.stop_auto_scroll(cx);
-                        this.clear_drop_target(cx);
-                        this.clear_drag_hover_folder(cx);
-                        this.handle_drop(state, None, cx);
-                    });
-                })
-                .on_drag_move::<SidebarDragState>(move |_, _, cx| {
-                    sidebar_for_clear_drop.update(cx, |this, cx| {
-                        this.stop_auto_scroll(cx);
-                        this.clear_drop_target(cx);
-                        this.clear_drag_hover_folder(cx);
-                    });
-                })
-                .child(tree(
-                    &self.tree_state,
-                    move |ix, entry, selected, _window, cx| {
-                        render_tree_item(&tree_params, ix, entry, selected, cx)
-                    },
-                )),
-        )
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(has_entries, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .on_drop(move |state: &SidebarDragState, _, cx| {
+                            sidebar_for_root_drop.update(cx, |this, cx| {
+                                this.stop_auto_scroll(cx);
+                                this.clear_drop_target(cx);
+                                this.clear_drag_hover_folder(cx);
+                                this.handle_drop(state, None, cx);
+                            });
+                        })
+                        .on_drag_move::<SidebarDragState>(move |_, _, cx| {
+                            sidebar_for_clear_drop.update(cx, |this, cx| {
+                                this.stop_auto_scroll(cx);
+                                this.clear_drop_target(cx);
+                                this.clear_drag_hover_folder(cx);
+                            });
+                        })
+                        .child(tree(
+                            &self.tree_state,
+                            move |ix, entry, selected, _window, cx| {
+                                render_tree_item(&tree_params, ix, entry, selected, cx)
+                            },
+                        )),
+                )
+            })
+            .when(!has_entries, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(Spacing::SM)
+                        .px(Spacing::MD)
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .text_center()
+                                .child("No connections yet"),
+                        )
+                        .child(
+                            div()
+                                .text_size(FontSizes::XS)
+                                .text_color(theme.muted_foreground)
+                                .text_center()
+                                .child("Use + to add a new connection"),
+                        ),
+                )
+            })
     }
 
     fn render_scripts_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
