@@ -67,6 +67,8 @@ pub enum AppIcon {
     Link2,
     CaseSensitive,
     ScrollText,
+    ListFilter,
+    ArrowUpDown,
 
     // Connection / Network
     Plug,
@@ -150,6 +152,8 @@ impl AppIcon {
             Self::Link2 => "icons/ui/link-2.svg",
             Self::CaseSensitive => "icons/ui/case-sensitive.svg",
             Self::ScrollText => "icons/ui/scroll-text.svg",
+            Self::ListFilter => "icons/ui/list-filter.svg",
+            Self::ArrowUpDown => "icons/ui/arrow-up-down.svg",
             Self::Plug => "icons/ui/plug.svg",
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",
@@ -170,9 +174,115 @@ impl AppIcon {
         }
     }
 
+    pub fn embedded_bytes(self) -> &'static [u8] {
+        match self {
+            Self::ChevronDown => {
+                include_bytes!("../../../../../resources/icons/ui/chevron-down.svg")
+            }
+            Self::ChevronLeft => {
+                include_bytes!("../../../../../resources/icons/ui/chevron-left.svg")
+            }
+            Self::ChevronRight => {
+                include_bytes!("../../../../../resources/icons/ui/chevron-right.svg")
+            }
+            Self::ChevronUp => include_bytes!("../../../../../resources/icons/ui/chevron-up.svg"),
+            Self::Play => include_bytes!("../../../../../resources/icons/ui/play.svg"),
+            Self::SquarePlay => include_bytes!("../../../../../resources/icons/ui/square-play.svg"),
+            Self::Plus => include_bytes!("../../../../../resources/icons/ui/plus.svg"),
+            Self::Power => include_bytes!("../../../../../resources/icons/ui/power.svg"),
+            Self::Save => include_bytes!("../../../../../resources/icons/ui/save.svg"),
+            Self::Delete => include_bytes!("../../../../../resources/icons/ui/delete.svg"),
+            Self::Pencil => include_bytes!("../../../../../resources/icons/ui/pencil.svg"),
+            Self::RefreshCcw => include_bytes!("../../../../../resources/icons/ui/refresh-ccw.svg"),
+            Self::RotateCcw => include_bytes!("../../../../../resources/icons/ui/rotate-ccw.svg"),
+            Self::Download => include_bytes!("../../../../../resources/icons/ui/download.svg"),
+            Self::Search => include_bytes!("../../../../../resources/icons/ui/search.svg"),
+            Self::Settings => include_bytes!("../../../../../resources/icons/ui/settings.svg"),
+            Self::History => include_bytes!("../../../../../resources/icons/ui/history.svg"),
+            Self::Undo => include_bytes!("../../../../../resources/icons/ui/undo.svg"),
+            Self::Redo => include_bytes!("../../../../../resources/icons/ui/redo.svg"),
+            Self::X => include_bytes!("../../../../../resources/icons/ui/x.svg"),
+            Self::Eye => include_bytes!("../../../../../resources/icons/ui/eye.svg"),
+            Self::EyeOff => include_bytes!("../../../../../resources/icons/ui/eye-off.svg"),
+            Self::Loader => include_bytes!("../../../../../resources/icons/ui/loader.svg"),
+            Self::Info => include_bytes!("../../../../../resources/icons/ui/info.svg"),
+            Self::CircleAlert => {
+                include_bytes!("../../../../../resources/icons/ui/circle-alert.svg")
+            }
+            Self::CircleCheck => {
+                include_bytes!("../../../../../resources/icons/ui/circle-check.svg")
+            }
+            Self::TriangleAlert => {
+                include_bytes!("../../../../../resources/icons/ui/triangle-alert.svg")
+            }
+            Self::Code => include_bytes!("../../../../../resources/icons/ui/code.svg"),
+            Self::Table => include_bytes!("../../../../../resources/icons/ui/table.svg"),
+            Self::Columns => include_bytes!("../../../../../resources/icons/ui/columns.svg"),
+            Self::Rows3 => include_bytes!("../../../../../resources/icons/ui/rows-3.svg"),
+            Self::ArrowUp => include_bytes!("../../../../../resources/icons/ui/arrow-up.svg"),
+            Self::ArrowDown => include_bytes!("../../../../../resources/icons/ui/arrow-down.svg"),
+            Self::Star => include_bytes!("../../../../../resources/icons/ui/star.svg"),
+            Self::Clock => include_bytes!("../../../../../resources/icons/ui/clock.svg"),
+            Self::Zap => include_bytes!("../../../../../resources/icons/ui/zap.svg"),
+            Self::Hash => include_bytes!("../../../../../resources/icons/ui/hash.svg"),
+            Self::Lock => include_bytes!("../../../../../resources/icons/ui/lock.svg"),
+            Self::Layers => include_bytes!("../../../../../resources/icons/ui/layers.svg"),
+            Self::Keyboard => include_bytes!("../../../../../resources/icons/ui/keyboard.svg"),
+            Self::FingerprintPattern => {
+                include_bytes!("../../../../../resources/icons/ui/fingerprint-pattern.svg")
+            }
+            Self::Maximize2 => include_bytes!("../../../../../resources/icons/ui/maximize-2.svg"),
+            Self::Minimize2 => include_bytes!("../../../../../resources/icons/ui/minimize-2.svg"),
+            Self::PanelBottomClose => {
+                include_bytes!("../../../../../resources/icons/ui/panel-bottom-close.svg")
+            }
+            Self::PanelBottomOpen => {
+                include_bytes!("../../../../../resources/icons/ui/panel-bottom-open.svg")
+            }
+            Self::FileSpreadsheet => {
+                include_bytes!("../../../../../resources/icons/ui/file-spreadsheet.svg")
+            }
+            Self::KeyRound => include_bytes!("../../../../../resources/icons/ui/key-round.svg"),
+            Self::Link2 => include_bytes!("../../../../../resources/icons/ui/link-2.svg"),
+            Self::CaseSensitive => {
+                include_bytes!("../../../../../resources/icons/ui/case-sensitive.svg")
+            }
+            Self::ScrollText => include_bytes!("../../../../../resources/icons/ui/scroll-text.svg"),
+            Self::ListFilter => include_bytes!("../../../../../resources/icons/ui/list-filter.svg"),
+            Self::ArrowUpDown => {
+                include_bytes!("../../../../../resources/icons/ui/arrow-up-down.svg")
+            }
+            Self::Plug => include_bytes!("../../../../../resources/icons/ui/plug.svg"),
+            Self::Unplug => include_bytes!("../../../../../resources/icons/ui/unplug.svg"),
+            Self::Server => include_bytes!("../../../../../resources/icons/ui/server.svg"),
+            Self::HardDrive => include_bytes!("../../../../../resources/icons/ui/hard-drive.svg"),
+            Self::FileCode => {
+                include_bytes!("../../../../../resources/icons/ui/file-code-corner.svg")
+            }
+            Self::Folder => include_bytes!("../../../../../resources/icons/ui/folder.svg"),
+            Self::Box => include_bytes!("../../../../../resources/icons/ui/box.svg"),
+            Self::Braces => include_bytes!("../../../../../resources/icons/ui/braces.svg"),
+            Self::SquareTerminal => {
+                include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
+            }
+            Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
+            Self::BrandPostgres => {
+                include_bytes!("../../../../../resources/icons/brand/postgresql.svg")
+            }
+            Self::BrandMysql => include_bytes!("../../../../../resources/icons/brand/mysql.svg"),
+            Self::BrandMariadb => {
+                include_bytes!("../../../../../resources/icons/brand/mariadb.svg")
+            }
+            Self::BrandSqlite => include_bytes!("../../../../../resources/icons/brand/sqlite.svg"),
+            Self::BrandMongodb => {
+                include_bytes!("../../../../../resources/icons/brand/mongodb.svg")
+            }
+            Self::BrandRedis => include_bytes!("../../../../../resources/icons/brand/redis.svg"),
+            Self::DbFlux => include_bytes!("../../../../../resources/icons/dbflux.svg"),
+        }
+    }
+
     /// Maps a core Icon to the corresponding AppIcon.
-    ///
-    /// This is the preferred way to get database brand icons from driver metadata.
     pub const fn from_icon(icon: Icon) -> Self {
         match icon {
             Icon::Postgres => Self::BrandPostgres,
@@ -185,3 +295,75 @@ impl AppIcon {
         }
     }
 }
+
+pub const ALL_ICONS: &[AppIcon] = &[
+    AppIcon::ChevronDown,
+    AppIcon::ChevronLeft,
+    AppIcon::ChevronRight,
+    AppIcon::ChevronUp,
+    AppIcon::Play,
+    AppIcon::SquarePlay,
+    AppIcon::Plus,
+    AppIcon::Power,
+    AppIcon::Save,
+    AppIcon::Delete,
+    AppIcon::Pencil,
+    AppIcon::RefreshCcw,
+    AppIcon::RotateCcw,
+    AppIcon::Download,
+    AppIcon::Search,
+    AppIcon::Settings,
+    AppIcon::History,
+    AppIcon::Undo,
+    AppIcon::Redo,
+    AppIcon::X,
+    AppIcon::Eye,
+    AppIcon::EyeOff,
+    AppIcon::Loader,
+    AppIcon::Info,
+    AppIcon::CircleAlert,
+    AppIcon::CircleCheck,
+    AppIcon::TriangleAlert,
+    AppIcon::Code,
+    AppIcon::Table,
+    AppIcon::Columns,
+    AppIcon::Rows3,
+    AppIcon::ArrowUp,
+    AppIcon::ArrowDown,
+    AppIcon::Star,
+    AppIcon::Clock,
+    AppIcon::Zap,
+    AppIcon::Hash,
+    AppIcon::Lock,
+    AppIcon::Layers,
+    AppIcon::Keyboard,
+    AppIcon::FingerprintPattern,
+    AppIcon::Maximize2,
+    AppIcon::Minimize2,
+    AppIcon::PanelBottomClose,
+    AppIcon::PanelBottomOpen,
+    AppIcon::FileSpreadsheet,
+    AppIcon::KeyRound,
+    AppIcon::Link2,
+    AppIcon::CaseSensitive,
+    AppIcon::ScrollText,
+    AppIcon::ListFilter,
+    AppIcon::ArrowUpDown,
+    AppIcon::Plug,
+    AppIcon::Unplug,
+    AppIcon::Server,
+    AppIcon::HardDrive,
+    AppIcon::FileCode,
+    AppIcon::Folder,
+    AppIcon::Box,
+    AppIcon::Braces,
+    AppIcon::SquareTerminal,
+    AppIcon::Database,
+    AppIcon::BrandPostgres,
+    AppIcon::BrandMysql,
+    AppIcon::BrandMariadb,
+    AppIcon::BrandSqlite,
+    AppIcon::BrandMongodb,
+    AppIcon::BrandRedis,
+    AppIcon::DbFlux,
+];

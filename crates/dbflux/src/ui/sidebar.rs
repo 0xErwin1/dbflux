@@ -544,9 +544,7 @@ impl Sidebar {
     fn refresh_scripts_tree(&mut self, cx: &mut Context<Self>) {
         let state = self.app_state.read(cx);
         let entries = match state.scripts_directory() {
-            Some(dir) => {
-                dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query)
-            }
+            Some(dir) => dbflux_core::filter_entries(dir.entries(), &self.scripts_search_query),
             None => Vec::new(),
         };
 

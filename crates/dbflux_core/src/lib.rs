@@ -21,11 +21,11 @@ mod recent_files;
 mod refresh_policy;
 mod saved_query;
 mod schema;
-mod scripts_directory;
-mod session_store;
 mod schema_builder;
 pub mod schema_node_id;
+mod scripts_directory;
 mod secrets;
+mod session_store;
 mod shutdown;
 mod sql_dialect;
 mod sql_generation;
@@ -65,11 +65,11 @@ pub use driver_form::{
     MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 pub use error::DbError;
-pub use execution_context::ExecutionContext;
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
 };
+pub use execution_context::ExecutionContext;
 pub use history::{HistoryEntry, HistoryStore};
 pub use key_value::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
@@ -91,10 +91,8 @@ pub use profile::{
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
 pub use query_generator::{GeneratedQuery, MutationCategory, QueryGenerator, SqlMutationGenerator};
 pub use query_safety::is_safe_read_query;
-pub use refresh_policy::RefreshPolicy;
 pub use recent_files::{RecentFile, RecentFilesStore};
-pub use scripts_directory::{ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries};
-pub use session_store::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
+pub use refresh_policy::RefreshPolicy;
 pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
@@ -108,10 +106,12 @@ pub use schema::{
     VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
 pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
+pub use scripts_directory::{ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries};
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
     ssh_tunnel_secret_ref,
 };
+pub use session_store::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use store::{ProfileStore, SshTunnelStore};
 pub use table_browser::{

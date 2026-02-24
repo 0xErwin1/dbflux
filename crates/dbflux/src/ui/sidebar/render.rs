@@ -1,4 +1,4 @@
-use super::render_tree::{render_tree_item, TreeRenderParams};
+use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
 
 impl Sidebar {

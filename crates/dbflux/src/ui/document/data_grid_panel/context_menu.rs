@@ -4,7 +4,7 @@ use super::{
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
 };
 use crate::keymap::{Command, ContextId};
-use crate::ui::components::data_table::ContextMenuAction;
+use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
@@ -85,6 +85,8 @@ impl DataGridPanel {
             position,
             sql_submenu_open: false,
             copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
@@ -111,6 +113,8 @@ impl DataGridPanel {
             position,
             sql_submenu_open: false,
             copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -146,6 +150,8 @@ impl DataGridPanel {
             position,
             sql_submenu_open: false,
             copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -154,6 +160,20 @@ impl DataGridPanel {
         self.context_menu_focus.focus(window);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
+    }
+
+    fn is_sql_source(&self, cx: &App) -> bool {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => profile_id,
+            _ => return false,
+        };
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(profile_id)
+            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
+            .unwrap_or(false)
     }
 
     /// Returns true if the data grid is editable (has primary key info).
@@ -190,41 +210,58 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let is_editable = self.check_is_editable(cx);
+        let is_sql = self.is_sql_source(cx);
         let is_document_view = self
             .context_menu
             .as_ref()
             .map(|m| m.is_document_view)
             .unwrap_or(false);
 
+        let has_filter_order = is_sql && !is_document_view;
         let has_generate_sql = !is_document_view;
         let has_copy_query = self.has_copy_query_support();
 
-        // Layout: [base items] [sep + GenSQL trigger]? [sep + CopyQuery trigger]?
+        // Layout:
+        //   [base items]
+        //   [sep + Filter trigger + Order trigger]?   (if has_filter_order)
+        //   [sep + GenSQL trigger]?                    (if has_generate_sql)
+        //   [sep + CopyQuery trigger]?                (if has_copy_query)
         let base_items = Self::build_context_menu_items(is_editable, is_document_view);
         let base_count = base_items.len();
 
-        let copy_query_offset = if has_copy_query {
-            let after_gen_sql = if has_generate_sql {
-                base_count + 2
-            } else {
-                base_count
-            };
-            after_gen_sql + 1
+        // Filter/Order: sep(1) + filter(1) + order(1) = 3
+        let filter_order_slots = if has_filter_order { 3 } else { 0 };
+
+        let after_filter_order = base_count + filter_order_slots;
+
+        // GenSQL: sep(1) + trigger(1) = 2
+        let gen_sql_slots = if has_generate_sql { 2 } else { 0 };
+        let after_gen_sql = after_filter_order + gen_sql_slots;
+
+        // CopyQuery: sep(1) + trigger(1) = 2
+        let copy_query_slots = if has_copy_query { 2 } else { 0 };
+        let total_count = after_gen_sql + copy_query_slots;
+
+        let filter_trigger_idx = if has_filter_order {
+            Some(base_count + 1) // after separator
         } else {
-            0
+            None
         };
 
-        let total_count =
-            base_count + if has_generate_sql { 2 } else { 0 } + if has_copy_query { 2 } else { 0 };
+        let order_trigger_idx = if has_filter_order {
+            Some(base_count + 2)
+        } else {
+            None
+        };
 
         let gen_sql_trigger_idx = if has_generate_sql {
-            Some(base_count + 1)
+            Some(after_filter_order + 1) // after separator
         } else {
             None
         };
 
         let copy_query_trigger_idx = if has_copy_query {
-            Some(copy_query_offset)
+            Some(after_gen_sql + 1) // after separator
         } else {
             None
         };
@@ -232,21 +269,32 @@ impl DataGridPanel {
         let any_submenu_open = self
             .context_menu
             .as_ref()
-            .map(|m| m.sql_submenu_open || m.copy_query_submenu_open)
+            .map(|m| {
+                m.sql_submenu_open
+                    || m.copy_query_submenu_open
+                    || m.filter_submenu_open
+                    || m.order_submenu_open
+            })
             .unwrap_or(false);
 
-        let active_submenu_count = if self
-            .context_menu
-            .as_ref()
-            .is_some_and(|m| m.sql_submenu_open)
-        {
-            4 // SELECT WHERE, INSERT, UPDATE, DELETE
-        } else if self
-            .context_menu
-            .as_ref()
-            .is_some_and(|m| m.copy_query_submenu_open)
-        {
-            3 // INSERT, UPDATE, DELETE
+        // Determine count of items in the active submenu
+        let active_submenu_count = if let Some(menu) = &self.context_menu {
+            if menu.filter_submenu_open {
+                let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
+                let value_filterable = cell_value
+                    .as_ref()
+                    .map(Self::is_value_filterable)
+                    .unwrap_or(false);
+                if value_filterable { 7 } else { 3 } // 4+2+1 or 2+1
+            } else if menu.order_submenu_open {
+                3 // ASC, DESC, Remove
+            } else if menu.sql_submenu_open {
+                4 // SELECT WHERE, INSERT, UPDATE, DELETE
+            } else if menu.copy_query_submenu_open {
+                3 // INSERT, UPDATE, DELETE
+            } else {
+                0
+            }
         } else {
             0
         };
@@ -255,15 +303,22 @@ impl DataGridPanel {
             if idx < base_count {
                 return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
             }
-            if has_generate_sql && idx == base_count {
+
+            // Filter/Order separator
+            if has_filter_order && idx == base_count {
                 return true;
             }
-            if has_copy_query && has_generate_sql && idx == base_count + 2 {
+
+            // GenSQL separator
+            if has_generate_sql && idx == after_filter_order {
                 return true;
             }
-            if has_copy_query && !has_generate_sql && idx == base_count {
+
+            // CopyQuery separator
+            if has_copy_query && idx == after_gen_sql {
                 return true;
             }
+
             false
         };
 
@@ -306,8 +361,46 @@ impl DataGridPanel {
                 true
             }
             Command::MenuSelect => {
+                // Pre-compute filter value info before mutably borrowing context_menu,
+                // to avoid conflicting borrows on self.
+                let filter_value_filterable = self
+                    .context_menu
+                    .as_ref()
+                    .filter(|m| m.filter_submenu_open)
+                    .and_then(|m| {
+                        let val = self.resolve_cell_value(m.row, m.col, cx)?;
+                        Some(Self::is_value_filterable(&val))
+                    })
+                    .unwrap_or(false);
+
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open {
+                    if menu.filter_submenu_open {
+                        let action = if filter_value_filterable {
+                            match menu.submenu_selected_index {
+                                0 => ContextMenuAction::FilterByValue(FilterOperator::Eq),
+                                1 => ContextMenuAction::FilterByValue(FilterOperator::NotEq),
+                                2 => ContextMenuAction::FilterByValue(FilterOperator::Gt),
+                                3 => ContextMenuAction::FilterByValue(FilterOperator::Lt),
+                                4 => ContextMenuAction::FilterIsNull,
+                                5 => ContextMenuAction::FilterIsNotNull,
+                                _ => ContextMenuAction::RemoveFilter,
+                            }
+                        } else {
+                            match menu.submenu_selected_index {
+                                0 => ContextMenuAction::FilterIsNull,
+                                1 => ContextMenuAction::FilterIsNotNull,
+                                _ => ContextMenuAction::RemoveFilter,
+                            }
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if menu.order_submenu_open {
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+                            1 => ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+                            _ => ContextMenuAction::RemoveOrdering,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if menu.sql_submenu_open {
                         let action = match menu.submenu_selected_index {
                             0 => ContextMenuAction::GenerateSelectWhere,
                             1 => ContextMenuAction::GenerateInsert,
@@ -322,13 +415,31 @@ impl DataGridPanel {
                             _ => ContextMenuAction::CopyAsDelete,
                         };
                         self.handle_context_menu_action(action, window, cx);
+                    } else if filter_trigger_idx == Some(menu.selected_index) {
+                        menu.filter_submenu_open = true;
+                        menu.order_submenu_open = false;
+                        menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if order_trigger_idx == Some(menu.selected_index) {
+                        menu.order_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
                     } else if gen_sql_trigger_idx == Some(menu.selected_index) {
                         menu.sql_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
                         menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if copy_query_trigger_idx == Some(menu.selected_index) {
                         menu.copy_query_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
                         menu.sql_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
@@ -343,9 +454,15 @@ impl DataGridPanel {
             }
             Command::MenuBack | Command::Cancel => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open || menu.copy_query_submenu_open {
+                    if menu.sql_submenu_open
+                        || menu.copy_query_submenu_open
+                        || menu.filter_submenu_open
+                        || menu.order_submenu_open
+                    {
                         menu.sql_submenu_open = false;
                         menu.copy_query_submenu_open = false;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
                         cx.notify();
                     } else {
                         let is_document_view = menu.is_document_view;
@@ -829,6 +946,495 @@ impl DataGridPanel {
             visual_index += 1;
         }
 
+        // -- Filter submenu (SQL sources only, table view only) --
+        let is_sql = self.is_sql_source(cx);
+        if is_sql && !is_document_view {
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            let filter_submenu_open = menu.filter_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let filter_index = visual_index;
+            let filter_selected = selected_index == filter_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
+            let col_name_display = self
+                .result
+                .columns
+                .get(menu.col)
+                .map(|c| c.name.as_str())
+                .unwrap_or("column");
+
+            let value_filterable = cell_value
+                .as_ref()
+                .map(Self::is_value_filterable)
+                .unwrap_or(false);
+
+            let value_preview = cell_value.as_ref().and_then(|v| {
+                if !Self::is_value_filterable(v) {
+                    return None;
+                }
+                Some(Self::truncate_for_label(
+                    &Self::value_display_preview(v),
+                    30,
+                ))
+            });
+
+            let filter_submenu_count = if value_filterable { 7 } else { 3 };
+
+            let mut filter_items: Vec<(String, ContextMenuAction)> = Vec::new();
+
+            if let Some(ref preview) = value_preview {
+                let col = Self::truncate_for_label(col_name_display, 20);
+                filter_items.push((
+                    format!("{} = {}", col, preview),
+                    ContextMenuAction::FilterByValue(FilterOperator::Eq),
+                ));
+                filter_items.push((
+                    format!("{} <> {}", col, preview),
+                    ContextMenuAction::FilterByValue(FilterOperator::NotEq),
+                ));
+                filter_items.push((
+                    format!("{} > {}", col, preview),
+                    ContextMenuAction::FilterByValue(FilterOperator::Gt),
+                ));
+                filter_items.push((
+                    format!("{} < {}", col, preview),
+                    ContextMenuAction::FilterByValue(FilterOperator::Lt),
+                ));
+            }
+
+            filter_items.push((
+                format!("{} IS NULL", col_name_display),
+                ContextMenuAction::FilterIsNull,
+            ));
+            filter_items.push((
+                format!("{} IS NOT NULL", col_name_display),
+                ContextMenuAction::FilterIsNotNull,
+            ));
+            filter_items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+
+            menu_items.push(
+                div()
+                    .id("filter-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if filter_selected && !filter_submenu_open {
+                        theme.accent_foreground
+                    } else {
+                        submenu_fg
+                    })
+                    .when(filter_submenu_open, |d| d.bg(submenu_hover))
+                    .when(filter_selected && !filter_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!filter_selected && !filter_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != filter_index
+                            && !menu.filter_submenu_open
+                        {
+                            menu.selected_index = filter_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.filter_submenu_open = !menu.filter_submenu_open;
+                            menu.order_submenu_open = false;
+                            menu.sql_submenu_open = false;
+                            menu.copy_query_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(svg().path(AppIcon::ListFilter.path()).size_4().text_color(
+                                if filter_selected && !filter_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                },
+                            ))
+                            .child("Filter"),
+                    )
+                    .child(
+                        svg()
+                            .path(AppIcon::ChevronRight.path())
+                            .size_4()
+                            .text_color(if filter_selected && !filter_submenu_open {
+                                theme.accent_foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .when(filter_submenu_open, |d: Stateful<Div>| {
+                        let separator_after = if value_filterable { Some(4) } else { None };
+                        let null_separator_idx = if value_filterable {
+                            filter_submenu_count - 2 // before "Remove filter", after IS NOT NULL
+                        } else {
+                            2 // after IS NOT NULL
+                        };
+
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(280.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .when(value_filterable, |d| {
+                                    d.child(
+                                        div()
+                                            .px(Spacing::SM)
+                                            .py(Spacing::XS)
+                                            .text_size(FontSizes::XS)
+                                            .text_color(theme.muted_foreground)
+                                            .child("Cell value"),
+                                    )
+                                })
+                                .children(
+                                    filter_items
+                                        .into_iter()
+                                        .enumerate()
+                                        .flat_map(|(idx, (label, action))| {
+                                            let mut elements: Vec<AnyElement> = Vec::new();
+
+                                            // Add separator between value ops and IS NULL section
+                                            if separator_after == Some(idx) {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            // Add separator before "Remove filter"
+                                            if idx == null_separator_idx {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            let is_submenu_selected = idx == submenu_selected_index;
+                                            let is_remove =
+                                                matches!(action, ContextMenuAction::RemoveFilter);
+                                            let label_shared =
+                                                SharedString::from(format!("filter-{}", idx));
+
+                                            elements.push(
+                                                div()
+                                                    .id(label_shared)
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(Spacing::SM)
+                                                    .h(Heights::ROW_COMPACT)
+                                                    .px(Spacing::SM)
+                                                    .mx(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(if is_remove {
+                                                        theme.danger
+                                                    } else if is_submenu_selected {
+                                                        theme.accent_foreground
+                                                    } else {
+                                                        submenu_fg
+                                                    })
+                                                    .when(is_submenu_selected && !is_remove, |d| {
+                                                        d.bg(theme.accent)
+                                                    })
+                                                    .when(is_submenu_selected && is_remove, |d| {
+                                                        d.bg(theme.danger.opacity(0.1))
+                                                    })
+                                                    .when(!is_submenu_selected, |d| {
+                                                        d.hover(|d| d.bg(submenu_hover))
+                                                    })
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if let Some(ref mut menu) =
+                                                                this.context_menu
+                                                                && menu.submenu_selected_index
+                                                                    != idx
+                                                            {
+                                                                menu.submenu_selected_index = idx;
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.handle_context_menu_action(
+                                                                action, window, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .child(label.clone())
+                                                    .into_any_element(),
+                                            );
+
+                                            elements
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            // -- Order submenu --
+            let order_submenu_open = menu.order_submenu_open;
+            let order_index = visual_index;
+            let order_selected = selected_index == order_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+            let col_name_for_order = col_name_display.to_string();
+
+            menu_items.push(
+                div()
+                    .id("order-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if order_selected && !order_submenu_open {
+                        theme.accent_foreground
+                    } else {
+                        submenu_fg
+                    })
+                    .when(order_submenu_open, |d| d.bg(submenu_hover))
+                    .when(order_selected && !order_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!order_selected && !order_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != order_index
+                            && !menu.order_submenu_open
+                        {
+                            menu.selected_index = order_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.order_submenu_open = !menu.order_submenu_open;
+                            menu.filter_submenu_open = false;
+                            menu.sql_submenu_open = false;
+                            menu.copy_query_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(svg().path(AppIcon::ArrowUpDown.path()).size_4().text_color(
+                                if order_selected && !order_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                },
+                            ))
+                            .child("Order"),
+                    )
+                    .child(
+                        svg()
+                            .path(AppIcon::ChevronRight.path())
+                            .size_4()
+                            .text_color(if order_selected && !order_submenu_open {
+                                theme.accent_foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .when(order_submenu_open, |d: Stateful<Div>| {
+                        let order_items: Vec<(String, ContextMenuAction, AppIcon)> = vec![
+                            (
+                                format!("{} ASC", col_name_for_order),
+                                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+                                AppIcon::ArrowUp,
+                            ),
+                            (
+                                format!("{} DESC", col_name_for_order),
+                                ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+                                AppIcon::ArrowDown,
+                            ),
+                            (
+                                "Remove ordering".to_string(),
+                                ContextMenuAction::RemoveOrdering,
+                                AppIcon::X,
+                            ),
+                        ];
+
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(200.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    order_items
+                                        .into_iter()
+                                        .enumerate()
+                                        .flat_map(|(idx, (label, action, icon))| {
+                                            let mut elements: Vec<AnyElement> = Vec::new();
+
+                                            // Separator before "Remove ordering"
+                                            if idx == 2 {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            let is_submenu_selected = idx == submenu_selected_index;
+                                            let is_remove =
+                                                matches!(action, ContextMenuAction::RemoveOrdering);
+
+                                            elements.push(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "order-{}",
+                                                        idx
+                                                    )))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(Spacing::SM)
+                                                    .h(Heights::ROW_COMPACT)
+                                                    .px(Spacing::SM)
+                                                    .mx(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .text_color(if is_remove {
+                                                        theme.danger
+                                                    } else if is_submenu_selected {
+                                                        theme.accent_foreground
+                                                    } else {
+                                                        submenu_fg
+                                                    })
+                                                    .when(is_submenu_selected && !is_remove, |d| {
+                                                        d.bg(theme.accent)
+                                                    })
+                                                    .when(is_submenu_selected && is_remove, |d| {
+                                                        d.bg(theme.danger.opacity(0.1))
+                                                    })
+                                                    .when(!is_submenu_selected, |d| {
+                                                        d.hover(|d| d.bg(submenu_hover))
+                                                    })
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if let Some(ref mut menu) =
+                                                                this.context_menu
+                                                                && menu.submenu_selected_index
+                                                                    != idx
+                                                            {
+                                                                menu.submenu_selected_index = idx;
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.handle_context_menu_action(
+                                                                action, window, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .child(
+                                                        svg()
+                                                            .path(icon.path())
+                                                            .size_4()
+                                                            .text_color(if is_remove {
+                                                                theme.danger
+                                                            } else if is_submenu_selected {
+                                                                theme.accent_foreground
+                                                            } else {
+                                                                theme.muted_foreground
+                                                            }),
+                                                    )
+                                                    .child(label)
+                                                    .into_any_element(),
+                                            );
+
+                                            elements
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+            visual_index += 1;
+        }
+
         // "Generate SQL" submenu (only for table view, not document view)
         if !is_document_view {
             // Add separator before "Generate SQL"
@@ -1299,6 +1905,24 @@ impl DataGridPanel {
             | ContextMenuAction::CopyAsUpdate
             | ContextMenuAction::CopyAsDelete => {
                 self.handle_copy_as_query(menu.row, action, cx);
+            }
+            ContextMenuAction::FilterByValue(op) => {
+                self.handle_filter_by_value(menu.row, menu.col, op, window, cx);
+            }
+            ContextMenuAction::FilterIsNull => {
+                self.handle_filter_is_null(menu.col, false, window, cx);
+            }
+            ContextMenuAction::FilterIsNotNull => {
+                self.handle_filter_is_null(menu.col, true, window, cx);
+            }
+            ContextMenuAction::RemoveFilter => {
+                self.handle_remove_filter(window, cx);
+            }
+            ContextMenuAction::Order(direction) => {
+                self.handle_sort_request(menu.col, direction, cx);
+            }
+            ContextMenuAction::RemoveOrdering => {
+                self.handle_sort_clear(cx);
             }
         }
 
@@ -1899,6 +2523,171 @@ impl DataGridPanel {
 
             cx.notify();
         });
+    }
+
+    // === Filter / Order from context menu ===
+
+    /// Resolves the original `Value` for a cell from the result set.
+    fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
+        use crate::ui::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let ts = table_state.read(cx);
+        let buffer = ts.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => self
+                .result
+                .rows
+                .get(base_idx)
+                .and_then(|r| r.get(col).cloned()),
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|cells| cells.get(col).map(|c| self.cell_value_to_value(c))),
+            None => None,
+        }
+    }
+
+    /// Appends `expr` to the WHERE filter input and refreshes.
+    /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
+    fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.filter_input.read(cx).value().to_string();
+
+        let new_filter = if current.trim().is_empty() {
+            expr.to_string()
+        } else {
+            format!("({}) AND ({})", current.trim(), expr)
+        };
+
+        self.filter_input
+            .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
+        self.refresh(window, cx);
+    }
+
+    fn handle_filter_by_value(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else { return };
+        let dialect = conn.dialect();
+
+        let col_name = match self.result.columns.get(col) {
+            Some(c) => dialect.quote_identifier(&c.name),
+            None => return,
+        };
+
+        let cell_value = match self.resolve_cell_value(visual_row, col, cx) {
+            Some(v) => v,
+            None => return,
+        };
+
+        let literal = dialect.value_to_literal(&cell_value);
+
+        let op_str = match operator {
+            FilterOperator::Eq => "=",
+            FilterOperator::NotEq => "<>",
+            FilterOperator::Gt => ">",
+            FilterOperator::Lt => "<",
+        };
+
+        let expr = format!("{} {} {}", col_name, op_str, literal);
+        self.apply_filter_expression(&expr, window, cx);
+    }
+
+    fn handle_filter_is_null(
+        &mut self,
+        col: usize,
+        is_not_null: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else { return };
+        let dialect = conn.dialect();
+
+        let col_name = match self.result.columns.get(col) {
+            Some(c) => dialect.quote_identifier(&c.name),
+            None => return,
+        };
+
+        let expr = if is_not_null {
+            format!("{} IS NOT NULL", col_name)
+        } else {
+            format!("{} IS NULL", col_name)
+        };
+
+        self.apply_filter_expression(&expr, window, cx);
+    }
+
+    fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.refresh(window, cx);
+    }
+
+    fn truncate_for_label(s: &str, max_len: usize) -> String {
+        if s.len() <= max_len {
+            s.to_string()
+        } else {
+            let truncated: String = s.chars().take(max_len).collect();
+            format!("{}...", truncated)
+        }
+    }
+
+    fn value_display_preview(value: &Value) -> String {
+        match value {
+            Value::Null => "NULL".to_string(),
+            Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Decimal(s) => s.clone(),
+            Value::Text(s) => format!("'{}'", s),
+            Value::Json(s) => format!("'{}'", s),
+            Value::ObjectId(id) => format!("'{}'", id),
+            Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
+            Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+            Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
+            Value::Bytes(b) => format!("[{} bytes]", b.len()),
+            Value::Array(_) | Value::Document(_) => "'...'".to_string(),
+        }
+    }
+
+    /// NULL, Bytes, NaN, and Infinity don't support comparison operators;
+    /// only IS NULL / IS NOT NULL applies.
+    fn is_value_filterable(value: &Value) -> bool {
+        match value {
+            Value::Null | Value::Bytes(_) => false,
+            Value::Float(f) if f.is_nan() || f.is_infinite() => false,
+            _ => true,
+        }
     }
 
     pub(super) fn handle_generate_sql(

@@ -166,17 +166,13 @@ impl SqlQueryDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
-        let active_database = self
-            .exec_ctx
-            .database
-            .clone()
-            .or_else(|| {
-                self.app_state
-                    .read(cx)
-                    .connections()
-                    .get(&conn_id)
-                    .and_then(|c| c.active_database.clone())
-            });
+        let active_database = self.exec_ctx.database.clone().or_else(|| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .and_then(|c| c.active_database.clone())
+        });
 
         let request = QueryRequest::new(query.clone()).with_database(active_database);
 
