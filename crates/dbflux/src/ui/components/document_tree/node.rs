@@ -1,5 +1,5 @@
-use dbflux_core::Value;
 use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
+use dbflux_core::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -209,10 +209,20 @@ fn format_value_preview(value: &Value, truncate: bool) -> String {
         Value::Bytes(b) => format!("<{} bytes>", b.len()),
         Value::Decimal(d) => d.to_string(),
         Value::Json(j) => {
-            if truncate && j.len() > MAX_PREVIEW_LEN {
-                format!("{}...", &j[..MAX_PREVIEW_LEN])
+            let escaped: String = j
+                .chars()
+                .flat_map(|c| match c {
+                    '\n' => vec!['\\', 'n'],
+                    '\r' => vec!['\\', 'r'],
+                    '\t' => vec!['\\', 't'],
+                    c => vec![c],
+                })
+                .collect();
+
+            if truncate && escaped.len() > MAX_PREVIEW_LEN {
+                format!("{}...", &escaped[..MAX_PREVIEW_LEN.min(escaped.len())])
             } else {
-                j.to_string()
+                escaped
             }
         }
         Value::Document(fields) => format!("{{{} fields}}", fields.len()),

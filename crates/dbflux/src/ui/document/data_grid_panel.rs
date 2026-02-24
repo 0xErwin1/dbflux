@@ -250,6 +250,8 @@ struct TableContextMenu {
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
+    doc_field_path: Option<Vec<String>>,
+    doc_field_value: Option<crate::ui::components::document_tree::NodeValue>,
 }
 
 /// A single item in the context menu.
@@ -1024,6 +1026,8 @@ impl DataGridPanel {
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
+                            doc_field_path: None,
+                            doc_field_value: None,
                         });
                         this.pending_context_menu_focus = true;
                         cx.emit(DataGridEvent::Focused);
@@ -1121,8 +1125,11 @@ impl DataGridPanel {
                 DocumentTreeEvent::ContextMenuRequested {
                     doc_index,
                     position,
+                    node_id,
+                    node_value,
                 } => {
-                    // Set context menu state directly (same pattern as DataTableEvent::ContextMenuRequested)
+                    let field_path: Vec<String> = node_id.path[1..].to_vec();
+
                     this.context_menu = Some(TableContextMenu {
                         row: *doc_index,
                         col: 0,
@@ -1134,6 +1141,12 @@ impl DataGridPanel {
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,
+                        doc_field_path: if field_path.is_empty() {
+                            None
+                        } else {
+                            Some(field_path)
+                        },
+                        doc_field_value: node_value.clone(),
                     });
                     this.pending_context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);

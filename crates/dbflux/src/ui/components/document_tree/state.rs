@@ -842,9 +842,13 @@ impl DocumentTreeState {
         };
 
         let doc_index = cursor.doc_index().unwrap_or(0);
+        let node = self.visible_nodes.iter().find(|n| &n.id == cursor);
+
         cx.emit(DocumentTreeEvent::ContextMenuRequested {
             doc_index,
             position,
+            node_id: cursor.clone(),
+            node_value: node.map(|n| n.value.clone()),
         });
     }
 

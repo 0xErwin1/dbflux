@@ -441,7 +441,7 @@ impl DataGridPanel {
                                             this.filter_input.update(cx, |input, cx| {
                                                 input.set_value("", window, cx);
                                             });
-                                            cx.notify();
+                                            this.refresh(window, cx);
                                         }))
                                         .child("×"),
                                 )
@@ -915,10 +915,13 @@ impl DataGridPanel {
                 .text_color(text_color)
                 .child(f.to_string()),
 
-            Value::Text(s) => div()
-                .text_size(FontSizes::SM)
-                .text_color(text_color)
-                .child(format!("\"{}\"", s)),
+            Value::Text(s) => {
+                let display: String = s.replace('\n', "\\n").replace('\r', "\\r");
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(text_color)
+                    .child(format!("\"{}\"", display))
+            }
 
             Value::ObjectId(oid) => div()
                 .text_size(FontSizes::SM)
@@ -992,10 +995,13 @@ impl DataGridPanel {
                 }
             }
 
-            _ => div()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
-                .child(format!("{:?}", value)),
+            _ => {
+                let display = format!("{:?}", value).replace('\n', "\\n").replace('\r', "\\r");
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .child(display)
+            }
         }
     }
 

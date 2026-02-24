@@ -20,6 +20,12 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterBackend {
+    Sql,
+    Mongo,
+}
+
 impl DataGridPanel {
     fn restore_focus_after_context_menu(
         &mut self,
@@ -90,6 +96,8 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
+            doc_field_path: None,
+            doc_field_value: None,
         });
 
         // Focus the context menu to receive keyboard events
@@ -118,6 +126,8 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
+            doc_field_path: None,
+            doc_field_value: None,
         });
 
         self.context_menu_focus.focus(window);
@@ -135,8 +145,26 @@ impl DataGridPanel {
             return;
         };
 
-        let cursor_info = tree_state.read(cx).cursor().and_then(|id| id.doc_index());
-        let doc_index = cursor_info.unwrap_or(0);
+        let (doc_index, field_path, field_value) =
+            tree_state.update(cx, |ts, _cx| {
+                let cursor_id = ts.cursor().cloned();
+                let idx = cursor_id
+                    .as_ref()
+                    .and_then(|id| id.doc_index())
+                    .unwrap_or(0);
+
+                let (fp, fv) = cursor_id
+                    .as_ref()
+                    .and_then(|cid| {
+                        let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                        let path: Vec<String> = cid.path[1..].to_vec();
+                        let path_opt = if path.is_empty() { None } else { Some(path) };
+                        Some((path_opt, Some(node.value.clone())))
+                    })
+                    .unwrap_or((None, None));
+
+                (idx, fp, fv)
+            });
 
         // Use panel origin with some offset for keyboard-triggered menu
         let position = Point {
@@ -155,6 +183,8 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
+            doc_field_path: field_path,
+            doc_field_value: field_value,
         });
 
         self.context_menu_focus.focus(window);
@@ -162,18 +192,259 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    fn is_sql_source(&self, cx: &App) -> bool {
-        let profile_id = match &self.source {
-            DataSource::Table { profile_id, .. } => profile_id,
-            _ => return false,
+    fn filter_backend(&self, cx: &App) -> Option<FilterBackend> {
+        match &self.source {
+            DataSource::Table { profile_id, .. } => {
+                let is_sql = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|c| {
+                        c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
+                    })
+                    .unwrap_or(false);
+                is_sql.then_some(FilterBackend::Sql)
+            }
+            DataSource::Collection { .. } => Some(FilterBackend::Mongo),
+            _ => None,
+        }
+    }
+
+    fn has_filter_submenu(
+        &self,
+        backend: Option<FilterBackend>,
+        is_document_view: bool,
+        cx: &App,
+    ) -> bool {
+        match backend {
+            Some(FilterBackend::Sql) => !is_document_view,
+            Some(FilterBackend::Mongo) => {
+                is_document_view && self.mongo_filter_field_info(cx).is_some()
+            }
+            None => false,
+        }
+    }
+
+    fn mongo_filter_field_info(&self, _cx: &App) -> Option<(String, Value)> {
+        use crate::ui::components::document_tree::NodeValue;
+
+        let menu = self.context_menu.as_ref()?;
+        let path = menu.doc_field_path.as_ref()?;
+        if path.is_empty() {
+            return None;
+        }
+
+        let field = path.join(".");
+        let value = match menu.doc_field_value.as_ref()? {
+            NodeValue::Scalar(v) => v.clone(),
+            _ => return None,
         };
 
-        self.app_state
-            .read(cx)
-            .connections()
-            .get(profile_id)
-            .map(|c| c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql)
-            .unwrap_or(false)
+        if matches!(value, Value::Bytes(_)) {
+            return None;
+        }
+
+        Some((field, value))
+    }
+
+    fn active_filter_submenu_count(
+        &self,
+        menu: &TableContextMenu,
+        backend: Option<FilterBackend>,
+        cx: &App,
+    ) -> usize {
+        match backend {
+            Some(FilterBackend::Sql) => {
+                let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
+                let filterable = cell_value
+                    .as_ref()
+                    .map(Self::is_value_filterable)
+                    .unwrap_or(false);
+                if filterable { 7 } else { 3 }
+            }
+            Some(FilterBackend::Mongo) => {
+                if let Some((_, ref val)) = self.mongo_filter_field_info(cx) {
+                    let has_comparison = Self::is_mongo_comparable(val);
+                    if has_comparison { 7 } else { 5 }
+                } else {
+                    3
+                }
+            }
+            None => 0,
+        }
+    }
+
+    fn filter_submenu_action(idx: usize, total_items: usize) -> ContextMenuAction {
+        // Items from the end are always: ..., IS NULL, IS NOT NULL, Remove
+        let remove_idx = total_items - 1;
+        let is_not_null_idx = total_items - 2;
+        let is_null_idx = total_items - 3;
+
+        match idx {
+            i if i == remove_idx => ContextMenuAction::RemoveFilter,
+            i if i == is_not_null_idx => ContextMenuAction::FilterIsNotNull,
+            i if i == is_null_idx => ContextMenuAction::FilterIsNull,
+            0 => ContextMenuAction::FilterByValue(FilterOperator::Eq),
+            1 => ContextMenuAction::FilterByValue(FilterOperator::NotEq),
+            2 => ContextMenuAction::FilterByValue(FilterOperator::Gt),
+            3 => ContextMenuAction::FilterByValue(FilterOperator::Lt),
+            _ => ContextMenuAction::RemoveFilter,
+        }
+    }
+
+    fn is_mongo_comparable(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Int(_) | Value::Float(_) | Value::Decimal(_) | Value::DateTime(_) | Value::Date(_) | Value::Time(_)
+        )
+    }
+
+    fn mongo_value_display_preview(value: &Value) -> String {
+        match value {
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Decimal(d) => d.clone(),
+            Value::Text(s) => {
+                let sanitized = Self::sanitize_for_label(s);
+                format!("\"{}\"", sanitized)
+            }
+            Value::Json(j) => Self::truncate_for_label(&Self::sanitize_for_label(j), 20),
+            Value::ObjectId(oid) => format!("ObjectId(\"{}\")", Self::truncate_for_label(oid, 12)),
+            Value::DateTime(dt) => format!("\"{}\"", dt.to_rfc3339()),
+            Value::Date(d) => format!("\"{}\"", d),
+            Value::Time(t) => format!("\"{}\"", t),
+            Value::Bytes(b) => format!("[{} bytes]", b.len()),
+            Value::Array(_) | Value::Document(_) => "...".to_string(),
+        }
+    }
+
+    fn build_filter_items(
+        &self,
+        menu: &TableContextMenu,
+        backend: Option<FilterBackend>,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
+        match backend {
+            Some(FilterBackend::Sql) => self.build_sql_filter_items(menu, cx),
+            Some(FilterBackend::Mongo) => self.build_mongo_filter_items(cx),
+            None => (String::new(), 0, Vec::new(), false),
+        }
+    }
+
+    fn build_sql_filter_items(
+        &self,
+        menu: &TableContextMenu,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
+        let col_name = self
+            .result
+            .columns
+            .get(menu.col)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
+        let filterable = cell_value
+            .as_ref()
+            .map(Self::is_value_filterable)
+            .unwrap_or(false);
+
+        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+
+        if filterable {
+            let display = cell_value
+                .as_ref()
+                .map(Self::value_display_preview)
+                .unwrap_or_default();
+            let short = Self::truncate_for_label(&display, 20);
+
+            items.push((
+                format!("{} = {}", col_name, short),
+                ContextMenuAction::FilterByValue(FilterOperator::Eq),
+            ));
+            items.push((
+                format!("{} <> {}", col_name, short),
+                ContextMenuAction::FilterByValue(FilterOperator::NotEq),
+            ));
+            items.push((
+                format!("{} > {}", col_name, short),
+                ContextMenuAction::FilterByValue(FilterOperator::Gt),
+            ));
+            items.push((
+                format!("{} < {}", col_name, short),
+                ContextMenuAction::FilterByValue(FilterOperator::Lt),
+            ));
+        }
+
+        items.push((
+            format!("{} IS NULL", col_name),
+            ContextMenuAction::FilterIsNull,
+        ));
+        items.push((
+            format!("{} IS NOT NULL", col_name),
+            ContextMenuAction::FilterIsNotNull,
+        ));
+        items.push((
+            "Remove filter".to_string(),
+            ContextMenuAction::RemoveFilter,
+        ));
+
+        let count = items.len();
+        (col_name, count, items, filterable)
+    }
+
+    fn build_mongo_filter_items(
+        &self,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
+        let Some((field, ref val)) = self.mongo_filter_field_info(cx) else {
+            return (String::new(), 0, Vec::new(), false);
+        };
+
+        let comparable = Self::is_mongo_comparable(val);
+        let display = Self::mongo_value_display_preview(val);
+        let short = Self::truncate_for_label(&display, 20);
+
+        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+
+        items.push((
+            format!("{} = {}", field, short),
+            ContextMenuAction::FilterByValue(FilterOperator::Eq),
+        ));
+        items.push((
+            format!("{} != {}", field, short),
+            ContextMenuAction::FilterByValue(FilterOperator::NotEq),
+        ));
+
+        if comparable {
+            items.push((
+                format!("{} > {}", field, short),
+                ContextMenuAction::FilterByValue(FilterOperator::Gt),
+            ));
+            items.push((
+                format!("{} < {}", field, short),
+                ContextMenuAction::FilterByValue(FilterOperator::Lt),
+            ));
+        }
+
+        items.push((
+            format!("{} IS NULL", field),
+            ContextMenuAction::FilterIsNull,
+        ));
+        items.push((
+            format!("{} IS NOT NULL", field),
+            ContextMenuAction::FilterIsNotNull,
+        ));
+        items.push((
+            "Remove filter".to_string(),
+            ContextMenuAction::RemoveFilter,
+        ));
+
+        let count = items.len();
+        (field, count, items, true)
     }
 
     /// Returns true if the data grid is editable (has primary key info).
@@ -210,29 +481,31 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let is_editable = self.check_is_editable(cx);
-        let is_sql = self.is_sql_source(cx);
+        let backend = self.filter_backend(cx);
         let is_document_view = self
             .context_menu
             .as_ref()
             .map(|m| m.is_document_view)
             .unwrap_or(false);
 
-        let has_filter_order = is_sql && !is_document_view;
+        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
         let has_generate_sql = !is_document_view;
         let has_copy_query = self.has_copy_query_support();
 
         // Layout:
         //   [base items]
-        //   [sep + Filter trigger + Order trigger]?   (if has_filter_order)
-        //   [sep + GenSQL trigger]?                    (if has_generate_sql)
-        //   [sep + CopyQuery trigger]?                (if has_copy_query)
+        //   [sep + Filter trigger]?   (if has_filter)
+        //   [Order trigger]?          (if has_order, shares separator with filter)
+        //   [sep + GenSQL trigger]?   (if has_generate_sql)
+        //   [sep + CopyQuery trigger]?(if has_copy_query)
         let base_items = Self::build_context_menu_items(is_editable, is_document_view);
         let base_count = base_items.len();
 
-        // Filter/Order: sep(1) + filter(1) + order(1) = 3
-        let filter_order_slots = if has_filter_order { 3 } else { 0 };
-
-        let after_filter_order = base_count + filter_order_slots;
+        // Filter: sep(1) + filter(1) = 2; Order adds 1 more
+        let filter_slots = if has_filter { 2 } else { 0 };
+        let order_slots = if has_order { 1 } else { 0 };
+        let after_filter_order = base_count + filter_slots + order_slots;
 
         // GenSQL: sep(1) + trigger(1) = 2
         let gen_sql_slots = if has_generate_sql { 2 } else { 0 };
@@ -242,14 +515,14 @@ impl DataGridPanel {
         let copy_query_slots = if has_copy_query { 2 } else { 0 };
         let total_count = after_gen_sql + copy_query_slots;
 
-        let filter_trigger_idx = if has_filter_order {
+        let filter_trigger_idx = if has_filter {
             Some(base_count + 1) // after separator
         } else {
             None
         };
 
-        let order_trigger_idx = if has_filter_order {
-            Some(base_count + 2)
+        let order_trigger_idx = if has_order {
+            Some(base_count + filter_slots) // right after filter trigger
         } else {
             None
         };
@@ -280,12 +553,7 @@ impl DataGridPanel {
         // Determine count of items in the active submenu
         let active_submenu_count = if let Some(menu) = &self.context_menu {
             if menu.filter_submenu_open {
-                let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
-                let value_filterable = cell_value
-                    .as_ref()
-                    .map(Self::is_value_filterable)
-                    .unwrap_or(false);
-                if value_filterable { 7 } else { 3 } // 4+2+1 or 2+1
+                self.active_filter_submenu_count(menu, backend, cx)
             } else if menu.order_submenu_open {
                 3 // ASC, DESC, Remove
             } else if menu.sql_submenu_open {
@@ -304,8 +572,8 @@ impl DataGridPanel {
                 return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
             }
 
-            // Filter/Order separator
-            if has_filter_order && idx == base_count {
+            // Filter separator
+            if has_filter && idx == base_count {
                 return true;
             }
 
@@ -361,37 +629,19 @@ impl DataGridPanel {
                 true
             }
             Command::MenuSelect => {
-                // Pre-compute filter value info before mutably borrowing context_menu,
+                // Pre-compute filter item count before mutably borrowing context_menu,
                 // to avoid conflicting borrows on self.
-                let filter_value_filterable = self
+                let filter_item_count = self
                     .context_menu
                     .as_ref()
                     .filter(|m| m.filter_submenu_open)
-                    .and_then(|m| {
-                        let val = self.resolve_cell_value(m.row, m.col, cx)?;
-                        Some(Self::is_value_filterable(&val))
-                    })
-                    .unwrap_or(false);
+                    .map(|m| self.active_filter_submenu_count(m, backend, cx))
+                    .unwrap_or(0);
 
                 if let Some(ref mut menu) = self.context_menu {
                     if menu.filter_submenu_open {
-                        let action = if filter_value_filterable {
-                            match menu.submenu_selected_index {
-                                0 => ContextMenuAction::FilterByValue(FilterOperator::Eq),
-                                1 => ContextMenuAction::FilterByValue(FilterOperator::NotEq),
-                                2 => ContextMenuAction::FilterByValue(FilterOperator::Gt),
-                                3 => ContextMenuAction::FilterByValue(FilterOperator::Lt),
-                                4 => ContextMenuAction::FilterIsNull,
-                                5 => ContextMenuAction::FilterIsNotNull,
-                                _ => ContextMenuAction::RemoveFilter,
-                            }
-                        } else {
-                            match menu.submenu_selected_index {
-                                0 => ContextMenuAction::FilterIsNull,
-                                1 => ContextMenuAction::FilterIsNotNull,
-                                _ => ContextMenuAction::RemoveFilter,
-                            }
-                        };
+                        let action =
+                            Self::filter_submenu_action(menu.submenu_selected_index, filter_item_count);
                         self.handle_context_menu_action(action, window, cx);
                     } else if menu.order_submenu_open {
                         let action = match menu.submenu_selected_index {
@@ -946,9 +1196,12 @@ impl DataGridPanel {
             visual_index += 1;
         }
 
-        // -- Filter submenu (SQL sources only, table view only) --
-        let is_sql = self.is_sql_source(cx);
-        if is_sql && !is_document_view {
+        // -- Filter submenu --
+        let backend = self.filter_backend(cx);
+        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+
+        if has_filter {
             menu_items.push(
                 div()
                     .h(px(1.0))
@@ -968,62 +1221,8 @@ impl DataGridPanel {
             let filter_selected = selected_index == filter_index;
             let submenu_selected_index = menu.submenu_selected_index;
 
-            let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
-            let col_name_display = self
-                .result
-                .columns
-                .get(menu.col)
-                .map(|c| c.name.as_str())
-                .unwrap_or("column");
-
-            let value_filterable = cell_value
-                .as_ref()
-                .map(Self::is_value_filterable)
-                .unwrap_or(false);
-
-            let value_preview = cell_value.as_ref().and_then(|v| {
-                if !Self::is_value_filterable(v) {
-                    return None;
-                }
-                Some(Self::truncate_for_label(
-                    &Self::value_display_preview(v),
-                    30,
-                ))
-            });
-
-            let filter_submenu_count = if value_filterable { 7 } else { 3 };
-
-            let mut filter_items: Vec<(String, ContextMenuAction)> = Vec::new();
-
-            if let Some(ref preview) = value_preview {
-                let col = Self::truncate_for_label(col_name_display, 20);
-                filter_items.push((
-                    format!("{} = {}", col, preview),
-                    ContextMenuAction::FilterByValue(FilterOperator::Eq),
-                ));
-                filter_items.push((
-                    format!("{} <> {}", col, preview),
-                    ContextMenuAction::FilterByValue(FilterOperator::NotEq),
-                ));
-                filter_items.push((
-                    format!("{} > {}", col, preview),
-                    ContextMenuAction::FilterByValue(FilterOperator::Gt),
-                ));
-                filter_items.push((
-                    format!("{} < {}", col, preview),
-                    ContextMenuAction::FilterByValue(FilterOperator::Lt),
-                ));
-            }
-
-            filter_items.push((
-                format!("{} IS NULL", col_name_display),
-                ContextMenuAction::FilterIsNull,
-            ));
-            filter_items.push((
-                format!("{} IS NOT NULL", col_name_display),
-                ContextMenuAction::FilterIsNotNull,
-            ));
-            filter_items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+            let (_col_name_display, filter_submenu_count, filter_items, value_filterable) =
+                self.build_filter_items(menu, backend, cx);
 
             menu_items.push(
                 div()
@@ -1224,13 +1423,25 @@ impl DataGridPanel {
                     .into_any_element(),
             );
             visual_index += 1;
+        }
 
-            // -- Order submenu --
+        // -- Order submenu (SQL table view only) --
+        if has_order {
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
             let order_submenu_open = menu.order_submenu_open;
             let order_index = visual_index;
             let order_selected = selected_index == order_index;
             let submenu_selected_index = menu.submenu_selected_index;
-            let col_name_for_order = col_name_display.to_string();
+
+            let col_name_for_order = self
+                .result
+                .columns
+                .get(menu.col)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
 
             menu_items.push(
                 div()
@@ -1856,6 +2067,7 @@ impl DataGridPanel {
         };
 
         let is_document_view = menu.is_document_view;
+        let backend = self.filter_backend(cx);
 
         match action {
             ContextMenuAction::Copy => {
@@ -1906,15 +2118,46 @@ impl DataGridPanel {
             | ContextMenuAction::CopyAsDelete => {
                 self.handle_copy_as_query(menu.row, action, cx);
             }
-            ContextMenuAction::FilterByValue(op) => {
-                self.handle_filter_by_value(menu.row, menu.col, op, window, cx);
-            }
-            ContextMenuAction::FilterIsNull => {
-                self.handle_filter_is_null(menu.col, false, window, cx);
-            }
-            ContextMenuAction::FilterIsNotNull => {
-                self.handle_filter_is_null(menu.col, true, window, cx);
-            }
+            ContextMenuAction::FilterByValue(op) => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_by_value(
+                        &menu.doc_field_path,
+                        &menu.doc_field_value,
+                        op,
+                        window,
+                        cx,
+                    );
+                }
+                _ => {
+                    self.handle_filter_by_value(menu.row, menu.col, op, window, cx);
+                }
+            },
+            ContextMenuAction::FilterIsNull => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_null(
+                        &menu.doc_field_path,
+                        false,
+                        window,
+                        cx,
+                    );
+                }
+                _ => {
+                    self.handle_filter_is_null(menu.col, false, window, cx);
+                }
+            },
+            ContextMenuAction::FilterIsNotNull => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_null(
+                        &menu.doc_field_path,
+                        true,
+                        window,
+                        cx,
+                    );
+                }
+                _ => {
+                    self.handle_filter_is_null(menu.col, true, window, cx);
+                }
+            },
             ContextMenuAction::RemoveFilter => {
                 self.handle_remove_filter(window, cx);
             }
@@ -2653,6 +2896,121 @@ impl DataGridPanel {
         self.refresh(window, cx);
     }
 
+    // === MongoDB filter handlers ===
+
+    fn handle_mongo_filter_by_value(
+        &mut self,
+        field_path: &Option<Vec<String>>,
+        field_value: &Option<crate::ui::components::document_tree::NodeValue>,
+        operator: FilterOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::components::document_tree::NodeValue;
+
+        let Some(path) = field_path else { return };
+        if path.is_empty() {
+            return;
+        }
+        let field_dot = path.join(".");
+
+        let scalar = match field_value {
+            Some(NodeValue::Scalar(v)) => v,
+            _ => return,
+        };
+
+        let json_val = value_to_json(scalar);
+
+        let filter_obj = match operator {
+            FilterOperator::Eq => serde_json::json!({ &field_dot: json_val }),
+            FilterOperator::NotEq => serde_json::json!({ &field_dot: { "$ne": json_val } }),
+            FilterOperator::Gt => serde_json::json!({ &field_dot: { "$gt": json_val } }),
+            FilterOperator::Lt => serde_json::json!({ &field_dot: { "$lt": json_val } }),
+        };
+
+        self.apply_mongo_filter(&filter_obj, window, cx);
+    }
+
+    fn handle_mongo_filter_null(
+        &mut self,
+        field_path: &Option<Vec<String>>,
+        is_not_null: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = field_path else { return };
+        if path.is_empty() {
+            return;
+        }
+        let field_dot = path.join(".");
+
+        let filter_obj = if is_not_null {
+            serde_json::json!({
+                "$and": [
+                    { &field_dot: { "$ne": null } },
+                    { &field_dot: { "$exists": true } }
+                ]
+            })
+        } else {
+            serde_json::json!({
+                "$and": [
+                    { &field_dot: null },
+                    { &field_dot: { "$exists": true } }
+                ]
+            })
+        };
+
+        self.apply_mongo_filter(&filter_obj, window, cx);
+    }
+
+    fn apply_mongo_filter(
+        &mut self,
+        new_filter: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.filter_input.read(cx).value().to_string();
+        let current_trimmed = current.trim();
+
+        let composed = if current_trimmed.is_empty() {
+            new_filter.clone()
+        } else {
+            match serde_json::from_str::<serde_json::Value>(current_trimmed) {
+                Ok(existing) => Self::compose_mongo_and(&existing, new_filter),
+                Err(_) => new_filter.clone(),
+            }
+        };
+
+        let serialized = serde_json::to_string(&composed).unwrap_or_default();
+
+        self.filter_input
+            .update(cx, |state, cx| state.set_value(&serialized, window, cx));
+        self.refresh(window, cx);
+    }
+
+    fn compose_mongo_and(
+        existing: &serde_json::Value,
+        new_clause: &serde_json::Value,
+    ) -> serde_json::Value {
+        if let Some(obj) = existing.as_object()
+            && obj.len() == 1
+            && let Some(existing_and) = obj.get("$and")
+            && let Some(arr) = existing_and.as_array()
+        {
+            let mut clauses = arr.clone();
+            clauses.push(new_clause.clone());
+            return serde_json::json!({ "$and": clauses });
+        }
+
+        serde_json::json!({ "$and": [existing, new_clause] })
+    }
+
+    fn sanitize_for_label(s: &str) -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_control() { ' ' } else { c })
+            .collect()
+    }
+
     fn truncate_for_label(s: &str, max_len: usize) -> String {
         if s.len() <= max_len {
             s.to_string()
@@ -2669,8 +3027,8 @@ impl DataGridPanel {
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Decimal(s) => s.clone(),
-            Value::Text(s) => format!("'{}'", s),
-            Value::Json(s) => format!("'{}'", s),
+            Value::Text(s) => format!("'{}'", Self::sanitize_for_label(s)),
+            Value::Json(s) => format!("'{}'", Self::sanitize_for_label(s)),
             Value::ObjectId(id) => format!("'{}'", id),
             Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
             Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
