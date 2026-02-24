@@ -40,21 +40,20 @@ impl Sidebar {
     pub(super) fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
         let parsed = parse_node_id(item_id);
 
-        // When expanding a table, check if columns need to be lazy loaded
+        // Expand immediately for Ready/Loading; bail on NotFound (prepare failed).
         if expanded && matches!(parsed, Some(SchemaNodeId::Table { .. })) {
             let pending = PendingAction::ViewSchema {
                 item_id: item_id.to_string(),
             };
-            let status = self.ensure_table_details(item_id, pending, cx);
-
-            // Only expand immediately if details are ready (cached)
-            // If Loading, complete_pending_action will handle expansion after fetch
-            if !matches!(status, TableDetailsStatus::Ready) {
+            if matches!(
+                self.ensure_table_details(item_id, pending, cx),
+                TableDetailsStatus::NotFound
+            ) {
                 return;
             }
         }
 
-        // When expanding a Data Types folder, check if types need to be loaded
+        // Data Types folder: fetch types if needed.
         if expanded
             && let Some(SchemaNodeId::TypesFolder {
                 profile_id,
@@ -71,12 +70,19 @@ impl Sidebar {
                 let pending = PendingAction::ExpandTypesFolder {
                     item_id: item_id.to_string(),
                 };
-                self.spawn_fetch_schema_types(*profile_id, database, Some(schema), pending, cx);
-                return;
+                if !self.spawn_fetch_schema_types(
+                    *profile_id,
+                    database,
+                    Some(schema),
+                    pending,
+                    cx,
+                ) {
+                    return;
+                }
             }
         }
 
-        // When expanding schema-level Indexes folder, check if indexes need to be loaded
+        // Schema-level Indexes folder: fetch if needed.
         if expanded
             && let Some(SchemaNodeId::SchemaIndexesFolder {
                 profile_id,
@@ -93,12 +99,19 @@ impl Sidebar {
                 let pending = PendingAction::ExpandSchemaIndexesFolder {
                     item_id: item_id.to_string(),
                 };
-                self.spawn_fetch_schema_indexes(*profile_id, database, Some(schema), pending, cx);
-                return;
+                if !self.spawn_fetch_schema_indexes(
+                    *profile_id,
+                    database,
+                    Some(schema),
+                    pending,
+                    cx,
+                ) {
+                    return;
+                }
             }
         }
 
-        // When expanding schema-level Foreign Keys folder, check if FKs need to be loaded
+        // Schema-level Foreign Keys folder: fetch if needed.
         if expanded
             && let Some(SchemaNodeId::SchemaForeignKeysFolder {
                 profile_id,
@@ -116,14 +129,15 @@ impl Sidebar {
                 let pending = PendingAction::ExpandSchemaForeignKeysFolder {
                     item_id: item_id.to_string(),
                 };
-                self.spawn_fetch_schema_foreign_keys(
+                if !self.spawn_fetch_schema_foreign_keys(
                     *profile_id,
                     database,
                     Some(schema),
                     pending,
                     cx,
-                );
-                return;
+                ) {
+                    return;
+                }
             }
         }
 

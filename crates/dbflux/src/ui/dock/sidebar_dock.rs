@@ -1,12 +1,14 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::sidebar::Sidebar;
-use crate::ui::tokens::Radii;
+use crate::ui::tokens::{Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 pub enum SidebarDockEvent {
     OpenSettings,
+    OpenConnections,
+    OpenScripts,
     Collapsed,
     Expanded,
 }
@@ -68,6 +70,15 @@ impl SidebarDock {
             }
         }
         cx.notify();
+    }
+
+    pub fn expand(&mut self, cx: &mut Context<Self>) {
+        if self.state == SidebarState::Collapsed {
+            self.finish_resize(cx);
+            self.state = SidebarState::Expanded;
+            self.width = self.last_expanded_width;
+            cx.notify();
+        }
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -199,14 +210,22 @@ impl SidebarDock {
                 div()
                     .w_full()
                     .flex()
-                    .justify_center()
+                    .flex_col()
+                    .items_center()
+                    .gap(Spacing::XS)
                     .py(HEADER_PADDING)
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
                         self.header_button("sidebar-database", AppIcon::Database, cx)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle(cx);
+                            .on_click(cx.listener(|_this, _, _, cx| {
+                                cx.emit(SidebarDockEvent::OpenConnections);
+                            })),
+                    )
+                    .child(
+                        self.header_button("sidebar-scripts", AppIcon::FileCode, cx)
+                            .on_click(cx.listener(|_this, _, _, cx| {
+                                cx.emit(SidebarDockEvent::OpenScripts);
                             })),
                     ),
             )

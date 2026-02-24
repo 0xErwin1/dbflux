@@ -44,6 +44,10 @@ impl Sidebar {
         pending_action: PendingAction,
         cx: &mut Context<Self>,
     ) -> TableDetailsStatus {
+        if self.loading_items.contains(item_id) {
+            return TableDetailsStatus::Loading;
+        }
+
         let Some(parts) = parse_node_id(item_id)
             .as_ref()
             .and_then(ItemIdParts::from_node_id)
@@ -94,18 +98,20 @@ impl Sidebar {
             }
         }
 
-        // Table needs details fetched - spawn async task
-        self.spawn_fetch_table_details(&parts, pending_action, cx);
-        TableDetailsStatus::Loading
+        if self.spawn_fetch_table_details(&parts, pending_action, cx) {
+            TableDetailsStatus::Loading
+        } else {
+            TableDetailsStatus::NotFound
+        }
     }
 
-    /// Spawn a background task to fetch table details (columns, indexes).
+    /// Returns `true` if the fetch was started, `false` if preparation failed.
     fn spawn_fetch_table_details(
         &mut self,
         parts: &ItemIdParts,
         pending_action: PendingAction,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let cache_db = parts.cache_database().to_string();
 
         let params = match self.app_state.read(cx).prepare_fetch_table_details(
@@ -124,11 +130,13 @@ impl Sidebar {
                     });
                     cx.notify();
                 }
-                return;
+                return false;
             }
         };
 
-        self.pending_action = Some(pending_action);
+        let item_id = pending_action.item_id().to_string();
+        self.pending_actions.insert(item_id.clone(), pending_action);
+        self.loading_items.insert(item_id.clone());
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
@@ -157,7 +165,8 @@ impl Sidebar {
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
-                            sidebar.complete_pending_action(cx);
+                            sidebar.loading_items.remove(&item_id);
+                            sidebar.complete_pending_action(&item_id, cx);
                         });
                     }
                     Err(e) => {
@@ -169,12 +178,14 @@ impl Sidebar {
                         );
 
                         sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_action = None;
+                            sidebar.loading_items.remove(&item_id);
+                            sidebar.pending_actions.remove(&item_id);
+                            sidebar.expansion_overrides.remove(&item_id);
                             sidebar.pending_toast = Some(PendingToast {
                                 message: format!("Failed to load table schema: {}", e),
                                 is_error: true,
                             });
-                            cx.notify();
+                            sidebar.rebuild_tree_with_overrides(cx);
                         });
                     }
                 }
@@ -187,9 +198,11 @@ impl Sidebar {
             .ok();
         })
         .detach();
+
+        true
     }
 
-    /// Spawn a background task to fetch custom types for a schema.
+    /// Returns `true` if the fetch was started, `false` if preparation failed.
     pub(super) fn spawn_fetch_schema_types(
         &mut self,
         profile_id: Uuid,
@@ -197,7 +210,7 @@ impl Sidebar {
         schema: Option<&str>,
         pending_action: PendingAction,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let params = match self
             .app_state
             .read(cx)
@@ -208,11 +221,13 @@ impl Sidebar {
                 if e != "Schema types already cached" {
                     log::warn!("Cannot fetch schema types: {}", e);
                 }
-                return;
+                return false;
             }
         };
 
-        self.pending_action = Some(pending_action);
+        let item_id = pending_action.item_id().to_string();
+        self.pending_actions.insert(item_id.clone(), pending_action);
+        self.loading_items.insert(item_id.clone());
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
@@ -234,7 +249,8 @@ impl Sidebar {
                     });
 
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.complete_pending_action(cx);
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.complete_pending_action(&item_id, cx);
                     });
                 }
                 Err(e) => {
@@ -246,17 +262,21 @@ impl Sidebar {
                     );
 
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_action = None;
-                        cx.notify();
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.pending_actions.remove(&item_id);
+                        sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
             })
             .ok();
         })
         .detach();
+
+        true
     }
 
-    /// Spawn a background task to fetch indexes for a schema.
+    /// Returns `true` if the fetch was started, `false` if preparation failed.
     pub(super) fn spawn_fetch_schema_indexes(
         &mut self,
         profile_id: Uuid,
@@ -264,7 +284,7 @@ impl Sidebar {
         schema: Option<&str>,
         pending_action: PendingAction,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let params = match self
             .app_state
             .read(cx)
@@ -275,11 +295,13 @@ impl Sidebar {
                 if e != "Schema indexes already cached" {
                     log::warn!("Cannot fetch schema indexes: {}", e);
                 }
-                return;
+                return false;
             }
         };
 
-        self.pending_action = Some(pending_action);
+        let item_id = pending_action.item_id().to_string();
+        self.pending_actions.insert(item_id.clone(), pending_action);
+        self.loading_items.insert(item_id.clone());
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
@@ -304,23 +326,28 @@ impl Sidebar {
                     });
 
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.complete_pending_action(cx);
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.complete_pending_action(&item_id, cx);
                     });
                 }
                 Err(e) => {
                     log::error!("Failed to fetch schema indexes: {}", e);
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_action = None;
-                        cx.notify();
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.pending_actions.remove(&item_id);
+                        sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
             })
             .ok();
         })
         .detach();
+
+        true
     }
 
-    /// Spawn a background task to fetch foreign keys for a schema.
+    /// Returns `true` if the fetch was started, `false` if preparation failed.
     pub(super) fn spawn_fetch_schema_foreign_keys(
         &mut self,
         profile_id: Uuid,
@@ -328,7 +355,7 @@ impl Sidebar {
         schema: Option<&str>,
         pending_action: PendingAction,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let params = match self
             .app_state
             .read(cx)
@@ -339,11 +366,13 @@ impl Sidebar {
                 if e != "Schema foreign keys already cached" {
                     log::warn!("Cannot fetch schema foreign keys: {}", e);
                 }
-                return;
+                return false;
             }
         };
 
-        self.pending_action = Some(pending_action);
+        let item_id = pending_action.item_id().to_string();
+        self.pending_actions.insert(item_id.clone(), pending_action);
+        self.loading_items.insert(item_id.clone());
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
@@ -368,25 +397,30 @@ impl Sidebar {
                     });
 
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.complete_pending_action(cx);
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.complete_pending_action(&item_id, cx);
                     });
                 }
                 Err(e) => {
                     log::error!("Failed to fetch schema foreign keys: {}", e);
                     sidebar.update(cx, |sidebar, cx| {
-                        sidebar.pending_action = None;
-                        cx.notify();
+                        sidebar.loading_items.remove(&item_id);
+                        sidebar.pending_actions.remove(&item_id);
+                        sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
             })
             .ok();
         })
         .detach();
+
+        true
     }
 
-    /// Called when table/type details finish loading to execute the stored action.
-    pub(super) fn complete_pending_action(&mut self, cx: &mut Context<Self>) {
-        let Some(action) = self.pending_action.take() else {
+    /// Execute the stored action for a completed fetch.
+    pub(super) fn complete_pending_action(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(action) = self.pending_actions.remove(item_id) else {
             return;
         };
 

@@ -75,6 +75,7 @@ pub enum AppIcon {
     HardDrive,
 
     // Files / Folders
+    FileCode,
     Folder,
     Box,
     Braces,
@@ -153,6 +154,7 @@ impl AppIcon {
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",
             Self::HardDrive => "icons/ui/hard-drive.svg",
+            Self::FileCode => "icons/ui/file-code-corner.svg",
             Self::Folder => "icons/ui/folder.svg",
             Self::Box => "icons/ui/box.svg",
             Self::Braces => "icons/ui/braces.svg",

@@ -15,7 +15,7 @@ use crate::ui::document::{
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::shutdown_overlay::ShutdownOverlay;
-use crate::ui::sidebar::{Sidebar, SidebarEvent};
+use crate::ui::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::sql_preview_modal::SqlPreviewModal;
 use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::tasks_panel::TasksPanel;
@@ -200,12 +200,27 @@ impl Workspace {
                 SidebarDockEvent::OpenSettings => {
                     this.open_settings(cx);
                 }
+                SidebarDockEvent::OpenConnections => {
+                    this.sidebar.update(cx, |s, cx| {
+                        s.set_active_tab(SidebarTab::Connections, cx);
+                    });
+                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
+                    this.pending_focus = Some(FocusTarget::Sidebar);
+                    cx.notify();
+                }
+                SidebarDockEvent::OpenScripts => {
+                    this.sidebar.update(cx, |s, cx| {
+                        s.set_active_tab(SidebarTab::Scripts, cx);
+                    });
+                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
+                    this.pending_focus = Some(FocusTarget::Sidebar);
+                    cx.notify();
+                }
                 SidebarDockEvent::Collapsed => {
                     this.pending_focus = Some(FocusTarget::Document);
                     cx.notify();
                 }
                 SidebarDockEvent::Expanded => {
-                    // When expanded, focus the sidebar
                     this.pending_focus = Some(FocusTarget::Sidebar);
                     cx.notify();
                 }
