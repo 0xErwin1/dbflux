@@ -526,95 +526,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${VERSION#v}"
+
+          # Extract the section between this version's header and the next (or EOF),
+          # then strip trailing blank lines and --- separators.
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]")) { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md | sed '/^---$/d' | sed '1{/^[[:space:]]*$/d}' | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }' > changelog_section.md
+
+          if [ ! -s changelog_section.md ]; then
+            echo "WARNING: No changelog section found for version $VERSION"
+          fi
+
       - name: Compose release body
         run: |
-          cat > release_body.md << 'EOF'
-          ## Installation
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
 
-          ### Linux
+          : > release_body.md
 
-          #### Tarball (recommended)
-          ```bash
-          # Download and extract (replace amd64 with arm64 for ARM)
-          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/dbflux-linux-amd64.tar.gz
-          tar -xzf dbflux-linux-amd64.tar.gz
+          # 1) Changelog content from CHANGELOG.md
+          if [ -s changelog_section.md ]; then
+            cat changelog_section.md >> release_body.md
+            echo "" >> release_body.md
+          fi
 
-          # Run installer
-          sudo ./scripts/install.sh
-          ```
+          # 2) Installation template with version/repo substituted
+          sed -e "s|__VERSION__|${VERSION}|g" -e "s|__REPO__|${REPO}|g" \
+            .github/release-template.md >> release_body.md
 
-          #### AppImage (portable)
-          ```bash
-          # Download
-          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/dbflux-linux-amd64.AppImage
-          chmod +x dbflux-linux-amd64.AppImage
-          ./dbflux-linux-amd64.AppImage
-          ```
-
-          ### macOS
-
-          DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time:
-
-          1. Download the DMG for your architecture:
-             - **Intel Macs**: `dbflux-macos-amd64.dmg`
-             - **Apple Silicon (M1/M2/M3)**: `dbflux-macos-arm64.dmg`
-          2. Open the DMG and drag DBFlux to Applications
-          3. When you see "unidentified developer", go to **System Preferences → Privacy & Security**
-          4. Click **Open Anyway** next to the warning
-          5. Confirm you want to open the application
-
-          Alternatively, from Terminal:
-          ```bash
-          xattr -cr /Applications/DBFlux.app
-          ```
-
-          ### Windows
-
-          #### Installer
-          1. Download `dbflux-windows-amd64-setup.exe`
-          2. Run the installer and follow the wizard
-
-          #### Portable
-          1. Download `dbflux-windows-amd64.zip`
-          2. Extract and run `dbflux.exe`
-
-          > Note: The executable is not signed. Windows SmartScreen may show a warning. Click "More info" → "Run anyway".
-
-          ---
-
-          ### Verify Downloads
-
-          Releases triggered with `workflow_dispatch` and `sign=true` include GPG signatures (key `A614B7D25134987A`).
-
-          ```bash
-          # Import the public key (one time)
-          gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
-
-          # Verify checksum
-          sha256sum -c dbflux-linux-amd64.tar.gz.sha256
-
-          # Verify GPG signature (if signed)
-          gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
-          ```
-
-          ### System Requirements
-
-          | Platform | Requirements |
-          |----------|-------------|
-          | Linux | x86_64 or ARM64, Vulkan-capable GPU (recommended) |
-          | macOS | macOS 11.0 (Big Sur) or later |
-          | Windows | Windows 10 or later, x86_64 |
-
-          ---
-
-          EOF
-
+          # 3) Auto-generated contributor notes
           if [ -f auto_notes.md ]; then
             cat auto_notes.md >> release_body.md
           else
-            echo "## What's Changed" >> release_body.md
-            echo "" >> release_body.md
-            echo "Initial release or no previous tag found." >> release_body.md
+            PREV_TAG="${{ steps.prev_tag.outputs.tag }}"
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${REPO}/compare/${PREV_TAG}...${VERSION}" >> release_body.md
+            fi
           fi
 
       - name: Create release
