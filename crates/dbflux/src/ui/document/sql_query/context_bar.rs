@@ -220,7 +220,11 @@ impl SqlQueryDocument {
         prev_schema: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let params = match self.app_state.read(cx).prepare_database_connection(profile_id, &database) {
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_database_connection(profile_id, &database)
+        {
             Ok(p) => p,
             Err(e) => {
                 log::warn!("Cannot connect to database {}: {}", database, e);
@@ -232,9 +236,9 @@ impl SqlQueryDocument {
         let app_state = self.app_state.clone();
         let target_db = database.clone();
 
-        let task = cx.background_executor().spawn(async move {
-            params.execute()
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;

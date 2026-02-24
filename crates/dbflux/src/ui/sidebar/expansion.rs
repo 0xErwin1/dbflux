@@ -70,13 +70,8 @@ impl Sidebar {
                 let pending = PendingAction::ExpandTypesFolder {
                     item_id: item_id.to_string(),
                 };
-                if !self.spawn_fetch_schema_types(
-                    *profile_id,
-                    database,
-                    Some(schema),
-                    pending,
-                    cx,
-                ) {
+                if !self.spawn_fetch_schema_types(*profile_id, database, Some(schema), pending, cx)
+                {
                     return;
                 }
             }

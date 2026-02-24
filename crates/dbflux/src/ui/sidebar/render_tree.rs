@@ -672,11 +672,7 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected {
-                    "\u{25CF}"
-                } else {
-                    "\u{25CB}"
-                }
+                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
             } else {
                 ""
             };

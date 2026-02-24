@@ -613,10 +613,7 @@ impl ConnectionManager {
         schema: Option<SchemaSnapshot>,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.add_database_connection(
-                database,
-                DatabaseConnection { connection, schema },
-            );
+            connected.add_database_connection(database, DatabaseConnection { connection, schema });
         }
     }
 
@@ -758,8 +755,13 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        if connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::ConnectionPerDatabase {
-            return Err("Per-database connections only supported for ConnectionPerDatabase drivers".to_string());
+        if connected.connection.schema_loading_strategy()
+            != SchemaLoadingStrategy::ConnectionPerDatabase
+        {
+            return Err(
+                "Per-database connections only supported for ConnectionPerDatabase drivers"
+                    .to_string(),
+            );
         }
 
         if connected.database_connections.contains_key(database) {

@@ -240,6 +240,10 @@ struct TableContextMenu {
     sql_submenu_open: bool,
     /// Whether the "Copy as Query" submenu is open.
     copy_query_submenu_open: bool,
+    /// Whether the "Filter" submenu is open.
+    filter_submenu_open: bool,
+    /// Whether the "Order" submenu is open.
+    order_submenu_open: bool,
     /// Currently selected menu item index (for keyboard navigation).
     selected_index: usize,
     /// Selected index within the active submenu.
@@ -1015,6 +1019,8 @@ impl DataGridPanel {
                             position: *position,
                             sql_submenu_open: false,
                             copy_query_submenu_open: false,
+                            filter_submenu_open: false,
+                            order_submenu_open: false,
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
@@ -1123,6 +1129,8 @@ impl DataGridPanel {
                         position: *position,
                         sql_submenu_open: false,
                         copy_query_submenu_open: false,
+                        filter_submenu_open: false,
+                        order_submenu_open: false,
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,

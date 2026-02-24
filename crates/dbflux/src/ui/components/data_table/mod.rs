@@ -6,7 +6,7 @@ mod state;
 mod table;
 mod theme;
 
-pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
+pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOperator, SortState};
 pub use model::TableModel;
 pub use state::DataTableState;
 pub use table::{DataTable, init};

@@ -435,11 +435,7 @@ impl Workspace {
     }
 
     /// Closes the active tab.
-    pub(super) fn close_active_tab(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn close_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let active_id = self.tab_manager.read(cx).active_id();
         let Some(doc_id) = active_id else {
             return;
@@ -767,7 +763,8 @@ impl Workspace {
         }
 
         let active_index = manager.active_id().and_then(|active_id| {
-            tabs.iter().position(|tab| tab.id == active_id.0.to_string())
+            tabs.iter()
+                .position(|tab| tab.id == active_id.0.to_string())
         });
 
         let manifest = SessionManifest {
@@ -820,8 +817,7 @@ impl Workspace {
                 } => {
                     let content = if let Some(shadow) = shadow_path {
                         // Shadow exists: check for conflict
-                        let shadow_content =
-                            std::fs::read_to_string(shadow).unwrap_or_default();
+                        let shadow_content = std::fs::read_to_string(shadow).unwrap_or_default();
                         let original_modified = std::fs::metadata(file_path)
                             .ok()
                             .and_then(|m| m.modified().ok());
@@ -829,9 +825,7 @@ impl Workspace {
                             .ok()
                             .and_then(|m| m.modified().ok());
 
-                        if let (Some(orig_t), Some(shad_t)) =
-                            (original_modified, shadow_modified)
-                        {
+                        if let (Some(orig_t), Some(shad_t)) = (original_modified, shadow_modified) {
                             if orig_t > shad_t {
                                 // Original was modified after shadow — external edit.
                                 // Prefer the original file content (user can undo).
@@ -850,12 +844,7 @@ impl Workspace {
                         std::fs::read_to_string(file_path).unwrap_or_default()
                     };
 
-                    (
-                        content,
-                        Some(file_path.clone()),
-                        None,
-                        shadow_path.clone(),
-                    )
+                    (content, Some(file_path.clone()), None, shadow_path.clone())
                 }
             };
 
@@ -896,7 +885,13 @@ impl Workspace {
                 doc.set_content(body, window, cx);
 
                 // If there was a shadow, the tab had unsaved changes — mark dirty
-                if matches!(&tab.kind, SessionTabKind::FileBacked { shadow_path: Some(_), .. }) {
+                if matches!(
+                    &tab.kind,
+                    SessionTabKind::FileBacked {
+                        shadow_path: Some(_),
+                        ..
+                    }
+                ) {
                     doc.restore_dirty(cx);
                 }
 

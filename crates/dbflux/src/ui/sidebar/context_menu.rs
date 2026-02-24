@@ -468,9 +468,7 @@ impl Sidebar {
         let strategy = conn.connection.schema_loading_strategy();
 
         match strategy {
-            SchemaLoadingStrategy::LazyPerDatabase => {
-                conn.database_schemas.contains_key(&name)
-            }
+            SchemaLoadingStrategy::LazyPerDatabase => conn.database_schemas.contains_key(&name),
             SchemaLoadingStrategy::ConnectionPerDatabase => {
                 conn.database_connections.contains_key(&name)
             }

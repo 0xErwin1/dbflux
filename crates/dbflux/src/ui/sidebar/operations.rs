@@ -303,8 +303,7 @@ impl Sidebar {
             }
             SchemaNodeKind::ScriptsFolder => {
                 // Only allow renaming subfolders, not root
-                if let Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) = parse_node_id(&item_id)
                 {
                     self.start_rename(&item_id, window, cx);
                 }
@@ -566,10 +565,7 @@ impl Sidebar {
                             res.connection,
                             res.schema,
                         );
-                        state.set_active_database(
-                            profile_id,
-                            Some(db_name_owned.clone()),
-                        );
+                        state.set_active_database(profile_id, Some(db_name_owned.clone()));
                     }
 
                     cx.emit(AppStateChanged);
@@ -758,9 +754,9 @@ impl Sidebar {
 
         match node_id {
             SchemaNodeId::ScriptsFolder { path: Some(p) } => Some(std::path::PathBuf::from(p)),
-            SchemaNodeId::ScriptFile { path } => {
-                std::path::Path::new(&path).parent().map(|p| p.to_path_buf())
-            }
+            SchemaNodeId::ScriptFile { path } => std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_path_buf()),
             _ => None,
         }
     }
@@ -779,9 +775,9 @@ impl Sidebar {
             Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
                 Some(std::path::PathBuf::from(p))
             }
-            Some(SchemaNodeId::ScriptFile { path }) => {
-                std::path::Path::new(&path).parent().map(|p| p.to_path_buf())
-            }
+            Some(SchemaNodeId::ScriptFile { path }) => std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_path_buf()),
             _ => None,
         }
     }
@@ -919,7 +915,10 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let result = self.app_state.update(cx, |state, _cx| {
-            state.scripts_directory_mut()?.move_entry(source, target_dir).ok()
+            state
+                .scripts_directory_mut()?
+                .move_entry(source, target_dir)
+                .ok()
         });
 
         if result.is_some() {
@@ -947,7 +946,9 @@ impl Sidebar {
     fn resolve_script_path(item_id: &str) -> Option<std::path::PathBuf> {
         match parse_node_id(item_id) {
             Some(SchemaNodeId::ScriptFile { path }) => Some(std::path::PathBuf::from(path)),
-            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => Some(std::path::PathBuf::from(p)),
+            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                Some(std::path::PathBuf::from(p))
+            }
             Some(SchemaNodeId::ScriptsFolder { path: None }) => {
                 dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
             }
@@ -985,10 +986,7 @@ impl Sidebar {
                 {
                     log::error!("Failed to reveal in file manager: {}", e);
                 }
-            } else if let Err(e) = std::process::Command::new("explorer")
-                .arg(&path)
-                .spawn()
-            {
+            } else if let Err(e) = std::process::Command::new("explorer").arg(&path).spawn() {
                 log::error!("Failed to reveal in file manager: {}", e);
             }
         }
@@ -1017,7 +1015,9 @@ impl Sidebar {
             return;
         };
 
-        cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().to_string()));
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            path.to_string_lossy().to_string(),
+        ));
     }
 
     fn generate_unique_script_name(

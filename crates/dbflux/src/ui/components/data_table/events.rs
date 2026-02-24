@@ -48,6 +48,14 @@ impl SortState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterOperator {
+    Eq,
+    NotEq,
+    Gt,
+    Lt,
+}
+
 /// Actions available in the context menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextMenuAction {
@@ -83,6 +91,18 @@ pub enum ContextMenuAction {
     CopyAsUpdate,
     /// Copy DELETE to clipboard via query generator.
     CopyAsDelete,
+    /// Filter by cell value with an operator (=, <>, >, <).
+    FilterByValue(FilterOperator),
+    /// Filter: column IS NULL.
+    FilterIsNull,
+    /// Filter: column IS NOT NULL.
+    FilterIsNotNull,
+    /// Remove all filters.
+    RemoveFilter,
+    /// Order by column (ASC or DESC).
+    Order(SortDirection),
+    /// Remove ordering.
+    RemoveOrdering,
 }
 
 /// Events emitted by the DataTable component.

@@ -61,9 +61,7 @@ impl Sidebar {
     }
 
     /// Build tree items for the Scripts tab from ScriptsDirectory entries.
-    pub(super) fn build_scripts_tree_items(
-        entries: &[dbflux_core::ScriptEntry],
-    ) -> Vec<TreeItem> {
+    pub(super) fn build_scripts_tree_items(entries: &[dbflux_core::ScriptEntry]) -> Vec<TreeItem> {
         entries
             .iter()
             .map(Self::script_entry_to_tree_item)
@@ -248,8 +246,8 @@ impl Sidebar {
                                 "Loading...".to_string(),
                             )]
                         } else {
-                        Vec::new()
-                    }
+                            Vec::new()
+                        }
                     } else if let Some(db_conn) = connected.database_connections.get(&db.name) {
                         if let Some(ref db_schema) = db_conn.schema {
                             Self::build_schema_children(

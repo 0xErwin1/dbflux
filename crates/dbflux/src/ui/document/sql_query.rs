@@ -10,10 +10,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
-    ValidationResult, detect_dangerous_query,
+    DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity, DriverCapabilities,
+    EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry, QueryLanguage,
+    QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy, ValidationResult,
+    detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -288,24 +288,20 @@ impl SqlQueryDocument {
 
         let doc_id = DocumentId::new();
 
-        let scratch_path = app_state
-            .read(cx)
-            .session_store()
-            .map(|store| store.scratch_path(&doc_id.0.to_string(), query_language.default_extension()));
+        let scratch_path = app_state.read(cx).session_store().map(|store| {
+            store.scratch_path(&doc_id.0.to_string(), query_language.default_extension())
+        });
 
         let initial_database = connection_id.and_then(|id| {
             let connections = app_state.read(cx).connections();
             let connected = connections.get(&id)?;
 
-            connected
-                .active_database
-                .clone()
-                .or_else(|| {
-                    connected
-                        .schema
-                        .as_ref()
-                        .and_then(|s| s.current_database().map(String::from))
-                })
+            connected.active_database.clone().or_else(|| {
+                connected
+                    .schema
+                    .as_ref()
+                    .and_then(|s| s.current_database().map(String::from))
+            })
         });
 
         let mut exec_ctx = ExecutionContext {
@@ -316,7 +312,10 @@ impl SqlQueryDocument {
 
         // Pre-select "public" schema when available (PostgreSQL default).
         let schema_items = Self::schema_items_for_connection(&app_state, &exec_ctx, cx);
-        if schema_items.iter().any(|item| item.value.as_ref() == "public") {
+        if schema_items
+            .iter()
+            .any(|item| item.value.as_ref() == "public")
+        {
             exec_ctx.schema = Some("public".to_string());
         }
 
@@ -552,11 +551,7 @@ impl SqlQueryDocument {
     }
 
     /// Override session paths (used during session restore).
-    pub fn set_session_paths(
-        &mut self,
-        scratch: Option<PathBuf>,
-        shadow: Option<PathBuf>,
-    ) {
+    pub fn set_session_paths(&mut self, scratch: Option<PathBuf>, shadow: Option<PathBuf>) {
         self.scratch_path = scratch;
         self.shadow_path = shadow;
     }
