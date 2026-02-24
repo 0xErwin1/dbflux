@@ -30,11 +30,18 @@ impl Sidebar {
         let item_id = item.id.to_string();
         let default_expanded = item.is_expanded();
 
-        let children: Vec<TreeItem> = item
+        let mut children: Vec<TreeItem> = item
             .children
             .into_iter()
             .map(|c| self.apply_override_recursive(c))
             .collect();
+
+        if self.loading_items.contains(&item_id) && children.is_empty() {
+            children.push(TreeItem::new(
+                format!("{}_loading", item_id),
+                "Loading...".to_string(),
+            ));
+        }
 
         // Apply override if exists, otherwise keep default
         let expanded = self
@@ -868,8 +875,9 @@ impl Sidebar {
         table: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
     ) -> TreeItem {
-        // Check if we have detailed info in the cache (lazy-loaded)
-        let cache_key = (schema_name.to_string(), table.name.clone());
+        // Must match the key used by cache_database().
+        let cache_db = target_database.unwrap_or(schema_name);
+        let cache_key = (cache_db.to_string(), table.name.clone());
         let effective_table = table_details.get(&cache_key).unwrap_or(table);
 
         let mut table_sections: Vec<TreeItem> = Vec::new();
@@ -1040,7 +1048,7 @@ impl Sidebar {
             );
         }
 
-        // Add placeholder when columns not loaded yet (shows chevron indicator)
+        // Placeholder so the chevron appears before details are loaded
         if columns_not_loaded && table_sections.is_empty() {
             table_sections.push(TreeItem::new(
                 SchemaNodeId::Placeholder {
@@ -1049,7 +1057,7 @@ impl Sidebar {
                     table: table.name.clone(),
                 }
                 .to_string(),
-                "Click to load schema...".to_string(),
+                "Loading...".to_string(),
             ));
         }
 

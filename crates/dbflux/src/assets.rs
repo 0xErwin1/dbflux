@@ -131,6 +131,9 @@ impl AssetSource for Assets {
             "icons/ui/rotate-ccw.svg" => {
                 Some(include_bytes!("../../../resources/icons/ui/rotate-ccw.svg"))
             }
+            "icons/ui/file-code-corner.svg" => Some(include_bytes!(
+                "../../../resources/icons/ui/file-code-corner.svg"
+            )),
 
             // App icon
             "icons/dbflux.svg" => Some(include_bytes!("../../../resources/icons/dbflux.svg")),
@@ -223,6 +226,7 @@ impl AssetSource for Assets {
                 "icons/ui/circle-check.svg".into(),
                 "icons/ui/link-2.svg".into(),
                 "icons/ui/rotate-ccw.svg".into(),
+                "icons/ui/file-code-corner.svg".into(),
             ]),
             "icons/brand" | "icons/brand/" => Ok(vec![
                 "icons/brand/postgresql.svg".into(),

@@ -351,6 +351,18 @@ enum PendingAction {
     },
 }
 
+impl PendingAction {
+    fn item_id(&self) -> &str {
+        match self {
+            Self::ViewSchema { item_id }
+            | Self::GenerateCode { item_id, .. }
+            | Self::ExpandTypesFolder { item_id }
+            | Self::ExpandSchemaIndexesFolder { item_id }
+            | Self::ExpandSchemaForeignKeysFolder { item_id } => item_id,
+        }
+    }
+}
+
 /// Result of checking whether table details are available.
 enum TableDetailsStatus {
     Ready,
@@ -372,8 +384,10 @@ pub struct Sidebar {
     expansion_overrides: HashMap<String, bool>,
     /// State for the keyboard-triggered context menu
     context_menu: Option<ContextMenuState>,
-    /// Action to execute after table details finish loading
-    pending_action: Option<PendingAction>,
+    /// Actions to execute after table/type details finish loading, keyed by item_id
+    pending_actions: HashMap<String, PendingAction>,
+    /// Item IDs currently being fetched (tables, type/index/FK folders)
+    loading_items: HashSet<String>,
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     _subscriptions: Vec<Subscription>,
@@ -469,7 +483,8 @@ impl Sidebar {
             visible_entry_count,
             expansion_overrides: HashMap::new(),
             context_menu: None,
-            pending_action: None,
+            pending_actions: HashMap::new(),
+            loading_items: HashSet::new(),
             active_databases: HashMap::new(),
             _subscriptions: vec![
                 app_state_subscription,
