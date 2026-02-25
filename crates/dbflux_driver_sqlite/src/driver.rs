@@ -9,7 +9,7 @@ use dbflux_core::{
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest,
     DriverCapabilities, DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, PlaceholderStyle,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, PlaceholderStyle,
     QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
     RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
@@ -485,7 +485,7 @@ impl Connection for SqliteConnection {
             name: table.to_string(),
             schema: None,
             columns: Some(columns),
-            indexes: Some(indexes),
+            indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
         })

@@ -8,8 +8,9 @@ use dbflux_core::{
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FormValues,
-    FormattedError, Icon, IndexInfo, LanguageService, MONGODB_FORM, PlaceholderStyle,
+    CollectionIndexInfo, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
+    FormValues, FormattedError, Icon, IndexData, IndexDirection, LanguageService, MONGODB_FORM,
+    PlaceholderStyle,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
     TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo,
@@ -745,7 +746,7 @@ impl Connection for MongoConnection {
         let tables: Vec<TableInfo> = collection_names
             .into_iter()
             .map(|name| {
-                let indexes = fetch_collection_indexes(&db, &name);
+                let indexes = fetch_collection_indexes(&db, &name).map(IndexData::Document);
                 TableInfo {
                     name,
                     schema: Some(database.to_string()),
@@ -777,12 +778,19 @@ impl Connection for MongoConnection {
             collection
         );
 
-        // For now, return basic info without schema sampling
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let db = client.database(database);
+        let indexes = fetch_collection_indexes(&db, collection).map(IndexData::Document);
+
         Ok(TableInfo {
             name: collection.to_string(),
             schema: Some(database.to_string()),
             columns: None,
-            indexes: None,
+            indexes,
             foreign_keys: None,
             constraints: None,
         })
@@ -1907,12 +1915,14 @@ fn bson_to_value(bson: &Bson) -> Value {
     }
 }
 
-/// Fetch indexes for a collection. Returns None if fetching fails (non-blocking).
-fn fetch_collection_indexes(db: &Database, collection_name: &str) -> Option<Vec<IndexInfo>> {
+/// Fetch indexes for a collection. Returns `None` on failure or empty results.
+fn fetch_collection_indexes(
+    db: &Database,
+    collection_name: &str,
+) -> Option<Vec<CollectionIndexInfo>> {
     let collection = db.collection::<Document>(collection_name);
 
-    let indexes_result = collection.list_indexes().run();
-    let cursor = match indexes_result {
+    let cursor = match collection.list_indexes().run() {
         Ok(c) => c,
         Err(e) => {
             log::warn!(
@@ -1924,36 +1934,64 @@ fn fetch_collection_indexes(db: &Database, collection_name: &str) -> Option<Vec<
         }
     };
 
-    let indexes: Vec<IndexInfo> = cursor
+    let indexes: Vec<CollectionIndexInfo> = cursor
         .filter_map(|result| {
-            let index_model = result.ok()?;
-            let keys = index_model.keys;
+            let index_model = match result {
+                Ok(model) => model,
+                Err(e) => {
+                    log::warn!(
+                        "[SCHEMA] Failed to deserialize index for {}: {}",
+                        collection_name,
+                        e
+                    );
+                    return None;
+                }
+            };
 
-            // Extract column names from the key document
-            let columns: Vec<String> = keys.keys().cloned().collect();
+            let keys: Vec<(String, IndexDirection)> = index_model
+                .keys
+                .iter()
+                .map(|(field, value)| {
+                    let direction = bson_to_index_direction(value);
+                    (field.to_string(), direction)
+                })
+                .collect();
 
-            // Get index name
             let name = index_model
                 .options
                 .as_ref()
                 .and_then(|opts| opts.name.clone())
-                .unwrap_or_else(|| columns.join("_"));
+                .unwrap_or_else(|| {
+                    keys.iter()
+                        .map(|(f, _)| f.as_str())
+                        .collect::<Vec<_>>()
+                        .join("_")
+                });
 
-            // Check if unique
             let is_unique = index_model
                 .options
                 .as_ref()
                 .and_then(|opts| opts.unique)
                 .unwrap_or(false);
 
-            // Check if this is the _id index (primary)
-            let is_primary = columns.len() == 1 && columns[0] == "_id";
+            let is_sparse = index_model
+                .options
+                .as_ref()
+                .and_then(|opts| opts.sparse)
+                .unwrap_or(false);
 
-            Some(IndexInfo {
+            let expire_after_seconds = index_model
+                .options
+                .as_ref()
+                .and_then(|opts| opts.expire_after)
+                .map(|d| d.as_secs());
+
+            Some(CollectionIndexInfo {
                 name,
-                columns,
+                keys,
                 is_unique,
-                is_primary,
+                is_sparse,
+                expire_after_seconds,
             })
         })
         .collect();
@@ -1962,6 +2000,23 @@ fn fetch_collection_indexes(db: &Database, collection_name: &str) -> Option<Vec<
         None
     } else {
         Some(indexes)
+    }
+}
+
+fn bson_to_index_direction(value: &Bson) -> IndexDirection {
+    match value {
+        Bson::Int32(1) | Bson::Int64(1) => IndexDirection::Ascending,
+        Bson::Int32(-1) | Bson::Int64(-1) => IndexDirection::Descending,
+        Bson::Double(v) if *v == 1.0 => IndexDirection::Ascending,
+        Bson::Double(v) if *v == -1.0 => IndexDirection::Descending,
+        Bson::String(s) => match s.as_str() {
+            "text" => IndexDirection::Text,
+            "hashed" => IndexDirection::Hashed,
+            "2d" => IndexDirection::Geo2d,
+            "2dsphere" => IndexDirection::Geo2dSphere,
+            _ => IndexDirection::Ascending,
+        },
+        _ => IndexDirection::Ascending,
     }
 }
 

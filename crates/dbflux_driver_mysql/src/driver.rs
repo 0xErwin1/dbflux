@@ -10,7 +10,8 @@ use dbflux_core::{
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
     DriverFormDef, DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest,
-    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo, MYSQL_FORM,
+    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    MYSQL_FORM,
     PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle,
     QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row, RowDelete,
     RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
@@ -1257,7 +1258,7 @@ impl Connection for MysqlConnection {
             name: table.to_string(),
             schema: Some(database.to_string()),
             columns: Some(columns),
-            indexes: Some(indexes),
+            indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
         })

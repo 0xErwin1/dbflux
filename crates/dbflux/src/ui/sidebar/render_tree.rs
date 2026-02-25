@@ -83,6 +83,10 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::Database
                 | SchemaNodeKind::Profile
                 | SchemaNodeKind::ScriptsFolder
+                | SchemaNodeKind::Collection
+                | SchemaNodeKind::CollectionsFolder
+                | SchemaNodeKind::DatabaseIndexesFolder
+                | SchemaNodeKind::CollectionIndexesFolder
         );
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -672,7 +676,11 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
+                if is_connected {
+                    "\u{25CF}"
+                } else {
+                    "\u{25CB}"
+                }
             } else {
                 ""
             };
@@ -707,6 +715,10 @@ fn resolve_node_icon(
         SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::DatabaseIndexesFolder | SchemaNodeKind::CollectionIndexesFolder => {
+            (Some(AppIcon::Hash), "", params.color_purple)
+        }
+        SchemaNodeKind::CollectionIndex => (Some(AppIcon::Hash), "", params.color_purple),
         SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
         SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
@@ -764,8 +776,11 @@ fn resolve_label_color(
         SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => params.color_purple,
         SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => params.color_orange,
         SchemaNodeKind::Constraint => params.color_yellow,
-        SchemaNodeKind::CollectionsFolder => params.color_gray,
+        SchemaNodeKind::CollectionsFolder
+        | SchemaNodeKind::DatabaseIndexesFolder
+        | SchemaNodeKind::CollectionIndexesFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
+        SchemaNodeKind::CollectionIndex => params.color_purple,
         SchemaNodeKind::ScriptsFolder => theme.foreground,
         SchemaNodeKind::ScriptFile => theme.foreground,
         _ => theme.muted_foreground,

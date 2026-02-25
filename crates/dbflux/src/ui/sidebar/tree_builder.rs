@@ -465,6 +465,81 @@ impl Sidebar {
             );
         }
 
+        let all_index_items: Vec<TreeItem> = db_schema
+            .tables
+            .iter()
+            .filter_map(|coll| {
+                let doc_indexes = match coll.indexes.as_ref()? {
+                    IndexData::Document(v) => v,
+                    IndexData::Relational(v) => {
+                        return Some(
+                            v.iter()
+                                .map(|idx| {
+                                    let unique_marker =
+                                        if idx.is_unique { " UNIQUE" } else { "" };
+                                    let pk_marker = if idx.is_primary { " PK" } else { "" };
+                                    let cols = idx.columns.join(", ");
+                                    let label = format!(
+                                        "{}.{} ({}){}{}",
+                                        coll.name, idx.name, cols, unique_marker, pk_marker
+                                    );
+
+                                    TreeItem::new(
+                                        SchemaNodeId::CollectionIndex {
+                                            profile_id,
+                                            collection: coll.name.to_string(),
+                                            name: idx.name.clone(),
+                                        }
+                                        .to_string(),
+                                        label,
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                };
+
+                Some(
+                    doc_indexes
+                        .iter()
+                        .map(|idx| {
+                            let label = format!(
+                                "{}.{}",
+                                coll.name,
+                                format_collection_index_label(idx)
+                            );
+
+                            TreeItem::new(
+                                SchemaNodeId::CollectionIndex {
+                                    profile_id,
+                                    collection: coll.name.to_string(),
+                                    name: idx.name.clone(),
+                                }
+                                .to_string(),
+                                label,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect();
+
+        if !all_index_items.is_empty() {
+            content.push(
+                TreeItem::new(
+                    SchemaNodeId::DatabaseIndexesFolder {
+                        profile_id,
+                        database: database_name.to_string(),
+                    }
+                    .to_string(),
+                    format!("Indexes ({})", all_index_items.len()),
+                )
+                .expanded(false)
+                .children(all_index_items),
+            );
+        }
+
         content
     }
 
@@ -476,42 +551,72 @@ impl Sidebar {
         let coll_name = &collection.name;
         let mut collection_children = Vec::new();
 
-        if let Some(ref indexes) = collection.indexes
-            && !indexes.is_empty()
-        {
-            let index_children: Vec<TreeItem> = indexes
-                .iter()
-                .map(|idx| {
-                    let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
-                    let pk_marker = if idx.is_primary { " PK" } else { "" };
-                    let cols = idx.columns.join(", ");
-                    let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
+        if let Some(ref index_data) = collection.indexes {
+            let (index_children, count) = match index_data {
+                IndexData::Document(doc_indexes) if !doc_indexes.is_empty() => {
+                    let children: Vec<TreeItem> = doc_indexes
+                        .iter()
+                        .map(|idx| {
+                            let label = format_collection_index_label(idx);
 
+                            TreeItem::new(
+                                SchemaNodeId::CollectionIndex {
+                                    profile_id,
+                                    collection: coll_name.to_string(),
+                                    name: idx.name.clone(),
+                                }
+                                .to_string(),
+                                label,
+                            )
+                        })
+                        .collect();
+                    let count = children.len();
+                    (children, count)
+                }
+
+                IndexData::Relational(indexes) if !indexes.is_empty() => {
+                    let children: Vec<TreeItem> = indexes
+                        .iter()
+                        .map(|idx| {
+                            let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
+                            let pk_marker = if idx.is_primary { " PK" } else { "" };
+                            let cols = idx.columns.join(", ");
+                            let label =
+                                format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
+
+                            TreeItem::new(
+                                SchemaNodeId::CollectionIndex {
+                                    profile_id,
+                                    collection: coll_name.to_string(),
+                                    name: idx.name.clone(),
+                                }
+                                .to_string(),
+                                label,
+                            )
+                        })
+                        .collect();
+                    let count = children.len();
+                    (children, count)
+                }
+
+                _ => (Vec::new(), 0),
+            };
+
+            if !index_children.is_empty() {
+                collection_children.push(
                     TreeItem::new(
-                        SchemaNodeId::CollectionIndex {
+                        SchemaNodeId::CollectionIndexesFolder {
                             profile_id,
+                            database: database_name.to_string(),
                             collection: coll_name.to_string(),
-                            name: idx.name.clone(),
                         }
                         .to_string(),
-                        label,
+                        format!("Indexes ({})", count),
                     )
-                })
-                .collect();
-
-            collection_children.push(
-                TreeItem::new(
-                    SchemaNodeId::CollectionIndexesFolder {
-                        profile_id,
-                        database: database_name.to_string(),
-                        collection: coll_name.to_string(),
-                    }
-                    .to_string(),
-                    format!("Indexes ({})", indexes.len()),
-                )
-                .expanded(false)
-                .children(index_children),
-            );
+                    .expanded(false)
+                    .children(index_children),
+                );
+            }
         }
 
         if collection_children.is_empty() {
@@ -918,8 +1023,7 @@ impl Sidebar {
             );
         }
 
-        // indexes: None = not loaded yet, Some([]) = loaded but empty
-        if let Some(ref indexes) = effective_table.indexes
+        if let Some(IndexData::Relational(ref indexes)) = effective_table.indexes
             && !indexes.is_empty()
         {
             let index_children: Vec<TreeItem> = indexes
@@ -1072,4 +1176,37 @@ impl Sidebar {
         .expanded(false)
         .children(table_sections)
     }
+}
+
+fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
+    let keys_str = idx
+        .keys
+        .iter()
+        .map(|(field, dir)| {
+            let dir_label = match dir {
+                IndexDirection::Ascending => "ASC",
+                IndexDirection::Descending => "DESC",
+                IndexDirection::Text => "TEXT",
+                IndexDirection::Hashed => "HASHED",
+                IndexDirection::Geo2d => "2D",
+                IndexDirection::Geo2dSphere => "2DSPHERE",
+            };
+            format!("{} {}", field, dir_label)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut label = format!("{} ({})", idx.name, keys_str);
+
+    if idx.is_unique {
+        label.push_str(" UNIQUE");
+    }
+    if idx.is_sparse {
+        label.push_str(" SPARSE");
+    }
+    if let Some(ttl) = idx.expire_after_seconds {
+        label.push_str(&format!(" TTL:{}s", ttl));
+    }
+
+    label
 }
