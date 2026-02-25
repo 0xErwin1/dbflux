@@ -17,6 +17,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(dropdown_layer());
     stack.add_layer(context_menu_layer());
     stack.add_layer(form_navigation_layer());
+    stack.add_layer(context_bar_layer());
 
     stack
 });
@@ -502,6 +503,61 @@ fn text_input_layer() -> KeymapLayer {
 
     // Escape exits text input mode
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+    layer
+}
+
+fn context_bar_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ContextBar);
+
+    // Commands that should pass through to the workspace/document
+    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(KeyChord::new("enter", Modifiers::ctrl()), Command::RunQuery);
+    layer.bind(
+        KeyChord::new("enter", Modifiers::ctrl_shift()),
+        Command::RunQueryInNewTab,
+    );
+    layer.bind(
+        KeyChord::new("w", Modifiers::ctrl()),
+        Command::CloseCurrentTab,
+    );
+    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+    layer.bind(
+        KeyChord::new("s", Modifiers::ctrl_shift()),
+        Command::SaveFileAs,
+    );
+
+    // Navigate between dropdowns
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
+    layer.bind(KeyChord::new("left", Modifiers::none()), Command::FocusLeft);
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::FocusRight,
+    );
+
+    // Navigate items within an open dropdown
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+
+    // Open/select dropdown
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+
+    // Return to editor
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusDown);
+
+    // C-k stays in context bar (no-op)
+    layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::FocusUp);
+
+    // Ctrl+h/l also navigate between dropdowns
+    layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
+    layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
 
     layer
 }

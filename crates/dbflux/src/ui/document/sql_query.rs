@@ -70,6 +70,7 @@ pub enum SqlQueryFocus {
     #[default]
     Editor,
     Results,
+    ContextBar,
 }
 
 pub struct SqlQueryDocument {
@@ -121,6 +122,7 @@ pub struct SqlQueryDocument {
     layout: SqlQueryLayout,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
+    context_bar_index: usize,
     results_maximized: bool,
 
     // Task runner (query execution)
@@ -358,6 +360,7 @@ impl SqlQueryDocument {
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
+            context_bar_index: 0,
             results_maximized: false,
             runner,
             refresh_policy: RefreshPolicy::Manual,
@@ -466,6 +469,11 @@ impl SqlQueryDocument {
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
         self.query_language
+    }
+
+    /// Returns true if the editor content is empty or whitespace-only.
+    pub fn is_content_empty(&self, cx: &App) -> bool {
+        self.input_state.read(cx).value().trim().is_empty()
     }
 
     fn mark_dirty(&mut self, cx: &mut Context<Self>) {
@@ -684,6 +692,12 @@ impl SqlQueryDocument {
             }
         }
 
+        if self.focus_mode == SqlQueryFocus::ContextBar
+            && self.dispatch_context_bar_command(cmd, window, cx)
+        {
+            return true;
+        }
+
         match cmd {
             Command::RunQuery => {
                 self.run_query(window, cx);
@@ -700,6 +714,14 @@ impl SqlQueryDocument {
                 } else {
                     false
                 }
+            }
+
+            Command::FocusUp => {
+                if self.focus_mode == SqlQueryFocus::Editor {
+                    self.enter_context_bar(window, cx);
+                    return true;
+                }
+                false
             }
 
             // Focus navigation from editor to results

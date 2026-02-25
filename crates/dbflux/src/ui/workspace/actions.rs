@@ -441,6 +441,31 @@ impl Workspace {
             return;
         };
 
+        // Delete backing file for empty file-backed scripts on close.
+        let empty_script_path = self
+            .tab_manager
+            .read(cx)
+            .active_document()
+            .and_then(|handle| {
+                if let crate::ui::document::DocumentHandle::SqlQuery { entity, .. } = handle {
+                    let doc = entity.read(cx);
+                    if doc.is_file_backed() && doc.is_content_empty(cx) {
+                        return doc.path().cloned();
+                    }
+                }
+                None
+            });
+
+        if let Some(path) = empty_script_path {
+            self.app_state.update(cx, |state, cx| {
+                if let Some(dir) = state.scripts_directory_mut()
+                    && dir.delete(&path).is_ok()
+                {
+                    cx.emit(AppStateChanged);
+                }
+            });
+        }
+
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.close(doc_id, cx);
         });
@@ -662,22 +687,45 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    /// Creates a new SQL query tab.
+    /// Creates a new SQL query tab backed by a script file.
     pub(super) fn new_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Count existing query tabs for naming
-        let query_count = self
-            .tab_manager
+        let query_language = self
+            .app_state
             .read(cx)
-            .documents()
-            .iter()
-            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Script))
-            .count();
+            .active_connection_id()
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .map(|conn| conn.connection.metadata().query_language)
+            .unwrap_or(dbflux_core::QueryLanguage::Sql);
 
-        let title = format!("Query {}", query_count + 1);
+        let extension = query_language.default_extension();
 
-        let doc = cx
-            .new(|cx| SqlQueryDocument::new(self.app_state.clone(), window, cx).with_title(title));
-        doc.read(cx).initial_auto_save(cx);
+        let script_path = self.app_state.update(cx, |state, cx| {
+            let dir = state.scripts_directory_mut()?;
+            let name = dir.next_available_name("Query", extension);
+            let path = dir.create_file(None, &name, extension).ok();
+            if path.is_some() {
+                cx.emit(AppStateChanged);
+            }
+            path
+        });
+
+        let doc = cx.new(|cx| {
+            let mut doc = SqlQueryDocument::new(self.app_state.clone(), window, cx);
+            if let Some(path) = script_path {
+                let title = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Query")
+                    .to_string();
+                doc = doc.with_title(title).with_path(path);
+            }
+            doc
+        });
+
+        if !doc.read(cx).is_file_backed() {
+            doc.read(cx).initial_auto_save(cx);
+        }
+
         let handle = DocumentHandle::sql_query(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
@@ -693,24 +741,52 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Count existing query tabs for naming
-        let query_count = self
-            .tab_manager
+        let query_language = self
+            .app_state
             .read(cx)
-            .documents()
-            .iter()
-            .filter(|d| matches!(d.kind(), crate::ui::document::DocumentKind::Script))
-            .count();
+            .active_connection_id()
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .map(|conn| conn.connection.metadata().query_language)
+            .unwrap_or(dbflux_core::QueryLanguage::Sql);
 
-        let title = format!("Query {}", query_count + 1);
+        let extension = query_language.default_extension();
+
+        let script_path = self.app_state.update(cx, |state, cx| {
+            let dir = state.scripts_directory_mut()?;
+            let name = dir.next_available_name("Query", extension);
+            let path = dir.create_file(None, &name, extension).ok();
+            if path.is_some() {
+                cx.emit(AppStateChanged);
+            }
+            path
+        });
 
         let doc = cx.new(|cx| {
-            let mut doc =
-                SqlQueryDocument::new(self.app_state.clone(), window, cx).with_title(title);
+            let mut doc = SqlQueryDocument::new(self.app_state.clone(), window, cx);
+            if let Some(ref path) = script_path {
+                let title = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Query")
+                    .to_string();
+                doc = doc.with_title(title).with_path(path.clone());
+            }
             doc.set_content(&sql, window, cx);
             doc
         });
-        doc.read(cx).initial_auto_save(cx);
+
+        if !doc.read(cx).is_file_backed() {
+            doc.read(cx).initial_auto_save(cx);
+        }
+
+        // Write initial content to the script file (with annotation headers)
+        if let Some(path) = script_path {
+            let content = doc.read(cx).build_file_content(cx);
+            if let Err(e) = std::fs::write(&path, &content) {
+                log::error!("Failed to write initial script content: {}", e);
+            }
+        }
+
         let handle = DocumentHandle::sql_query(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {

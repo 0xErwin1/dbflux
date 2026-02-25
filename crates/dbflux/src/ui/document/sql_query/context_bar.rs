@@ -29,8 +29,8 @@ impl SqlQueryDocument {
         let sub = cx.subscribe_in(
             &dropdown,
             window,
-            |this, _, event: &DropdownSelectionChanged, _window, cx| {
-                this.on_connection_changed(event.index, cx);
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                this.on_connection_changed(event.index, window, cx);
             },
         );
 
@@ -101,7 +101,7 @@ impl SqlQueryDocument {
 
     // === Event handlers for context changes ===
 
-    fn on_connection_changed(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn on_connection_changed(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let connections = self.app_state.read(cx).connections();
         let conn = connections.values().nth(index);
 
@@ -147,6 +147,11 @@ impl SqlQueryDocument {
         self.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = Some(completion_provider);
         });
+
+        // Re-validate context bar index since dropdown visibility may have changed
+        if self.focus_mode == SqlQueryFocus::ContextBar {
+            self.revalidate_context_bar_index(window, cx);
+        }
 
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
@@ -431,6 +436,163 @@ impl SqlQueryDocument {
             dd.set_items(items, cx);
             dd.set_selected_index(selected_index, cx);
         });
+    }
+
+    // === Context bar keyboard navigation ===
+
+    /// Returns the list of visible dropdown indices:
+    /// 0 = Connection (always), 1 = Database (if visible), 2 = Schema (if visible).
+    fn visible_dropdown_indices(&self, cx: &App) -> Vec<usize> {
+        let mut indices = vec![0]; // Connection is always visible
+        if self.should_show_database_dropdown(cx) {
+            indices.push(1);
+        }
+        if self.should_show_schema_dropdown(cx) {
+            indices.push(2);
+        }
+        indices
+    }
+
+    fn dropdown_for_index(&self, index: usize) -> &Entity<Dropdown> {
+        match index {
+            0 => &self.connection_dropdown,
+            1 => &self.database_dropdown,
+            _ => &self.schema_dropdown,
+        }
+    }
+
+    pub(super) fn enter_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let visible = self.visible_dropdown_indices(cx);
+        if visible.is_empty() {
+            return;
+        }
+
+        self.focus_mode = SqlQueryFocus::ContextBar;
+        self.context_bar_index = visible[0];
+        self.focus_handle.focus(window);
+        self.update_context_bar_focus_rings(cx);
+        cx.notify();
+    }
+
+    /// Clamp `context_bar_index` to a visible dropdown after connection changes.
+    fn revalidate_context_bar_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let visible = self.visible_dropdown_indices(cx);
+
+        if visible.is_empty() {
+            self.exit_context_bar(window, cx);
+            return;
+        }
+
+        if !visible.contains(&self.context_bar_index) {
+            self.context_bar_index = visible[0];
+        }
+
+        self.update_context_bar_focus_rings(cx);
+    }
+
+    fn exit_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_context_bar_focus_rings(cx);
+        self.focus_mode = SqlQueryFocus::Editor;
+        self.input_state
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn dispatch_context_bar_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let visible = self.visible_dropdown_indices(cx);
+        if visible.is_empty() {
+            self.exit_context_bar(window, cx);
+            return true;
+        }
+
+        // If a dropdown is open, route j/k/Enter/Escape to it
+        let current_dropdown = self.dropdown_for_index(self.context_bar_index).clone();
+        if current_dropdown.read(cx).is_open() {
+            match cmd {
+                Command::SelectNext => {
+                    current_dropdown.update(cx, |dd, cx| dd.select_next_item(cx));
+                    return true;
+                }
+                Command::SelectPrev => {
+                    current_dropdown.update(cx, |dd, cx| dd.select_prev_item(cx));
+                    return true;
+                }
+                Command::Execute => {
+                    current_dropdown.update(cx, |dd, cx| dd.accept_selection(cx));
+                    return true;
+                }
+                Command::Cancel => {
+                    current_dropdown.update(cx, |dd, cx| dd.close(cx));
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        match cmd {
+            Command::FocusRight => {
+                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                    && pos + 1 < visible.len()
+                {
+                    self.context_bar_index = visible[pos + 1];
+                    self.update_context_bar_focus_rings(cx);
+                    cx.notify();
+                }
+                true
+            }
+            Command::FocusLeft => {
+                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                    && pos > 0
+                {
+                    self.context_bar_index = visible[pos - 1];
+                    self.update_context_bar_focus_rings(cx);
+                    cx.notify();
+                }
+                true
+            }
+
+            Command::Execute => {
+                current_dropdown.update(cx, |dd, cx| dd.toggle_open(cx));
+                true
+            }
+
+            Command::FocusDown | Command::Cancel => {
+                self.exit_context_bar(window, cx);
+                true
+            }
+
+            Command::FocusUp => true,
+
+            // Don't exit context bar for unrelated commands (e.g. C-b toggle sidebar)
+            _ => false,
+        }
+    }
+
+    fn update_context_bar_focus_rings(&self, cx: &mut Context<Self>) {
+        let theme = cx.theme();
+        let active_color = theme.ring;
+
+        for idx in [0, 1, 2] {
+            let dropdown = self.dropdown_for_index(idx);
+            let color = if idx == self.context_bar_index {
+                Some(active_color)
+            } else {
+                None
+            };
+            dropdown.update(cx, |dd, cx| dd.set_focus_ring(color, cx));
+        }
+    }
+
+    fn clear_context_bar_focus_rings(&self, cx: &mut Context<Self>) {
+        for idx in [0, 1, 2] {
+            let dropdown = self.dropdown_for_index(idx);
+            dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
+        }
     }
 
     // === Render the context bar ===

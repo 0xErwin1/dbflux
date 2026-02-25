@@ -376,6 +376,15 @@ impl CommandDispatcher for Workspace {
             // Layout:  Sidebar | Document
             //                  | BackgroundTasks
             Command::FocusLeft => {
+                // Only try document dispatch when in context bar mode,
+                // otherwise FocusLeft would be swallowed by DataGridPanel column navigation.
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                    && doc.active_context(cx) == ContextId::ContextBar
+                    && doc.dispatch_command(Command::FocusLeft, window, cx)
+                {
+                    return true;
+                }
+
                 if self.is_sidebar_collapsed(cx) {
                     return false;
                 }
@@ -388,13 +397,24 @@ impl CommandDispatcher for Workspace {
                 }
             }
 
-            Command::FocusRight => match self.focus_target {
-                FocusTarget::Sidebar => {
-                    self.set_focus(FocusTarget::Document, window, cx);
-                    true
+            Command::FocusRight => {
+                // Only try document dispatch when in context bar mode,
+                // otherwise FocusRight would be swallowed by DataGridPanel column navigation.
+                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                    && doc.active_context(cx) == ContextId::ContextBar
+                    && doc.dispatch_command(Command::FocusRight, window, cx)
+                {
+                    return true;
                 }
-                _ => false,
-            },
+
+                match self.focus_target {
+                    FocusTarget::Sidebar => {
+                        self.set_focus(FocusTarget::Document, window, cx);
+                        true
+                    }
+                    _ => false,
+                }
+            }
 
             Command::FocusDown => {
                 // First try the active document (for internal editor->results navigation)

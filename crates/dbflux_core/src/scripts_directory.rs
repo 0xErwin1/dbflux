@@ -75,6 +75,28 @@ impl ScriptsDirectory {
         self.entries = scan_directory(&self.root);
     }
 
+    /// Returns the next available name like "Query 1", "Query 2", etc.
+    /// that doesn't collide with existing root-level files.
+    pub fn next_available_name(&self, prefix: &str, extension: &str) -> String {
+        let existing: std::collections::HashSet<String> = self
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ScriptEntry::File { name, .. } => Some(name.to_lowercase()),
+                _ => None,
+            })
+            .collect();
+
+        for n in 1.. {
+            let candidate = format!("{} {}.{}", prefix, n, extension);
+            if !existing.contains(&candidate.to_lowercase()) {
+                return format!("{} {}", prefix, n);
+            }
+        }
+
+        unreachable!()
+    }
+
     /// Create an empty script file. Returns the full path of the created file.
     pub fn create_file(
         &mut self,
@@ -556,13 +578,11 @@ mod tests {
         assert!(dir.create_folder(Some(&outside), "bad").is_err());
         assert!(dir.rename(&outside.join("file.sql"), "new.sql").is_err());
         assert!(dir.delete(&outside.join("file.sql")).is_err());
-        assert!(
-            dir.move_entry(&outside.join("file.sql"), tmp.path())
-                .is_err()
-        );
-        assert!(
-            dir.move_entry(&tmp.path().join("file.sql"), &outside)
-                .is_err()
-        );
+        assert!(dir
+            .move_entry(&outside.join("file.sql"), tmp.path())
+            .is_err());
+        assert!(dir
+            .move_entry(&tmp.path().join("file.sql"), &outside)
+            .is_err());
     }
 }

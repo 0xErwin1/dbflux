@@ -48,6 +48,9 @@ pub enum ContextId {
 
     /// A navigable form is in `Navigating` mode (j/k/h/l move focus ring).
     FormNavigation,
+
+    /// Execution context bar (Connection/Database/Schema dropdowns).
+    ContextBar,
 }
 
 impl ContextId {
@@ -67,6 +70,7 @@ impl ContextId {
             ContextId::ContextMenu => None,
             ContextId::ConfirmModal => None,
             ContextId::FormNavigation => None,
+            ContextId::ContextBar => None,
             ContextId::Sidebar => Some(ContextId::Global),
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
@@ -88,6 +92,7 @@ impl ContextId {
                 | ContextId::ContextMenu
                 | ContextId::ConfirmModal
                 | ContextId::FormNavigation
+                | ContextId::ContextBar
         )
     }
 
@@ -109,6 +114,7 @@ impl ContextId {
             ContextId::ContextMenu => "Context Menu",
             ContextId::ConfirmModal => "Confirm",
             ContextId::FormNavigation => "Form Navigation",
+            ContextId::ContextBar => "Context Bar",
         }
     }
 
@@ -129,6 +135,7 @@ impl ContextId {
             ContextId::ContextMenu,
             ContextId::ConfirmModal,
             ContextId::FormNavigation,
+            ContextId::ContextBar,
         ]
     }
 
@@ -149,6 +156,7 @@ impl ContextId {
             ContextId::ContextMenu => "ContextMenu",
             ContextId::ConfirmModal => "ConfirmModal",
             ContextId::FormNavigation => "FormNavigation",
+            ContextId::ContextBar => "ContextBar",
         }
     }
 }

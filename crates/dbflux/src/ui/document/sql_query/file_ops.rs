@@ -202,7 +202,7 @@ impl SqlQueryDocument {
     // === Explicit save (Ctrl+S) ===
 
     /// Build the full file content, prepending execution context metadata.
-    fn build_file_content(&self, cx: &App) -> String {
+    pub fn build_file_content(&self, cx: &App) -> String {
         let editor_content = self.input_state.read(cx).value().to_string();
 
         let header = self.exec_ctx.to_comment_header(self.query_language);

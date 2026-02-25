@@ -42,6 +42,7 @@ impl SqlQueryDocument {
         match self.focus_mode {
             SqlQueryFocus::Editor => ContextId::Editor,
             SqlQueryFocus::Results => ContextId::Results,
+            SqlQueryFocus::ContextBar => ContextId::ContextBar,
         }
     }
 }
