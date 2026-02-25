@@ -38,10 +38,32 @@ impl Sidebar {
     }
 
     pub(super) fn set_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        if expanded && !self.trigger_expansion_fetch(item_id, cx) {
+            return;
+        }
+
+        if let Some(SchemaNodeId::ConnectionFolder { node_id }) = parse_node_id(item_id) {
+            self.app_state.update(cx, |state, _cx| {
+                state.set_folder_collapsed(node_id, !expanded);
+            });
+        }
+
+        self.expansion_overrides
+            .insert(item_id.to_string(), expanded);
+        self.rebuild_tree_with_overrides(cx);
+    }
+
+    /// Starts any background fetches required when a node is expanded.
+    /// Returns `false` if expansion should be blocked (e.g. fetch preparation failed).
+    /// Does not modify `expansion_overrides` or rebuild the tree.
+    pub(super) fn trigger_expansion_fetch(
+        &mut self,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let parsed = parse_node_id(item_id);
 
-        // Expand immediately for Ready/Loading; bail on NotFound (prepare failed).
-        if expanded && matches!(parsed, Some(SchemaNodeId::Table { .. })) {
+        if matches!(parsed, Some(SchemaNodeId::Table { .. })) {
             let pending = PendingAction::ViewSchema {
                 item_id: item_id.to_string(),
             };
@@ -49,17 +71,15 @@ impl Sidebar {
                 self.ensure_table_details(item_id, pending, cx),
                 TableDetailsStatus::NotFound
             ) {
-                return;
+                return false;
             }
         }
 
-        // Data Types folder: fetch types if needed.
-        if expanded
-            && let Some(SchemaNodeId::TypesFolder {
-                profile_id,
-                database,
-                schema,
-            }) = &parsed
+        if let Some(SchemaNodeId::TypesFolder {
+            profile_id,
+            database,
+            schema,
+        }) = &parsed
         {
             let needs_fetch =
                 self.app_state
@@ -72,18 +92,16 @@ impl Sidebar {
                 };
                 if !self.spawn_fetch_schema_types(*profile_id, database, Some(schema), pending, cx)
                 {
-                    return;
+                    return false;
                 }
             }
         }
 
-        // Schema-level Indexes folder: fetch if needed.
-        if expanded
-            && let Some(SchemaNodeId::SchemaIndexesFolder {
-                profile_id,
-                database,
-                schema,
-            }) = &parsed
+        if let Some(SchemaNodeId::SchemaIndexesFolder {
+            profile_id,
+            database,
+            schema,
+        }) = &parsed
         {
             let needs_fetch =
                 self.app_state
@@ -101,18 +119,16 @@ impl Sidebar {
                     pending,
                     cx,
                 ) {
-                    return;
+                    return false;
                 }
             }
         }
 
-        // Schema-level Foreign Keys folder: fetch if needed.
-        if expanded
-            && let Some(SchemaNodeId::SchemaForeignKeysFolder {
-                profile_id,
-                database,
-                schema,
-            }) = &parsed
+        if let Some(SchemaNodeId::SchemaForeignKeysFolder {
+            profile_id,
+            database,
+            schema,
+        }) = &parsed
         {
             let needs_fetch = self.app_state.read(cx).needs_schema_foreign_keys(
                 *profile_id,
@@ -131,27 +147,16 @@ impl Sidebar {
                     pending,
                     cx,
                 ) {
-                    return;
+                    return false;
                 }
             }
         }
 
-        // When expanding a database, trigger schema fetch via handle_database_click
-        // which properly dispatches based on the driver's schema_loading_strategy
-        if expanded && matches!(parsed, Some(SchemaNodeId::Database { .. })) {
+        if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
 
-        // Sync folder collapsed state with AppState
-        if let Some(SchemaNodeId::ConnectionFolder { node_id }) = &parsed {
-            self.app_state.update(cx, |state, _cx| {
-                state.set_folder_collapsed(*node_id, !expanded);
-            });
-        }
-
-        self.expansion_overrides
-            .insert(item_id.to_string(), expanded);
-        self.rebuild_tree_with_overrides(cx);
+        true
     }
 
     pub(super) fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
@@ -161,6 +166,7 @@ impl Sidebar {
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
 
+        self.syncing_expansion = true;
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
             if let Some(idx) = selected_index {
@@ -168,6 +174,7 @@ impl Sidebar {
                 state.set_selected_index(Some(new_idx), cx);
             }
         });
+        self.syncing_expansion = false;
         cx.notify();
     }
 
@@ -175,8 +182,6 @@ impl Sidebar {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
-        // Clean up stale expansion overrides for schema-specific items
-        // These should reset when switching databases/connections
         self.cleanup_stale_overrides(cx);
 
         let items = self.build_tree_items_with_overrides(cx);
@@ -188,6 +193,7 @@ impl Sidebar {
             self.context_menu = None;
         }
 
+        self.syncing_expansion = true;
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
 
@@ -196,6 +202,7 @@ impl Sidebar {
                 state.set_selected_index(Some(new_idx), cx);
             }
         });
+        self.syncing_expansion = false;
         cx.notify();
     }
 
@@ -203,23 +210,29 @@ impl Sidebar {
         let state = self.app_state.read(cx);
 
         self.expansion_overrides
-            .retain(|item_id, _expanded| match parse_node_id(item_id) {
-                Some(SchemaNodeId::TypesFolder {
-                    profile_id,
-                    database,
-                    schema,
-                }) => !state.needs_schema_types(profile_id, &database, Some(&schema)),
-                Some(SchemaNodeId::SchemaIndexesFolder {
-                    profile_id,
-                    database,
-                    schema,
-                }) => !state.needs_schema_indexes(profile_id, &database, Some(&schema)),
-                Some(SchemaNodeId::SchemaForeignKeysFolder {
-                    profile_id,
-                    database,
-                    schema,
-                }) => !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema)),
-                _ => true,
+            .retain(|item_id, _expanded| {
+                if self.loading_items.contains(item_id) {
+                    return true;
+                }
+
+                match parse_node_id(item_id) {
+                    Some(SchemaNodeId::TypesFolder {
+                        profile_id,
+                        database,
+                        schema,
+                    }) => !state.needs_schema_types(profile_id, &database, Some(&schema)),
+                    Some(SchemaNodeId::SchemaIndexesFolder {
+                        profile_id,
+                        database,
+                        schema,
+                    }) => !state.needs_schema_indexes(profile_id, &database, Some(&schema)),
+                    Some(SchemaNodeId::SchemaForeignKeysFolder {
+                        profile_id,
+                        database,
+                        schema,
+                    }) => !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema)),
+                    _ => true,
+                }
             });
     }
 }

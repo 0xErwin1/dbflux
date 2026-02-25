@@ -265,6 +265,10 @@ impl Sidebar {
                         sidebar.loading_items.remove(&item_id);
                         sidebar.pending_actions.remove(&item_id);
                         sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.pending_toast = Some(PendingToast {
+                            message: format!("Failed to load data types: {}", e),
+                            is_error: true,
+                        });
                         sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
@@ -336,6 +340,10 @@ impl Sidebar {
                         sidebar.loading_items.remove(&item_id);
                         sidebar.pending_actions.remove(&item_id);
                         sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.pending_toast = Some(PendingToast {
+                            message: format!("Failed to load indexes: {}", e),
+                            is_error: true,
+                        });
                         sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
@@ -407,6 +415,10 @@ impl Sidebar {
                         sidebar.loading_items.remove(&item_id);
                         sidebar.pending_actions.remove(&item_id);
                         sidebar.expansion_overrides.remove(&item_id);
+                        sidebar.pending_toast = Some(PendingToast {
+                            message: format!("Failed to load foreign keys: {}", e),
+                            is_error: true,
+                        });
                         sidebar.rebuild_tree_with_overrides(cx);
                     });
                 }
