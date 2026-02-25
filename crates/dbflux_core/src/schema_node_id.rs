@@ -155,6 +155,10 @@ pub enum SchemaNodeId {
     },
 
     // Collection detail variants
+    DatabaseIndexesFolder {
+        profile_id: Uuid,
+        database: String,
+    },
     CollectionIndexesFolder {
         profile_id: Uuid,
         database: String,
@@ -226,6 +230,7 @@ pub enum SchemaNodeKind {
     Constraint,
     SchemaIndex,
     SchemaForeignKey,
+    DatabaseIndexesFolder,
     CollectionIndexesFolder,
     CollectionIndex,
     EnumValue,
@@ -268,6 +273,7 @@ impl SchemaNodeId {
             Self::Constraint { .. } => SchemaNodeKind::Constraint,
             Self::SchemaIndex { .. } => SchemaNodeKind::SchemaIndex,
             Self::SchemaForeignKey { .. } => SchemaNodeKind::SchemaForeignKey,
+            Self::DatabaseIndexesFolder { .. } => SchemaNodeKind::DatabaseIndexesFolder,
             Self::CollectionIndexesFolder { .. } => SchemaNodeKind::CollectionIndexesFolder,
             Self::CollectionIndex { .. } => SchemaNodeKind::CollectionIndex,
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
@@ -310,6 +316,7 @@ impl SchemaNodeId {
             | Self::Constraint { profile_id, .. }
             | Self::SchemaIndex { profile_id, .. }
             | Self::SchemaForeignKey { profile_id, .. }
+            | Self::DatabaseIndexesFolder { profile_id, .. }
             | Self::CollectionIndexesFolder { profile_id, .. }
             | Self::CollectionIndex { profile_id, .. }
             | Self::EnumValue { profile_id, .. }
@@ -349,6 +356,7 @@ const P_FK: &str = "FK";
 const P_CONSTRAINT: &str = "CS";
 const P_SCHEMA_INDEX: &str = "SX";
 const P_SCHEMA_FK: &str = "SK";
+const P_DB_IDX_FOLDER: &str = "DIF";
 const P_COLL_IDX_FOLDER: &str = "CIF";
 const P_COLL_INDEX: &str = "CI";
 const P_ENUM_VALUE: &str = "EV";
@@ -569,6 +577,12 @@ impl fmt::Display for SchemaNodeId {
                 name,
             } => {
                 write!(f, "{}|{}|{}|{}", P_SCHEMA_FK, profile_id, schema, name)
+            }
+            Self::DatabaseIndexesFolder {
+                profile_id,
+                database,
+            } => {
+                write!(f, "{}|{}|{}", P_DB_IDX_FOLDER, profile_id, database)
             }
             Self::CollectionIndexesFolder {
                 profile_id,
@@ -973,6 +987,16 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_DB_IDX_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::DatabaseIndexesFolder {
+                    profile_id,
+                    database,
+                })
+            }
+
             P_COLL_IDX_FOLDER => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
@@ -1260,6 +1284,10 @@ mod tests {
             profile_id: uuid,
             schema: "public".into(),
             name: "fk_orders_user".into(),
+        });
+        roundtrip(SchemaNodeId::DatabaseIndexesFolder {
+            profile_id: uuid,
+            database: "mydb".into(),
         });
         roundtrip(SchemaNodeId::CollectionIndexesFolder {
             profile_id: uuid,

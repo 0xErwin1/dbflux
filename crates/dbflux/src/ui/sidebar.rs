@@ -18,12 +18,13 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{
-    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CollectionRef,
-    ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
-    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, QueryLanguage, ReindexRequest, SchemaCacheKey,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind,
-    SchemaSnapshot, TableInfo, TableRef, TaskKind, TypeDefinition, ViewInfo,
+    AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
+    CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,
+    CreateIndexRequest, CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, IndexData, IndexDirection,
+    QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
+    TaskKind, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;

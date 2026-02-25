@@ -4,20 +4,21 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexInfo,
-    POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
+    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
     RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1082,7 +1083,7 @@ impl Connection for PostgresConnection {
             name: table.to_string(),
             schema: Some(schema_name.to_string()),
             columns: Some(columns),
-            indexes: Some(indexes),
+            indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
         })

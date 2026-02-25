@@ -366,11 +366,19 @@ impl Sidebar {
                 .values()
                 .find(|t| t.name == table_name)
                 .and_then(|t| t.indexes.as_ref())
-                .and_then(|indexes| {
-                    indexes
+                .and_then(|index_data| match index_data {
+                    dbflux_core::IndexData::Relational(indexes) => indexes
                         .iter()
                         .find(|idx| idx.name == index_name)
-                        .map(|idx| (table_name.clone(), idx.columns.clone(), idx.is_unique))
+                        .map(|idx| (table_name.clone(), idx.columns.clone(), idx.is_unique)),
+                    dbflux_core::IndexData::Document(indexes) => indexes
+                        .iter()
+                        .find(|idx| idx.name == index_name)
+                        .map(|idx| {
+                            let columns: Vec<String> =
+                                idx.keys.iter().map(|(f, _)| f.clone()).collect();
+                            (table_name.clone(), columns, idx.is_unique)
+                        }),
                 })
         };
 

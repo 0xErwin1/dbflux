@@ -580,8 +580,8 @@ pub struct TableInfo {
     /// Column metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
     pub columns: Option<Vec<ColumnInfo>>,
 
-    /// Index metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
-    pub indexes: Option<Vec<IndexInfo>>,
+    /// Index metadata. `None` = not yet loaded (lazy), `Some(data)` = loaded.
+    pub indexes: Option<IndexData>,
 
     /// Foreign key metadata. `None` = not yet loaded (lazy), `Some(vec)` = loaded.
     #[serde(default)]
@@ -616,7 +616,16 @@ pub struct ColumnInfo {
     pub default_value: Option<String>,
 }
 
-/// Index metadata.
+/// Relational tables store [`IndexInfo`], document collections store
+/// [`CollectionIndexInfo`] with direction, sparse, and TTL metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum IndexData {
+    Relational(Vec<IndexInfo>),
+    Document(Vec<CollectionIndexInfo>),
+}
+
+/// Index metadata (relational databases).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexInfo {
     pub name: String,
