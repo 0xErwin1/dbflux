@@ -42,7 +42,13 @@ impl Sidebar {
         self.app_state.update(cx, |state, cx| {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 conn.database_schemas.remove(&db_name);
-                conn.database_connections.remove(&db_name);
+
+                if let Some(db_conn) = conn.database_connections.remove(&db_name) {
+                    std::thread::spawn(move || {
+                        let _ = db_conn.connection.cancel_active();
+                        drop(db_conn);
+                    });
+                }
 
                 if conn.active_database.as_deref() == Some(db_name.as_str()) {
                     conn.active_database = None;

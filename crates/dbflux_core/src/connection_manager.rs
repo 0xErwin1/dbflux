@@ -407,15 +407,14 @@ impl ConnectionManager {
     }
 
     pub fn disconnect(&mut self, profile_id: Uuid) {
-        if let Some(mut connected) = self.connections.remove(&profile_id)
-            && let Some(conn) = Arc::get_mut(&mut connected.connection)
-            && let Err(e) = conn.close()
-        {
-            log::warn!(
-                "Failed to close connection for {}: {:?}",
-                connected.profile.name,
-                e
-            );
+        if let Some(connected) = self.connections.remove(&profile_id) {
+            std::thread::spawn(move || {
+                let _ = connected.connection.cancel_active();
+                for db_conn in connected.database_connections.values() {
+                    let _ = db_conn.connection.cancel_active();
+                }
+                drop(connected);
+            });
         }
 
         if self.active_connection_id == Some(profile_id) {
@@ -908,7 +907,7 @@ impl ConnectionManager {
             profile_id,
             database: database.to_string(),
             schema: schema.map(String::from),
-            connection: connected.connection.clone(),
+            connection: connected.connection_for_database(database),
         })
     }
 
@@ -932,7 +931,7 @@ impl ConnectionManager {
             profile_id,
             database: database.to_string(),
             schema: schema.map(String::from),
-            connection: connected.connection.clone(),
+            connection: connected.connection_for_database(database),
         })
     }
 
@@ -956,7 +955,7 @@ impl ConnectionManager {
             profile_id,
             database: database.to_string(),
             schema: schema.map(String::from),
-            connection: connected.connection.clone(),
+            connection: connected.connection_for_database(database),
         })
     }
 

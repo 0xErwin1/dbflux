@@ -390,6 +390,7 @@ pub struct Sidebar {
     loading_items: HashSet<String>,
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
+    syncing_expansion: bool,
     _subscriptions: Vec<Subscription>,
     editing_id: Option<Uuid>,
     editing_is_folder: bool,
@@ -471,6 +472,35 @@ impl Sidebar {
             },
         );
 
+        let tree_expansion_subscription =
+            cx.observe(&tree_state, |this: &mut Self, tree_state, cx| {
+                if this.syncing_expansion {
+                    return;
+                }
+                this.syncing_expansion = true;
+
+                let entry = tree_state.read(cx).selected_entry().cloned();
+
+                if let Some(entry) = entry
+                    && entry.is_folder()
+                {
+                    let item_id = entry.item().id.to_string();
+                    let tree_expanded = entry.is_expanded();
+                    let known = this.expansion_overrides.get(&item_id).copied();
+
+                    if known != Some(tree_expanded) {
+                        this.expansion_overrides
+                            .insert(item_id.clone(), tree_expanded);
+
+                        if tree_expanded && !this.trigger_expansion_fetch(&item_id, cx) {
+                            this.expansion_overrides.remove(&item_id);
+                        }
+                    }
+                }
+
+                this.syncing_expansion = false;
+            });
+
         Self {
             app_state,
             tree_state,
@@ -486,10 +516,12 @@ impl Sidebar {
             pending_actions: HashMap::new(),
             loading_items: HashSet::new(),
             active_databases: HashMap::new(),
+            syncing_expansion: false,
             _subscriptions: vec![
                 app_state_subscription,
                 rename_subscription,
                 scripts_search_subscription,
+                tree_expansion_subscription,
             ],
             editing_id: None,
             editing_is_folder: false,
