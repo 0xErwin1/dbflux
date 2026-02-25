@@ -3,13 +3,13 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
@@ -781,7 +781,7 @@ impl SettingsWindow {
         current_field: SshFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
 
         let is_save_secret_focused = is_form_focused && current_field == SshFormField::SaveSecret;
@@ -896,14 +896,35 @@ impl SettingsWindow {
                             .flex()
                             .items_end()
                             .gap_3()
-                            .child(div().flex_1().child(self.render_form_field_with_focus(
-                                "Key Passphrase",
-                                &self.input_ssh_key_passphrase,
-                                is_passphrase_focused,
-                                primary,
-                                SshFormField::Passphrase,
-                                cx,
-                            )))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .items_end()
+                                    .gap_1()
+                                    .child(div().flex_1().child(self.render_form_field_with_focus(
+                                        "Key Passphrase",
+                                        &self.input_ssh_key_passphrase,
+                                        is_passphrase_focused,
+                                        primary,
+                                        SshFormField::Passphrase,
+                                        cx,
+                                    )))
+                                    .child(
+                                        Self::render_password_toggle(
+                                            self.show_ssh_passphrase,
+                                            "toggle-ssh-passphrase",
+                                            &theme,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.show_ssh_passphrase =
+                                                    !this.show_ssh_passphrase;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ),
+                            )
                             .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
                     )
                     .into_any_element()
@@ -922,19 +943,66 @@ impl SettingsWindow {
                             .flex()
                             .items_end()
                             .gap_3()
-                            .child(div().flex_1().child(self.render_form_field_with_focus(
-                                "Password",
-                                &self.input_ssh_password,
-                                is_password_focused,
-                                primary,
-                                SshFormField::Password,
-                                cx,
-                            )))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .items_end()
+                                    .gap_1()
+                                    .child(div().flex_1().child(self.render_form_field_with_focus(
+                                        "Password",
+                                        &self.input_ssh_password,
+                                        is_password_focused,
+                                        primary,
+                                        SshFormField::Password,
+                                        cx,
+                                    )))
+                                    .child(
+                                        Self::render_password_toggle(
+                                            self.show_ssh_password,
+                                            "toggle-ssh-password",
+                                            &theme,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.show_ssh_password = !this.show_ssh_password;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ),
+                            )
                             .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
                     )
                     .into_any_element()
             }
         }
+    }
+
+    fn render_password_toggle(
+        show: bool,
+        toggle_id: &'static str,
+        theme: &gpui_component::theme::Theme,
+    ) -> Stateful<Div> {
+        let secondary = theme.secondary;
+        let muted_foreground = theme.muted_foreground;
+
+        let icon_path = if show {
+            AppIcon::EyeOff.path()
+        } else {
+            AppIcon::Eye.path()
+        };
+
+        div()
+            .id(toggle_id)
+            .w(px(32.0))
+            .h(px(32.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .hover(move |d| d.bg(secondary))
+            .child(svg().path(icon_path).size_4().text_color(muted_foreground))
     }
 }
 
@@ -945,6 +1013,15 @@ impl Render for SettingsWindow {
                 state.set_value(path, window, cx);
             });
         }
+
+        let show_ssh_passphrase = self.show_ssh_passphrase;
+        let show_ssh_password = self.show_ssh_password;
+        self.input_ssh_key_passphrase.update(cx, |state, cx| {
+            state.set_masked(!show_ssh_passphrase, window, cx);
+        });
+        self.input_ssh_password.update(cx, |state, cx| {
+            state.set_masked(!show_ssh_password, window, cx);
+        });
 
         let theme = cx.theme();
         let show_delete_confirm = self.pending_delete_tunnel_id.is_some();
