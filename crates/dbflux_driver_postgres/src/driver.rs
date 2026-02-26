@@ -1959,7 +1959,7 @@ struct PgText(String);
 
 fn is_textual_pg_type(ty: &Type) -> bool {
     match ty.name() {
-        "text" | "varchar" | "bpchar" | "name" | "citext" => true,
+        "text" | "varchar" | "bpchar" | "name" | "citext" | "tsvector" | "tsquery" => true,
         _ => match ty.kind() {
             Kind::Enum(_) => true,
             Kind::Domain(inner) => is_textual_pg_type(inner),
@@ -2141,6 +2141,15 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
         "text" | "varchar" | "bpchar" | "name" | "citext" => row
             .try_get::<_, Option<String>>(idx)
             .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
+
+        "tsvector" | "tsquery" => row
+            .try_get::<_, Option<PgText>>(idx)
+            .map(|value| {
+                value
+                    .map(|PgText(text)| Value::Text(text))
+                    .unwrap_or(Value::Null)
+            })
             .unwrap_or(Value::Null),
 
         "uuid" => row

@@ -361,8 +361,14 @@ impl DataGridPanel {
             || type_name.contains("clob")
             || type_name.contains("uuid")
             || type_name.contains("citext")
+            || type_name.contains("tsvector")
+            || type_name.contains("tsquery")
             || type_name.contains("enum")
             || type_name.contains("set")
+    }
+
+    fn should_cast_postgres_text_type(type_name: &str) -> bool {
+        type_name == "uuid" || type_name == "tsvector" || type_name == "tsquery"
     }
 
     fn sql_operator_symbol(operator: FilterOperator) -> &'static str {
@@ -2905,6 +2911,13 @@ impl DataGridPanel {
 
         let op_str = Self::sql_operator_symbol(operator);
 
+        let needs_text_cast = is_postgres && Self::should_cast_postgres_text_type(&col_type_name);
+        let comparable_column = if needs_text_cast {
+            format!("({})::text", col_name)
+        } else {
+            col_name.clone()
+        };
+
         let expr = if operator == FilterOperator::Like {
             let raw = match &cell_value {
                 Value::Text(text) => text.clone(),
@@ -2926,16 +2939,10 @@ impl DataGridPanel {
 
             let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
 
-            let like_column = if is_postgres && col_type_name == "uuid" {
-                format!("({})::text", col_name)
-            } else {
-                col_name.clone()
-            };
-
             if needs_escape {
-                format!("{} LIKE {} ESCAPE '\\'", like_column, pattern_literal)
+                format!("{} LIKE {} ESCAPE '\\'", comparable_column, pattern_literal)
             } else {
-                format!("{} LIKE {}", like_column, pattern_literal)
+                format!("{} LIKE {}", comparable_column, pattern_literal)
             }
         } else if is_postgres
             && matches!(cell_value, Value::Json(_))
@@ -2943,7 +2950,7 @@ impl DataGridPanel {
         {
             format!("({})::jsonb {} ({})", col_name, op_str, literal)
         } else {
-            format!("{} {} {}", col_name, op_str, literal)
+            format!("{} {} {}", comparable_column, op_str, literal)
         };
 
         self.apply_filter_expression(&expr, window, cx);
