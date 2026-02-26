@@ -2,6 +2,20 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.0] – 2026-02-26
+
+### Added
+
+* First development pre-release line for v0.4 on the `dev` branch
+* IPC workspace crates integrated for local v0.4 testing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`)
+
+### Changed
+
+* Project version bumped from `0.3.4` to `0.4.0-dev.0`
+* Nix default package version bumped to `0.4.0-dev.0`
+
+---
+
 ## [0.3.4] – 2026-02-26
 
 ### Added
