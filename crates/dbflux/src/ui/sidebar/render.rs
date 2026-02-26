@@ -1,4 +1,4 @@
-use super::render_tree::{TreeRenderParams, render_tree_item};
+use super::render_tree::{render_tree_item, TreeRenderParams};
 use super::*;
 
 impl Sidebar {
@@ -344,7 +344,7 @@ impl Render for Sidebar {
             .filter_map(|p| {
                 state
                     .drivers()
-                    .get(&p.kind())
+                    .get(&p.driver_id())
                     .map(|driver| (p.id, driver.metadata().icon))
             })
             .collect();

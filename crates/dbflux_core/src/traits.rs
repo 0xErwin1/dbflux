@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
@@ -34,13 +35,32 @@ bitflags! {
     }
 }
 
+impl Serialize for SchemaFeatures {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.bits().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaFeatures {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bits = u32::deserialize(deserializer)?;
+        Ok(Self::from_bits(bits).unwrap_or_else(Self::empty))
+    }
+}
+
 /// Describes how a database driver handles schema loading for multiple databases.
 ///
 /// Different database systems have fundamentally different approaches:
 /// - MySQL/MariaDB: Single connection can switch between databases with `USE`
 /// - PostgreSQL: Each database requires a separate connection
 /// - SQLite: Single database per file, no database switching
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchemaLoadingStrategy {
     /// Schema is loaded lazily per database on the same connection.
     /// Clicking a database loads its schema without reconnecting.
@@ -60,7 +80,7 @@ pub enum SchemaLoadingStrategy {
 }
 
 /// Scope where a code generator can be applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodeGenScope {
     Table,
     View,

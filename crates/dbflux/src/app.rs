@@ -1,9 +1,10 @@
 use dbflux_core::{
-    CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo, HistoryEntry,
-    RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
-    TaskId, TaskKind, TaskSnapshot,
+    AppConfigStore, CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo,
+    HistoryEntry, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase,
+    SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -35,6 +36,10 @@ pub use dbflux_core::{
     FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
+fn rpc_registry_id(socket_id: &str) -> String {
+    format!("rpc:{}", socket_id)
+}
+
 pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
@@ -45,32 +50,88 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let mut drivers: HashMap<DbKind, Arc<dyn DbDriver>> = HashMap::new();
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
 
         #[cfg(feature = "sqlite")]
         {
-            drivers.insert(DbKind::SQLite, Arc::new(SqliteDriver::new()));
+            drivers.insert("sqlite".to_string(), Arc::new(SqliteDriver::new()));
         }
 
         #[cfg(feature = "postgres")]
         {
-            drivers.insert(DbKind::Postgres, Arc::new(PostgresDriver::new()));
+            drivers.insert("postgres".to_string(), Arc::new(PostgresDriver::new()));
         }
 
         #[cfg(feature = "mysql")]
         {
-            drivers.insert(DbKind::MySQL, Arc::new(MysqlDriver::new(DbKind::MySQL)));
-            drivers.insert(DbKind::MariaDB, Arc::new(MysqlDriver::new(DbKind::MariaDB)));
+            drivers.insert(
+                "mysql".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MySQL)),
+            );
+            drivers.insert(
+                "mariadb".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MariaDB)),
+            );
         }
 
         #[cfg(feature = "mongodb")]
         {
-            drivers.insert(DbKind::MongoDB, Arc::new(MongoDriver::new()));
+            drivers.insert("mongodb".to_string(), Arc::new(MongoDriver::new()));
         }
 
         #[cfg(feature = "redis")]
         {
-            drivers.insert(DbKind::Redis, Arc::new(RedisDriver::new()));
+            drivers.insert("redis".to_string(), Arc::new(RedisDriver::new()));
+        }
+
+        let app_config = AppConfigStore::new()
+            .and_then(|store| store.load())
+            .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
+            .ok();
+
+        if let Some(config) = app_config {
+            for service in config.rpc_services {
+                let driver_id = rpc_registry_id(&service.socket_id);
+
+                if drivers.contains_key(&driver_id) {
+                    log::warn!(
+                        "Skipping external RPC service '{}': driver id already exists",
+                        service.socket_id
+                    );
+                    continue;
+                }
+
+                let launch = IpcDriverLaunchConfig {
+                    program: service
+                        .command
+                        .clone()
+                        .unwrap_or_else(|| "dbflux-driver-host".to_string()),
+                    args: service.args.clone(),
+                    env: service.env.into_iter().collect(),
+                    startup_timeout: std::time::Duration::from_millis(
+                        service.startup_timeout_ms.unwrap_or(5_000),
+                    ),
+                };
+
+                let (kind, metadata, form_definition) =
+                    match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
+                        Ok(info) => info,
+                        Err(error) => {
+                            log::warn!(
+                                "Skipping RPC service '{}': failed to probe driver metadata: {}",
+                                service.socket_id,
+                                error
+                            );
+                            continue;
+                        }
+                    };
+
+                let ipc_driver =
+                    IpcDriver::new(service.socket_id.clone(), kind, metadata, form_definition)
+                        .with_launch_config(launch);
+
+                drivers.insert(driver_id, Arc::new(ipc_driver));
+            }
         }
 
         let recent_files = RecentFilesStore::new()
@@ -777,8 +838,16 @@ impl AppState {
 // --- Field accessors ---
 
 impl AppState {
-    pub fn drivers(&self) -> &HashMap<DbKind, Arc<dyn DbDriver>> {
+    pub fn drivers(&self) -> &HashMap<String, Arc<dyn DbDriver>> {
         &self.facade.connections.drivers
+    }
+
+    pub fn driver_for_profile(&self, profile: &ConnectionProfile) -> Option<Arc<dyn DbDriver>> {
+        self.facade
+            .connections
+            .drivers
+            .get(&profile.driver_id())
+            .cloned()
     }
 
     pub fn profiles(&self) -> &[ConnectionProfile] {

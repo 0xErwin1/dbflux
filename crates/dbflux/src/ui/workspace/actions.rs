@@ -541,11 +541,7 @@ impl Workspace {
     }
 
     /// Opens a script file from a known path (e.g., from sidebar recent files).
-    pub(super) fn open_script_from_path(
-        &mut self,
-        path: std::path::PathBuf,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open_script_from_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         let tab_manager = self.tab_manager.clone();
 
         // Check if already open

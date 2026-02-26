@@ -706,9 +706,8 @@ impl DataGridPanel {
             Command::MenuSelect => {
                 if let Some(ref mut menu) = self.context_menu {
                     if menu.filter_submenu_open {
-                        if let Some(action) = filter_submenu_actions
-                            .get(menu.submenu_selected_index)
-                            .copied()
+                        if let Some(action) =
+                            filter_submenu_actions.get(menu.submenu_selected_index).copied()
                         {
                             self.handle_context_menu_action(action, window, cx);
                         }

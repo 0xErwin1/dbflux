@@ -280,6 +280,25 @@ bitflags! {
     }
 }
 
+impl Serialize for DriverCapabilities {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.bits().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DriverCapabilities {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bits = u64::deserialize(deserializer)?;
+        Ok(Self::from_bits(bits).unwrap_or_else(Self::empty))
+    }
+}
+
 impl DriverCapabilities {
     /// Common capabilities for relational databases.
     pub const RELATIONAL_BASE: Self = Self::from_bits_truncate(
