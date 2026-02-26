@@ -9,7 +9,8 @@ use dbflux_core::{
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
     CollectionIndexInfo, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
-    FormValues, FormattedError, Icon, IndexData, IndexDirection, LanguageService, MONGODB_FORM,
+    FieldInfo, FormValues, FormattedError, Icon, IndexData, IndexDirection, LanguageService,
+    MONGODB_FORM,
     PlaceholderStyle,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
@@ -754,6 +755,7 @@ impl Connection for MongoConnection {
                     indexes,
                     foreign_keys: None,
                     constraints: None,
+                    sample_fields: None,
                 }
             })
             .collect();
@@ -786,6 +788,8 @@ impl Connection for MongoConnection {
         let db = client.database(database);
         let indexes = fetch_collection_indexes(&db, collection).map(IndexData::Document);
 
+        let sample_fields = sample_collection_fields(&db, collection);
+
         Ok(TableInfo {
             name: collection.to_string(),
             schema: Some(database.to_string()),
@@ -793,6 +797,7 @@ impl Connection for MongoConnection {
             indexes,
             foreign_keys: None,
             constraints: None,
+            sample_fields: Some(sample_fields),
         })
     }
 
@@ -2017,6 +2022,147 @@ fn bson_to_index_direction(value: &Bson) -> IndexDirection {
             _ => IndexDirection::Ascending,
         },
         _ => IndexDirection::Ascending,
+    }
+}
+
+const SAMPLE_SIZE: i32 = 100;
+
+fn sample_collection_fields(db: &Database, collection_name: &str) -> Vec<FieldInfo> {
+    let collection = db.collection::<Document>(collection_name);
+
+    let pipeline = vec![doc! { "$sample": { "size": SAMPLE_SIZE } }];
+    let cursor = match collection.aggregate(pipeline).run() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "[SCHEMA] Failed to sample documents with $sample for {}: {}",
+                collection_name,
+                e
+            );
+
+            match collection.find(doc! {}).limit(SAMPLE_SIZE as i64).run() {
+                Ok(c) => c,
+                Err(find_error) => {
+                    log::warn!(
+                        "[SCHEMA] Fallback sampling (find+limit) failed for {}: {}",
+                        collection_name,
+                        find_error
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+    };
+
+    let documents: Vec<Document> = cursor
+        .filter_map(|r| match r {
+            Ok(doc) => Some(doc),
+            Err(e) => {
+                log::warn!("[SCHEMA] Error reading sample document: {}", e);
+                None
+            }
+        })
+        .collect();
+
+    if documents.is_empty() {
+        return Vec::new();
+    }
+
+    let total = documents.len() as f32;
+    let mut field_stats: BTreeMap<String, FieldStats> = BTreeMap::new();
+
+    for doc in &documents {
+        collect_field_stats(doc, &mut field_stats);
+    }
+
+    let mut fields: Vec<FieldInfo> = field_stats
+        .into_iter()
+        .map(|(name, stats)| build_field_info(&name, &stats, total))
+        .collect();
+
+    // _id always first, then alphabetical (BTreeMap already sorts the rest)
+    fields.sort_by(|a, b| {
+        let a_is_id = a.name == "_id";
+        let b_is_id = b.name == "_id";
+        match (a_is_id, b_is_id) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        }
+    });
+
+    fields
+}
+
+struct FieldStats {
+    occurrence_count: u32,
+    type_counts: HashMap<String, u32>,
+    nested_stats: Option<BTreeMap<String, FieldStats>>,
+}
+
+fn collect_field_stats(doc: &Document, stats: &mut BTreeMap<String, FieldStats>) {
+    for (key, value) in doc {
+        let type_name = bson_type_name(value);
+        let entry = stats.entry(key.clone()).or_insert_with(|| FieldStats {
+            occurrence_count: 0,
+            type_counts: HashMap::new(),
+            nested_stats: None,
+        });
+
+        entry.occurrence_count += 1;
+        *entry.type_counts.entry(type_name).or_insert(0) += 1;
+
+        if let Bson::Document(nested_doc) = value {
+            let nested = entry
+                .nested_stats
+                .get_or_insert_with(BTreeMap::new);
+            collect_field_stats(nested_doc, nested);
+        }
+    }
+}
+
+fn build_field_info(name: &str, stats: &FieldStats, total: f32) -> FieldInfo {
+    let common_type = stats
+        .type_counts
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(t, _)| t.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let occurrence_rate = stats.occurrence_count as f32 / total;
+
+    let nested_fields = stats.nested_stats.as_ref().map(|nested| {
+        nested
+            .iter()
+            .map(|(n, s)| build_field_info(n, s, stats.occurrence_count as f32))
+            .collect()
+    });
+
+    FieldInfo {
+        name: name.to_string(),
+        common_type,
+        occurrence_rate: Some(occurrence_rate),
+        nested_fields,
+    }
+}
+
+fn bson_type_name(value: &Bson) -> String {
+    match value {
+        Bson::Double(_) => "Double".to_string(),
+        Bson::String(_) => "String".to_string(),
+        Bson::Document(_) => "Document".to_string(),
+        Bson::Array(_) => "Array".to_string(),
+        Bson::Binary(_) => "Binary".to_string(),
+        Bson::ObjectId(_) => "ObjectId".to_string(),
+        Bson::Boolean(_) => "Boolean".to_string(),
+        Bson::DateTime(_) => "DateTime".to_string(),
+        Bson::Null => "Null".to_string(),
+        Bson::RegularExpression(_) => "Regex".to_string(),
+        Bson::Int32(_) => "Int32".to_string(),
+        Bson::Int64(_) => "Int64".to_string(),
+        Bson::Timestamp(_) => "Timestamp".to_string(),
+        Bson::Decimal128(_) => "Decimal128".to_string(),
+        _ => "Unknown".to_string(),
     }
 }
 

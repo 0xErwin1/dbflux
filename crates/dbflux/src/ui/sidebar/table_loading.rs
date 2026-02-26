@@ -63,7 +63,9 @@ impl Sidebar {
         let cache_db = parts.cache_database();
         let cache_key = (cache_db.to_string(), parts.object_name.clone());
 
-        if conn.table_details.contains_key(&cache_key) {
+        if let Some(details) = conn.table_details.get(&cache_key)
+            && (details.columns.is_some() || details.sample_fields.is_some())
+        {
             return TableDetailsStatus::Ready;
         }
 
@@ -72,7 +74,7 @@ impl Sidebar {
                 .tables
                 .iter()
                 .find(|t| t.name == parts.object_name)
-            && table.columns.is_some()
+            && (table.columns.is_some() || table.sample_fields.is_some())
         {
             return TableDetailsStatus::Ready;
         }
@@ -91,7 +93,7 @@ impl Sidebar {
                         .tables
                         .iter()
                         .find(|t| t.name == parts.object_name)
-                    && table.columns.is_some()
+                    && (table.columns.is_some() || table.sample_fields.is_some())
                 {
                     return TableDetailsStatus::Ready;
                 }
@@ -448,7 +450,8 @@ impl Sidebar {
             }
             PendingAction::ExpandTypesFolder { item_id }
             | PendingAction::ExpandSchemaIndexesFolder { item_id }
-            | PendingAction::ExpandSchemaForeignKeysFolder { item_id } => {
+            | PendingAction::ExpandSchemaForeignKeysFolder { item_id }
+            | PendingAction::ExpandCollection { item_id } => {
                 self.expand_schema_folder(&item_id, cx);
             }
         }

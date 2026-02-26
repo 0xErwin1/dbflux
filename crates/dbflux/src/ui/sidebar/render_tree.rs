@@ -86,6 +86,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::Collection
                 | SchemaNodeKind::CollectionsFolder
                 | SchemaNodeKind::DatabaseIndexesFolder
+                | SchemaNodeKind::CollectionFieldsFolder
                 | SchemaNodeKind::CollectionIndexesFolder
         );
 
@@ -718,6 +719,11 @@ fn resolve_node_icon(
         SchemaNodeKind::DatabaseIndexesFolder | SchemaNodeKind::CollectionIndexesFolder => {
             (Some(AppIcon::Hash), "", params.color_purple)
         }
+        SchemaNodeKind::CollectionFieldsFolder => (Some(AppIcon::Columns), "", params.color_blue),
+        SchemaNodeKind::CollectionField => {
+            let icon = resolve_collection_field_type_icon(label);
+            (Some(icon), "", params.color_blue)
+        }
         SchemaNodeKind::CollectionIndex => (Some(AppIcon::Hash), "", params.color_purple),
         SchemaNodeKind::ScriptsFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
         SchemaNodeKind::ScriptFile => (Some(AppIcon::ScrollText), "", theme.muted_foreground),
@@ -750,6 +756,31 @@ fn resolve_column_type_icon(label: &str) -> AppIcon {
     }
 }
 
+/// Label format: `"field_name: BsonType (85%)"` — extracts the BSON type.
+fn resolve_collection_field_type_icon(label: &str) -> AppIcon {
+    let type_name = label
+        .split_once(": ")
+        .map(|(_, rest)| {
+            rest.split_once(' ')
+                .map(|(t, _)| t)
+                .unwrap_or(rest)
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+
+    match type_name.as_str() {
+        "string" => AppIcon::CaseSensitive,
+        "int32" | "int64" | "double" | "decimal128" => AppIcon::Hash,
+        "boolean" => AppIcon::Zap,
+        "datetime" | "timestamp" => AppIcon::Clock,
+        "objectid" => AppIcon::KeyRound,
+        "document" => AppIcon::Braces,
+        "array" => AppIcon::Rows3,
+        "binary" => AppIcon::HardDrive,
+        _ => AppIcon::Columns,
+    }
+}
+
 fn resolve_label_color(
     node_kind: SchemaNodeKind,
     theme: &gpui_component::Theme,
@@ -778,8 +809,10 @@ fn resolve_label_color(
         SchemaNodeKind::Constraint => params.color_yellow,
         SchemaNodeKind::CollectionsFolder
         | SchemaNodeKind::DatabaseIndexesFolder
+        | SchemaNodeKind::CollectionFieldsFolder
         | SchemaNodeKind::CollectionIndexesFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
+        SchemaNodeKind::CollectionField => params.color_blue,
         SchemaNodeKind::CollectionIndex => params.color_purple,
         SchemaNodeKind::ScriptsFolder => theme.foreground,
         SchemaNodeKind::ScriptFile => theme.foreground,

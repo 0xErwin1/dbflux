@@ -873,8 +873,10 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        let key = CacheKey::table_details(database, table);
-        if connected.cache_contains(&key) {
+        let cache_key = (database.to_string(), table.to_string());
+        if let Some(details) = connected.table_details.get(&cache_key)
+            && (details.columns.is_some() || details.sample_fields.is_some())
+        {
             return Err("Table details already cached".to_string());
         }
 

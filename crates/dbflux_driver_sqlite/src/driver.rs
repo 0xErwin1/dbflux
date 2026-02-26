@@ -488,6 +488,7 @@ impl Connection for SqliteConnection {
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
+            sample_fields: None,
         })
     }
 
@@ -761,6 +762,7 @@ impl SqliteConnection {
                 indexes: None,
                 foreign_keys: None,
                 constraints: None,
+                sample_fields: None,
             })
             .collect();
 

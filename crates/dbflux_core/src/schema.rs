@@ -590,6 +590,11 @@ pub struct TableInfo {
     /// Constraint metadata (CHECK, UNIQUE). `None` = not yet loaded (lazy).
     #[serde(default)]
     pub constraints: Option<Vec<ConstraintInfo>>,
+
+    /// Sampled document fields (document databases only).
+    /// `None` = not loaded, `Some(vec)` = loaded via document sampling.
+    #[serde(default)]
+    pub sample_fields: Option<Vec<FieldInfo>>,
 }
 
 /// View metadata.

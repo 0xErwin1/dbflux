@@ -159,6 +159,16 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         database: String,
     },
+    CollectionFieldsFolder {
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+    },
+    CollectionField {
+        profile_id: Uuid,
+        collection: String,
+        name: String,
+    },
     CollectionIndexesFolder {
         profile_id: Uuid,
         database: String,
@@ -231,6 +241,8 @@ pub enum SchemaNodeKind {
     SchemaIndex,
     SchemaForeignKey,
     DatabaseIndexesFolder,
+    CollectionFieldsFolder,
+    CollectionField,
     CollectionIndexesFolder,
     CollectionIndex,
     EnumValue,
@@ -274,6 +286,8 @@ impl SchemaNodeId {
             Self::SchemaIndex { .. } => SchemaNodeKind::SchemaIndex,
             Self::SchemaForeignKey { .. } => SchemaNodeKind::SchemaForeignKey,
             Self::DatabaseIndexesFolder { .. } => SchemaNodeKind::DatabaseIndexesFolder,
+            Self::CollectionFieldsFolder { .. } => SchemaNodeKind::CollectionFieldsFolder,
+            Self::CollectionField { .. } => SchemaNodeKind::CollectionField,
             Self::CollectionIndexesFolder { .. } => SchemaNodeKind::CollectionIndexesFolder,
             Self::CollectionIndex { .. } => SchemaNodeKind::CollectionIndex,
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
@@ -317,6 +331,8 @@ impl SchemaNodeId {
             | Self::SchemaIndex { profile_id, .. }
             | Self::SchemaForeignKey { profile_id, .. }
             | Self::DatabaseIndexesFolder { profile_id, .. }
+            | Self::CollectionFieldsFolder { profile_id, .. }
+            | Self::CollectionField { profile_id, .. }
             | Self::CollectionIndexesFolder { profile_id, .. }
             | Self::CollectionIndex { profile_id, .. }
             | Self::EnumValue { profile_id, .. }
@@ -357,6 +373,8 @@ const P_CONSTRAINT: &str = "CS";
 const P_SCHEMA_INDEX: &str = "SX";
 const P_SCHEMA_FK: &str = "SK";
 const P_DB_IDX_FOLDER: &str = "DIF";
+const P_COLL_FIELDS_FOLDER: &str = "CFF";
+const P_COLL_FIELD: &str = "CFD";
 const P_COLL_IDX_FOLDER: &str = "CIF";
 const P_COLL_INDEX: &str = "CI";
 const P_ENUM_VALUE: &str = "EV";
@@ -583,6 +601,24 @@ impl fmt::Display for SchemaNodeId {
                 database,
             } => {
                 write!(f, "{}|{}|{}", P_DB_IDX_FOLDER, profile_id, database)
+            }
+            Self::CollectionFieldsFolder {
+                profile_id,
+                database,
+                collection,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_COLL_FIELDS_FOLDER, profile_id, database, collection
+                )
+            }
+            Self::CollectionField {
+                profile_id,
+                collection,
+                name,
+            } => {
+                write!(f, "{}|{}|{}|{}", P_COLL_FIELD, profile_id, collection, name)
             }
             Self::CollectionIndexesFolder {
                 profile_id,
@@ -997,6 +1033,30 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_COLL_FIELDS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let collection = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::CollectionFieldsFolder {
+                    profile_id,
+                    database,
+                    collection,
+                })
+            }
+
+            P_COLL_FIELD => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let collection = parts.get(2).ok_or_else(err)?.to_string();
+                let name = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::CollectionField {
+                    profile_id,
+                    collection,
+                    name,
+                })
+            }
+
             P_COLL_IDX_FOLDER => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
@@ -1094,6 +1154,7 @@ impl SchemaNodeKind {
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
                 | Self::CollectionsFolder
+                | Self::CollectionFieldsFolder
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
@@ -1115,6 +1176,7 @@ impl SchemaNodeKind {
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
                 | Self::CollectionsFolder
+                | Self::CollectionFieldsFolder
                 | Self::Database
                 | Self::CustomType
                 | Self::ScriptsFolder
@@ -1288,6 +1350,16 @@ mod tests {
         roundtrip(SchemaNodeId::DatabaseIndexesFolder {
             profile_id: uuid,
             database: "mydb".into(),
+        });
+        roundtrip(SchemaNodeId::CollectionFieldsFolder {
+            profile_id: uuid,
+            database: "mydb".into(),
+            collection: "orders".into(),
+        });
+        roundtrip(SchemaNodeId::CollectionField {
+            profile_id: uuid,
+            collection: "orders".into(),
+            name: "email".into(),
         });
         roundtrip(SchemaNodeId::CollectionIndexesFolder {
             profile_id: uuid,

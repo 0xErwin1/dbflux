@@ -1261,6 +1261,7 @@ impl Connection for MysqlConnection {
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
+            sample_fields: None,
         })
     }
 
@@ -1892,6 +1893,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             indexes: None,
             foreign_keys: None,
             constraints: None,
+            sample_fields: None,
         })
         .collect())
 }
