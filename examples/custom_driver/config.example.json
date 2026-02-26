@@ -1,0 +1,13 @@
+{
+  "rpc_services": [
+    {
+      "socket_id": "my-test-driver.sock",
+      "command": "/ABSOLUTE/PATH/TO/examples/custom_driver/target/debug/custom-driver",
+      "args": ["--socket", "my-test-driver.sock"],
+      "env": {
+        "RUST_LOG": "info"
+      },
+      "startup_timeout_ms": 5000
+    }
+  ]
+}

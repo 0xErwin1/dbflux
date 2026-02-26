@@ -19,6 +19,7 @@ dbflux_core.workspace = true
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true
 dbflux_ipc.workspace = true
+dbflux_driver_ipc.workspace = true
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true

@@ -8,12 +8,12 @@ use std::sync::Arc;
 use dbflux_core::DbKind;
 use dbflux_core::{ConnectionProfile, DbDriver};
 use dbflux_ipc::driver_protocol::{
-    DriverHelloResponse, DriverMetadataDto, DriverRequestBody, DriverRequestEnvelope,
-    DriverResponseBody, DriverResponseEnvelope, DriverRpcErrorCode,
+    DriverFormDefDto, DriverHelloResponse, DriverMetadataDto, DriverRequestBody,
+    DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcErrorCode,
 };
-use dbflux_ipc::{DRIVER_RPC_VERSION, framing};
+use dbflux_ipc::{framing, DRIVER_RPC_VERSION};
 use interprocess::local_socket::{
-    GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
+    prelude::*, GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions,
 };
 use session::SessionManager;
 use uuid::Uuid;
@@ -113,6 +113,9 @@ fn handle_connection(mut stream: interprocess::local_socket::Stream, driver: &dy
                             server_version: env!("CARGO_PKG_VERSION").to_string(),
                             selected_version: DRIVER_RPC_VERSION,
                             capabilities: hello_req.requested_capabilities,
+                            driver_kind: driver.kind(),
+                            driver_metadata: DriverMetadataDto::from(driver.metadata()),
+                            form_definition: DriverFormDefDto::from(driver.form_definition()),
                         }),
                     )
                 }

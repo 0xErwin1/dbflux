@@ -8,6 +8,7 @@ mod ui;
 use app::AppState;
 use assets::Assets;
 use dbflux_core::ShutdownPhase;
+use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
@@ -200,6 +201,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
+            let stopped = shutdown_managed_hosts();
+            if stopped > 0 {
+                info!("Stopped {} managed RPC host process(es)", stopped);
+            }
             let _ = cx.update(|cx| cx.quit());
             return;
         }
@@ -236,6 +241,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
+            let stopped = shutdown_managed_hosts();
+            if stopped > 0 {
+                info!("Stopped {} managed RPC host process(es)", stopped);
+            }
             let _ = cx.update(|cx| cx.quit());
             return;
         }
@@ -279,6 +288,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
     });
 
     // Socket cleanup is automatic — interprocess reclaims the name on drop.
+
+    let stopped = shutdown_managed_hosts();
+    if stopped > 0 {
+        info!("Stopped {} managed RPC host process(es)", stopped);
+    }
 
     let _ = cx.update(|cx| {
         cx.quit();

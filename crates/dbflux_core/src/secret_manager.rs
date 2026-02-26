@@ -178,7 +178,7 @@ impl SecretManager {
                 ssh_tunnel_profile_id,
                 ..
             } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
-            DbConfig::SQLite { .. } => return None,
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
         };
 
         // If using a saved tunnel profile, get secret from there

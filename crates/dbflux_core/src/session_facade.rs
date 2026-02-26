@@ -6,8 +6,8 @@ use crate::saved_query_manager::SavedQueryManager;
 use crate::secret_manager::SecretManager;
 use crate::ssh_tunnel_manager::SshTunnelManager;
 use crate::{
-    ConnectionProfile, DangerousQueryKind, DbDriver, DbKind, ShutdownCoordinator, ShutdownPhase,
-    TaskManager, create_secret_store,
+    create_secret_store, ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator,
+    ShutdownPhase, TaskManager,
 };
 use log::info;
 use std::collections::HashMap;
@@ -91,7 +91,7 @@ pub struct SessionFacade {
 }
 
 impl SessionFacade {
-    pub fn new(drivers: HashMap<DbKind, Arc<dyn DbDriver>>) -> Self {
+    pub fn new(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
         let secret_store = create_secret_store();
         info!("Secret store available: {}", secret_store.is_available());
 

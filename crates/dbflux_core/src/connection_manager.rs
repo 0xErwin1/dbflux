@@ -328,14 +328,14 @@ pub struct PendingOperation {
 }
 
 pub struct ConnectionManager {
-    pub drivers: HashMap<DbKind, Arc<dyn DbDriver>>,
+    pub drivers: HashMap<String, Arc<dyn DbDriver>>,
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
 }
 
 impl ConnectionManager {
-    pub fn new(drivers: HashMap<DbKind, Arc<dyn DbDriver>>) -> Self {
+    pub fn new(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
         Self {
             drivers,
             connections: HashMap::new(),
@@ -662,11 +662,12 @@ impl ConnectionManager {
         }
 
         let kind = profile.kind();
+        let driver_id = profile.driver_id();
         let driver = self
             .drivers
-            .get(&kind)
+            .get(&driver_id)
             .cloned()
-            .ok_or_else(|| format!("No driver for {:?}", kind))?;
+            .ok_or_else(|| format!("No driver registered for '{}'", driver_id))?;
 
         let secret_store_param = if kind == DbKind::SQLite {
             None
@@ -723,11 +724,12 @@ impl ConnectionManager {
             *db = database.to_string();
         }
 
+        let driver_id = connected.profile.driver_id();
         let driver = self
             .drivers
-            .get(&DbKind::Postgres)
+            .get(&driver_id)
             .cloned()
-            .ok_or_else(|| "PostgreSQL driver not available".to_string())?;
+            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
 
         let original_profile = connected.profile.clone();
 
@@ -767,7 +769,7 @@ impl ConnectionManager {
             return Err(format!("Already connected to database '{}'", database));
         }
 
-        let kind = connected.profile.kind();
+        let driver_id = connected.profile.driver_id();
         let mut new_profile = connected.profile.clone();
 
         match &mut new_profile.config {
@@ -781,9 +783,9 @@ impl ConnectionManager {
 
         let driver = self
             .drivers
-            .get(&kind)
+            .get(&driver_id)
             .cloned()
-            .ok_or_else(|| format!("{:?} driver not available", kind))?;
+            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
 
         let original_profile = connected.profile.clone();
 
