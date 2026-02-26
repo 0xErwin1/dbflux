@@ -142,6 +142,7 @@ impl Sidebar {
             indexes: None,
             foreign_keys: None,
             constraints: None,
+            sample_fields: None,
         };
 
         match conn.connection.generate_code(generator_id, &table_info) {

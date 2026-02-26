@@ -75,6 +75,18 @@ impl Sidebar {
             }
         }
 
+        if matches!(parsed, Some(SchemaNodeId::Collection { .. })) {
+            let pending = PendingAction::ExpandCollection {
+                item_id: item_id.to_string(),
+            };
+            if matches!(
+                self.ensure_table_details(item_id, pending, cx),
+                TableDetailsStatus::NotFound
+            ) {
+                return false;
+            }
+        }
+
         if let Some(SchemaNodeId::TypesFolder {
             profile_id,
             database,

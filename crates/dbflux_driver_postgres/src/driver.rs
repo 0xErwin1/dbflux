@@ -1086,6 +1086,7 @@ impl Connection for PostgresConnection {
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
+            sample_fields: None,
         })
     }
 
@@ -1426,6 +1427,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 indexes: None,
                 foreign_keys: None,
                 constraints: None,
+                sample_fields: None,
             }
         })
         .collect();

@@ -320,6 +320,16 @@ impl ItemIdParts {
                 schema_name: schema.clone(),
                 object_name: name.clone(),
             }),
+            SchemaNodeId::Collection {
+                profile_id,
+                database,
+                name,
+            } => Some(Self {
+                profile_id: *profile_id,
+                database: Some(database.clone()),
+                schema_name: database.clone(),
+                object_name: name.clone(),
+            }),
             _ => None,
         }
     }
@@ -350,6 +360,9 @@ enum PendingAction {
     ExpandSchemaForeignKeysFolder {
         item_id: String,
     },
+    ExpandCollection {
+        item_id: String,
+    },
 }
 
 impl PendingAction {
@@ -359,7 +372,8 @@ impl PendingAction {
             | Self::GenerateCode { item_id, .. }
             | Self::ExpandTypesFolder { item_id }
             | Self::ExpandSchemaIndexesFolder { item_id }
-            | Self::ExpandSchemaForeignKeysFolder { item_id } => item_id,
+            | Self::ExpandSchemaForeignKeysFolder { item_id }
+            | Self::ExpandCollection { item_id } => item_id,
         }
     }
 }
