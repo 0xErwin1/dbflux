@@ -996,7 +996,9 @@ impl DataGridPanel {
             }
 
             _ => {
-                let display = format!("{:?}", value).replace('\n', "\\n").replace('\r', "\\r");
+                let display = format!("{:?}", value)
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r");
                 div()
                     .text_size(FontSizes::SM)
                     .text_color(theme.foreground)

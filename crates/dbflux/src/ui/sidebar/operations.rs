@@ -488,6 +488,32 @@ impl Sidebar {
         db_name: &str,
         cx: &mut Context<Self>,
     ) {
+        let already_connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|conn| {
+                conn.database_connections.contains_key(db_name)
+                    || conn
+                        .schema
+                        .as_ref()
+                        .and_then(|schema| schema.current_database())
+                        .is_some_and(|current| current == db_name)
+            });
+
+        if already_connected {
+            self.app_state.update(cx, |state, cx| {
+                if state.get_active_database(profile_id).as_deref() != Some(db_name) {
+                    state.set_active_database(profile_id, Some(db_name.to_string()));
+                    cx.emit(AppStateChanged);
+                }
+            });
+
+            self.refresh_tree(cx);
+            return;
+        }
+
         let params = match self.app_state.update(cx, |state, cx| {
             if state.is_operation_pending(profile_id, Some(db_name)) {
                 return Err("Operation already pending".to_string());

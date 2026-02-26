@@ -763,6 +763,12 @@ impl ConnectionManager {
             );
         }
 
+        if let Some(ref schema) = connected.schema
+            && schema.current_database() == Some(database)
+        {
+            return Err(format!("Already connected to database '{}'", database));
+        }
+
         if connected.database_connections.contains_key(database) {
             return Err(format!("Already connected to database '{}'", database));
         }
