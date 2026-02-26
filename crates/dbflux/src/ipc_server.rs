@@ -1,12 +1,13 @@
 use crate::ui::workspace::Workspace;
 use dbflux_ipc::{
-    APP_CONTROL_VERSION,
-    framing,
+    APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
 };
 use gpui::*;
+use interprocess::local_socket::{
+    Listener as IpcListener, Stream as IpcStream, traits::Listener as _,
+};
 use std::io;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -20,7 +21,7 @@ enum IpcCommand {
 }
 
 impl IpcServer {
-    pub fn start_with_listener(listener: UnixListener, workspace: Entity<Workspace>, cx: &mut App) {
+    pub fn start_with_listener(listener: IpcListener, workspace: Entity<Workspace>, cx: &mut App) {
         let (cmd_tx, cmd_rx): (Sender<IpcCommand>, Receiver<IpcCommand>) = mpsc::channel();
 
         thread::spawn(move || {
@@ -34,10 +35,10 @@ impl IpcServer {
     }
 }
 
-fn accept_loop(listener: UnixListener, cmd_tx: Sender<IpcCommand>) {
+fn accept_loop(listener: IpcListener, cmd_tx: Sender<IpcCommand>) {
     loop {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok(stream) => {
                 if let Err(e) = handle_connection(stream, &cmd_tx) {
                     log::warn!("IPC connection error: {}", e);
                 }
@@ -53,7 +54,7 @@ fn accept_loop(listener: UnixListener, cmd_tx: Sender<IpcCommand>) {
     }
 }
 
-fn handle_connection(mut stream: UnixStream, cmd_tx: &Sender<IpcCommand>) -> io::Result<()> {
+fn handle_connection(mut stream: IpcStream, cmd_tx: &Sender<IpcCommand>) -> io::Result<()> {
     let request: AppControlRequest = framing::recv_msg(&mut stream)?;
     let request_id = request.request_id;
 

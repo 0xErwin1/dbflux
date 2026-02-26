@@ -1,10 +1,10 @@
 use dbflux_ipc::{
-    framing,
+    APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    socket_path, APP_CONTROL_VERSION,
+    socket_name,
 };
+use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 use std::io;
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,7 +37,8 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 fn try_send(path: Option<&PathBuf>) -> io::Result<()> {
-    let mut stream = UnixStream::connect(socket_path())?;
+    let name = socket_name()?;
+    let mut stream = IpcStream::connect(name)?;
 
     let msg = match path {
         Some(p) => IpcMessage::OpenScript { path: p.clone() },

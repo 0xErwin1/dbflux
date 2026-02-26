@@ -9,7 +9,7 @@ pub use driver_protocol::{
     DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcError,
     DriverRpcErrorCode, QueryRequestDto, QueryResultChunk, QueryResultDto, QueryResultShapeDto,
 };
-pub use envelope::{ProtocolVersion, APP_CONTROL_VERSION, DRIVER_RPC_VERSION};
+pub use envelope::{APP_CONTROL_VERSION, DRIVER_RPC_VERSION, ProtocolVersion};
 pub use framing::{recv_msg, send_msg};
 pub use protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse};
-pub use socket::{ensure_socket_dir, socket_path};
+pub use socket::{driver_socket_name, socket_name};

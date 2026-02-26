@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{DbKind, SqlDialect};
 
 /// Sort direction for ORDER BY clauses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SortDirection {
     #[default]
     Ascending,
@@ -9,7 +11,7 @@ pub enum SortDirection {
 }
 
 /// Column with sort direction for ORDER BY clauses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderByColumn {
     pub name: String,
     pub direction: SortDirection,
@@ -42,7 +44,7 @@ fn escape_identifier(name: &str, quote_char: char) -> String {
 ///
 /// Currently only supports OFFSET-based pagination.
 /// Keyset pagination can be added later for better performance on large tables.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pagination {
     Offset { limit: u32, offset: u64 },
 }
@@ -131,7 +133,7 @@ impl Pagination {
 }
 
 /// Reference to a table (schema + name).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableRef {
     pub schema: Option<String>,
     pub name: String,
@@ -147,7 +149,7 @@ impl TableRef {
 }
 
 /// Reference to a collection (database + name) for document databases.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionRef {
     pub database: String,
     pub name: String,
@@ -228,7 +230,7 @@ impl TableRef {
 }
 
 /// State for table browsing with pagination.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableBrowseRequest {
     pub table: TableRef,
     pub pagination: Pagination,
@@ -355,7 +357,7 @@ impl TableBrowseRequest {
 ///
 /// This is the document-database equivalent of `TableBrowseRequest`.
 /// Drivers translate this into their native query syntax internally.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionBrowseRequest {
     pub collection: CollectionRef,
     pub pagination: Pagination,
@@ -383,7 +385,7 @@ impl CollectionBrowseRequest {
 }
 
 /// Request for counting rows in a table with an optional filter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCountRequest {
     pub table: TableRef,
     pub filter: Option<String>,
@@ -404,7 +406,7 @@ impl TableCountRequest {
 }
 
 /// Request for counting documents in a collection with an optional filter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionCountRequest {
     pub collection: CollectionRef,
     pub filter: Option<serde_json::Value>,
@@ -430,7 +432,7 @@ impl CollectionCountRequest {
 /// - PostgreSQL: `EXPLAIN (FORMAT JSON, ANALYZE) ...`
 /// - MySQL: `EXPLAIN FORMAT=JSON ...`
 /// - SQLite: `EXPLAIN QUERY PLAN ...`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainRequest {
     pub table: TableRef,
     pub query: Option<String>,
@@ -453,7 +455,7 @@ impl ExplainRequest {
 /// - PostgreSQL: `information_schema.columns` query
 /// - MySQL: `DESCRIBE table`
 /// - SQLite: `PRAGMA table_info(...)`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeRequest {
     pub table: TableRef,
 }

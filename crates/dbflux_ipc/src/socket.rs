@@ -1,25 +1,22 @@
+use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use std::io;
-use std::path::PathBuf;
 
-pub fn socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/tmp/dbflux-{}", unsafe { libc::getuid() }));
-
+/// Returns the local socket name for the main DBFlux app-control channel.
+///
+/// Debug and release builds use distinct names so both can run simultaneously.
+/// The underlying transport is platform-specific:
+/// - Linux: abstract namespace Unix domain socket
+/// - macOS: Unix domain socket in `/tmp/`
+/// - Windows: named pipe
+pub fn socket_name() -> io::Result<Name<'static>> {
     let suffix = if cfg!(debug_assertions) { "-debug" } else { "" };
-    PathBuf::from(runtime_dir)
-        .join("dbflux")
-        .join(format!("dbflux{}.sock", suffix))
+    format!("dbflux{suffix}.sock").to_ns_name::<GenericNamespaced>()
 }
 
-pub fn ensure_socket_dir() -> io::Result<()> {
-    let path = socket_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
-    }
-    Ok(())
+/// Returns the local socket name for an IPC driver-host process.
+///
+/// Each driver-host gets a unique socket name based on its identifier.
+pub fn driver_socket_name(id: &str) -> io::Result<Name<'static>> {
+    let suffix = if cfg!(debug_assertions) { "-debug" } else { "" };
+    format!("dbflux-driver-{id}{suffix}.sock").to_ns_name::<GenericNamespaced>()
 }

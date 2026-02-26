@@ -1,4 +1,4 @@
-use crate::envelope::{ProtocolVersion, APP_CONTROL_VERSION};
+use crate::envelope::{APP_CONTROL_VERSION, ProtocolVersion};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

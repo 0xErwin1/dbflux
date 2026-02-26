@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{
     Row, Value,
     key_value::{
@@ -13,7 +15,7 @@ use crate::{
 /// - SQL: composite primary key (one or more columns)
 /// - Document DBs: ObjectId or similar unique identifier
 /// - Key-Value: the key itself
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RecordIdentity {
     /// SQL-style composite primary key.
     /// Uses column names and values to construct a WHERE clause.
@@ -86,7 +88,7 @@ impl RecordIdentity {
 pub type RowIdentity = RecordIdentity;
 
 /// Changes to apply to a single row via UPDATE.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RowPatch {
     /// Unique identification of the row to update.
     pub identity: RowIdentity,
@@ -122,7 +124,7 @@ impl RowPatch {
 }
 
 /// Data for INSERT operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RowInsert {
     /// Table name.
     pub table: String,
@@ -163,7 +165,7 @@ impl RowInsert {
 }
 
 /// Data for DELETE operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RowDelete {
     /// Unique identification of the row to delete.
     pub identity: RowIdentity,
@@ -190,7 +192,7 @@ impl RowDelete {
 }
 
 /// State of a row during editing.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RowState {
     /// No pending changes.
     #[default]
@@ -254,7 +256,7 @@ impl RowState {
 }
 
 /// Result of a CRUD operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrudResult {
     /// Number of rows affected by the operation.
     pub affected_rows: u64,
@@ -292,7 +294,7 @@ impl CrudResult {
 // =============================================================================
 
 /// Filter criteria for document operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentFilter {
     /// JSON-style filter document (e.g., `{"status": "active"}`).
     pub filter: serde_json::Value,
@@ -311,7 +313,7 @@ impl DocumentFilter {
 }
 
 /// Update operation for document databases.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentUpdate {
     /// Collection name.
     pub collection: String,
@@ -361,7 +363,7 @@ impl DocumentUpdate {
 }
 
 /// Insert operation for document databases.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentInsert {
     /// Collection name.
     pub collection: String,
@@ -397,7 +399,7 @@ impl DocumentInsert {
 }
 
 /// Delete operation for document databases.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentDelete {
     /// Collection name.
     pub collection: String,
@@ -438,7 +440,7 @@ impl DocumentDelete {
 // =============================================================================
 
 /// Unified mutation request that can represent operations across database paradigms.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MutationRequest {
     // SQL mutations (relational databases)
     SqlUpdate(RowPatch),

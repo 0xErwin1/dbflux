@@ -11,6 +11,6 @@ license.workspace = true
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 bincode = "1"
-libc = "0.2"
+interprocess.workspace = true
 dbflux_core.workspace = true
 uuid.workspace = true

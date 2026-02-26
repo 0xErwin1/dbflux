@@ -1,5 +1,5 @@
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::io::{self, Read, Write};
 
 const MAX_MSG_SIZE: u32 = 16 * 1024 * 1024;

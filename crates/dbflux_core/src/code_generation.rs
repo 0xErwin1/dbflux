@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 
 bitflags! {
     /// DDL operations supported by a driver.
@@ -51,6 +52,25 @@ bitflags! {
     }
 }
 
+impl Serialize for CodeGenCapabilities {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.bits().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CodeGenCapabilities {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bits = u32::deserialize(deserializer)?;
+        Ok(Self::from_bits(bits).unwrap_or_else(Self::empty))
+    }
+}
+
 // =============================================================================
 // Request Types
 // =============================================================================
@@ -97,7 +117,7 @@ pub struct DropForeignKeyRequest<'a> {
     pub schema_name: Option<&'a str>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TypeDefinition {
     Enum { values: Vec<String> },
     Domain { base_type: String },
