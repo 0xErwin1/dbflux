@@ -154,6 +154,8 @@ fn infer_column_kind(type_name: &str) -> ColumnKind {
         || lower.contains("varchar")
         || lower.contains("string")
         || lower.contains("uuid")
+        || lower.contains("tsvector")
+        || lower.contains("tsquery")
         || lower.contains("timestamp")
         || lower.contains("datetime")
         || lower.contains("date")
