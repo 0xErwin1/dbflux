@@ -41,18 +41,15 @@ fn main() {
     }
 
     if args.len() == 1 {
-        let connected = socket_name().and_then(|name| IpcStream::connect(name)).ok();
-
-        match connected {
-            Some(mut stream) => {
-                let _ = send_focus_request(&mut stream, 1);
-                return;
-            }
-            None => {
-                run_gui();
-                return;
-            }
+        if let Ok(name) = socket_name()
+            && let Ok(mut stream) = IpcStream::connect(name)
+            && send_focus_request(&mut stream, 1).is_ok()
+        {
+            return;
         }
+
+        run_gui();
+        return;
     }
 
     std::process::exit(cli::run(&args));
@@ -64,8 +61,9 @@ fn bind_ipc_socket() -> Result<IpcListener, ()> {
         eprintln!("Failed to create socket name: {}", e);
     })?;
 
-    if let Ok(mut stream) = IpcStream::connect(connect_name) {
-        let _ = send_focus_request(&mut stream, 1);
+    if let Ok(mut stream) = IpcStream::connect(connect_name)
+        && send_focus_request(&mut stream, 1).is_ok()
+    {
         std::process::exit(0);
     }
 
