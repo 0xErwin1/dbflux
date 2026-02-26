@@ -1,11 +1,12 @@
-use crate::envelope::{DRIVER_RPC_VERSION, ProtocolVersion};
+use crate::envelope::{ProtocolVersion, DRIVER_RPC_VERSION};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverMetadata, ExplainRequest, QueryRequest,
-    QueryResult, QueryResultShape, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    DocumentDelete, DocumentInsert, DocumentUpdate, DriverMetadata, ExplainRequest, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, QueryRequest, QueryResult, QueryResultShape, RowDelete,
+    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SelectOption, TableBrowseRequest, TableCountRequest,
+    TableInfo, Value, ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -109,6 +110,223 @@ impl From<&CodeGeneratorInfo> for CodeGeneratorInfoDto {
             order: value.order,
             destructive: value.destructive,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectOptionDto {
+    pub value: String,
+    pub label: String,
+}
+
+impl From<&SelectOption> for SelectOptionDto {
+    fn from(value: &SelectOption) -> Self {
+        Self {
+            value: value.value.to_string(),
+            label: value.label.to_string(),
+        }
+    }
+}
+
+impl From<SelectOptionDto> for SelectOption {
+    fn from(value: SelectOptionDto) -> Self {
+        Self {
+            value: Box::leak(value.value.into_boxed_str()),
+            label: Box::leak(value.label.into_boxed_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FormFieldKindDto {
+    Text,
+    Password,
+    Number,
+    FilePath,
+    Checkbox,
+    Select { options: Vec<SelectOptionDto> },
+}
+
+impl From<FormFieldKind> for FormFieldKindDto {
+    fn from(value: FormFieldKind) -> Self {
+        match value {
+            FormFieldKind::Text => Self::Text,
+            FormFieldKind::Password => Self::Password,
+            FormFieldKind::Number => Self::Number,
+            FormFieldKind::FilePath => Self::FilePath,
+            FormFieldKind::Checkbox => Self::Checkbox,
+            FormFieldKind::Select { options } => Self::Select {
+                options: options.iter().map(SelectOptionDto::from).collect(),
+            },
+        }
+    }
+}
+
+impl From<FormFieldKindDto> for FormFieldKind {
+    fn from(value: FormFieldKindDto) -> Self {
+        match value {
+            FormFieldKindDto::Text => Self::Text,
+            FormFieldKindDto::Password => Self::Password,
+            FormFieldKindDto::Number => Self::Number,
+            FormFieldKindDto::FilePath => Self::FilePath,
+            FormFieldKindDto::Checkbox => Self::Checkbox,
+            FormFieldKindDto::Select { options } => {
+                let leaked_options: &'static [SelectOption] = Box::leak(
+                    options
+                        .into_iter()
+                        .map(SelectOption::from)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                );
+
+                Self::Select {
+                    options: leaked_options,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormFieldDefDto {
+    pub id: String,
+    pub label: String,
+    pub kind: FormFieldKindDto,
+    pub placeholder: String,
+    pub required: bool,
+    pub default_value: String,
+    pub enabled_when_checked: Option<String>,
+    pub enabled_when_unchecked: Option<String>,
+}
+
+impl From<&FormFieldDef> for FormFieldDefDto {
+    fn from(value: &FormFieldDef) -> Self {
+        Self {
+            id: value.id.to_string(),
+            label: value.label.to_string(),
+            kind: value.kind.into(),
+            placeholder: value.placeholder.to_string(),
+            required: value.required,
+            default_value: value.default_value.to_string(),
+            enabled_when_checked: value.enabled_when_checked.map(str::to_string),
+            enabled_when_unchecked: value.enabled_when_unchecked.map(str::to_string),
+        }
+    }
+}
+
+impl From<FormFieldDefDto> for FormFieldDef {
+    fn from(value: FormFieldDefDto) -> Self {
+        Self {
+            id: Box::leak(value.id.into_boxed_str()),
+            label: Box::leak(value.label.into_boxed_str()),
+            kind: value.kind.into(),
+            placeholder: Box::leak(value.placeholder.into_boxed_str()),
+            required: value.required,
+            default_value: Box::leak(value.default_value.into_boxed_str()),
+            enabled_when_checked: value
+                .enabled_when_checked
+                .map(|v| Box::leak(v.into_boxed_str()) as &'static str),
+            enabled_when_unchecked: value
+                .enabled_when_unchecked
+                .map(|v| Box::leak(v.into_boxed_str()) as &'static str),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormSectionDto {
+    pub title: String,
+    pub fields: Vec<FormFieldDefDto>,
+}
+
+impl From<&FormSection> for FormSectionDto {
+    fn from(value: &FormSection) -> Self {
+        Self {
+            title: value.title.to_string(),
+            fields: value.fields.iter().map(FormFieldDefDto::from).collect(),
+        }
+    }
+}
+
+impl From<FormSectionDto> for FormSection {
+    fn from(value: FormSectionDto) -> Self {
+        let fields: &'static [FormFieldDef] = Box::leak(
+            value
+                .fields
+                .into_iter()
+                .map(FormFieldDef::from)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+
+        Self {
+            title: Box::leak(value.title.into_boxed_str()),
+            fields,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormTabDto {
+    pub id: String,
+    pub label: String,
+    pub sections: Vec<FormSectionDto>,
+}
+
+impl From<&FormTab> for FormTabDto {
+    fn from(value: &FormTab) -> Self {
+        Self {
+            id: value.id.to_string(),
+            label: value.label.to_string(),
+            sections: value.sections.iter().map(FormSectionDto::from).collect(),
+        }
+    }
+}
+
+impl From<FormTabDto> for FormTab {
+    fn from(value: FormTabDto) -> Self {
+        let sections: &'static [FormSection] = Box::leak(
+            value
+                .sections
+                .into_iter()
+                .map(FormSection::from)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+
+        Self {
+            id: Box::leak(value.id.into_boxed_str()),
+            label: Box::leak(value.label.into_boxed_str()),
+            sections,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriverFormDefDto {
+    pub tabs: Vec<FormTabDto>,
+}
+
+impl From<&dbflux_core::DriverFormDef> for DriverFormDefDto {
+    fn from(value: &dbflux_core::DriverFormDef) -> Self {
+        Self {
+            tabs: value.tabs.iter().map(FormTabDto::from).collect(),
+        }
+    }
+}
+
+impl From<DriverFormDefDto> for dbflux_core::DriverFormDef {
+    fn from(value: DriverFormDefDto) -> Self {
+        let tabs: &'static [FormTab] = Box::leak(
+            value
+                .tabs
+                .into_iter()
+                .map(FormTab::from)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+
+        Self { tabs }
     }
 }
 
@@ -277,6 +495,9 @@ pub struct DriverHelloResponse {
     pub server_version: String,
     pub selected_version: ProtocolVersion,
     pub capabilities: Vec<DriverCapability>,
+    pub driver_kind: dbflux_core::DbKind,
+    pub driver_metadata: DriverMetadataDto,
+    pub form_definition: DriverFormDefDto,
 }
 
 /// Request body for a single driver RPC call.

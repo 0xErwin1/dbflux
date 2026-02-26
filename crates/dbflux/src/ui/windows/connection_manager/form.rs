@@ -140,7 +140,7 @@ impl ConnectionManagerWindow {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::SQLite { .. } => {}
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
         }
 
         Some(config)
@@ -149,14 +149,15 @@ impl ConnectionManagerWindow {
     pub(super) fn build_profile(&self, cx: &Context<Self>) -> Option<ConnectionProfile> {
         let name = self.input_name.read(cx).value().to_string();
         let kind = self.selected_kind()?;
+        let driver_id = self.selected_driver_id()?;
         let config = self.build_config(cx)?;
 
         let mut profile = if let Some(existing_id) = self.editing_profile_id {
-            let mut p = ConnectionProfile::new_with_kind(name, kind, config);
+            let mut p = ConnectionProfile::new_with_driver(name, kind, driver_id, config);
             p.id = existing_id;
             p
         } else {
-            ConnectionProfile::new_with_kind(name, kind, config)
+            ConnectionProfile::new_with_driver(name, kind, driver_id, config)
         };
 
         profile.save_password = self.form_save_password;

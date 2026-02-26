@@ -432,8 +432,8 @@ impl ConnectionManagerWindow {
             Command::Execute => {
                 let idx = self.driver_focus.index();
                 if let Some(driver_info) = self.available_drivers.get(idx) {
-                    let kind = driver_info.kind;
-                    self.select_driver(kind, window, cx);
+                    let driver_id = driver_info.id.clone();
+                    self.select_driver(&driver_id, window, cx);
                 }
                 true
             }

@@ -5,13 +5,13 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::list::ListItem;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
@@ -60,7 +60,7 @@ impl ConnectionManagerWindow {
                                 .child("Select database type (j/k to navigate, Enter to select)"),
                         )
                         .children(drivers.into_iter().enumerate().map(|(idx, driver_info)| {
-                            let kind = driver_info.kind;
+                            let driver_id = driver_info.id.clone();
                             let icon = driver_info.icon;
                             let is_focused = idx == focused_idx;
 
@@ -73,7 +73,7 @@ impl ConnectionManagerWindow {
                                     ListItem::new(("driver", idx))
                                         .py(px(8.0))
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.select_driver(kind, window, cx);
+                                            this.select_driver(&driver_id, window, cx);
                                         }))
                                         .child(
                                             div()

@@ -36,6 +36,7 @@ dbflux_driver_redis = { path = "crates/dbflux_driver_redis" }
 dbflux_ssh = { path = "crates/dbflux_ssh" }
 dbflux_export = { path = "crates/dbflux_export" }
 dbflux_ipc = { path = "crates/dbflux_ipc" }
+dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
 mysql = "25"
 
 gpui = "0.2.2"

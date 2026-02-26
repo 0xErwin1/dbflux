@@ -91,7 +91,7 @@ enum TestStatus {
 
 #[derive(Clone)]
 struct DriverInfo {
-    kind: DbKind,
+    id: String,
     icon: dbflux_core::Icon,
     name: String,
     description: String,
@@ -102,6 +102,7 @@ pub struct ConnectionManagerWindow {
     view: View,
     active_tab: ActiveTab,
     available_drivers: Vec<DriverInfo>,
+    selected_driver_id: Option<String>,
     selected_driver: Option<Arc<dyn DbDriver>>,
     form_save_password: bool,
     form_save_ssh_secret: bool,
@@ -163,9 +164,9 @@ impl ConnectionManagerWindow {
         let available_drivers: Vec<DriverInfo> = app_state
             .read(cx)
             .drivers()
-            .values()
-            .map(|driver| DriverInfo {
-                kind: driver.kind(),
+            .iter()
+            .map(|(driver_id, driver)| DriverInfo {
+                id: driver_id.clone(),
                 icon: driver.metadata().icon,
                 name: driver.display_name().to_string(),
                 description: driver.description().to_string(),
@@ -270,6 +271,7 @@ impl ConnectionManagerWindow {
             view: View::DriverSelect,
             active_tab: ActiveTab::Main,
             available_drivers,
+            selected_driver_id: None,
             selected_driver: None,
             form_save_password: false,
             form_save_ssh_secret: false,
@@ -331,8 +333,9 @@ impl ConnectionManagerWindow {
         let mut instance = Self::new(app_state.clone(), window, cx);
         instance.editing_profile_id = Some(profile.id);
 
-        let driver = app_state.read(cx).drivers().get(&profile.kind()).cloned();
+        let driver = app_state.read(cx).driver_for_profile(profile);
         instance.selected_driver = driver.clone();
+        instance.selected_driver_id = Some(profile.driver_id());
         instance.form_save_password = profile.save_password;
         instance.view = View::EditForm;
 
@@ -400,8 +403,9 @@ impl ConnectionManagerWindow {
         instance
     }
 
-    fn select_driver(&mut self, kind: DbKind, window: &mut Window, cx: &mut Context<Self>) {
-        let driver = self.app_state.read(cx).drivers().get(&kind).cloned();
+    fn select_driver(&mut self, driver_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let driver = self.app_state.read(cx).drivers().get(driver_id).cloned();
+        self.selected_driver_id = Some(driver_id.to_string());
         self.selected_driver = driver.clone();
         self.form_save_password = false;
         self.ssh_enabled = false;
@@ -551,6 +555,7 @@ impl ConnectionManagerWindow {
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
         self.view = View::DriverSelect;
+        self.selected_driver_id = None;
         self.selected_driver = None;
         self.validation_errors.clear();
         self.test_status = TestStatus::None;
@@ -560,6 +565,10 @@ impl ConnectionManagerWindow {
 
     fn selected_kind(&self) -> Option<DbKind> {
         self.selected_driver.as_ref().map(|d| d.kind())
+    }
+
+    fn selected_driver_id(&self) -> Option<&str> {
+        self.selected_driver_id.as_deref()
     }
 
     /// Returns true if this driver uses the server form (host/port/user/database)

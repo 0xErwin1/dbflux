@@ -1618,6 +1618,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "dbflux_core",
+ "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
  "dbflux_driver_postgres",

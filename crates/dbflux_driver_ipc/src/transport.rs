@@ -2,19 +2,19 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_VERSION,
     driver_protocol::{
-        DriverCapability, DriverHelloRequest, DriverRequestBody, DriverRequestEnvelope,
-        DriverResponseBody, DriverResponseEnvelope,
+        DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
+        DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
-    framing,
+    framing, DRIVER_RPC_VERSION,
 };
-use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
+use interprocess::local_socket::{prelude::*, Name, Stream as IpcStream};
 use uuid::Uuid;
 
 pub struct RpcClient {
     stream: Arc<Mutex<IpcStream>>,
     request_id: Arc<Mutex<u64>>,
+    hello: DriverHelloResponse,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -52,17 +52,28 @@ impl RpcClient {
         let stream =
             IpcStream::connect(name).map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
 
-        let client = Self {
-            stream: Arc::new(Mutex::new(stream)),
-            request_id: Arc::new(Mutex::new(0)),
-        };
+        let stream = Arc::new(Mutex::new(stream));
+        let request_id = Arc::new(Mutex::new(0));
 
-        client.hello()?;
+        let hello = Self::perform_hello(&stream, &request_id)?;
+
+        let client = Self {
+            stream,
+            request_id,
+            hello,
+        };
 
         Ok(client)
     }
 
-    fn hello(&self) -> Result<(), RpcError> {
+    pub fn hello_response(&self) -> &DriverHelloResponse {
+        &self.hello
+    }
+
+    fn perform_hello(
+        stream: &Arc<Mutex<IpcStream>>,
+        request_id: &Arc<Mutex<u64>>,
+    ) -> Result<DriverHelloResponse, RpcError> {
         let request = DriverRequestEnvelope::new(
             0,
             DriverRequestBody::Hello(DriverHelloRequest {
@@ -78,7 +89,7 @@ impl RpcClient {
             }),
         );
 
-        let response = self.send_raw(request)?;
+        let response = Self::send_raw_with(stream, request_id, request)?;
 
         match response.body {
             DriverResponseBody::Hello(hello) => {
@@ -87,11 +98,33 @@ impl RpcClient {
                     hello.server_name,
                     hello.server_version
                 );
-                Ok(())
+                Ok(hello)
             }
             DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
             _ => Err(RpcError::Protocol("Unexpected response to Hello".into())),
         }
+    }
+
+    fn send_raw_with(
+        stream: &Arc<Mutex<IpcStream>>,
+        _request_id: &Arc<Mutex<u64>>,
+        request: DriverRequestEnvelope,
+    ) -> Result<DriverResponseEnvelope, RpcError> {
+        let mut stream_guard = stream
+            .lock()
+            .map_err(|_| RpcError::Protocol("Stream mutex poisoned".into()))?;
+
+        framing::send_msg(&mut *stream_guard, &request)?;
+        let response: DriverResponseEnvelope = framing::recv_msg(&mut *stream_guard)?;
+
+        if response.request_id != request.request_id {
+            return Err(RpcError::Protocol(format!(
+                "Request ID mismatch: sent {}, got {}",
+                request.request_id, response.request_id
+            )));
+        }
+
+        Ok(response)
     }
 
     /// Sends an OpenSession request and returns the full response body (caller

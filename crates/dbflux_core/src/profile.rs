@@ -1,3 +1,4 @@
+use crate::driver_form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -174,6 +175,12 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    /// Generic config for external RPC drivers.
+    External {
+        kind: DbKind,
+        #[serde(default)]
+        values: FormValues,
+    },
 }
 
 impl DbConfig {
@@ -188,6 +195,7 @@ impl DbConfig {
             DbConfig::MySQL { .. } => DbKind::MySQL,
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
             DbConfig::Redis { .. } => DbKind::Redis,
+            DbConfig::External { kind, .. } => *kind,
         }
     }
 
@@ -259,7 +267,7 @@ impl DbConfig {
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } => None,
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
         }
     }
 }
@@ -283,6 +291,17 @@ pub struct ConnectionProfile {
     #[serde(default)]
     kind: Option<DbKind>,
 
+    /// Driver identifier used to resolve the runtime driver implementation.
+    ///
+    /// For built-in drivers this is the stable ID (e.g., `postgres`, `sqlite`).
+    /// For external RPC drivers this is a registry key derived from socket id
+    /// (format: `rpc:<socket_id>`).
+    ///
+    /// Legacy profiles may not have this field. In that case we derive it from
+    /// `kind` for backward compatibility.
+    #[serde(default)]
+    driver_id: Option<String>,
+
     /// Database-specific connection parameters.
     pub config: DbConfig,
 
@@ -298,6 +317,7 @@ impl ConnectionProfile {
             id: Uuid::new_v4(),
             name: name.into(),
             kind: Some(kind),
+            driver_id: Some(Self::builtin_driver_id_for_kind(kind).to_string()),
             config,
             save_password: false,
         }
@@ -312,6 +332,24 @@ impl ConnectionProfile {
             id: Uuid::new_v4(),
             name: name.into(),
             kind: Some(kind),
+            driver_id: Some(Self::builtin_driver_id_for_kind(kind).to_string()),
+            config,
+            save_password: false,
+        }
+    }
+
+    /// Creates a new profile with explicit database kind and driver id.
+    pub fn new_with_driver(
+        name: impl Into<String>,
+        kind: DbKind,
+        driver_id: impl Into<String>,
+        config: DbConfig,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            kind: Some(kind),
+            driver_id: Some(driver_id.into()),
             config,
             save_password: false,
         }
@@ -331,6 +369,35 @@ impl ConnectionProfile {
     /// without changing the underlying config.
     pub fn set_kind(&mut self, kind: DbKind) {
         self.kind = Some(kind);
+
+        if self.driver_id.is_none() {
+            self.driver_id = Some(Self::builtin_driver_id_for_kind(kind).to_string());
+        }
+    }
+
+    /// Returns the runtime driver identifier used to resolve the driver.
+    pub fn driver_id(&self) -> String {
+        if let Some(driver_id) = &self.driver_id {
+            return driver_id.clone();
+        }
+
+        Self::builtin_driver_id_for_kind(self.kind()).to_string()
+    }
+
+    /// Sets the runtime driver identifier explicitly.
+    pub fn set_driver_id(&mut self, driver_id: impl Into<String>) {
+        self.driver_id = Some(driver_id.into());
+    }
+
+    pub fn builtin_driver_id_for_kind(kind: DbKind) -> &'static str {
+        match kind {
+            DbKind::Postgres => "postgres",
+            DbKind::SQLite => "sqlite",
+            DbKind::MySQL => "mysql",
+            DbKind::MariaDB => "mariadb",
+            DbKind::MongoDB => "mongodb",
+            DbKind::Redis => "redis",
+        }
     }
 
     pub fn secret_ref(&self) -> String {
