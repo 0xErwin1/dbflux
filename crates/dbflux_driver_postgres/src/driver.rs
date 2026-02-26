@@ -1,11 +1,11 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -13,17 +13,21 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
-    POSTGRES_FORM,
+    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
+    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
+use postgres::types::Kind;
 use postgres::{CancelToken as PgCancelToken, Client, NoTls};
 use postgres_native_tls::MakeTlsConnector;
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// PostgreSQL driver metadata.
@@ -1923,42 +1927,230 @@ fn pg_quote_string(s: &str) -> String {
     format!("'{}'", pg_escape_string(s))
 }
 
+fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> Option<Value> {
+    match type_name {
+        "_bool" => match row.try_get::<_, Option<Vec<bool>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Bool).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_int2" => match row.try_get::<_, Option<Vec<i16>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter().map(|v| Value::Int(v as i64)).collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_int4" => match row.try_get::<_, Option<Vec<i32>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter().map(|v| Value::Int(v as i64)).collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_int8" => match row.try_get::<_, Option<Vec<i64>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Int).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_float4" => match row.try_get::<_, Option<Vec<f32>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter().map(|v| Value::Float(v as f64)).collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_float8" => match row.try_get::<_, Option<Vec<f64>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Float).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_text" | "_varchar" | "_bpchar" | "_name" | "_citext" => {
+            match row.try_get::<_, Option<Vec<String>>>(idx) {
+                Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Text).collect())),
+                Ok(None) => Some(Value::Null),
+                Err(_) => None,
+            }
+        }
+
+        "_uuid" => match row.try_get::<_, Option<Vec<Uuid>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter()
+                    .map(|uuid| Value::Text(uuid.to_string()))
+                    .collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_json" | "_jsonb" => match row.try_get::<_, Option<Vec<JsonValue>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter()
+                    .map(|json| Value::Json(json.to_string()))
+                    .collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_date" => match row.try_get::<_, Option<Vec<NaiveDate>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Date).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_time" => match row.try_get::<_, Option<Vec<NaiveTime>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Time).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_timestamp" => match row.try_get::<_, Option<Vec<NaiveDateTime>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter()
+                    .map(|ts| Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc)))
+                    .collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_timestamptz" => match row.try_get::<_, Option<Vec<DateTime<Utc>>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::DateTime).collect())),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        "_inet" => match row.try_get::<_, Option<Vec<IpAddr>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter()
+                    .map(|ip| Value::Text(ip.to_string()))
+                    .collect(),
+            )),
+            Ok(None) => Some(Value::Null),
+            Err(_) => None,
+        },
+
+        _ => None,
+    }
+}
+
 fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
     let col_type = row.columns()[idx].type_();
+    let type_name = col_type.name();
 
-    match col_type.name() {
+    if let Some(array_value) = postgres_array_to_value(row, idx, type_name) {
+        return array_value;
+    }
+
+    match type_name {
         "bool" => row
-            .try_get::<_, bool>(idx)
-            .map(Value::Bool)
+            .try_get::<_, Option<bool>>(idx)
+            .map(|value| value.map(Value::Bool).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
         "int2" => row
-            .try_get::<_, i16>(idx)
-            .map(|v| Value::Int(v as i64))
+            .try_get::<_, Option<i16>>(idx)
+            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
         "int4" => row
-            .try_get::<_, i32>(idx)
-            .map(|v| Value::Int(v as i64))
+            .try_get::<_, Option<i32>>(idx)
+            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
         "int8" => row
-            .try_get::<_, i64>(idx)
-            .map(Value::Int)
+            .try_get::<_, Option<i64>>(idx)
+            .map(|value| value.map(Value::Int).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
         "float4" => row
-            .try_get::<_, f32>(idx)
-            .map(|v| Value::Float(v as f64))
+            .try_get::<_, Option<f32>>(idx)
+            .map(|value| {
+                value
+                    .map(|float| Value::Float(float as f64))
+                    .unwrap_or(Value::Null)
+            })
             .unwrap_or(Value::Null),
+
         "float8" | "numeric" => row
-            .try_get::<_, f64>(idx)
-            .map(Value::Float)
+            .try_get::<_, Option<f64>>(idx)
+            .map(|value| value.map(Value::Float).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
+        "uuid" => row
+            .try_get::<_, Option<Uuid>>(idx)
+            .map(|value| {
+                value
+                    .map(|uuid| Value::Text(uuid.to_string()))
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or(Value::Null),
+
+        "json" | "jsonb" => row
+            .try_get::<_, Option<JsonValue>>(idx)
+            .map(|value| {
+                value
+                    .map(|json| Value::Json(json.to_string()))
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or(Value::Null),
+
+        "date" => row
+            .try_get::<_, Option<NaiveDate>>(idx)
+            .map(|value| value.map(Value::Date).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
+
+        "time" => row
+            .try_get::<_, Option<NaiveTime>>(idx)
+            .map(|value| value.map(Value::Time).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
+
+        "timestamp" => row
+            .try_get::<_, Option<NaiveDateTime>>(idx)
+            .map(|value| {
+                value
+                    .map(|timestamp| {
+                        Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
+                    })
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or(Value::Null),
+
+        "timestamptz" => row
+            .try_get::<_, Option<DateTime<Utc>>>(idx)
+            .map(|value| value.map(Value::DateTime).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
+
+        "inet" => row
+            .try_get::<_, Option<IpAddr>>(idx)
+            .map(|value| {
+                value
+                    .map(|ip| Value::Text(ip.to_string()))
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or(Value::Null),
+
         "bytea" => row
-            .try_get::<_, Vec<u8>>(idx)
-            .map(Value::Bytes)
+            .try_get::<_, Option<Vec<u8>>>(idx)
+            .map(|value| value.map(Value::Bytes).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
-        _ => row
-            .try_get::<_, String>(idx)
-            .map(Value::Text)
-            .unwrap_or(Value::Null),
+
+        _ => {
+            if matches!(col_type.kind(), Kind::Array(_)) {
+                return Value::Null;
+            }
+
+            row.try_get::<_, Option<String>>(idx)
+                .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null)
+        }
     }
 }
 

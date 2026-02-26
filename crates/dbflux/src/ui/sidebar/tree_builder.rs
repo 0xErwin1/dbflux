@@ -454,7 +454,9 @@ impl Sidebar {
             let collection_children: Vec<TreeItem> = db_schema
                 .tables
                 .iter()
-                .map(|coll| Self::build_collection_item(profile_id, database_name, coll, table_details))
+                .map(|coll| {
+                    Self::build_collection_item(profile_id, database_name, coll, table_details)
+                })
                 .collect();
 
             content.push(
@@ -481,8 +483,7 @@ impl Sidebar {
                         return Some(
                             v.iter()
                                 .map(|idx| {
-                                    let unique_marker =
-                                        if idx.is_unique { " UNIQUE" } else { "" };
+                                    let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
                                     let pk_marker = if idx.is_primary { " PK" } else { "" };
                                     let cols = idx.columns.join(", ");
                                     let label = format!(
@@ -509,11 +510,8 @@ impl Sidebar {
                     doc_indexes
                         .iter()
                         .map(|idx| {
-                            let label = format!(
-                                "{}.{}",
-                                coll.name,
-                                format_collection_index_label(idx)
-                            );
+                            let label =
+                                format!("{}.{}", coll.name, format_collection_index_label(idx));
 
                             TreeItem::new(
                                 SchemaNodeId::CollectionIndex {
@@ -560,8 +558,7 @@ impl Sidebar {
         let effective = table_details.get(&cache_key).unwrap_or(collection);
         let details_loaded = effective.sample_fields.is_some();
 
-        let (field_children, field_count) = if let Some(fields) = effective.sample_fields.as_ref()
-        {
+        let (field_children, field_count) = if let Some(fields) = effective.sample_fields.as_ref() {
             (
                 build_collection_field_items(profile_id, coll_name, fields),
                 fields.len(),
@@ -1037,7 +1034,8 @@ impl Sidebar {
                         let unique_marker = if idx.is_unique { " UNIQUE" } else { "" };
                         let pk_marker = if idx.is_primary { " PK" } else { "" };
                         let cols = idx.columns.join(", ");
-                        let label = format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
+                        let label =
+                            format!("{} ({}){}{}", idx.name, cols, unique_marker, pk_marker);
 
                         TreeItem::new(
                             SchemaNodeId::Index {
@@ -1217,8 +1215,7 @@ fn build_collection_field_items(
             if let Some(ref nested) = field.nested_fields
                 && !nested.is_empty()
             {
-                let children =
-                    build_collection_field_items(profile_id, collection_name, nested);
+                let children = build_collection_field_items(profile_id, collection_name, nested);
                 item = item.expanded(false).children(children);
             }
 
