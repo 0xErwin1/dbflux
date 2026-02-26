@@ -9,18 +9,19 @@ use app::AppState;
 use assets::Assets;
 use dbflux_core::ShutdownPhase;
 use dbflux_ipc::{
-    APP_CONTROL_VERSION,
-    ensure_socket_dir,
-    framing,
+    APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    socket_path,
+    socket_name,
 };
 use gpui::*;
 use gpui_component::Root;
+use interprocess::local_socket::{
+    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
+    prelude::*,
+};
 use ipc_server::IpcServer;
 use log::info;
-use std::io;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 use ui::command_palette::command_palette_keybindings;
 use ui::workspace::Workspace;
@@ -39,12 +40,14 @@ fn main() {
     }
 
     if args.len() == 1 {
-        match UnixStream::connect(socket_path()) {
-            Ok(mut stream) => {
+        let connected = socket_name().and_then(|name| IpcStream::connect(name)).ok();
+
+        match connected {
+            Some(mut stream) => {
                 let _ = send_focus_request(&mut stream, 1);
                 return;
             }
-            Err(_) => {
+            None => {
                 run_gui();
                 return;
             }
@@ -54,55 +57,34 @@ fn main() {
     std::process::exit(cli::run(&args));
 }
 
-fn bind_ipc_socket() -> Result<UnixListener, ()> {
-    let path = socket_path();
+fn bind_ipc_socket() -> Result<IpcListener, ()> {
+    // First try connecting — if an existing instance responds, focus it and exit.
+    let connect_name = socket_name().map_err(|e| {
+        eprintln!("Failed to create socket name: {}", e);
+    })?;
 
-    if let Err(e) = ensure_socket_dir() {
-        eprintln!("Failed to create socket directory: {}", e);
-        return Err(());
+    if let Ok(mut stream) = IpcStream::connect(connect_name) {
+        let _ = send_focus_request(&mut stream, 1);
+        std::process::exit(0);
     }
 
-    match UnixListener::bind(&path) {
-        Ok(listener) => {
-            if let Err(e) = listener.set_nonblocking(true) {
-                eprintln!("Failed to set socket nonblocking: {}", e);
-                return Err(());
-            }
-            Ok(listener)
-        }
-        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-            if let Ok(mut stream) = UnixStream::connect(&path) {
-                let _ = send_focus_request(&mut stream, 1);
-                std::process::exit(0);
-            }
+    // No live instance. Bind with nonblocking accept and try_overwrite to handle
+    // stale sockets left behind by a crashed process.
+    let bind_name = socket_name().map_err(|e| {
+        eprintln!("Failed to create socket name: {}", e);
+    })?;
 
-            if let Err(e) = std::fs::remove_file(&path) {
-                eprintln!("Failed to remove stale socket: {}", e);
-                return Err(());
-            }
-
-            match UnixListener::bind(&path) {
-                Ok(listener) => {
-                    if let Err(e) = listener.set_nonblocking(true) {
-                        eprintln!("Failed to set socket nonblocking: {}", e);
-                        return Err(());
-                    }
-                    Ok(listener)
-                }
-                Err(e) => {
-                    eprintln!("Failed to bind socket after cleanup: {}", e);
-                    Err(())
-                }
-            }
-        }
-        Err(e) => {
+    ListenerOptions::new()
+        .name(bind_name)
+        .nonblocking(ListenerNonblockingMode::Accept)
+        .try_overwrite(true)
+        .create_sync()
+        .map_err(|e| {
             eprintln!("Failed to bind IPC socket: {}", e);
-            Err(())
-        }
-    }
+        })
 }
 
-fn send_focus_request(stream: &mut UnixStream, request_id: u64) -> io::Result<()> {
+fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::Result<()> {
     let request = AppControlRequest::new(request_id, IpcMessage::Focus);
     framing::send_msg(&mut *stream, &request)?;
 
@@ -112,7 +94,9 @@ fn send_focus_request(stream: &mut UnixStream, request_id: u64) -> io::Result<()
         .protocol_version
         .is_compatible_with(APP_CONTROL_VERSION)
     {
-        return Err(io::Error::other("incompatible app-control protocol version"));
+        return Err(io::Error::other(
+            "incompatible app-control protocol version",
+        ));
     }
 
     if response.request_id != request_id {
@@ -294,16 +278,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
         });
     });
 
-    let socket = socket_path();
-    if let Err(error) = std::fs::remove_file(&socket)
-        && error.kind() != io::ErrorKind::NotFound
-    {
-        log::warn!(
-            "Failed to remove IPC socket {}: {}",
-            socket.display(),
-            error
-        );
-    }
+    // Socket cleanup is automatic — interprocess reclaims the name on drop.
 
     let _ = cx.update(|cx| {
         cx.quit();

@@ -46,7 +46,7 @@ impl KeyEntry {
 }
 
 /// Request for scanning keys with cursor-based pagination.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyScanRequest {
     pub cursor: Option<String>,
     pub filter: Option<String>,
@@ -81,14 +81,14 @@ impl KeyScanRequest {
 }
 
 /// A page of keys returned by a scan operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyScanPage {
     pub entries: Vec<KeyEntry>,
     pub next_cursor: Option<String>,
 }
 
 /// Request for reading a key value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyGetRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -115,7 +115,7 @@ impl KeyGetRequest {
 }
 
 /// Key value with metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyGetResult {
     pub entry: KeyEntry,
     pub value: Vec<u8>,
@@ -123,7 +123,7 @@ pub struct KeyGetResult {
 }
 
 /// Request for writing a key value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySetRequest {
     pub key: String,
     pub value: Vec<u8>,
@@ -181,7 +181,7 @@ impl KeySetRequest {
 }
 
 /// Request for deleting a key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyDeleteRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -202,7 +202,7 @@ impl KeyDeleteRequest {
 }
 
 /// Request for checking key existence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyExistsRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -223,7 +223,7 @@ impl KeyExistsRequest {
 }
 
 /// Request for reading key type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyTypeRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -244,7 +244,7 @@ impl KeyTypeRequest {
 }
 
 /// Request for reading key TTL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyTtlRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -265,7 +265,7 @@ impl KeyTtlRequest {
 }
 
 /// Request for setting key TTL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyExpireRequest {
     pub key: String,
     pub ttl_seconds: u64,
@@ -288,7 +288,7 @@ impl KeyExpireRequest {
 }
 
 /// Request for removing key TTL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyPersistRequest {
     pub key: String,
     pub keyspace: Option<u32>,
@@ -309,7 +309,7 @@ impl KeyPersistRequest {
 }
 
 /// Request for renaming a key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyRenameRequest {
     pub from_key: String,
     pub to_key: String,
@@ -332,7 +332,7 @@ impl KeyRenameRequest {
 }
 
 /// Request for fetching multiple keys in one round trip.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyBulkGetRequest {
     pub keys: Vec<String>,
     pub keyspace: Option<u32>,
@@ -369,14 +369,14 @@ pub enum ListEnd {
     Tail,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HashSetRequest {
     pub key: String,
     pub fields: Vec<(String, String)>,
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HashDeleteRequest {
     pub key: String,
     pub fields: Vec<String>,
@@ -384,7 +384,7 @@ pub struct HashDeleteRequest {
 }
 
 /// Overwrite a list element at a given index.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListSetRequest {
     pub key: String,
     pub index: i64,
@@ -392,7 +392,7 @@ pub struct ListSetRequest {
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListPushRequest {
     pub key: String,
     pub values: Vec<String>,
@@ -401,7 +401,7 @@ pub struct ListPushRequest {
 }
 
 /// Remove occurrences of a value from a list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListRemoveRequest {
     pub key: String,
     pub value: String,
@@ -409,28 +409,28 @@ pub struct ListRemoveRequest {
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetAddRequest {
     pub key: String,
     pub members: Vec<String>,
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetRemoveRequest {
     pub key: String,
     pub members: Vec<String>,
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZSetAddRequest {
     pub key: String,
     pub members: Vec<(String, f64)>,
     pub keyspace: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZSetRemoveRequest {
     pub key: String,
     pub members: Vec<String>,
@@ -442,7 +442,7 @@ pub struct ZSetRemoveRequest {
 // ---------------------------------------------------------------------------
 
 /// How to generate the entry ID for `XADD`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamEntryId {
     /// Server-assigned (`*`).
     #[default]
@@ -452,7 +452,7 @@ pub enum StreamEntryId {
 }
 
 /// Optional max-length trimming strategy for stream writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamMaxLen {
     pub count: u64,
     /// If `true`, use approximate trimming (`~`), which is cheaper.
@@ -460,7 +460,7 @@ pub struct StreamMaxLen {
 }
 
 /// Add an entry to a Stream key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamAddRequest {
     pub key: String,
     pub id: StreamEntryId,
@@ -470,7 +470,7 @@ pub struct StreamAddRequest {
 }
 
 /// Delete entries from a Stream key by their IDs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamDeleteRequest {
     pub key: String,
     pub ids: Vec<String>,

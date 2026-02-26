@@ -3,6 +3,7 @@ members = [
     "crates/dbflux",
     "crates/dbflux_core",
     "crates/dbflux_ipc",
+    "crates/dbflux_driver_ipc",
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
     "crates/dbflux_driver_mysql",
@@ -10,6 +11,7 @@ members = [
     "crates/dbflux_driver_redis",
     "crates/dbflux_ssh",
     "crates/dbflux_export",
+    "crates/dbflux_driver_host",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -54,3 +56,4 @@ log = "0.4"
 env_logger = "0.11"
 fuzzy-matcher = "0.3"
 hex = "0.4"
+interprocess = "2.4"

@@ -1,11 +1,116 @@
-use crate::envelope::{ProtocolVersion, DRIVER_RPC_VERSION};
+use crate::envelope::{DRIVER_RPC_VERSION, ProtocolVersion};
 use dbflux_core::{
-    ColumnMeta, DatabaseInfo, DbSchemaInfo, QueryRequest, QueryResult, QueryResultShape,
-    SchemaSnapshot, TableInfo, Value, ViewInfo,
+    CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
+    ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
+    DocumentDelete, DocumentInsert, DocumentUpdate, DriverMetadata, ExplainRequest, QueryRequest,
+    QueryResult, QueryResultShape, RowDelete, RowInsert, RowPatch, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+};
+use dbflux_core::{
+    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
+    KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyTypeRequest, ListPushRequest,
+    ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
+    StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
+
+/// DTO for DriverMetadata (serializable version for IPC).
+/// Contains owned String fields instead of &'static str.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriverMetadataDto {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub category: dbflux_core::DatabaseCategory,
+    pub query_language: QueryLanguageDto,
+    pub capabilities: u64,
+    pub default_port: Option<u16>,
+    pub uri_scheme: String,
+    pub icon: dbflux_core::Icon,
+}
+
+impl From<&DriverMetadata> for DriverMetadataDto {
+    fn from(value: &DriverMetadata) -> Self {
+        Self {
+            id: value.id.to_string(),
+            display_name: value.display_name.to_string(),
+            description: value.description.to_string(),
+            category: value.category,
+            query_language: value.query_language.into(),
+            capabilities: value.capabilities.bits(),
+            default_port: value.default_port,
+            uri_scheme: value.uri_scheme.to_string(),
+            icon: value.icon,
+        }
+    }
+}
+
+/// DTO for QueryLanguage (serializable version for IPC).
+/// The Custom variant stores the string directly instead of &static str.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum QueryLanguageDto {
+    Sql,
+    MongoQuery,
+    RedisCommands,
+    Cypher,
+    InfluxQuery,
+    Cql,
+    Custom(String),
+}
+
+impl From<dbflux_core::QueryLanguage> for QueryLanguageDto {
+    fn from(value: dbflux_core::QueryLanguage) -> Self {
+        match value {
+            dbflux_core::QueryLanguage::Sql => Self::Sql,
+            dbflux_core::QueryLanguage::MongoQuery => Self::MongoQuery,
+            dbflux_core::QueryLanguage::RedisCommands => Self::RedisCommands,
+            dbflux_core::QueryLanguage::Cypher => Self::Cypher,
+            dbflux_core::QueryLanguage::InfluxQuery => Self::InfluxQuery,
+            dbflux_core::QueryLanguage::Cql => Self::Cql,
+            dbflux_core::QueryLanguage::Custom(s) => Self::Custom(s.to_string()),
+        }
+    }
+}
+
+impl From<QueryLanguageDto> for dbflux_core::QueryLanguage {
+    fn from(value: QueryLanguageDto) -> Self {
+        match value {
+            QueryLanguageDto::Sql => Self::Sql,
+            QueryLanguageDto::MongoQuery => Self::MongoQuery,
+            QueryLanguageDto::RedisCommands => Self::RedisCommands,
+            QueryLanguageDto::Cypher => Self::Cypher,
+            QueryLanguageDto::InfluxQuery => Self::InfluxQuery,
+            QueryLanguageDto::Cql => Self::Cql,
+            QueryLanguageDto::Custom(s) => Self::Custom(Box::leak(s.into_boxed_str())),
+        }
+    }
+}
+
+/// DTO for CodeGeneratorInfo (serializable version for IPC).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeGeneratorInfoDto {
+    pub id: String,
+    pub label: String,
+    pub scope: dbflux_core::CodeGenScope,
+    pub order: u32,
+    pub destructive: bool,
+}
+
+impl From<&CodeGeneratorInfo> for CodeGeneratorInfoDto {
+    fn from(value: &CodeGeneratorInfo) -> Self {
+        Self {
+            id: value.id.to_string(),
+            label: value.label.to_string(),
+            scope: value.scope,
+            order: value.order,
+            destructive: value.destructive,
+        }
+    }
+}
 
 /// Feature flags advertised during driver RPC handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,7 +283,11 @@ pub struct DriverHelloResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DriverRequestBody {
     Hello(DriverHelloRequest),
-    OpenSession,
+    OpenSession {
+        profile_json: String,
+        password: Option<String>,
+        ssh_secret: Option<String>,
+    },
     CloseSession,
     Ping,
     Execute {
@@ -209,6 +318,132 @@ pub enum DriverRequestBody {
     },
     SetActiveDatabase {
         database: Option<String>,
+    },
+    // === Browse operations ===
+    BrowseTable {
+        request: TableBrowseRequest,
+    },
+    CountTable {
+        request: TableCountRequest,
+    },
+    BrowseCollection {
+        request: CollectionBrowseRequest,
+    },
+    CountCollection {
+        request: CollectionCountRequest,
+    },
+    Explain {
+        request: ExplainRequest,
+    },
+    DescribeTable {
+        request: DescribeRequest,
+    },
+    // === CRUD operations ===
+    UpdateRow {
+        patch: RowPatch,
+    },
+    InsertRow {
+        insert: RowInsert,
+    },
+    DeleteRow {
+        delete: RowDelete,
+    },
+    // === Document mutations ===
+    UpdateDocument {
+        update: DocumentUpdate,
+    },
+    InsertDocument {
+        insert: DocumentInsert,
+    },
+    DeleteDocument {
+        delete: DocumentDelete,
+    },
+    // === Schema extras ===
+    SchemaTypes {
+        database: String,
+        schema: Option<String>,
+    },
+    SchemaIndexes {
+        database: String,
+        schema: Option<String>,
+    },
+    SchemaForeignKeys {
+        database: String,
+        schema: Option<String>,
+    },
+    ActiveDatabase,
+    // === Key-Value operations ===
+    KvScanKeys {
+        request: KeyScanRequest,
+    },
+    KvGetKey {
+        request: KeyGetRequest,
+    },
+    KvSetKey {
+        request: KeySetRequest,
+    },
+    KvDeleteKey {
+        request: KeyDeleteRequest,
+    },
+    KvExistsKey {
+        request: KeyExistsRequest,
+    },
+    KvKeyType {
+        request: KeyTypeRequest,
+    },
+    KvKeyTtl {
+        request: KeyTtlRequest,
+    },
+    KvExpireKey {
+        request: KeyExpireRequest,
+    },
+    KvPersistKey {
+        request: KeyPersistRequest,
+    },
+    KvRenameKey {
+        request: KeyRenameRequest,
+    },
+    KvBulkGet {
+        request: KeyBulkGetRequest,
+    },
+    KvHashSet {
+        request: HashSetRequest,
+    },
+    KvHashDelete {
+        request: HashDeleteRequest,
+    },
+    KvListSet {
+        request: ListSetRequest,
+    },
+    KvListPush {
+        request: ListPushRequest,
+    },
+    KvListRemove {
+        request: ListRemoveRequest,
+    },
+    KvSetAdd {
+        request: SetAddRequest,
+    },
+    KvSetRemove {
+        request: SetRemoveRequest,
+    },
+    KvZSetAdd {
+        request: ZSetAddRequest,
+    },
+    KvZSetRemove {
+        request: ZSetRemoveRequest,
+    },
+    KvStreamAdd {
+        request: StreamAddRequest,
+    },
+    KvStreamDelete {
+        request: StreamDeleteRequest,
+    },
+    // === Code generation ===
+    CodeGenerators,
+    GenerateCode {
+        generator_id: String,
+        table: TableInfo,
     },
 }
 
@@ -250,6 +485,11 @@ pub enum DriverResponseBody {
     Hello(DriverHelloResponse),
     SessionOpened {
         session_id: Uuid,
+        kind: dbflux_core::DbKind,
+        metadata: DriverMetadataDto,
+        schema_loading_strategy: SchemaLoadingStrategy,
+        schema_features: SchemaFeatures,
+        code_gen_capabilities: CodeGenCapabilities,
     },
     SessionClosed,
     Pong,
@@ -279,6 +519,59 @@ pub enum DriverResponseBody {
         view: ViewInfo,
     },
     ActiveDatabaseSet,
+    // === Browse results ===
+    BrowseResult {
+        result: QueryResultDto,
+    },
+    CountResult {
+        count: u64,
+    },
+    // === CRUD results ===
+    CrudResult {
+        result: CrudResult,
+    },
+    // === Document results ===
+    // Same as CrudResult, no separate variant needed
+    // === Schema extras ===
+    SchemaTypes {
+        types: Vec<CustomTypeInfo>,
+    },
+    SchemaIndexes {
+        indexes: Vec<SchemaIndexInfo>,
+    },
+    SchemaForeignKeys {
+        foreign_keys: Vec<SchemaForeignKeyInfo>,
+    },
+    ActiveDatabaseResult {
+        database: Option<String>,
+    },
+    // === Key-Value results ===
+    KvScanResult {
+        page: KeyScanPage,
+    },
+    KvGetResult {
+        result: KeyGetResult,
+    },
+    KvBoolResult {
+        value: bool,
+    },
+    KvStringResult {
+        value: String,
+    },
+    KvU64Result {
+        value: u64,
+    },
+    KvBulkGetResult {
+        results: Vec<Option<KeyGetResult>>,
+    },
+    // === Code generation results ===
+    CodeGeneratorsResult {
+        generators: Vec<CodeGeneratorInfoDto>,
+    },
+    GenerateCodeResult {
+        code: String,
+    },
+    // === Error ===
     Error(DriverRpcError),
 }
 
