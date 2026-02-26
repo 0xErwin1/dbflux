@@ -247,49 +247,58 @@ impl DataGridPanel {
         Some((field, value))
     }
 
-    fn active_filter_submenu_count(
-        &self,
-        menu: &TableContextMenu,
-        backend: Option<FilterBackend>,
-        cx: &App,
-    ) -> usize {
-        match backend {
-            Some(FilterBackend::Sql) => {
-                let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
-                let filterable = cell_value
-                    .as_ref()
-                    .map(Self::is_value_filterable)
-                    .unwrap_or(false);
-                if filterable { 7 } else { 3 }
-            }
-            Some(FilterBackend::Mongo) => {
-                if let Some((_, ref val)) = self.mongo_filter_field_info(cx) {
-                    let has_comparison = Self::is_mongo_comparable(val);
-                    if has_comparison { 7 } else { 5 }
-                } else {
-                    3
-                }
-            }
-            None => 0,
+    fn sql_filter_operators(type_name: &str, value: &Value) -> Vec<FilterOperator> {
+        if !Self::is_value_filterable(value) {
+            return Vec::new();
         }
+
+        if Self::is_sql_json_type(type_name, value) {
+            return vec![FilterOperator::Eq, FilterOperator::NotEq];
+        }
+
+        if Self::is_sql_bool_type(type_name, value) {
+            return vec![FilterOperator::Eq, FilterOperator::NotEq];
+        }
+
+        if Self::is_sql_comparable_type(type_name, value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Gt,
+                FilterOperator::Gte,
+                FilterOperator::Lt,
+                FilterOperator::Lte,
+            ];
+        }
+
+        if Self::is_sql_text_type(type_name, value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Like,
+            ];
+        }
+
+        vec![FilterOperator::Eq, FilterOperator::NotEq]
     }
 
-    fn filter_submenu_action(idx: usize, total_items: usize) -> ContextMenuAction {
-        // Items from the end are always: ..., IS NULL, IS NOT NULL, Remove
-        let remove_idx = total_items - 1;
-        let is_not_null_idx = total_items - 2;
-        let is_null_idx = total_items - 3;
-
-        match idx {
-            i if i == remove_idx => ContextMenuAction::RemoveFilter,
-            i if i == is_not_null_idx => ContextMenuAction::FilterIsNotNull,
-            i if i == is_null_idx => ContextMenuAction::FilterIsNull,
-            0 => ContextMenuAction::FilterByValue(FilterOperator::Eq),
-            1 => ContextMenuAction::FilterByValue(FilterOperator::NotEq),
-            2 => ContextMenuAction::FilterByValue(FilterOperator::Gt),
-            3 => ContextMenuAction::FilterByValue(FilterOperator::Lt),
-            _ => ContextMenuAction::RemoveFilter,
+    fn mongo_filter_operators(value: &Value) -> Vec<FilterOperator> {
+        if !Self::is_value_filterable(value) {
+            return Vec::new();
         }
+
+        if Self::is_mongo_comparable(value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Gt,
+                FilterOperator::Gte,
+                FilterOperator::Lt,
+                FilterOperator::Lte,
+            ];
+        }
+
+        vec![FilterOperator::Eq, FilterOperator::NotEq]
     }
 
     fn is_mongo_comparable(value: &Value) -> bool {
@@ -304,6 +313,82 @@ impl DataGridPanel {
         )
     }
 
+    fn is_sql_json_type(type_name: &str, value: &Value) -> bool {
+        type_name.contains("json") || type_name.contains("bson") || matches!(value, Value::Json(_))
+    }
+
+    fn is_sql_bool_type(type_name: &str, value: &Value) -> bool {
+        type_name.contains("bool") || matches!(value, Value::Bool(_))
+    }
+
+    fn is_sql_comparable_type(type_name: &str, value: &Value) -> bool {
+        if matches!(
+            value,
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Decimal(_)
+                | Value::DateTime(_)
+                | Value::Date(_)
+                | Value::Time(_)
+        ) {
+            return true;
+        }
+
+        type_name.contains("int")
+            || type_name.contains("serial")
+            || type_name.contains("float")
+            || type_name.contains("double")
+            || type_name.contains("real")
+            || type_name.contains("numeric")
+            || type_name.contains("decimal")
+            || type_name.contains("number")
+            || type_name.contains("money")
+            || type_name.contains("date")
+            || type_name.contains("time")
+            || type_name.contains("timestamp")
+            || type_name.contains("datetime")
+            || type_name.contains("year")
+    }
+
+    fn is_sql_text_type(type_name: &str, value: &Value) -> bool {
+        if matches!(value, Value::Text(_) | Value::ObjectId(_)) {
+            return true;
+        }
+
+        type_name.contains("text")
+            || type_name.contains("char")
+            || type_name.contains("string")
+            || type_name.contains("clob")
+            || type_name.contains("uuid")
+            || type_name.contains("citext")
+            || type_name.contains("enum")
+            || type_name.contains("set")
+    }
+
+    fn sql_operator_symbol(operator: FilterOperator) -> &'static str {
+        match operator {
+            FilterOperator::Eq => "=",
+            FilterOperator::NotEq => "<>",
+            FilterOperator::Gt => ">",
+            FilterOperator::Gte => ">=",
+            FilterOperator::Lt => "<",
+            FilterOperator::Lte => "<=",
+            FilterOperator::Like => "LIKE",
+        }
+    }
+
+    fn mongo_operator_symbol(operator: FilterOperator) -> &'static str {
+        match operator {
+            FilterOperator::Eq => "=",
+            FilterOperator::NotEq => "!=",
+            FilterOperator::Gt => ">",
+            FilterOperator::Gte => ">=",
+            FilterOperator::Lt => "<",
+            FilterOperator::Lte => "<=",
+            FilterOperator::Like => "LIKE",
+        }
+    }
+
     fn mongo_value_display_preview(value: &Value) -> String {
         match value {
             Value::Null => "null".to_string(),
@@ -316,7 +401,9 @@ impl DataGridPanel {
                 format!("\"{}\"", sanitized)
             }
             Value::Json(j) => Self::truncate_for_label(&Self::sanitize_for_label(j), 20),
-            Value::ObjectId(oid) => format!("ObjectId(\"{}\")", Self::truncate_for_label(oid, 12)),
+            Value::ObjectId(oid) => {
+                format!("ObjectId(\"{}\")", Self::truncate_for_label(oid, 12))
+            }
             Value::DateTime(dt) => format!("\"{}\"", dt.to_rfc3339()),
             Value::Date(d) => format!("\"{}\"", d),
             Value::Time(t) => format!("\"{}\"", t),
@@ -330,11 +417,11 @@ impl DataGridPanel {
         menu: &TableContextMenu,
         backend: Option<FilterBackend>,
         cx: &App,
-    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
         match backend {
             Some(FilterBackend::Sql) => self.build_sql_filter_items(menu, cx),
             Some(FilterBackend::Mongo) => self.build_mongo_filter_items(cx),
-            None => (String::new(), 0, Vec::new(), false),
+            None => (String::new(), 0, Vec::new(), 0),
         }
     }
 
@@ -342,45 +429,36 @@ impl DataGridPanel {
         &self,
         menu: &TableContextMenu,
         cx: &App,
-    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
-        let col_name = self
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
+        let (col_name, col_type_name) = self
             .result
             .columns
             .get(menu.col)
-            .map(|c| c.name.clone())
+            .map(|column| (column.name.clone(), column.type_name.to_ascii_lowercase()))
             .unwrap_or_default();
 
         let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
-        let filterable = cell_value
-            .as_ref()
-            .map(Self::is_value_filterable)
-            .unwrap_or(false);
 
         let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+        let mut value_ops_count = 0;
 
-        if filterable {
+        if let Some(ref value) = cell_value {
             let display = cell_value
                 .as_ref()
                 .map(Self::value_display_preview)
                 .unwrap_or_default();
             let short = Self::truncate_for_label(&display, 20);
 
-            items.push((
-                format!("{} = {}", col_name, short),
-                ContextMenuAction::FilterByValue(FilterOperator::Eq),
-            ));
-            items.push((
-                format!("{} <> {}", col_name, short),
-                ContextMenuAction::FilterByValue(FilterOperator::NotEq),
-            ));
-            items.push((
-                format!("{} > {}", col_name, short),
-                ContextMenuAction::FilterByValue(FilterOperator::Gt),
-            ));
-            items.push((
-                format!("{} < {}", col_name, short),
-                ContextMenuAction::FilterByValue(FilterOperator::Lt),
-            ));
+            let operators = Self::sql_filter_operators(&col_type_name, value);
+            value_ops_count = operators.len();
+
+            for operator in operators {
+                let op = Self::sql_operator_symbol(operator);
+                items.push((
+                    format!("{} {} {}", col_name, op, short),
+                    ContextMenuAction::FilterByValue(operator),
+                ));
+            }
         }
 
         items.push((
@@ -394,40 +472,29 @@ impl DataGridPanel {
         items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
 
         let count = items.len();
-        (col_name, count, items, filterable)
+        (col_name, count, items, value_ops_count)
     }
 
     fn build_mongo_filter_items(
         &self,
         cx: &App,
-    ) -> (String, usize, Vec<(String, ContextMenuAction)>, bool) {
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
         let Some((field, ref val)) = self.mongo_filter_field_info(cx) else {
-            return (String::new(), 0, Vec::new(), false);
+            return (String::new(), 0, Vec::new(), 0);
         };
 
-        let comparable = Self::is_mongo_comparable(val);
         let display = Self::mongo_value_display_preview(val);
         let short = Self::truncate_for_label(&display, 20);
 
         let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+        let operators = Self::mongo_filter_operators(val);
+        let value_ops_count = operators.len();
 
-        items.push((
-            format!("{} = {}", field, short),
-            ContextMenuAction::FilterByValue(FilterOperator::Eq),
-        ));
-        items.push((
-            format!("{} != {}", field, short),
-            ContextMenuAction::FilterByValue(FilterOperator::NotEq),
-        ));
-
-        if comparable {
+        for operator in operators {
+            let op = Self::mongo_operator_symbol(operator);
             items.push((
-                format!("{} > {}", field, short),
-                ContextMenuAction::FilterByValue(FilterOperator::Gt),
-            ));
-            items.push((
-                format!("{} < {}", field, short),
-                ContextMenuAction::FilterByValue(FilterOperator::Lt),
+                format!("{} {} {}", field, op, short),
+                ContextMenuAction::FilterByValue(operator),
             ));
         }
 
@@ -442,7 +509,7 @@ impl DataGridPanel {
         items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
 
         let count = items.len();
-        (field, count, items, true)
+        (field, count, items, value_ops_count)
     }
 
     /// Returns true if the data grid is editable (has primary key info).
@@ -548,10 +615,20 @@ impl DataGridPanel {
             })
             .unwrap_or(false);
 
+        let filter_submenu_actions: Vec<ContextMenuAction> = self
+            .context_menu
+            .as_ref()
+            .filter(|m| m.filter_submenu_open)
+            .map(|m| {
+                let (_, _, items, _) = self.build_filter_items(m, backend, cx);
+                items.into_iter().map(|(_, action)| action).collect()
+            })
+            .unwrap_or_default();
+
         // Determine count of items in the active submenu
         let active_submenu_count = if let Some(menu) = &self.context_menu {
             if menu.filter_submenu_open {
-                self.active_filter_submenu_count(menu, backend, cx)
+                filter_submenu_actions.len()
             } else if menu.order_submenu_open {
                 3 // ASC, DESC, Remove
             } else if menu.sql_submenu_open {
@@ -627,22 +704,14 @@ impl DataGridPanel {
                 true
             }
             Command::MenuSelect => {
-                // Pre-compute filter item count before mutably borrowing context_menu,
-                // to avoid conflicting borrows on self.
-                let filter_item_count = self
-                    .context_menu
-                    .as_ref()
-                    .filter(|m| m.filter_submenu_open)
-                    .map(|m| self.active_filter_submenu_count(m, backend, cx))
-                    .unwrap_or(0);
-
                 if let Some(ref mut menu) = self.context_menu {
                     if menu.filter_submenu_open {
-                        let action = Self::filter_submenu_action(
-                            menu.submenu_selected_index,
-                            filter_item_count,
-                        );
-                        self.handle_context_menu_action(action, window, cx);
+                        if let Some(action) = filter_submenu_actions
+                            .get(menu.submenu_selected_index)
+                            .copied()
+                        {
+                            self.handle_context_menu_action(action, window, cx);
+                        }
                     } else if menu.order_submenu_open {
                         let action = match menu.submenu_selected_index {
                             0 => ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
@@ -1221,7 +1290,7 @@ impl DataGridPanel {
             let filter_selected = selected_index == filter_index;
             let submenu_selected_index = menu.submenu_selected_index;
 
-            let (_col_name_display, filter_submenu_count, filter_items, value_filterable) =
+            let (_col_name_display, filter_submenu_count, filter_items, value_ops_count) =
                 self.build_filter_items(menu, backend, cx);
 
             menu_items.push(
@@ -1293,12 +1362,9 @@ impl DataGridPanel {
                             }),
                     )
                     .when(filter_submenu_open, |d: Stateful<Div>| {
-                        let separator_after = if value_filterable { Some(4) } else { None };
-                        let null_separator_idx = if value_filterable {
-                            filter_submenu_count - 2 // before "Remove filter", after IS NOT NULL
-                        } else {
-                            2 // after IS NOT NULL
-                        };
+                        let value_section_separator_idx =
+                            (value_ops_count > 0).then_some(value_ops_count);
+                        let remove_separator_idx = filter_submenu_count.saturating_sub(1);
 
                         d.child(
                             div()
@@ -1316,7 +1382,7 @@ impl DataGridPanel {
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
-                                .when(value_filterable, |d| {
+                                .when(value_ops_count > 0, |d| {
                                     d.child(
                                         div()
                                             .px(Spacing::SM)
@@ -1334,7 +1400,7 @@ impl DataGridPanel {
                                             let mut elements: Vec<AnyElement> = Vec::new();
 
                                             // Add separator between value ops and IS NULL section
-                                            if separator_after == Some(idx) {
+                                            if value_section_separator_idx == Some(idx) {
                                                 elements.push(
                                                     div()
                                                         .h(px(1.0))
@@ -1346,7 +1412,7 @@ impl DataGridPanel {
                                             }
 
                                             // Add separator before "Remove filter"
-                                            if idx == null_separator_idx {
+                                            if idx == remove_separator_idx {
                                                 elements.push(
                                                     div()
                                                         .h(px(1.0))
@@ -2820,9 +2886,13 @@ impl DataGridPanel {
 
         let Some(conn) = conn else { return };
         let dialect = conn.dialect();
+        let is_postgres = conn.metadata().id == "postgres";
 
-        let col_name = match self.result.columns.get(col) {
-            Some(c) => dialect.quote_identifier(&c.name),
+        let (col_name, col_type_name) = match self.result.columns.get(col) {
+            Some(c) => (
+                dialect.quote_identifier(&c.name),
+                c.type_name.to_ascii_lowercase(),
+            ),
             None => return,
         };
 
@@ -2833,14 +2903,31 @@ impl DataGridPanel {
 
         let literal = dialect.value_to_literal(&cell_value);
 
-        let op_str = match operator {
-            FilterOperator::Eq => "=",
-            FilterOperator::NotEq => "<>",
-            FilterOperator::Gt => ">",
-            FilterOperator::Lt => "<",
+        let op_str = Self::sql_operator_symbol(operator);
+
+        let expr = if operator == FilterOperator::Like {
+            let raw = match &cell_value {
+                Value::Text(text) => text.clone(),
+                Value::ObjectId(id) => id.clone(),
+                _ => return,
+            };
+
+            let escaped = raw
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern_literal = dialect.value_to_literal(&Value::Text(format!("%{}%", escaped)));
+
+            format!("{} LIKE {} ESCAPE '\\'", col_name, pattern_literal)
+        } else if is_postgres
+            && matches!(cell_value, Value::Json(_))
+            && col_type_name.contains("json")
+        {
+            format!("({})::jsonb {} ({})", col_name, op_str, literal)
+        } else {
+            format!("{} {} {}", col_name, op_str, literal)
         };
 
-        let expr = format!("{} {} {}", col_name, op_str, literal);
         self.apply_filter_expression(&expr, window, cx);
     }
 
@@ -2915,7 +3002,10 @@ impl DataGridPanel {
             FilterOperator::Eq => serde_json::json!({ &field_dot: json_val }),
             FilterOperator::NotEq => serde_json::json!({ &field_dot: { "$ne": json_val } }),
             FilterOperator::Gt => serde_json::json!({ &field_dot: { "$gt": json_val } }),
+            FilterOperator::Gte => serde_json::json!({ &field_dot: { "$gte": json_val } }),
             FilterOperator::Lt => serde_json::json!({ &field_dot: { "$lt": json_val } }),
+            FilterOperator::Lte => serde_json::json!({ &field_dot: { "$lte": json_val } }),
+            FilterOperator::Like => return,
         };
 
         self.apply_mongo_filter(&filter_obj, window, cx);
@@ -3028,11 +3118,11 @@ impl DataGridPanel {
         }
     }
 
-    /// NULL, Bytes, NaN, and Infinity don't support comparison operators;
+    /// NULL, bytes, complex structures, NaN, and Infinity don't support value operators;
     /// only IS NULL / IS NOT NULL applies.
     fn is_value_filterable(value: &Value) -> bool {
         match value {
-            Value::Null | Value::Bytes(_) => false,
+            Value::Null | Value::Bytes(_) | Value::Array(_) | Value::Document(_) => false,
             Value::Float(f) if f.is_nan() || f.is_infinite() => false,
             _ => true,
         }
