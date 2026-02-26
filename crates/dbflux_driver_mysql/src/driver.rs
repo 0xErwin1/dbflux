@@ -1804,10 +1804,20 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
     }
 
     // Fallback: try to get as string
-    row.get_opt::<Option<String>, _>(idx)
-        .and_then(|r| r.ok())
-        .map(|opt| opt.map(Value::Text).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null)
+    match row.get_opt::<Option<String>, _>(idx) {
+        Some(Ok(Some(s))) => Value::Text(s),
+        Some(Ok(None)) => Value::Null,
+        Some(Err(e)) => {
+            log::info!(
+                "Unsupported MySQL column type {:?} at index {}: {}",
+                col_type,
+                idx,
+                e
+            );
+            Value::Null
+        }
+        None => Value::Null,
+    }
 }
 
 /// Convert a Value to a safe MySQL literal string.
@@ -1841,6 +1851,36 @@ fn value_to_mysql_literal(value: &Value) -> String {
             format!("'{}'", mysql_escape_string(&json))
         }
     }
+}
+
+/// Parse MySQL `enum('a','b','c')` or `set('x','y')` column types into a list of values.
+fn parse_mysql_enum_or_set(column_type: &str) -> Option<Vec<String>> {
+    let lower = column_type.to_lowercase();
+    let inner = if lower.starts_with("enum(") && lower.ends_with(')') {
+        &column_type[5..column_type.len() - 1]
+    } else if lower.starts_with("set(") && lower.ends_with(')') {
+        &column_type[4..column_type.len() - 1]
+    } else {
+        return None;
+    };
+
+    let values: Vec<String> = inner
+        .split(',')
+        .map(|s| {
+            let trimmed = s.trim();
+            if (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+                || (trimmed.starts_with('"') && trimmed.ends_with('"'))
+            {
+                trimmed[1..trimmed.len() - 1]
+                    .replace("''", "'")
+                    .replace("\\\\", "\\")
+            } else {
+                trimmed.to_string()
+            }
+        })
+        .collect();
+
+    Some(values)
 }
 
 /// Quote an identifier (table/column name) for MySQL using backticks.
@@ -1962,12 +2002,15 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
                     is_pk
                 );
             }
+            let enum_values = parse_mysql_enum_or_set(&type_name);
+
             ColumnInfo {
                 name,
                 type_name,
                 nullable: nullable == "YES",
                 default_value: default,
                 is_primary_key: is_pk,
+                enum_values,
             }
         })
         .collect())

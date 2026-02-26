@@ -15,6 +15,10 @@ pub struct DropdownSelectionChanged {
     pub item: DropdownItem,
 }
 
+/// Emitted when the dropdown closes without a selection (click outside).
+#[derive(Clone, Debug)]
+pub struct DropdownDismissed;
+
 #[derive(Clone, Debug)]
 pub struct DropdownItem {
     pub label: SharedString,
@@ -240,6 +244,7 @@ impl Dropdown {
         if self.open {
             self.open = false;
             self.highlighted_index = None;
+            cx.emit(DropdownDismissed);
             cx.notify();
         }
     }
@@ -412,3 +417,4 @@ impl Render for Dropdown {
 }
 
 impl EventEmitter<DropdownSelectionChanged> for Dropdown {}
+impl EventEmitter<DropdownDismissed> for Dropdown {}

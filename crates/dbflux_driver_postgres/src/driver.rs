@@ -24,7 +24,7 @@ use dbflux_core::{
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
-use postgres::types::Kind;
+use postgres::types::{FromSql, Kind, Type};
 use postgres::{CancelToken as PgCancelToken, Client, NoTls};
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::Value as JsonValue;
@@ -1300,11 +1300,25 @@ impl Connection for PostgresConnection {
         let escaped_table = request.table.name.replace('\'', "''");
 
         let sql = format!(
-            "SELECT column_name, data_type, is_nullable, column_default, \
-             character_maximum_length \
-             FROM information_schema.columns \
-             WHERE table_schema = '{}' AND table_name = '{}' \
-             ORDER BY ordinal_position",
+            "SELECT \
+                a.attname AS column_name, \
+                format_type(a.atttypid, a.atttypmod) AS data_type, \
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable, \
+                pg_get_expr(d.adbin, d.adrelid) AS column_default, \
+                CASE WHEN a.atttypmod > 0 AND t.typname IN ('varchar', 'bpchar') \
+                     THEN a.atttypmod - 4 \
+                     ELSE NULL \
+                END AS character_maximum_length \
+            FROM pg_attribute a \
+            JOIN pg_class c ON c.oid = a.attrelid \
+            JOIN pg_namespace n ON n.oid = c.relnamespace \
+            JOIN pg_type t ON t.oid = a.atttypid \
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+            WHERE n.nspname = '{}' \
+              AND c.relname = '{}' \
+              AND a.attnum > 0 \
+              AND NOT a.attisdropped \
+            ORDER BY a.attnum",
             escaped_schema, escaped_table
         );
 
@@ -1467,30 +1481,32 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
         .query(
             r#"
             SELECT
-                c.column_name,
-                c.data_type,
-                c.is_nullable = 'YES' as nullable,
-                c.column_default,
+                a.attname AS column_name,
+                format_type(a.atttypid, a.atttypmod) AS type_name,
+                NOT a.attnotnull AS nullable,
+                pg_get_expr(d.adbin, d.adrelid) AS column_default,
                 COALESCE(
-                    (SELECT true FROM information_schema.table_constraints tc
-                     JOIN information_schema.key_column_usage kcu
-                       ON tc.constraint_name = kcu.constraint_name
-                      AND tc.table_schema = kcu.table_schema
-                     WHERE tc.constraint_type = 'PRIMARY KEY'
-                       AND tc.table_schema = c.table_schema
-                       AND tc.table_name = c.table_name
-                       AND kcu.column_name = c.column_name),
+                    (SELECT true FROM pg_index ix
+                     WHERE ix.indrelid = c.oid
+                       AND ix.indisprimary
+                       AND a.attnum = ANY(ix.indkey)),
                     false
-                ) as is_pk
-            FROM information_schema.columns c
-            WHERE c.table_schema = $1 AND c.table_name = $2
-            ORDER BY c.ordinal_position
+                ) AS is_pk
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE n.nspname = $1
+              AND c.relname = $2
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY a.attnum
             "#,
             &[&schema, &table],
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    Ok(rows
+    let mut columns: Vec<ColumnInfo> = rows
         .iter()
         .map(|row| ColumnInfo {
             name: row.get(0),
@@ -1498,8 +1514,55 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
             nullable: row.get(2),
             default_value: row.get(3),
             is_primary_key: row.get(4),
+            enum_values: None,
         })
-        .collect())
+        .collect();
+
+    let enum_values = fetch_enum_values_for_columns(client, schema, table)?;
+    for col in &mut columns {
+        if let Some(values) = enum_values.get(&col.type_name) {
+            col.enum_values = Some(values.clone());
+        }
+    }
+
+    Ok(columns)
+}
+
+/// Fetch enum values for all enum-typed columns in a table, keyed by type name.
+fn fetch_enum_values_for_columns(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<HashMap<String, Vec<String>>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT DISTINCT
+                t.typname,
+                array_agg(e.enumlabel ORDER BY e.enumsortorder) AS enum_values
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_type t ON t.oid = a.atttypid
+            JOIN pg_enum e ON e.enumtypid = t.oid
+            WHERE n.nspname = $1
+              AND c.relname = $2
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+              AND t.typtype = 'e'
+            GROUP BY t.typname
+            "#,
+            &[&schema, &table],
+        )
+        .map_err(|e| format_pg_query_error(&e))?;
+
+    let mut result = HashMap::new();
+    for row in rows {
+        let type_name: String = row.get(0);
+        let values: Vec<String> = row.get(1);
+        result.insert(type_name, values);
+    }
+    Ok(result)
 }
 
 #[allow(dead_code)]
@@ -1511,57 +1574,27 @@ fn get_all_columns_for_schema(
         .query(
             r#"
             SELECT
-                c.table_name,
-                c.column_name,
-                CASE
-                    WHEN c.data_type = 'character varying' THEN
-                        'varchar' || COALESCE('(' || c.character_maximum_length || ')', '')
-                    WHEN c.data_type = 'character' THEN
-                        'char' || COALESCE('(' || c.character_maximum_length || ')', '')
-                    WHEN c.data_type = 'numeric' AND c.numeric_precision IS NOT NULL THEN
-                        'numeric(' || c.numeric_precision ||
-                        COALESCE(',' || c.numeric_scale, '') || ')'
-                    WHEN c.data_type = 'bit' AND c.character_maximum_length IS NOT NULL THEN
-                        'bit(' || c.character_maximum_length || ')'
-                    WHEN c.data_type = 'bit varying' AND c.character_maximum_length IS NOT NULL THEN
-                        'varbit(' || c.character_maximum_length || ')'
-                    WHEN c.data_type = 'time without time zone' AND c.datetime_precision IS NOT NULL
-                         AND c.datetime_precision != 6 THEN
-                        'time(' || c.datetime_precision || ')'
-                    WHEN c.data_type = 'time with time zone' AND c.datetime_precision IS NOT NULL
-                         AND c.datetime_precision != 6 THEN
-                        'timetz(' || c.datetime_precision || ')'
-                    WHEN c.data_type = 'timestamp without time zone' AND c.datetime_precision IS NOT NULL
-                         AND c.datetime_precision != 6 THEN
-                        'timestamp(' || c.datetime_precision || ')'
-                    WHEN c.data_type = 'timestamp with time zone' AND c.datetime_precision IS NOT NULL
-                         AND c.datetime_precision != 6 THEN
-                        'timestamptz(' || c.datetime_precision || ')'
-                    WHEN c.data_type = 'interval' AND c.datetime_precision IS NOT NULL
-                         AND c.datetime_precision != 6 THEN
-                        'interval(' || c.datetime_precision || ')'
-                    WHEN c.data_type = 'ARRAY' THEN
-                        c.udt_name
-                    ELSE c.data_type
-                END as type_name,
-                c.is_nullable = 'YES' as nullable,
-                c.column_default,
+                c.relname AS table_name,
+                a.attname AS column_name,
+                format_type(a.atttypid, a.atttypmod) AS type_name,
+                NOT a.attnotnull AS nullable,
+                pg_get_expr(d.adbin, d.adrelid) AS column_default,
                 COALESCE(
-                    (SELECT true FROM information_schema.table_constraints tc
-                     JOIN information_schema.key_column_usage kcu
-                       ON tc.constraint_name = kcu.constraint_name
-                      AND tc.table_schema = kcu.table_schema
-                     WHERE tc.constraint_type = 'PRIMARY KEY'
-                       AND tc.table_schema = c.table_schema
-                       AND tc.table_name = c.table_name
-                       AND kcu.column_name = c.column_name),
+                    (SELECT true FROM pg_index ix
+                     WHERE ix.indrelid = c.oid
+                       AND ix.indisprimary
+                       AND a.attnum = ANY(ix.indkey)),
                     false
-                ) as is_pk
-            FROM information_schema.columns c
-            JOIN information_schema.tables t
-              ON c.table_schema = t.table_schema AND c.table_name = t.table_name
-            WHERE c.table_schema = $1 AND t.table_type = 'BASE TABLE'
-            ORDER BY c.table_name, c.ordinal_position
+                ) AS is_pk
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE n.nspname = $1
+              AND c.relkind IN ('r', 'p')
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY c.relname, a.attnum
             "#,
             &[&schema],
         )
@@ -1577,6 +1610,7 @@ fn get_all_columns_for_schema(
             nullable: row.get(3),
             default_value: row.get(4),
             is_primary_key: row.get(5),
+            enum_values: None,
         };
         result.entry(table_name).or_default().push(column);
     }
@@ -1868,7 +1902,7 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
 
 /// Convert a Value to a safe PostgreSQL literal string.
 ///
-/// Uses dollar quoting for strings to avoid SQL injection.
+/// Uses escaped single-quoted literals for readable generated SQL.
 fn value_to_pg_literal(value: &Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
@@ -1911,20 +1945,30 @@ fn pg_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-/// Quote a string as a PostgreSQL literal using dollar quoting.
+/// Quote a string as a PostgreSQL literal.
 fn pg_quote_string(s: &str) -> String {
-    if !s.contains("$$") {
-        return format!("$${}$$", s);
-    }
-
-    for i in 0..100 {
-        let tag = format!("$tag{}$", i);
-        if !s.contains(&tag) {
-            return format!("{}{}{}", tag, s, tag);
-        }
-    }
-
     format!("'{}'", pg_escape_string(s))
+}
+
+/// Wrapper that accepts any PostgreSQL type and decodes its text representation.
+///
+/// The `postgres` crate's `FromSql<String>` only accepts TEXT/VARCHAR/BPCHAR OIDs,
+/// so custom types (enums, domains, composites) fail silently. This wrapper accepts
+/// any type and reads the raw bytes as UTF-8, which works because PostgreSQL sends
+/// enum/domain/composite values in their text form over the binary protocol.
+struct PgText(String);
+
+impl<'a> FromSql<'a> for PgText {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(PgText(String::from_utf8_lossy(raw).into_owned()))
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
 }
 
 fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> Option<Value> {
@@ -2142,15 +2186,58 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .map(|value| value.map(Value::Bytes).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
 
-        _ => {
-            if matches!(col_type.kind(), Kind::Array(_)) {
-                return Value::Null;
+        _ => match col_type.kind() {
+            Kind::Enum(_) | Kind::Domain(_) | Kind::Composite(_) | Kind::Range(_) => {
+                match row.try_get::<_, Option<PgText>>(idx) {
+                    Ok(Some(PgText(s))) => Value::Text(s),
+                    Ok(None) => Value::Null,
+                    Err(e) => {
+                        let col_name = row.columns()[idx].name();
+                        log::info!(
+                            "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
+                            type_name,
+                            col_type.kind(),
+                            col_name,
+                            e
+                        );
+                        Value::Null
+                    }
+                }
             }
 
-            row.try_get::<_, Option<String>>(idx)
-                .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
-                .unwrap_or(Value::Null)
-        }
+            Kind::Array(_) => match row.try_get::<_, Option<Vec<PgText>>>(idx) {
+                Ok(Some(arr)) => {
+                    Value::Array(arr.into_iter().map(|PgText(s)| Value::Text(s)).collect())
+                }
+                Ok(None) => Value::Null,
+                Err(e) => {
+                    let col_name = row.columns()[idx].name();
+                    log::info!(
+                        "Unsupported PostgreSQL array type '{}' for column '{}': {}",
+                        type_name,
+                        col_name,
+                        e
+                    );
+                    Value::Null
+                }
+            },
+
+            _ => match row.try_get::<_, Option<PgText>>(idx) {
+                Ok(Some(PgText(s))) => Value::Text(s),
+                Ok(None) => Value::Null,
+                Err(e) => {
+                    let col_name = row.columns()[idx].name();
+                    log::info!(
+                        "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
+                        type_name,
+                        col_type.kind(),
+                        col_name,
+                        e
+                    );
+                    Value::Null
+                }
+            },
+        },
     }
 }
 

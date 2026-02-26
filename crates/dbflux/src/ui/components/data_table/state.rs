@@ -11,6 +11,7 @@ use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, SCROLLBAR_WIDTH};
+use crate::ui::dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 
 /// Main state for the DataTable component.
 pub struct DataTableState {
@@ -52,6 +53,9 @@ pub struct DataTableState {
     /// Input state for the inline cell editor.
     cell_input: Option<Entity<InputState>>,
 
+    /// Dropdown for editing enum/set columns inline.
+    enum_dropdown: Option<Entity<Dropdown>>,
+
     /// Buffer for tracking local edits before committing.
     edit_buffer: EditBuffer,
 
@@ -64,9 +68,14 @@ pub struct DataTableState {
     /// Whether this table supports INSERT operations (add/duplicate rows).
     /// True for Table and Collection sources, false for query results.
     is_insertable: bool,
+
+    /// Enum/set options per column index.
+    enum_options: std::collections::HashMap<usize, Vec<String>>,
 }
 
 impl DataTableState {
+    pub const NULL_SENTINEL: &'static str = "\0__NULL__";
+
     pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
         let col_count = model.col_count();
         let row_count = model.row_count();
@@ -89,10 +98,12 @@ impl DataTableState {
             horizontal_offset: px(0.0),
             editing_cell: None,
             cell_input: None,
+            enum_dropdown: None,
             edit_buffer,
             pk_columns: Vec::new(),
             is_editable: false,
             is_insertable: false,
+            enum_options: std::collections::HashMap::new(),
         }
     }
 
@@ -434,6 +445,15 @@ impl DataTableState {
         self.is_insertable = insertable;
     }
 
+    pub fn set_enum_options(&mut self, col: usize, options: Vec<String>) {
+        self.enum_options.insert(col, options);
+    }
+
+    #[allow(dead_code)]
+    pub fn enum_options(&self, col: usize) -> Option<&Vec<String>> {
+        self.enum_options.get(&col)
+    }
+
     /// Check if a cell is currently being edited.
     pub fn is_editing(&self) -> bool {
         self.editing_cell.is_some()
@@ -516,6 +536,58 @@ impl DataTableState {
             return true;
         }
 
+        // Enum/set columns: use a dropdown instead of text input
+        if let Some(options) = self.enum_options.get(&coord.col).cloned() {
+            let items: Vec<DropdownItem> = options
+                .iter()
+                .map(|v| {
+                    if v == Self::NULL_SENTINEL {
+                        DropdownItem::with_value("NULL", Self::NULL_SENTINEL)
+                    } else {
+                        DropdownItem::new(v.clone())
+                    }
+                })
+                .collect();
+
+            let selected_index = if initial_value.is_empty() {
+                options.iter().position(|v| v == Self::NULL_SENTINEL)
+            } else {
+                options.iter().position(|v| v == &initial_value)
+            };
+
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(("enum-edit", coord.row * 10000 + coord.col))
+                    .items(items)
+                    .selected_index(selected_index)
+            });
+
+            dropdown.update(cx, |dd, cx| dd.open(cx));
+
+            cx.subscribe(
+                &dropdown,
+                |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                    let value = event.item.value.to_string();
+                    this.apply_enum_selection(&value, cx);
+                },
+            )
+            .detach();
+
+            cx.subscribe(
+                &dropdown,
+                |this, _dropdown, _event: &DropdownDismissed, cx| {
+                    this.cancel_enum_edit(cx);
+                },
+            )
+            .detach();
+
+            self.editing_cell = Some(coord);
+            self.enum_dropdown = Some(dropdown);
+            self.cell_input = None;
+            self.scroll_to_cell(coord.row, coord.col);
+            cx.notify();
+            return true;
+        }
+
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
             state.set_value(&initial_value, window, cx);
@@ -535,6 +607,7 @@ impl DataTableState {
 
         self.editing_cell = Some(coord);
         self.cell_input = Some(input);
+        self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
         cx.notify();
         true
@@ -543,6 +616,74 @@ impl DataTableState {
     /// Get the cell input state if currently editing.
     pub fn cell_input(&self) -> Option<&Entity<InputState>> {
         self.cell_input.as_ref()
+    }
+
+    pub fn enum_dropdown(&self) -> Option<&Entity<Dropdown>> {
+        self.enum_dropdown.as_ref()
+    }
+
+    fn apply_enum_selection(&mut self, value: &str, cx: &mut Context<Self>) {
+        use super::model::VisualRowSource;
+
+        let coord = match self.editing_cell.take() {
+            Some(c) => c,
+            None => return,
+        };
+
+        self.enum_dropdown = None;
+
+        let visual_order = self.edit_buffer.compute_visual_order();
+
+        let cell_value = if value == Self::NULL_SENTINEL {
+            super::model::CellValue::null()
+        } else {
+            super::model::CellValue::text(value)
+        };
+
+        match visual_order.get(coord.row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, coord.col, cell_value);
+            }
+            None => {}
+        }
+
+        cx.notify();
+    }
+
+    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing_cell = None;
+        self.enum_dropdown = None;
+        cx.notify();
+    }
+
+    pub fn is_editing_enum(&self) -> bool {
+        self.enum_dropdown.is_some()
+    }
+
+    pub fn enum_dropdown_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.select_next_item(cx));
+        }
+    }
+
+    pub fn enum_dropdown_prev(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.select_prev_item(cx));
+        }
+    }
+
+    pub fn enum_dropdown_accept(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = &self.enum_dropdown {
+            dropdown.update(cx, |dd, cx| dd.accept_selection(cx));
+        }
+    }
+
+    pub fn enum_dropdown_cancel(&mut self, cx: &mut Context<Self>) {
+        self.cancel_enum_edit(cx);
     }
 
     /// Stop editing and optionally apply the change.
@@ -554,6 +695,8 @@ impl DataTableState {
             Some(c) => c,
             None => return,
         };
+
+        self.enum_dropdown = None;
 
         if apply {
             if let Some(input) = self.cell_input.take() {

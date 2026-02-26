@@ -765,6 +765,7 @@ impl DataTable {
 
                         let editing_cell = state.editing_cell();
                         let cell_input = state.cell_input().cloned();
+                        let enum_dropdown = state.enum_dropdown().cloned();
                         let edit_buffer = state.edit_buffer();
 
                         render_rows(
@@ -775,6 +776,7 @@ impl DataTable {
                             state.selection(),
                             editing_cell,
                             cell_input.as_ref(),
+                            enum_dropdown.as_ref(),
                             edit_buffer,
                             total_width,
                             theme,
@@ -800,6 +802,7 @@ fn render_rows(
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
+    enum_dropdown: Option<&Entity<crate::ui::dropdown::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
     total_width: f32,
     theme: &gpui_component::theme::Theme,
@@ -867,21 +870,40 @@ fn render_rows(
                     let is_active = selection.active == Some(coord);
                     let is_editing = editing_cell == Some(coord);
 
-                    if is_editing && let Some(input_state) = cell_input {
-                        return div()
-                            .id(("cell", row_ix * 10000 + col_ix))
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .h(ROW_HEIGHT)
-                            .w(px(width))
-                            .overflow_hidden()
-                            .border_r_1()
-                            .border_1()
-                            .border_color(theme.ring)
-                            .bg(theme.background)
-                            .child(Input::new(input_state).small())
-                            .into_any_element();
+                    if is_editing {
+                        if let Some(dropdown) = enum_dropdown {
+                            return div()
+                                .id(("cell", row_ix * 10000 + col_ix))
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .h(ROW_HEIGHT)
+                                .w(px(width))
+                                .overflow_hidden()
+                                .border_r_1()
+                                .border_1()
+                                .border_color(theme.ring)
+                                .bg(theme.background)
+                                .child(dropdown.clone())
+                                .into_any_element();
+                        }
+
+                        if let Some(input_state) = cell_input {
+                            return div()
+                                .id(("cell", row_ix * 10000 + col_ix))
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .h(ROW_HEIGHT)
+                                .w(px(width))
+                                .overflow_hidden()
+                                .border_r_1()
+                                .border_1()
+                                .border_color(theme.ring)
+                                .bg(theme.background)
+                                .child(Input::new(input_state).small())
+                                .into_any_element();
+                        }
                     }
 
                     // For edit buffer access, use the data row index (model index for base rows)

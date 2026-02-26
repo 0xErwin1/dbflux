@@ -298,6 +298,7 @@ impl SqlPreviewModal {
                 nullable: true,
                 is_primary_key: pk_indices.contains(&idx),
                 default_value: None,
+                enum_values: None,
             })
             .collect();
 
@@ -372,6 +373,7 @@ impl SqlPreviewModal {
                     nullable: true,
                     is_primary_key: true,
                     default_value: None,
+                    enum_values: None,
                 },
                 ColumnInfo {
                     name: "column2".to_string(),
@@ -379,6 +381,7 @@ impl SqlPreviewModal {
                     nullable: true,
                     is_primary_key: false,
                     default_value: None,
+                    enum_values: None,
                 },
             ]
         });
