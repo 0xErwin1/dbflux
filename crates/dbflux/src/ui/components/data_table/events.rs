@@ -53,7 +53,10 @@ pub enum FilterOperator {
     Eq,
     NotEq,
     Gt,
+    Gte,
     Lt,
+    Lte,
+    Like,
 }
 
 /// Actions available in the context menu.
@@ -91,7 +94,7 @@ pub enum ContextMenuAction {
     CopyAsUpdate,
     /// Copy DELETE to clipboard via query generator.
     CopyAsDelete,
-    /// Filter by cell value with an operator (=, <>, >, <).
+    /// Filter by cell value with an operator.
     FilterByValue(FilterOperator),
     /// Filter: column IS NULL.
     FilterIsNull,
