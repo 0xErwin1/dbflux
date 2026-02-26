@@ -2,6 +2,30 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.4] – 2026-02-26
+
+### Added
+
+* Inline enum/set dropdown editing in the data grid with keyboard navigation (`j/k`, arrows, `Enter`, `Esc`)
+* Nullable enum editing support with explicit `NULL` option in dropdowns
+* Driver-level enum value metadata (`enum_values`) in `ColumnInfo` for PostgreSQL and MySQL
+* Info-level logging for unsupported value decoding paths in PostgreSQL, MySQL, and SQLite drivers
+
+### Changed
+
+* PostgreSQL column introspection now uses `pg_catalog` + `format_type(...)` to preserve real type names (including user-defined types)
+* PostgreSQL generated SQL literals now use escaped single-quoted string literals for readability
+* MySQL `ENUM(...)` and `SET(...)` column definitions are parsed and exposed as selectable values in the UI
+
+### Fixed
+
+* PostgreSQL custom types (enum/domain/composite/range) no longer appear as `NULL` due to restrictive string decoding
+* Table mode command routing now handles `Execute`/`Cancel` correctly, restoring keyboard-driven inline editing flow
+* `LIKE` filter generation now only adds `ESCAPE '\\'` when required by the search value
+* PostgreSQL `uuid` columns now cast to `::text` for `LIKE` filters
+
+---
+
 ## [0.3.3] – 2026-02-26
 
 ### Added
