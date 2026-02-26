@@ -786,6 +786,7 @@ impl SqliteConnection {
                     nullable: row.get::<_, i32>(3).unwrap_or(1) == 0,
                     is_primary_key: row.get::<_, i32>(5).unwrap_or(0) == 1,
                     default_value: row.get::<_, Option<String>>(4).unwrap_or(None),
+                    enum_values: None,
                 })
             })
             .map_err(|e| format_sqlite_query_error(&e))?
@@ -1124,7 +1125,10 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
         Ok(ValueRef::Real(f)) => Value::Float(f),
         Ok(ValueRef::Text(t)) => Value::Text(String::from_utf8_lossy(t).to_string()),
         Ok(ValueRef::Blob(b)) => Value::Bytes(b.to_vec()),
-        Err(_) => Value::Null,
+        Err(e) => {
+            log::info!("Unsupported SQLite value at column index {}: {}", idx, e);
+            Value::Null
+        }
     }
 }
 

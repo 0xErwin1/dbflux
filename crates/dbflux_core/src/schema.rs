@@ -619,6 +619,12 @@ pub struct ColumnInfo {
 
     /// Default value expression, if any.
     pub default_value: Option<String>,
+
+    /// For enum/set columns: the list of allowed values.
+    /// Populated by drivers that support custom types (PostgreSQL enums,
+    /// MySQL ENUM/SET).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enum_values: Option<Vec<String>>,
 }
 
 /// Relational tables store [`IndexInfo`], document collections store

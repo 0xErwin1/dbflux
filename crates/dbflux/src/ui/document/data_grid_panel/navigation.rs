@@ -530,11 +530,68 @@ impl DataGridPanel {
             }
         }
 
+        // When an enum dropdown is open, route navigation to the dropdown
+        let editing_enum = self
+            .table_state
+            .as_ref()
+            .map(|ts| ts.read(cx).is_editing_enum())
+            .unwrap_or(false);
+
+        if editing_enum && let Some(table_state) = &self.table_state {
+            match cmd {
+                Command::SelectNext | Command::FocusDown => {
+                    table_state.update(cx, |state, cx| state.enum_dropdown_next(cx));
+                    return true;
+                }
+                Command::SelectPrev | Command::FocusUp => {
+                    table_state.update(cx, |state, cx| state.enum_dropdown_prev(cx));
+                    return true;
+                }
+                Command::Execute => {
+                    table_state.update(cx, |state, cx| state.enum_dropdown_accept(cx));
+                    return true;
+                }
+                Command::Cancel => {
+                    table_state.update(cx, |state, cx| state.enum_dropdown_cancel(cx));
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
         // Handle table mode commands
         match cmd {
             Command::FocusToolbar => {
                 self.focus_toolbar(cx);
                 true
+            }
+            Command::Execute => {
+                if let Some(table_state) = &self.table_state {
+                    table_state.update(cx, |state, cx| {
+                        if state.is_editing() {
+                            state.stop_editing(true, cx);
+                        } else if let Some(coord) = state.selection().active {
+                            state.start_editing(coord, window, cx);
+                        }
+                    });
+                }
+                true
+            }
+            Command::Cancel => {
+                if let Some(table_state) = &self.table_state {
+                    let was_editing = table_state.update(cx, |state, cx| {
+                        if state.is_editing() {
+                            state.stop_editing(false, cx);
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if was_editing {
+                        return true;
+                    }
+                }
+                false
             }
             Command::SelectNext | Command::FocusDown => {
                 self.select_next(cx);

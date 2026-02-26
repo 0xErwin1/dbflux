@@ -55,6 +55,28 @@ impl DataGridPanel {
             .and_then(|c| c.default_value.clone())
     }
 
+    /// Returns the cached `ColumnInfo` list for the current table, if available.
+    pub(super) fn get_column_details(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<Vec<dbflux_core::ColumnInfo>> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => return None,
+            super::DataSource::QueryResult { .. } => return None,
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(&profile_id)?;
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = connected.table_details.get(&cache_key)?;
+
+        table_info.columns.clone()
+    }
+
     pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
         let (profile_id, table_ref) = match &self.source {
             super::DataSource::Table {

@@ -2912,13 +2912,31 @@ impl DataGridPanel {
                 _ => return,
             };
 
-            let escaped = raw
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            let pattern_literal = dialect.value_to_literal(&Value::Text(format!("%{}%", escaped)));
+            let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
 
-            format!("{} LIKE {} ESCAPE '\\'", col_name, pattern_literal)
+            let pattern_value = if needs_escape {
+                let escaped = raw
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                format!("%{}%", escaped)
+            } else {
+                format!("%{}%", raw)
+            };
+
+            let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
+
+            let like_column = if is_postgres && col_type_name == "uuid" {
+                format!("({})::text", col_name)
+            } else {
+                col_name.clone()
+            };
+
+            if needs_escape {
+                format!("{} LIKE {} ESCAPE '\\'", like_column, pattern_literal)
+            } else {
+                format!("{} LIKE {}", like_column, pattern_literal)
+            }
         } else if is_postgres
             && matches!(cell_value, Value::Json(_))
             && col_type_name.contains("json")

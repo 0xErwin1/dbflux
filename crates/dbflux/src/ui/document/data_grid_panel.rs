@@ -980,6 +980,8 @@ impl DataGridPanel {
             DataSource::Table { .. } | DataSource::Collection { .. }
         );
 
+        let column_details = self.get_column_details(cx);
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
@@ -988,6 +990,21 @@ impl DataGridPanel {
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
+
+            if let Some(columns) = &column_details {
+                for (col_ix, result_col) in self.result.columns.iter().enumerate() {
+                    if let Some(info) = columns.iter().find(|c| c.name == result_col.name)
+                        && let Some(enum_vals) = &info.enum_values
+                    {
+                        let mut options = enum_vals.clone();
+                        if info.nullable {
+                            options.insert(0, DataTableState::NULL_SENTINEL.to_string());
+                        }
+                        state.set_enum_options(col_ix, options);
+                    }
+                }
+            }
+
             state
         });
         let data_table = cx.new(|cx| DataTable::new("data-grid-table", table_state.clone(), cx));
