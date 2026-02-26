@@ -1613,7 +1613,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbflux"
-version = "0.3.4"
+version = "0.4.0-dev.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.3.4"
+version = "0.4.0-dev.0"
 dependencies = [
  "bitflags 2.10.0",
  "chrono",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_host"
-version = "0.3.4"
+version = "0.4.0-dev.0"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_mongodb",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_ipc"
-version = "0.3.4"
+version = "0.4.0-dev.0"
 dependencies = [
  "bincode",
  "dbflux_core",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ipc"
-version = "0.3.4"
+version = "0.4.0-dev.0"
 dependencies = [
  "bincode",
  "dbflux_core",
