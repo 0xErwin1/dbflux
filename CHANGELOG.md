@@ -2,6 +2,27 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.3] – 2026-02-26
+
+### Added
+
+* File-backed "New Tab" flow and keyboard navigation in the context bar
+* Settings toggle to mask and reveal SSH password fields
+* MongoDB sidebar metadata with collection-level indexes and a database-level indexes folder
+* MongoDB field schema sampling in the sidebar (field type, optionality, nested fields)
+
+### Changed
+
+* Sidebar schema folders now stay visible with zero counts while lazy details load
+* SQL and MongoDB schema folders are collapsed by default to avoid layout jumps during refresh
+
+### Fixed
+
+* Sidebar expansion no longer gets stuck in a loading state when opening schema nodes
+* Closing a database connection no longer blocks the UI thread and freezes the app
+
+---
+
 ## [0.3.2] – 2026-02-24
 
 ### Added
