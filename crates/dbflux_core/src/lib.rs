@@ -97,8 +97,8 @@ pub use saved_query::{SavedQuery, SavedQueryStore};
 pub use schema::{
     CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
     ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
-    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema,
-    IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyInfo, GraphInfo, GraphSchema, IndexData,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
     MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, PropertyInfo, RelationalSchema,
     RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,

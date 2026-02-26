@@ -2,6 +2,7 @@
 members = [
     "crates/dbflux",
     "crates/dbflux_core",
+    "crates/dbflux_ipc",
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
     "crates/dbflux_driver_mysql",
@@ -32,6 +33,7 @@ dbflux_driver_mongodb = { path = "crates/dbflux_driver_mongodb" }
 dbflux_driver_redis = { path = "crates/dbflux_driver_redis" }
 dbflux_ssh = { path = "crates/dbflux_ssh" }
 dbflux_export = { path = "crates/dbflux_export" }
+dbflux_ipc = { path = "crates/dbflux_ipc" }
 mysql = "25"
 
 gpui = "0.2.2"

@@ -221,30 +221,29 @@ impl Sidebar {
     fn cleanup_stale_overrides(&mut self, cx: &Context<Self>) {
         let state = self.app_state.read(cx);
 
-        self.expansion_overrides
-            .retain(|item_id, _expanded| {
-                if self.loading_items.contains(item_id) {
-                    return true;
-                }
+        self.expansion_overrides.retain(|item_id, _expanded| {
+            if self.loading_items.contains(item_id) {
+                return true;
+            }
 
-                match parse_node_id(item_id) {
-                    Some(SchemaNodeId::TypesFolder {
-                        profile_id,
-                        database,
-                        schema,
-                    }) => !state.needs_schema_types(profile_id, &database, Some(&schema)),
-                    Some(SchemaNodeId::SchemaIndexesFolder {
-                        profile_id,
-                        database,
-                        schema,
-                    }) => !state.needs_schema_indexes(profile_id, &database, Some(&schema)),
-                    Some(SchemaNodeId::SchemaForeignKeysFolder {
-                        profile_id,
-                        database,
-                        schema,
-                    }) => !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema)),
-                    _ => true,
-                }
-            });
+            match parse_node_id(item_id) {
+                Some(SchemaNodeId::TypesFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => !state.needs_schema_types(profile_id, &database, Some(&schema)),
+                Some(SchemaNodeId::SchemaIndexesFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => !state.needs_schema_indexes(profile_id, &database, Some(&schema)),
+                Some(SchemaNodeId::SchemaForeignKeysFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema)),
+                _ => true,
+            }
+        });
     }
 }

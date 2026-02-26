@@ -152,10 +152,16 @@ impl SettingsWindow {
         let input_ssh_user = cx.new(|cx| InputState::new(window, cx).placeholder("username"));
         let input_ssh_key_path =
             cx.new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_rsa"));
-        let input_ssh_key_passphrase =
-            cx.new(|cx| InputState::new(window, cx).placeholder("passphrase").masked(true));
-        let input_ssh_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("password").masked(true));
+        let input_ssh_key_passphrase = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("passphrase")
+                .masked(true)
+        });
+        let input_ssh_password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("password")
+                .masked(true)
+        });
 
         let subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
             this.editing_tunnel_id = None;

@@ -18,6 +18,7 @@ gpui-component.workspace = true
 dbflux_core.workspace = true
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true
+dbflux_ipc.workspace = true
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -27,6 +28,8 @@ rfd.workspace = true
 fuzzy-matcher.workspace = true
 anyhow = "1"
 lsp-types = "0.97"
+bincode = "1"
+libc = "0.2"
 
 [dependencies.dbflux_driver_sqlite]
 workspace = true

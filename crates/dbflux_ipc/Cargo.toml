@@ -1,0 +1,16 @@
+[package]
+name = "dbflux_ipc"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "IPC protocol for DBFlux single-instance"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+bincode = "1"
+libc = "0.2"
+dbflux_core.workspace = true
+uuid.workspace = true
