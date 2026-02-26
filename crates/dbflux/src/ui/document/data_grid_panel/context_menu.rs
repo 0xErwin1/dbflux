@@ -145,26 +145,25 @@ impl DataGridPanel {
             return;
         };
 
-        let (doc_index, field_path, field_value) =
-            tree_state.update(cx, |ts, _cx| {
-                let cursor_id = ts.cursor().cloned();
-                let idx = cursor_id
-                    .as_ref()
-                    .and_then(|id| id.doc_index())
-                    .unwrap_or(0);
+        let (doc_index, field_path, field_value) = tree_state.update(cx, |ts, _cx| {
+            let cursor_id = ts.cursor().cloned();
+            let idx = cursor_id
+                .as_ref()
+                .and_then(|id| id.doc_index())
+                .unwrap_or(0);
 
-                let (fp, fv) = cursor_id
-                    .as_ref()
-                    .and_then(|cid| {
-                        let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
-                        let path: Vec<String> = cid.path[1..].to_vec();
-                        let path_opt = if path.is_empty() { None } else { Some(path) };
-                        Some((path_opt, Some(node.value.clone())))
-                    })
-                    .unwrap_or((None, None));
+            let (fp, fv) = cursor_id
+                .as_ref()
+                .and_then(|cid| {
+                    let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                    let path: Vec<String> = cid.path[1..].to_vec();
+                    let path_opt = if path.is_empty() { None } else { Some(path) };
+                    Some((path_opt, Some(node.value.clone())))
+                })
+                .unwrap_or((None, None));
 
-                (idx, fp, fv)
-            });
+            (idx, fp, fv)
+        });
 
         // Use panel origin with some offset for keyboard-triggered menu
         let position = Point {
@@ -296,7 +295,12 @@ impl DataGridPanel {
     fn is_mongo_comparable(value: &Value) -> bool {
         matches!(
             value,
-            Value::Int(_) | Value::Float(_) | Value::Decimal(_) | Value::DateTime(_) | Value::Date(_) | Value::Time(_)
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Decimal(_)
+                | Value::DateTime(_)
+                | Value::Date(_)
+                | Value::Time(_)
         )
     }
 
@@ -387,10 +391,7 @@ impl DataGridPanel {
             format!("{} IS NOT NULL", col_name),
             ContextMenuAction::FilterIsNotNull,
         ));
-        items.push((
-            "Remove filter".to_string(),
-            ContextMenuAction::RemoveFilter,
-        ));
+        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
 
         let count = items.len();
         (col_name, count, items, filterable)
@@ -438,10 +439,7 @@ impl DataGridPanel {
             format!("{} IS NOT NULL", field),
             ContextMenuAction::FilterIsNotNull,
         ));
-        items.push((
-            "Remove filter".to_string(),
-            ContextMenuAction::RemoveFilter,
-        ));
+        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
 
         let count = items.len();
         (field, count, items, true)
@@ -640,8 +638,10 @@ impl DataGridPanel {
 
                 if let Some(ref mut menu) = self.context_menu {
                     if menu.filter_submenu_open {
-                        let action =
-                            Self::filter_submenu_action(menu.submenu_selected_index, filter_item_count);
+                        let action = Self::filter_submenu_action(
+                            menu.submenu_selected_index,
+                            filter_item_count,
+                        );
                         self.handle_context_menu_action(action, window, cx);
                     } else if menu.order_submenu_open {
                         let action = match menu.submenu_selected_index {
@@ -2134,12 +2134,7 @@ impl DataGridPanel {
             },
             ContextMenuAction::FilterIsNull => match backend {
                 Some(FilterBackend::Mongo) => {
-                    self.handle_mongo_filter_null(
-                        &menu.doc_field_path,
-                        false,
-                        window,
-                        cx,
-                    );
+                    self.handle_mongo_filter_null(&menu.doc_field_path, false, window, cx);
                 }
                 _ => {
                     self.handle_filter_is_null(menu.col, false, window, cx);
@@ -2147,12 +2142,7 @@ impl DataGridPanel {
             },
             ContextMenuAction::FilterIsNotNull => match backend {
                 Some(FilterBackend::Mongo) => {
-                    self.handle_mongo_filter_null(
-                        &menu.doc_field_path,
-                        true,
-                        window,
-                        cx,
-                    );
+                    self.handle_mongo_filter_null(&menu.doc_field_path, true, window, cx);
                 }
                 _ => {
                     self.handle_filter_is_null(menu.col, true, window, cx);

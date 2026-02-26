@@ -588,6 +588,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1607,6 +1616,7 @@ name = "dbflux"
 version = "0.3.3"
 dependencies = [
  "anyhow",
+ "bincode",
  "dbflux_core",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
@@ -1614,12 +1624,14 @@ dependencies = [
  "dbflux_driver_redis",
  "dbflux_driver_sqlite",
  "dbflux_export",
+ "dbflux_ipc",
  "dbflux_ssh",
  "dirs 5.0.1",
  "env_logger",
  "fuzzy-matcher",
  "gpui",
  "gpui-component",
+ "libc",
  "log",
  "lsp-types",
  "rfd",
@@ -1725,6 +1737,17 @@ dependencies = [
  "hex",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "dbflux_ipc"
+version = "0.3.3"
+dependencies = [
+ "bincode",
+ "dbflux_core",
+ "libc",
+ "serde",
+ "uuid",
 ]
 
 [[package]]

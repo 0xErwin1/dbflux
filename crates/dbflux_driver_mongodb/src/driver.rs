@@ -4,18 +4,16 @@ use std::time::Instant;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountRequest, ColumnMeta, Connection,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    CollectionIndexInfo, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
-    FieldInfo, FormValues, FormattedError, Icon, IndexData, IndexDirection, LanguageService,
-    MONGODB_FORM,
-    PlaceholderStyle,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
-    TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo,
-    sanitize_uri,
+    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo, FormValues,
+    FormattedError, Icon, IndexData, IndexDirection, LanguageService, MONGODB_FORM,
+    PlaceholderStyle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SshTunnelConfig, TableInfo, TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo,
+    detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -2113,9 +2111,7 @@ fn collect_field_stats(doc: &Document, stats: &mut BTreeMap<String, FieldStats>)
         *entry.type_counts.entry(type_name).or_insert(0) += 1;
 
         if let Bson::Document(nested_doc) = value {
-            let nested = entry
-                .nested_stats
-                .get_or_insert_with(BTreeMap::new);
+            let nested = entry.nested_stats.get_or_insert_with(BTreeMap::new);
             collect_field_stats(nested_doc, nested);
         }
     }
