@@ -2167,6 +2167,128 @@ fn bson_type_name(value: &Bson) -> String {
 mod tests {
     use super::*;
     use crate::query_parser::parse_query;
+    use dbflux_core::{DbDriver, DbError};
+
+    #[test]
+    fn build_config_requires_uri_in_uri_mode() {
+        let driver = MongoDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_defaults_host_and_port() {
+        let driver = MongoDriver::new();
+        let values = FormValues::new();
+
+        let config = driver.build_config(&values).expect("config should build");
+        let DbConfig::MongoDB { host, port, .. } = config else {
+            panic!("expected mongodb config");
+        };
+
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 27017);
+    }
+
+    #[test]
+    fn extract_values_includes_uri_flags_and_auth_database() {
+        let driver = MongoDriver::new();
+        let config = DbConfig::MongoDB {
+            use_uri: true,
+            uri: Some("mongodb://user:pass@host:27017/app?authSource=admin".to_string()),
+            host: String::new(),
+            port: 27017,
+            user: Some("user".to_string()),
+            database: Some("app".to_string()),
+            auth_database: Some("admin".to_string()),
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(
+            values.get("auth_database").map(String::as_str),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn build_uri_encodes_credentials_and_auth_source() {
+        let driver = MongoDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "27017".to_string());
+        values.insert("user".to_string(), "app user".to_string());
+        values.insert("database".to_string(), "main".to_string());
+        values.insert("auth_database".to_string(), "admin db".to_string());
+
+        let uri = driver
+            .build_uri(&values, "s3cr@t")
+            .expect("mongodb should support uri build");
+
+        assert_eq!(
+            uri,
+            "mongodb://app%20user:s3cr%40t@localhost:27017/main?authSource=admin%20db"
+        );
+    }
+
+    #[test]
+    fn parse_uri_supports_srv_and_auth_source() {
+        let driver = MongoDriver::new();
+        let values = driver
+            .parse_uri("mongodb+srv://user:pass@cluster0.example.net/main?authSource=admin")
+            .expect("mongodb+srv uri should parse");
+
+        assert_eq!(values.get("host").map(String::as_str), Some("cluster0.example.net"));
+        assert_eq!(values.get("port").map(String::as_str), Some("27017"));
+        assert_eq!(values.get("database").map(String::as_str), Some("main"));
+        assert_eq!(
+            values.get("auth_database").map(String::as_str),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn parse_uri_rejects_non_mongodb_scheme() {
+        let driver = MongoDriver::new();
+        assert!(driver.parse_uri("redis://localhost:6379/0").is_none());
+    }
+
+    #[test]
+    fn inject_credentials_adds_only_when_absent() {
+        let injected = inject_credentials_into_uri(
+            "mongodb://localhost:27017/admin",
+            Some("alice"),
+            Some("pw"),
+        );
+        assert_eq!(injected, "mongodb://alice:pw@localhost:27017/admin");
+
+        let untouched = inject_credentials_into_uri(
+            "mongodb://existing:creds@localhost:27017/admin",
+            Some("alice"),
+            Some("pw"),
+        );
+        assert_eq!(
+            untouched,
+            "mongodb://existing:creds@localhost:27017/admin"
+        );
+    }
+
+    #[test]
+    fn build_mongodb_uri_defaults_auth_source_for_authenticated_connections() {
+        let uri = build_mongodb_uri("localhost", 27017, Some("user"), Some("pass"), None);
+        assert!(uri.contains("authSource=admin"));
+    }
+
+    #[test]
+    fn extract_mongodb_config_rejects_non_mongodb_config() {
+        let result = extract_mongodb_config(&DbConfig::default_postgres());
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
 
     #[test]
     fn test_parse_find_query() {

@@ -6,6 +6,8 @@ use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -13,14 +15,12 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
-    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -2588,8 +2588,8 @@ fn get_schema_foreign_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{PostgresDialect, PostgresDriver};
-    use dbflux_core::{DbDriver, FormValues, SqlDialect, Value};
+    use super::{inject_password_into_pg_uri, PostgresDialect, PostgresDriver};
+    use dbflux_core::{DbConfig, DbDriver, DbError, FormValues, SqlDialect, Value};
 
     #[test]
     fn build_uri_encodes_user_and_password() {
@@ -2649,5 +2649,66 @@ mod tests {
             dialect.value_to_literal(&Value::Float(f64::NEG_INFINITY)),
             "'-Infinity'::float8"
         );
+    }
+
+    #[test]
+    fn build_config_requires_uri_when_uri_mode_is_enabled() {
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_validates_manual_fields() {
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "invalid".to_string());
+        values.insert("user".to_string(), "postgres".to_string());
+        values.insert("database".to_string(), "app".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn extract_values_includes_uri_mode_flags() {
+        let driver = PostgresDriver::new();
+        let config = DbConfig::Postgres {
+            use_uri: true,
+            uri: Some("postgresql://u:p@localhost:5432/app".to_string()),
+            host: String::new(),
+            port: 5432,
+            user: String::new(),
+            database: String::new(),
+            ssl_mode: dbflux_core::SslMode::Prefer,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(
+            values.get("uri").map(String::as_str),
+            Some("postgresql://u:p@localhost:5432/app")
+        );
+    }
+
+    #[test]
+    fn parse_uri_rejects_non_postgres_schemes() {
+        let driver = PostgresDriver::new();
+        assert!(driver
+            .parse_uri("mysql://root@localhost:3306/app")
+            .is_none());
+    }
+
+    #[test]
+    fn inject_password_into_uri_adds_password_for_user_without_one() {
+        let uri =
+            inject_password_into_pg_uri("postgresql://user@localhost:5432/app", Some("new pass"));
+        assert_eq!(uri, "postgresql://user:new%20pass@localhost:5432/app");
     }
 }

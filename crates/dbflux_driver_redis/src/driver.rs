@@ -1972,3 +1972,180 @@ fn redis_first_line_range(query: &str) -> TextPositionRange {
 
     TextPositionRange::new(TextPosition::new(0, 0), TextPosition::new(0, end_col))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_core::{DbDriver, ValidationResult};
+
+    #[test]
+    fn build_config_requires_uri_when_uri_mode_enabled() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_rejects_invalid_database_index() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "6379".to_string());
+        values.insert("database".to_string(), "nope".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_requires_host_and_valid_port_in_manual_mode() {
+        let driver = RedisDriver::new();
+
+        let mut missing_host = FormValues::new();
+        missing_host.insert("port".to_string(), "6379".to_string());
+        let result = driver.build_config(&missing_host);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+
+        let mut bad_port = FormValues::new();
+        bad_port.insert("host".to_string(), "localhost".to_string());
+        bad_port.insert("port".to_string(), "not-a-port".to_string());
+        let result = driver.build_config(&bad_port);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn extract_values_includes_tls_and_database() {
+        let driver = RedisDriver::new();
+        let config = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "cache.local".to_string(),
+            port: 6380,
+            user: Some("svc".to_string()),
+            database: Some(3),
+            tls: true,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("host").map(String::as_str), Some("cache.local"));
+        assert_eq!(values.get("port").map(String::as_str), Some("6380"));
+        assert_eq!(values.get("database").map(String::as_str), Some("3"));
+        assert_eq!(values.get("tls").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn build_uri_and_parse_uri_keep_tls_user_and_db() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "cache.local".to_string());
+        values.insert("port".to_string(), "6380".to_string());
+        values.insert("user".to_string(), "service user".to_string());
+        values.insert("database".to_string(), "2".to_string());
+        values.insert("tls".to_string(), "true".to_string());
+
+        let uri = driver
+            .build_uri(&values, "s3cr@t")
+            .expect("redis driver should support uri build");
+        assert_eq!(uri, "rediss://service%20user:s3cr%40t@cache.local:6380/2");
+
+        let parsed = driver.parse_uri(&uri).expect("uri should parse");
+        assert_eq!(parsed.get("tls").map(String::as_str), Some("true"));
+        assert_eq!(parsed.get("host").map(String::as_str), Some("cache.local"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("6380"));
+        assert_eq!(
+            parsed.get("user").map(String::as_str),
+            Some("service%20user")
+        );
+        assert_eq!(parsed.get("database").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn parse_uri_rejects_unsupported_scheme() {
+        let driver = RedisDriver::new();
+        assert!(driver.parse_uri("http://localhost:6379").is_none());
+    }
+
+    #[test]
+    fn parse_uri_defaults_port_when_missing() {
+        let driver = RedisDriver::new();
+        let parsed = driver
+            .parse_uri("redis://localhost/0")
+            .expect("uri should parse");
+
+        assert_eq!(parsed.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("6379"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn parse_database_name_supports_prefix_and_plain_numbers() {
+        assert_eq!(parse_database_name("db3").unwrap(), 3);
+        assert_eq!(parse_database_name(" 7 ").unwrap(), 7);
+    }
+
+    #[test]
+    fn parse_database_name_rejects_invalid_values() {
+        let error = parse_database_name("dbx").expect_err("invalid db name should fail");
+        assert!(matches!(error, DbError::InvalidProfile(_)));
+    }
+
+    #[test]
+    fn parse_command_strips_comments_and_semicolon() {
+        let tokens = parse_command("# comment\nGET my_key;").expect("command should parse");
+        assert_eq!(tokens, vec!["GET", "my_key"]);
+    }
+
+    #[test]
+    fn parse_command_handles_quotes_and_escapes() {
+        let tokens = parse_command("SET \"my key\" 'hello world'\\n")
+            .expect("quoted command should parse");
+        assert_eq!(tokens, vec!["SET", "my key", "hello worldn"]);
+    }
+
+    #[test]
+    fn parse_command_reports_unterminated_quote() {
+        let error = parse_command("SET 'abc").expect_err("unterminated quote should fail");
+        assert!(matches!(error, DbError::QueryFailed(_)));
+    }
+
+    #[test]
+    fn check_pairing_detects_mset_odd_arguments() {
+        let message = check_pairing("MSET", 3).expect("odd mset arity should warn");
+        assert!(message.contains("even number of arguments"));
+    }
+
+    #[test]
+    fn check_redis_arity_reports_exact_argument_mismatch() {
+        let diagnostics = check_redis_arity(&["GET".to_string()], "GET");
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("requires exactly 1 argument"));
+    }
+
+    #[test]
+    fn language_service_flags_sql_as_wrong_language() {
+        let service = RedisLanguageService;
+        let validation = service.validate("SELECT * FROM users");
+
+        assert!(matches!(
+            validation,
+            ValidationResult::WrongLanguage { .. }
+        ));
+    }
+
+    #[test]
+    fn uri_authority_has_credentials_detects_at_symbol() {
+        assert!(uri_authority_has_credentials("redis://:pass@localhost:6379/0"));
+        assert!(!uri_authority_has_credentials("redis://localhost:6379/0"));
+    }
+
+    #[test]
+    #[ignore = "TODO: decode percent-encoded username in redis parse_uri"]
+    fn pending_redis_parse_uri_username_decoding() {
+        panic!("TODO: percent-decode username in Redis parse_uri result");
+    }
+}
