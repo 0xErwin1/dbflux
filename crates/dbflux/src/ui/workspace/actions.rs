@@ -1,5 +1,27 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenDocumentDecision {
+    ErrorNoConnection,
+    FocusExisting(crate::ui::document::DocumentId),
+    OpenNew,
+}
+
+fn decide_open_document(
+    has_connection: bool,
+    existing_id: Option<crate::ui::document::DocumentId>,
+) -> OpenDocumentDecision {
+    if !has_connection {
+        return OpenDocumentDecision::ErrorNoConnection;
+    }
+
+    if let Some(existing_id) = existing_id {
+        return OpenDocumentDecision::FocusExisting(existing_id);
+    }
+
+    OpenDocumentDecision::OpenNew
+}
+
 impl Workspace {
     pub(super) fn handle_command(
         &mut self,
@@ -266,36 +288,40 @@ impl Workspace {
     ) {
         use crate::ui::toast::ToastExt;
 
-        // Check if connection exists
-        if !self
+        let has_connection = self
             .app_state
             .read(cx)
             .connections()
-            .contains_key(&profile_id)
-        {
-            cx.toast_error("No active connection for this table", window);
-            return;
-        }
+            .contains_key(&profile_id);
 
-        // Check if table is already open - if so, focus that tab
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_table(&table, cx))
-            .map(|doc| doc.id());
+        let existing_id = if has_connection {
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find(|doc| doc.is_table(&table, cx))
+                .map(|doc| doc.id())
+        } else {
+            None
+        };
 
-        if let Some(id) = existing_id {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.activate(id, cx);
-            });
-            log::info!(
-                "Focused existing table document: {:?}.{:?}",
-                table.schema,
-                table.name
-            );
-            return;
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                cx.toast_error("No active connection for this table", window);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                log::info!(
+                    "Focused existing table document: {:?}.{:?}",
+                    table.schema,
+                    table.name
+                );
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
         }
 
         // Create a DataDocument for the table
@@ -327,36 +353,40 @@ impl Workspace {
     ) {
         use crate::ui::toast::ToastExt;
 
-        // Check if connection exists
-        if !self
+        let has_connection = self
             .app_state
             .read(cx)
             .connections()
-            .contains_key(&profile_id)
-        {
-            cx.toast_error("No active connection for this collection", window);
-            return;
-        }
+            .contains_key(&profile_id);
 
-        // Check if collection is already open - if so, focus that tab
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_collection(&collection, cx))
-            .map(|doc| doc.id());
+        let existing_id = if has_connection {
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find(|doc| doc.is_collection(&collection, cx))
+                .map(|doc| doc.id())
+        } else {
+            None
+        };
 
-        if let Some(id) = existing_id {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.activate(id, cx);
-            });
-            log::info!(
-                "Focused existing collection document: {}.{}",
-                collection.database,
-                collection.name
-            );
-            return;
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                cx.toast_error("No active connection for this collection", window);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                log::info!(
+                    "Focused existing collection document: {}.{}",
+                    collection.database,
+                    collection.name
+                );
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
         }
 
         // Create a DataDocument for the collection
@@ -391,29 +421,35 @@ impl Workspace {
     ) {
         use crate::ui::toast::ToastExt;
 
-        if !self
+        let has_connection = self
             .app_state
             .read(cx)
             .connections()
-            .contains_key(&profile_id)
-        {
-            cx.toast_error("No active connection for this key-value database", window);
-            return;
-        }
+            .contains_key(&profile_id);
 
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_key_value_database(profile_id, &database, cx))
-            .map(|doc| doc.id());
+        let existing_id = if has_connection {
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find(|doc| doc.is_key_value_database(profile_id, &database, cx))
+                .map(|doc| doc.id())
+        } else {
+            None
+        };
 
-        if let Some(id) = existing_id {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.activate(id, cx);
-            });
-            return;
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                cx.toast_error("No active connection for this key-value database", window);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
         }
 
         let doc = cx.new(|cx| {
@@ -997,5 +1033,31 @@ impl Workspace {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpenDocumentDecision, decide_open_document};
+    use crate::ui::document::DocumentId;
+    use uuid::Uuid;
+
+    #[test]
+    fn decide_open_document_returns_error_without_connection() {
+        let decision = decide_open_document(false, None);
+        assert_eq!(decision, OpenDocumentDecision::ErrorNoConnection);
+    }
+
+    #[test]
+    fn decide_open_document_focuses_existing_tab_when_available() {
+        let existing = DocumentId(Uuid::new_v4());
+        let decision = decide_open_document(true, Some(existing));
+        assert_eq!(decision, OpenDocumentDecision::FocusExisting(existing));
+    }
+
+    #[test]
+    fn decide_open_document_opens_new_when_connected_and_no_existing_tab() {
+        let decision = decide_open_document(true, None);
+        assert_eq!(decision, OpenDocumentDecision::OpenNew);
     }
 }

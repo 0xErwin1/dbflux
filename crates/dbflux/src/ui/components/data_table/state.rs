@@ -195,19 +195,7 @@ impl DataTableState {
 
     /// Cycle sort state for a column: none -> asc -> desc -> none
     pub fn cycle_sort(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        let new_sort = match self.sort {
-            Some(SortState {
-                column_ix,
-                direction,
-            }) if column_ix == col_ix => {
-                use dbflux_core::SortDirection::*;
-                match direction {
-                    Ascending => Some(SortState::descending(col_ix)),
-                    Descending => None,
-                }
-            }
-            _ => Some(SortState::ascending(col_ix)),
-        };
+        let new_sort = next_sort_state(self.sort, col_ix);
 
         self.set_sort(new_sort, cx);
     }
@@ -829,6 +817,49 @@ impl DataTableState {
     /// This applies server-side computed values (defaults, triggers) to the model.
     pub fn apply_returning_row(&mut self, row_idx: usize, values: &[dbflux_core::Value]) {
         self.model = Arc::new(self.model.with_row_updated(row_idx, values));
+    }
+}
+
+fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortState> {
+    match current {
+        Some(SortState {
+            column_ix,
+            direction,
+        }) if column_ix == col_ix => {
+            use dbflux_core::SortDirection::*;
+            match direction {
+                Ascending => Some(SortState::descending(col_ix)),
+                Descending => None,
+            }
+        }
+        _ => Some(SortState::ascending(col_ix)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_sort_state;
+    use crate::ui::components::data_table::events::SortState;
+
+    #[test]
+    fn next_sort_state_cycles_none_asc_desc_none() {
+        let column = 3;
+
+        let step1 = next_sort_state(None, column);
+        assert_eq!(step1, Some(SortState::ascending(column)));
+
+        let step2 = next_sort_state(step1, column);
+        assert_eq!(step2, Some(SortState::descending(column)));
+
+        let step3 = next_sort_state(step2, column);
+        assert_eq!(step3, None);
+    }
+
+    #[test]
+    fn next_sort_state_switches_to_new_column_ascending() {
+        let current = Some(SortState::descending(1));
+        let next = next_sort_state(current, 5);
+        assert_eq!(next, Some(SortState::ascending(5)));
     }
 }
 
