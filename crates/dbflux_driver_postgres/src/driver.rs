@@ -1950,24 +1950,34 @@ fn pg_quote_string(s: &str) -> String {
     format!("'{}'", pg_escape_string(s))
 }
 
-/// Wrapper that accepts any PostgreSQL type and decodes its text representation.
+/// Wrapper that decodes textual PostgreSQL values.
 ///
 /// The `postgres` crate's `FromSql<String>` only accepts TEXT/VARCHAR/BPCHAR OIDs,
 /// so custom types (enums, domains, composites) fail silently. This wrapper accepts
-/// any type and reads the raw bytes as UTF-8, which works because PostgreSQL sends
-/// enum/domain/composite values in their text form over the binary protocol.
+/// text-compatible custom types and reads the raw bytes as UTF-8.
 struct PgText(String);
+
+fn is_textual_pg_type(ty: &Type) -> bool {
+    match ty.name() {
+        "text" | "varchar" | "bpchar" | "name" | "citext" => true,
+        _ => match ty.kind() {
+            Kind::Enum(_) => true,
+            Kind::Domain(inner) => is_textual_pg_type(inner),
+            _ => false,
+        },
+    }
+}
 
 impl<'a> FromSql<'a> for PgText {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        Ok(PgText(String::from_utf8_lossy(raw).into_owned()))
+        Ok(PgText(std::str::from_utf8(raw)?.to_string()))
     }
 
-    fn accepts(_ty: &Type) -> bool {
-        true
+    fn accepts(ty: &Type) -> bool {
+        is_textual_pg_type(ty)
     }
 }
 
@@ -2128,6 +2138,11 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .map(|value| value.map(Value::Float).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
 
+        "text" | "varchar" | "bpchar" | "name" | "citext" => row
+            .try_get::<_, Option<String>>(idx)
+            .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
+
         "uuid" => row
             .try_get::<_, Option<Uuid>>(idx)
             .map(|value| {
@@ -2187,7 +2202,23 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .unwrap_or(Value::Null),
 
         _ => match col_type.kind() {
-            Kind::Enum(_) | Kind::Domain(_) | Kind::Composite(_) | Kind::Range(_) => {
+            Kind::Enum(_) => match row.try_get::<_, Option<PgText>>(idx) {
+                Ok(Some(PgText(s))) => Value::Text(s),
+                Ok(None) => Value::Null,
+                Err(e) => {
+                    let col_name = row.columns()[idx].name();
+                    log::info!(
+                        "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
+                        type_name,
+                        col_type.kind(),
+                        col_name,
+                        e
+                    );
+                    Value::Null
+                }
+            },
+
+            Kind::Domain(inner) if is_textual_pg_type(inner) => {
                 match row.try_get::<_, Option<PgText>>(idx) {
                     Ok(Some(PgText(s))) => Value::Text(s),
                     Ok(None) => Value::Null,
@@ -2205,38 +2236,35 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                 }
             }
 
-            Kind::Array(_) => match row.try_get::<_, Option<Vec<PgText>>>(idx) {
-                Ok(Some(arr)) => {
-                    Value::Array(arr.into_iter().map(|PgText(s)| Value::Text(s)).collect())
+            Kind::Array(inner) if is_textual_pg_type(inner) => {
+                match row.try_get::<_, Option<Vec<PgText>>>(idx) {
+                    Ok(Some(arr)) => {
+                        Value::Array(arr.into_iter().map(|PgText(s)| Value::Text(s)).collect())
+                    }
+                    Ok(None) => Value::Null,
+                    Err(e) => {
+                        let col_name = row.columns()[idx].name();
+                        log::info!(
+                            "Unsupported PostgreSQL array type '{}' for column '{}': {}",
+                            type_name,
+                            col_name,
+                            e
+                        );
+                        Value::Null
+                    }
                 }
-                Ok(None) => Value::Null,
-                Err(e) => {
-                    let col_name = row.columns()[idx].name();
-                    log::info!(
-                        "Unsupported PostgreSQL array type '{}' for column '{}': {}",
-                        type_name,
-                        col_name,
-                        e
-                    );
-                    Value::Null
-                }
-            },
+            }
 
-            _ => match row.try_get::<_, Option<PgText>>(idx) {
-                Ok(Some(PgText(s))) => Value::Text(s),
-                Ok(None) => Value::Null,
-                Err(e) => {
-                    let col_name = row.columns()[idx].name();
-                    log::info!(
-                        "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
-                        type_name,
-                        col_type.kind(),
-                        col_name,
-                        e
-                    );
-                    Value::Null
-                }
-            },
+            _ => {
+                let col_name = row.columns()[idx].name();
+                log::info!(
+                    "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': fallback decode disabled",
+                    type_name,
+                    col_type.kind(),
+                    col_name
+                );
+                Value::Null
+            }
         },
     }
 }

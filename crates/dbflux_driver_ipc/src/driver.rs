@@ -9,7 +9,7 @@ use dbflux_core::{
     DriverMetadata, FormValues,
 };
 use dbflux_ipc::driver_protocol::{DriverFormDefDto, DriverMetadataDto, DriverResponseBody};
-use interprocess::local_socket::{prelude::*, GenericNamespaced, Name, Stream as IpcStream};
+use interprocess::local_socket::{GenericNamespaced, Name, Stream as IpcStream, prelude::*};
 
 use crate::connection::IpcConnection;
 use crate::transport::RpcClient;

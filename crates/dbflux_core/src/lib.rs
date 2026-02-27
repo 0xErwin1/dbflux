@@ -1,5 +1,6 @@
 #![allow(clippy::result_large_err)]
 
+mod app_config;
 mod code_generation;
 mod connection_tree;
 mod connection_tree_store;
@@ -35,7 +36,6 @@ mod table_browser;
 mod task;
 mod traits;
 mod value;
-mod app_config;
 
 pub mod connection_manager;
 pub mod connection_tree_manager;
@@ -62,8 +62,8 @@ pub use driver_capabilities::{
     DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage,
 };
 pub use driver_form::{
-    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, SelectOption,
-    MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
+    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, MONGODB_FORM,
+    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM, SelectOption,
 };
 pub use error::DbError;
 pub use error_formatter::{
@@ -140,6 +140,7 @@ pub use sql_generation::{
 };
 pub use sql_query_builder::SqlQueryBuilder;
 
+pub use app_config::{AppConfig, AppConfigStore, RpcServiceConfig};
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
     ConnectionManager, DatabaseConnection, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
@@ -148,7 +149,6 @@ pub use connection_manager::{
     FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,
     RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
-pub use app_config::{AppConfig, AppConfigStore, RpcServiceConfig};
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;
 pub use profile_manager::ProfileManager;

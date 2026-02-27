@@ -11,9 +11,9 @@ use dbflux_ipc::driver_protocol::{
     DriverFormDefDto, DriverHelloResponse, DriverMetadataDto, DriverRequestBody,
     DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcErrorCode,
 };
-use dbflux_ipc::{framing, DRIVER_RPC_VERSION};
+use dbflux_ipc::{DRIVER_RPC_VERSION, framing};
 use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions,
+    GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
 };
 use session::SessionManager;
 use uuid::Uuid;

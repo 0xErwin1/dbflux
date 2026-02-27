@@ -6,8 +6,8 @@ use crate::saved_query_manager::SavedQueryManager;
 use crate::secret_manager::SecretManager;
 use crate::ssh_tunnel_manager::SshTunnelManager;
 use crate::{
-    create_secret_store, ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator,
-    ShutdownPhase, TaskManager,
+    ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
+    TaskManager, create_secret_store,
 };
 use log::info;
 use std::collections::HashMap;
