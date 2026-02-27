@@ -42,6 +42,9 @@ pub enum Value {
 
     /// MongoDB ObjectId (24-character hex string).
     ObjectId(String),
+
+    /// Value exists in database but this client cannot decode/render it yet.
+    Unsupported(String),
 }
 
 impl Value {
@@ -94,6 +97,7 @@ impl Value {
                     format!("ObjectId({}...)", &id[..max_len.saturating_sub(12)])
                 }
             }
+            Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
         }
     }
 }
@@ -120,7 +124,8 @@ impl Value {
             Value::ObjectId(_) => 10,
             Value::Array(_) => 11,
             Value::Document(_) => 12,
-            Value::Null => 13,
+            Value::Unsupported(_) => 13,
+            Value::Null => 14,
         }
     }
 
@@ -192,6 +197,7 @@ impl Value {
                 serde_json::Value::Object(map)
             }
             Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+            Value::Unsupported(type_name) => serde_json::json!({"$unsupported": type_name}),
         }
     }
 }
@@ -224,6 +230,7 @@ impl Ord for Value {
             (Date(a), Date(b)) => a.cmp(b),
             (Time(a), Time(b)) => a.cmp(b),
             (ObjectId(a), ObjectId(b)) => a.cmp(b),
+            (Unsupported(a), Unsupported(b)) => a.cmp(b),
             (Array(a), Array(b)) => a.cmp(b),
             (Document(a), Document(b)) => a.cmp(b),
 

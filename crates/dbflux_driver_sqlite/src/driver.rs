@@ -1127,7 +1127,7 @@ fn sqlite_value_to_value(row: &rusqlite::Row, idx: usize) -> Value {
         Ok(ValueRef::Blob(b)) => Value::Bytes(b.to_vec()),
         Err(e) => {
             log::info!("Unsupported SQLite value at column index {}: {}", idx, e);
-            Value::Null
+            Value::Unsupported("sqlite-value".to_string())
         }
     }
 }
@@ -1195,6 +1195,7 @@ fn value_to_sqlite_literal(value: &Value) -> String {
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
         Value::ObjectId(id) => format!("'{}'", sqlite_escape_string(id)),
+        Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
             format!("'{}'", sqlite_escape_string(&json))

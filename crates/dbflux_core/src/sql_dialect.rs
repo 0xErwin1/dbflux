@@ -97,6 +97,7 @@ impl SqlDialect for DefaultSqlDialect {
                 format!("'{}'", self.escape_string(&json))
             }
             Value::ObjectId(id) => format!("'{}'", self.escape_string(id)),
+            Value::Unsupported(_) => "NULL".to_string(),
         }
     }
 

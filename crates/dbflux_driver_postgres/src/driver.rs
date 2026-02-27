@@ -6,6 +6,8 @@ use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -13,14 +15,12 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
-    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1929,6 +1929,7 @@ fn value_to_pg_literal(value: &Value) -> String {
         Value::Date(d) => format!("'{}'::date", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'::time", t.format("%H:%M:%S%.f")),
         Value::ObjectId(id) => pg_quote_string(id),
+        Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
             format!("{}::jsonb", pg_quote_string(&json))
@@ -1959,7 +1960,7 @@ struct PgText(String);
 
 fn is_textual_pg_type(ty: &Type) -> bool {
     match ty.name() {
-        "text" | "varchar" | "bpchar" | "name" | "citext" => true,
+        "text" | "varchar" | "bpchar" | "name" | "citext" | "tsvector" | "tsquery" => true,
         _ => match ty.kind() {
             Kind::Enum(_) => true,
             Kind::Domain(inner) => is_textual_pg_type(inner),
@@ -2143,6 +2144,15 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
 
+        "tsvector" | "tsquery" => row
+            .try_get::<_, Option<PgText>>(idx)
+            .map(|value| {
+                value
+                    .map(|PgText(text)| Value::Text(text))
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or(Value::Null),
+
         "uuid" => row
             .try_get::<_, Option<Uuid>>(idx)
             .map(|value| {
@@ -2214,7 +2224,7 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                         col_name,
                         e
                     );
-                    Value::Null
+                    Value::Unsupported(type_name.to_string())
                 }
             },
 
@@ -2231,7 +2241,7 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                             col_name,
                             e
                         );
-                        Value::Null
+                        Value::Unsupported(type_name.to_string())
                     }
                 }
             }
@@ -2250,7 +2260,7 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                             col_name,
                             e
                         );
-                        Value::Null
+                        Value::Unsupported(type_name.to_string())
                     }
                 }
             }
@@ -2263,7 +2273,7 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                     col_type.kind(),
                     col_name
                 );
-                Value::Null
+                Value::Unsupported(type_name.to_string())
             }
         },
     }

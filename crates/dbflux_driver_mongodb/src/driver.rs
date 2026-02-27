@@ -1173,6 +1173,7 @@ impl SqlDialect for MongoDialect {
                 format!("{{{}}}", pairs.join(", "))
             }
             Value::ObjectId(oid) => format!("ObjectId(\"{}\")", oid),
+            Value::Unsupported(type_name) => format!("\"UNSUPPORTED<{}>\"", type_name),
         }
     }
 

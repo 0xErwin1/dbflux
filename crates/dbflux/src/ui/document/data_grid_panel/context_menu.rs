@@ -361,8 +361,14 @@ impl DataGridPanel {
             || type_name.contains("clob")
             || type_name.contains("uuid")
             || type_name.contains("citext")
+            || type_name.contains("tsvector")
+            || type_name.contains("tsquery")
             || type_name.contains("enum")
             || type_name.contains("set")
+    }
+
+    fn should_cast_postgres_text_type(type_name: &str) -> bool {
+        type_name == "uuid" || type_name == "tsvector" || type_name == "tsquery"
     }
 
     fn sql_operator_symbol(operator: FilterOperator) -> &'static str {
@@ -407,6 +413,9 @@ impl DataGridPanel {
             Value::DateTime(dt) => format!("\"{}\"", dt.to_rfc3339()),
             Value::Date(d) => format!("\"{}\"", d),
             Value::Time(t) => format!("\"{}\"", t),
+            Value::Unsupported(type_name) => {
+                format!("<unsupported:{}>", Self::truncate_for_label(type_name, 20))
+            }
             Value::Bytes(b) => format!("[{} bytes]", b.len()),
             Value::Array(_) | Value::Document(_) => "...".to_string(),
         }
@@ -2905,6 +2914,13 @@ impl DataGridPanel {
 
         let op_str = Self::sql_operator_symbol(operator);
 
+        let needs_text_cast = is_postgres && Self::should_cast_postgres_text_type(&col_type_name);
+        let comparable_column = if needs_text_cast {
+            format!("({})::text", col_name)
+        } else {
+            col_name.clone()
+        };
+
         let expr = if operator == FilterOperator::Like {
             let raw = match &cell_value {
                 Value::Text(text) => text.clone(),
@@ -2926,16 +2942,10 @@ impl DataGridPanel {
 
             let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
 
-            let like_column = if is_postgres && col_type_name == "uuid" {
-                format!("({})::text", col_name)
-            } else {
-                col_name.clone()
-            };
-
             if needs_escape {
-                format!("{} LIKE {} ESCAPE '\\'", like_column, pattern_literal)
+                format!("{} LIKE {} ESCAPE '\\'", comparable_column, pattern_literal)
             } else {
-                format!("{} LIKE {}", like_column, pattern_literal)
+                format!("{} LIKE {}", comparable_column, pattern_literal)
             }
         } else if is_postgres
             && matches!(cell_value, Value::Json(_))
@@ -2943,7 +2953,7 @@ impl DataGridPanel {
         {
             format!("({})::jsonb {} ({})", col_name, op_str, literal)
         } else {
-            format!("{} {} {}", col_name, op_str, literal)
+            format!("{} {} {}", comparable_column, op_str, literal)
         };
 
         self.apply_filter_expression(&expr, window, cx);
@@ -3131,6 +3141,7 @@ impl DataGridPanel {
             Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
             Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
             Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
+            Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
             Value::Bytes(b) => format!("[{} bytes]", b.len()),
             Value::Array(_) | Value::Document(_) => "'...'".to_string(),
         }
@@ -3140,7 +3151,11 @@ impl DataGridPanel {
     /// only IS NULL / IS NOT NULL applies.
     fn is_value_filterable(value: &Value) -> bool {
         match value {
-            Value::Null | Value::Bytes(_) | Value::Array(_) | Value::Document(_) => false,
+            Value::Null
+            | Value::Bytes(_)
+            | Value::Array(_)
+            | Value::Document(_)
+            | Value::Unsupported(_) => false,
             Value::Float(f) if f.is_nan() || f.is_infinite() => false,
             _ => true,
         }
@@ -3345,10 +3360,18 @@ impl DataGridPanel {
             return None;
         }
 
+        let has_unsupported = row_values
+            .iter()
+            .any(|value| matches!(value, Value::Unsupported(_)));
+
         let pk_indices = state.pk_columns();
 
         match action {
             ContextMenuAction::CopyAsInsert => {
+                if has_unsupported {
+                    return None;
+                }
+
                 let insert = RowInsert::new(
                     table.name.clone(),
                     table.schema.clone(),
@@ -3359,6 +3382,10 @@ impl DataGridPanel {
             }
 
             ContextMenuAction::CopyAsUpdate => {
+                if has_unsupported {
+                    return None;
+                }
+
                 if pk_indices.is_empty() {
                     return None;
                 }
@@ -3372,6 +3399,13 @@ impl DataGridPanel {
                     .iter()
                     .filter_map(|&idx| row_values.get(idx).cloned())
                     .collect();
+
+                if pk_values
+                    .iter()
+                    .any(|value| matches!(value, Value::Unsupported(_)))
+                {
+                    return None;
+                }
 
                 let identity = RowIdentity::new(pk_columns, pk_values);
 
@@ -3441,6 +3475,10 @@ impl DataGridPanel {
             return None;
         }
 
+        let has_unsupported = row_values
+            .iter()
+            .any(|value| matches!(value, Value::Unsupported(_)));
+
         let id_col_idx = self
             .result
             .columns
@@ -3458,6 +3496,10 @@ impl DataGridPanel {
 
         match action {
             ContextMenuAction::CopyAsInsert => {
+                if has_unsupported {
+                    return None;
+                }
+
                 let mut doc = serde_json::Map::new();
                 for (col_idx, val) in row_values.iter().enumerate() {
                     if let Some(col) = self.result.columns.get(col_idx)
@@ -3473,6 +3515,10 @@ impl DataGridPanel {
             }
 
             ContextMenuAction::CopyAsUpdate => {
+                if has_unsupported {
+                    return None;
+                }
+
                 let mut set_fields = serde_json::Map::new();
                 for (col_idx, val) in row_values.iter().enumerate() {
                     if col_idx == id_col_idx {
@@ -3513,6 +3559,7 @@ impl DataGridPanel {
             CellKind::Text(s) => Value::Text(s.to_string()),
             CellKind::Json(s) => Value::Json(s.to_string()),
             CellKind::Bytes(len) => Value::Bytes(vec![0u8; *len]),
+            CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
         }
     }
