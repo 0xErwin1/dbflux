@@ -1041,3 +1041,103 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Array(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DocumentTreeState, set_value_at_path, should_expand_scalar_value, value_to_json};
+    use dbflux_core::{ColumnMeta, Value};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn extract_document_value_prefers_document_column() {
+        let columns = vec![
+            ColumnMeta {
+                name: "_id".to_string(),
+                type_name: "text".to_string(),
+                nullable: false,
+            },
+            ColumnMeta {
+                name: "_document".to_string(),
+                type_name: "json".to_string(),
+                nullable: false,
+            },
+        ];
+
+        let mut doc = BTreeMap::new();
+        doc.insert("name".to_string(), Value::Text("alice".to_string()));
+
+        let row = vec![
+            Value::ObjectId("abc123".to_string()),
+            Value::Document(doc.clone()),
+        ];
+        let extracted = DocumentTreeState::extract_document_value(&row, &columns);
+
+        assert!(matches!(extracted, Value::Document(_)));
+        assert_eq!(
+            extracted.to_json_string(),
+            Value::Document(doc).to_json_string()
+        );
+    }
+
+    #[test]
+    fn set_value_at_path_updates_nested_document_and_rejects_invalid_index() {
+        let mut root = Value::Document(BTreeMap::from([(
+            "profile".to_string(),
+            Value::Document(BTreeMap::from([(
+                "tags".to_string(),
+                Value::Array(vec![Value::Text("old".to_string())]),
+            )])),
+        )]));
+
+        let updated = set_value_at_path(
+            &mut root,
+            &["profile".to_string(), "tags".to_string(), "0".to_string()],
+            Value::Text("new".to_string()),
+        );
+        assert!(updated);
+
+        let invalid = set_value_at_path(
+            &mut root,
+            &["profile".to_string(), "tags".to_string(), "9".to_string()],
+            Value::Text("noop".to_string()),
+        );
+        assert!(!invalid);
+
+        assert_eq!(
+            root.to_json_string(),
+            serde_json::json!({"profile":{"tags":["new"]}}).to_string()
+        );
+    }
+
+    #[test]
+    fn value_to_json_handles_object_id_bytes_and_unsupported() {
+        assert_eq!(
+            value_to_json(&Value::ObjectId("507f1f77bcf86cd799439011".to_string())),
+            serde_json::json!({"$oid":"507f1f77bcf86cd799439011"})
+        );
+
+        assert_eq!(
+            value_to_json(&Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef])),
+            serde_json::json!({"$binary":"deadbeef"})
+        );
+
+        assert_eq!(
+            value_to_json(&Value::Unsupported("xml".to_string())),
+            serde_json::json!({"$unsupported":"xml"})
+        );
+    }
+
+    #[test]
+    fn should_expand_scalar_value_matches_rules() {
+        assert!(should_expand_scalar_value(&Value::Text(
+            "line1\nline2".to_string()
+        )));
+        assert!(should_expand_scalar_value(&Value::Text("x".repeat(101))));
+        assert!(should_expand_scalar_value(&Value::Json("{}".to_string())));
+        assert!(should_expand_scalar_value(&Value::Bytes(vec![1, 2, 3])));
+        assert!(!should_expand_scalar_value(&Value::Text(
+            "short".to_string()
+        )));
+        assert!(!should_expand_scalar_value(&Value::Int(1)));
+    }
+}

@@ -45,6 +45,32 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        Self::new_with_drivers(Self::build_default_drivers())
+    }
+
+    pub fn new_with_drivers(drivers: HashMap<DbKind, Arc<dyn DbDriver>>) -> Self {
+        let recent_files = RecentFilesStore::new()
+            .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
+            .ok();
+
+        let scripts_directory = ScriptsDirectory::new()
+            .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
+            .ok();
+
+        let session_store = SessionStore::new()
+            .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
+            .ok();
+
+        Self {
+            facade: SessionFacade::new(drivers),
+            settings_window: None,
+            recent_files,
+            scripts_directory,
+            session_store,
+        }
+    }
+
+    fn build_default_drivers() -> HashMap<DbKind, Arc<dyn DbDriver>> {
         let mut drivers: HashMap<DbKind, Arc<dyn DbDriver>> = HashMap::new();
 
         #[cfg(feature = "sqlite")]
@@ -73,25 +99,7 @@ impl AppState {
             drivers.insert(DbKind::Redis, Arc::new(RedisDriver::new()));
         }
 
-        let recent_files = RecentFilesStore::new()
-            .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
-            .ok();
-
-        let scripts_directory = ScriptsDirectory::new()
-            .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
-            .ok();
-
-        let session_store = SessionStore::new()
-            .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
-            .ok();
-
-        Self {
-            facade: SessionFacade::new(drivers),
-            settings_window: None,
-            recent_files,
-            scripts_directory,
-            session_store,
-        }
+        drivers
     }
 
     // --- ConnectionManager ---
@@ -845,10 +853,24 @@ impl EventEmitter<AppStateChanged> for AppState {}
 #[cfg(test)]
 mod tests {
     use super::AppState;
+    use dbflux_core::{DbDriver, DbKind};
+    use dbflux_test_support::FakeDriver;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn saved_query_store_is_optional() {
         let state = AppState::new();
         let _ = state.saved_queries();
+    }
+
+    #[test]
+    fn new_with_drivers_uses_injected_registry() {
+        let mut drivers: HashMap<DbKind, Arc<dyn DbDriver>> = HashMap::new();
+        drivers.insert(DbKind::SQLite, Arc::new(FakeDriver::new(DbKind::SQLite)));
+
+        let state = AppState::new_with_drivers(drivers);
+        assert_eq!(state.drivers().len(), 1);
+        assert!(state.drivers().contains_key(&DbKind::SQLite));
     }
 }

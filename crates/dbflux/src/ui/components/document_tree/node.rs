@@ -1,5 +1,5 @@
-use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
 use dbflux_core::Value;
+use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

@@ -2134,6 +2134,52 @@ fn fetch_foreign_keys(
     Ok(builder.build())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{MysqlDialect, MysqlDriver};
+    use dbflux_core::{DbDriver, DbKind, FormValues, SqlDialect, Value};
+
+    #[test]
+    fn build_and_parse_uri_roundtrip_basics() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "127.0.0.1".to_string());
+        values.insert("port".to_string(), "3307".to_string());
+        values.insert("user".to_string(), "root user".to_string());
+        values.insert("database".to_string(), "app".to_string());
+
+        let uri = driver
+            .build_uri(&values, "s3cr@t")
+            .expect("mysql driver should support URI building");
+        assert_eq!(uri, "mysql://root%20user:s3cr%40t@127.0.0.1:3307/app");
+
+        let parsed = driver
+            .parse_uri(&uri)
+            .expect("uri built by driver should parse");
+
+        assert_eq!(parsed.get("user").map(String::as_str), Some("root user"));
+        assert_eq!(parsed.get("host").map(String::as_str), Some("127.0.0.1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("3307"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("app"));
+    }
+
+    #[test]
+    fn mysql_dialect_handles_special_floats_and_identifier_escaping() {
+        let dialect = MysqlDialect;
+
+        assert_eq!(dialect.value_to_literal(&Value::Float(f64::NAN)), "NULL");
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::INFINITY)),
+            "NULL"
+        );
+        assert_eq!(dialect.quote_identifier("a`b"), "`a``b`");
+        assert_eq!(
+            dialect.qualified_table(Some("main"), "user`table"),
+            "`main`.`user``table`"
+        );
+    }
+}
+
 fn fetch_constraints(
     conn: &mut Conn,
     database: &str,
