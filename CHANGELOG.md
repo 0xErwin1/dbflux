@@ -2,6 +2,23 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.5] – 2026-02-26
+
+### Added
+
+* Explicit unsupported-value representation in query results (`UNSUPPORTED<type>`) to distinguish decode gaps from real `NULL` values
+
+### Changed
+
+* Unsupported values are now treated as read-only in the data grid and are excluded from save/copy mutation flows
+
+### Fixed
+
+* Added complete PostgreSQL `tsvector`/`tsquery` handling across table browse, query results, and grid filtering
+* PostgreSQL fallback decode paths no longer misrepresent unknown types as `NULL`, reducing confusion and avoiding incorrect edits
+
+---
+
 ## [0.3.4] – 2026-02-26
 
 ### Added
