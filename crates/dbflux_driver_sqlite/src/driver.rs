@@ -1271,7 +1271,10 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::{SqliteDialect, SqliteDriver, sqlite_generate_create_table};
-    use dbflux_core::{ColumnInfo, DbConfig, DbDriver, FormValues, SqlDialect, TableInfo, Value};
+    use dbflux_core::{
+        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, QueryLanguage, SqlDialect,
+        TableInfo, Value,
+    };
 
     #[test]
     fn build_config_requires_non_empty_path() {
@@ -1381,5 +1384,17 @@ mod tests {
     #[ignore = "TODO: sqlite URI mode support"]
     fn pending_sqlite_uri_mode_support() {
         panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    }
+
+    #[test]
+    fn metadata_and_form_definition_match_sqlite_contract() {
+        let driver = SqliteDriver::new();
+        let metadata = driver.metadata();
+
+        assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.query_language, QueryLanguage::Sql);
+        assert_eq!(metadata.default_port, None);
+        assert_eq!(metadata.uri_scheme, "sqlite");
+        assert!(!driver.form_definition().tabs.is_empty());
     }
 }

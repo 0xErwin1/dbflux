@@ -2167,7 +2167,7 @@ fn bson_type_name(value: &Bson) -> String {
 mod tests {
     use super::*;
     use crate::query_parser::parse_query;
-    use dbflux_core::{DbDriver, DbError};
+    use dbflux_core::{DatabaseCategory, DbDriver, DbError, QueryLanguage};
 
     #[test]
     fn build_config_requires_uri_in_uri_mode() {
@@ -2288,6 +2288,18 @@ mod tests {
     fn extract_mongodb_config_rejects_non_mongodb_config() {
         let result = extract_mongodb_config(&DbConfig::default_postgres());
         assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn metadata_and_form_definition_match_mongodb_contract() {
+        let driver = MongoDriver::new();
+        let metadata = driver.metadata();
+
+        assert_eq!(metadata.category, DatabaseCategory::Document);
+        assert_eq!(metadata.query_language, QueryLanguage::MongoQuery);
+        assert_eq!(metadata.default_port, Some(27017));
+        assert_eq!(metadata.uri_scheme, "mongodb");
+        assert!(!driver.form_definition().tabs.is_empty());
     }
 
     #[test]

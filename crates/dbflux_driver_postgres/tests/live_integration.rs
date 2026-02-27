@@ -1,4 +1,6 @@
-use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, QueryRequest, SslMode};
+use dbflux_core::{
+    ConnectionProfile, DbConfig, DbDriver, QueryRequest, SchemaLoadingStrategy, SslMode,
+};
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
 
@@ -31,6 +33,14 @@ fn postgres_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbEr
 
         let result = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
         assert_eq!(result.rows.len(), 1);
+
+        assert_eq!(
+            connection.schema_loading_strategy(),
+            SchemaLoadingStrategy::ConnectionPerDatabase
+        );
+
+        let databases = connection.list_databases()?;
+        assert!(!databases.is_empty());
 
         let schema = connection.schema()?;
         let _ = schema.databases();

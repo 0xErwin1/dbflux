@@ -2589,7 +2589,9 @@ fn get_schema_foreign_keys(
 #[cfg(test)]
 mod tests {
     use super::{inject_password_into_pg_uri, PostgresDialect, PostgresDriver};
-    use dbflux_core::{DbConfig, DbDriver, DbError, FormValues, SqlDialect, Value};
+    use dbflux_core::{
+        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
+    };
 
     #[test]
     fn build_uri_encodes_user_and_password() {
@@ -2710,5 +2712,17 @@ mod tests {
         let uri =
             inject_password_into_pg_uri("postgresql://user@localhost:5432/app", Some("new pass"));
         assert_eq!(uri, "postgresql://user:new%20pass@localhost:5432/app");
+    }
+
+    #[test]
+    fn metadata_and_form_definition_match_postgres_contract() {
+        let driver = PostgresDriver::new();
+        let metadata = driver.metadata();
+
+        assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.query_language, QueryLanguage::Sql);
+        assert_eq!(metadata.default_port, Some(5432));
+        assert_eq!(metadata.uri_scheme, "postgresql");
+        assert!(!driver.form_definition().tabs.is_empty());
     }
 }
