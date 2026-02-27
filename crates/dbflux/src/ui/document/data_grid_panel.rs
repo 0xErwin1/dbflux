@@ -1348,3 +1348,83 @@ impl DataGridPanel {
 }
 
 impl EventEmitter<DataGridEvent> for DataGridPanel {}
+
+#[cfg(test)]
+mod tests {
+    use super::DataSource;
+    use dbflux_core::{CollectionRef, Pagination, QueryResult, TableRef};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    #[test]
+    fn table_source_accessors_match_expected_values() {
+        let table = TableRef::with_schema("public", "users");
+        let pagination = Pagination::Offset {
+            limit: 25,
+            offset: 50,
+        };
+
+        let source = DataSource::Table {
+            profile_id: Uuid::new_v4(),
+            database: Some("app".to_string()),
+            table: table.clone(),
+            pagination: pagination.clone(),
+            order_by: Vec::new(),
+            total_rows: Some(123),
+        };
+
+        assert!(source.is_table());
+        assert!(!source.is_collection());
+        assert!(source.is_paginated());
+        assert_eq!(source.database(), Some("app"));
+        assert_eq!(source.table_ref(), Some(&table));
+        assert_eq!(source.collection_ref(), None);
+        assert_eq!(source.pagination(), Some(&pagination));
+        assert_eq!(source.total_rows(), Some(123));
+    }
+
+    #[test]
+    fn collection_source_accessors_match_expected_values() {
+        let collection = CollectionRef::new("app", "users");
+        let pagination = Pagination::Offset {
+            limit: 10,
+            offset: 0,
+        };
+
+        let source = DataSource::Collection {
+            profile_id: Uuid::new_v4(),
+            collection: collection.clone(),
+            pagination: pagination.clone(),
+            total_docs: Some(17),
+        };
+
+        assert!(!source.is_table());
+        assert!(source.is_collection());
+        assert!(source.is_paginated());
+        assert_eq!(source.database(), None);
+        assert_eq!(source.table_ref(), None);
+        assert_eq!(source.collection_ref(), Some(&collection));
+        assert_eq!(source.pagination(), Some(&pagination));
+        assert_eq!(source.total_rows(), Some(17));
+    }
+
+    #[test]
+    fn query_result_source_accessors_match_expected_values() {
+        let source = DataSource::QueryResult {
+            result: Arc::new(QueryResult::text(
+                "ok".to_string(),
+                std::time::Duration::ZERO,
+            )),
+            original_query: "PING".to_string(),
+        };
+
+        assert!(!source.is_table());
+        assert!(!source.is_collection());
+        assert!(!source.is_paginated());
+        assert_eq!(source.database(), None);
+        assert_eq!(source.table_ref(), None);
+        assert_eq!(source.collection_ref(), None);
+        assert_eq!(source.pagination(), None);
+        assert_eq!(source.total_rows(), None);
+    }
+}

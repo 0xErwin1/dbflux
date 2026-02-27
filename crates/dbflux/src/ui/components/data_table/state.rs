@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    px, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
-    ScrollHandle, Size, UniformListScrollHandle, Window,
+    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
+    Size, UniformListScrollHandle, Window, px,
 };
 use gpui_component::input::{InputEvent, InputState};
 

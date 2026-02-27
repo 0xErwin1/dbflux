@@ -23,6 +23,7 @@ tree-sitter-sequel = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+dbflux_test_support.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

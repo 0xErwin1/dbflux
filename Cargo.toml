@@ -2,6 +2,7 @@
 members = [
     "crates/dbflux",
     "crates/dbflux_core",
+    "crates/dbflux_test_support",
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
     "crates/dbflux_driver_mysql",
@@ -25,6 +26,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_test_support = { path = "crates/dbflux_test_support" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
 dbflux_driver_mysql = { path = "crates/dbflux_driver_mysql" }

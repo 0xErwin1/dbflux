@@ -1615,6 +1615,7 @@ dependencies = [
  "dbflux_driver_sqlite",
  "dbflux_export",
  "dbflux_ssh",
+ "dbflux_test_support",
  "dirs 5.0.1",
  "env_logger",
  "fuzzy-matcher",
@@ -1633,6 +1634,7 @@ version = "0.3.5"
 dependencies = [
  "bitflags 2.10.0",
  "chrono",
+ "dbflux_test_support",
  "dirs 5.0.1",
  "keyring",
  "log",
@@ -1654,6 +1656,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
+ "dbflux_test_support",
  "log",
  "mongodb",
  "serde_json",
@@ -1668,6 +1671,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
+ "dbflux_test_support",
  "hex",
  "log",
  "mysql",
@@ -1683,6 +1687,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dbflux_ssh",
+ "dbflux_test_support",
  "hex",
  "log",
  "native-tls",
@@ -1699,6 +1704,7 @@ version = "0.1.0"
 dependencies = [
  "dbflux_core",
  "dbflux_ssh",
+ "dbflux_test_support",
  "log",
  "redis",
  "serde_json",
@@ -1710,6 +1716,7 @@ name = "dbflux_driver_sqlite"
 version = "0.0.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_test_support",
  "hex",
  "log",
  "rusqlite",
@@ -1736,6 +1743,14 @@ dependencies = [
  "dirs 6.0.0",
  "log",
  "ssh2",
+]
+
+[[package]]
+name = "dbflux_test_support"
+version = "0.1.0"
+dependencies = [
+ "dbflux_core",
+ "serde_json",
 ]
 
 [[package]]

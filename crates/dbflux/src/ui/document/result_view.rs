@@ -44,3 +44,60 @@ impl ResultViewMode {
         matches!(self, Self::Table)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ResultViewMode;
+    use dbflux_core::QueryResultShape;
+
+    #[test]
+    fn default_for_shape_matches_expected_mode() {
+        assert_eq!(
+            ResultViewMode::default_for_shape(&QueryResultShape::Table),
+            ResultViewMode::Table
+        );
+        assert_eq!(
+            ResultViewMode::default_for_shape(&QueryResultShape::Json),
+            ResultViewMode::Table
+        );
+        assert_eq!(
+            ResultViewMode::default_for_shape(&QueryResultShape::Text),
+            ResultViewMode::Text
+        );
+        assert_eq!(
+            ResultViewMode::default_for_shape(&QueryResultShape::Binary),
+            ResultViewMode::Raw
+        );
+    }
+
+    #[test]
+    fn available_modes_for_each_shape_are_stable() {
+        assert_eq!(
+            ResultViewMode::available_for_shape(&QueryResultShape::Table),
+            vec![ResultViewMode::Table, ResultViewMode::Json]
+        );
+
+        assert_eq!(
+            ResultViewMode::available_for_shape(&QueryResultShape::Json),
+            vec![
+                ResultViewMode::Table,
+                ResultViewMode::Text,
+                ResultViewMode::Raw
+            ]
+        );
+
+        assert_eq!(
+            ResultViewMode::available_for_shape(&QueryResultShape::Text),
+            vec![
+                ResultViewMode::Text,
+                ResultViewMode::Json,
+                ResultViewMode::Raw
+            ]
+        );
+
+        assert_eq!(
+            ResultViewMode::available_for_shape(&QueryResultShape::Binary),
+            vec![ResultViewMode::Raw]
+        );
+    }
+}

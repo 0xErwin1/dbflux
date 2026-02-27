@@ -6,8 +6,6 @@ use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -15,12 +13,14 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
-    POSTGRES_FORM,
+    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
+    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -2584,4 +2584,70 @@ fn get_schema_foreign_keys(
     }
 
     Ok(builder.build_sorted())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PostgresDialect, PostgresDriver};
+    use dbflux_core::{DbDriver, FormValues, SqlDialect, Value};
+
+    #[test]
+    fn build_uri_encodes_user_and_password() {
+        let driver = PostgresDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "5432".to_string());
+        values.insert("user".to_string(), "test user".to_string());
+        values.insert("database".to_string(), "dbflux".to_string());
+
+        let uri = driver
+            .build_uri(&values, "p@ss:word")
+            .expect("postgres driver should support URI building");
+
+        assert_eq!(
+            uri,
+            "postgresql://test%20user:p%40ss%3Aword@localhost:5432/dbflux"
+        );
+    }
+
+    #[test]
+    fn parse_uri_accepts_postgres_and_postgresql_schemes() {
+        let driver = PostgresDriver::new();
+
+        let short = driver
+            .parse_uri("postgres://user:pass@db.local:5433/app?sslmode=require")
+            .expect("short postgres URI should parse");
+
+        assert_eq!(short.get("user").map(String::as_str), Some("user"));
+        assert_eq!(short.get("host").map(String::as_str), Some("db.local"));
+        assert_eq!(short.get("port").map(String::as_str), Some("5433"));
+        assert_eq!(short.get("database").map(String::as_str), Some("app"));
+
+        let long = driver
+            .parse_uri("postgresql://alice@localhost/mydb")
+            .expect("long postgresql URI should parse");
+
+        assert_eq!(long.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(long.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(long.get("port").map(String::as_str), Some("5432"));
+        assert_eq!(long.get("database").map(String::as_str), Some("mydb"));
+    }
+
+    #[test]
+    fn postgres_dialect_formats_special_float_values() {
+        let dialect = PostgresDialect;
+
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::NAN)),
+            "'NaN'::float8"
+        );
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::INFINITY)),
+            "'Infinity'::float8"
+        );
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::NEG_INFINITY)),
+            "'-Infinity'::float8"
+        );
+    }
 }
