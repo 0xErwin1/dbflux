@@ -15,3 +15,4 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core.workspace = true
 serde_json.workspace = true
+testcontainers = "0.15"

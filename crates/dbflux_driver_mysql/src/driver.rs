@@ -2136,8 +2136,8 @@ fn fetch_foreign_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{MysqlDialect, MysqlDriver};
-    use dbflux_core::{DbDriver, DbKind, FormValues, SqlDialect, Value};
+    use super::{MysqlDialect, MysqlDriver, inject_password_into_mysql_uri};
+    use dbflux_core::{DbConfig, DbDriver, DbError, DbKind, FormValues, SqlDialect, Value};
 
     #[test]
     fn build_and_parse_uri_roundtrip_basics() {
@@ -2177,6 +2177,67 @@ mod tests {
             dialect.qualified_table(Some("main"), "user`table"),
             "`main`.`user``table`"
         );
+    }
+
+    #[test]
+    fn build_config_requires_uri_when_uri_mode_is_enabled() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_validates_port_in_manual_mode() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "bad".to_string());
+        values.insert("user".to_string(), "root".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn extract_values_includes_uri_mode_flags() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let config = DbConfig::MySQL {
+            use_uri: true,
+            uri: Some("mysql://root:root@localhost:3306/app".to_string()),
+            host: String::new(),
+            port: 3306,
+            user: String::new(),
+            database: None,
+            ssl_mode: dbflux_core::SslMode::Disable,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(
+            values.get("uri").map(String::as_str),
+            Some("mysql://root:root@localhost:3306/app")
+        );
+    }
+
+    #[test]
+    fn parse_uri_rejects_non_mysql_schemes() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        assert!(
+            driver
+                .parse_uri("postgres://postgres@localhost:5432/app")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inject_password_into_uri_adds_password_for_user_without_one() {
+        let uri = inject_password_into_mysql_uri("mysql://root@localhost:3306/app", Some("new p"));
+        assert_eq!(uri, "mysql://root:new%20p@localhost:3306/app");
     }
 }
 

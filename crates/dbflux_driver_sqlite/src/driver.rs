@@ -1367,4 +1367,19 @@ mod tests {
             Some("/tmp/dbflux-test.db")
         );
     }
+
+    #[test]
+    fn sqlite_driver_does_not_support_uri_helpers_yet() {
+        let driver = SqliteDriver::new();
+        let values = FormValues::new();
+
+        assert!(driver.build_uri(&values, "password").is_none());
+        assert!(driver.parse_uri("sqlite:///tmp/db.sqlite").is_none());
+    }
+
+    #[test]
+    #[ignore = "TODO: sqlite URI mode support"]
+    fn pending_sqlite_uri_mode_support() {
+        panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    }
 }
