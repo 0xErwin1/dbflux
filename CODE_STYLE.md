@@ -15,7 +15,7 @@
 - Workspace crates live under `crates/`, with UI in `crates/dbflux/` and shared domain logic in `crates/dbflux_core/` (Cargo.toml).
 - Each module is a dedicated file (no `mod.rs`); submodules are declared in the parent file (AGENTS.md, crates/dbflux/src/ui/mod.rs).
 - UI is organized by pane, window, and component in `crates/dbflux/src/ui/` (workspace, sidebar, editor, dock, document, windows, components).
-- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`).
+- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`).
 
 ## Import Style
 
@@ -28,6 +28,8 @@
 - GPUI entities: stateful UI pieces are `Entity<T>` values; updates use `entity.update(cx, |state, cx| { ... })` (crates/dbflux/src/ui/workspace.rs).
 - Background work: use `cx.background_executor().spawn(...)` for DB/IO, then `cx.spawn(...).update(...)` to re-enter UI thread (crates/dbflux/src/ui/workspace.rs).
 - Feature gating: drivers are compiled via `#[cfg(feature = "sqlite")]` / `#[cfg(feature = "postgres")]` (crates/dbflux/src/app.rs).
+- External RPC drivers are registered with `rpc:<socket_id>` keys and use `DbConfig::External { kind, values }` for persisted profile config (crates/dbflux/src/app.rs, crates/dbflux_core/src/profile.rs).
+- RPC protocol schemas and DTO conversions stay in `dbflux_ipc`; transport/client logic stays in `dbflux_driver_ipc` (crates/dbflux_ipc/src/driver_protocol.rs, crates/dbflux_driver_ipc/src/transport.rs).
 - Default constructors and helpers use `new`/`default_*` naming (crates/dbflux_core/src/profile.rs, crates/dbflux_core/src/query.rs).
 - Results and metadata are plain structs/enums with small helper methods (crates/dbflux_core/src/query.rs, crates/dbflux_core/src/schema.rs).
 
@@ -55,7 +57,9 @@
 - Do propagate or log errors; do not silently discard fallible results (AGENTS.md).
 - Do refactor and modularize functions that grow beyond ~100 lines; treat this as a design smell.
 - Do use abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt UI behavior instead of driver-specific conditionals.
+- Do treat external service `Hello` metadata/form definition as the source of truth for RPC drivers.
 - Don't create `mod.rs` files; declare modules directly in `src/*.rs` (AGENTS.md).
 - Don't use deprecated GPUI types (`Model<T>`, `View<T>`, etc.) (AGENTS.md).
 - Don't add driver-specific logic in UI code (e.g., `if driver == "mongodb"`). Use capability flags and metadata from `DriverMetadata` instead.
 - Don't import driver crates directly in UI code. All driver interaction goes through `dbflux_core` traits.
+- Don't use `config.json` to define driver metadata/forms for external services; it is runtime launch/socket config only.

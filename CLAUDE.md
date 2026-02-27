@@ -12,6 +12,9 @@ DBFlux is a keyboard-first database client built with Rust and GPUI (Zed's UI fr
 crates/
 ├── dbflux/                    # App + UI (GPUI)
 ├── dbflux_core/               # Traits, types, errors, driver capabilities (stable API)
+├── dbflux_ipc/                # IPC envelopes, framing, and driver RPC protocol
+├── dbflux_driver_ipc/         # External driver proxy over local IPC
+├── dbflux_driver_host/        # RPC host process for out-of-process drivers
 ├── dbflux_driver_postgres/    # PostgreSQL driver
 ├── dbflux_driver_sqlite/      # SQLite driver
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
@@ -248,8 +251,19 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 ### Crate Boundaries
 
 - `dbflux_core`: Pure types/traits, driver capabilities, SQL generation, query generator trait, no DB-specific code
+- `dbflux_ipc`: Versioned app-control + driver RPC protocol contracts, framing, socket naming helpers
+- `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
+- `dbflux_driver_host`: Standalone RPC host binary that serves drivers over local sockets
 - `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
 - `dbflux`: UI only, drivers via feature flags
+
+### External RPC Drivers
+
+- Treat the external service `Hello` payload as source of truth for `DbKind`, metadata, and form definition
+- `~/.config/dbflux/config.json` `rpc_services` is runtime/process config only (socket/command/args/env/timeout)
+- Internal driver keys for external services are `rpc:<socket_id>`
+- Use `DbConfig::External { kind, values }` for external driver profile configs
+- Only managed hosts started by DBFlux are shut down automatically
 
 ### Driver/UI Decoupling
 
@@ -329,6 +343,7 @@ Documents follow a consistent pattern for tab-based UI:
 | File                                                     | Purpose                                             |
 | -------------------------------------------------------- | --------------------------------------------------- |
 | `crates/dbflux/src/app.rs`                               | AppState, driver registry                           |
+| `crates/dbflux/src/main.rs`                              | App-control IPC server/client and graceful shutdown |
 | `crates/dbflux/src/ui/workspace.rs`                      | Main layout, command dispatch                       |
 | `crates/dbflux/src/ui/dock/sidebar_dock.rs`              | Collapsible, resizable sidebar                      |
 | `crates/dbflux/src/ui/sidebar.rs`                        | Schema tree with lazy loading                       |
@@ -346,6 +361,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/keymap/focus.rs`                      | FocusTarget (Document/Sidebar/BackgroundTasks)      |
 | `crates/dbflux_core/src/traits.rs`                       | `DbDriver`, `Connection` traits                     |
 | `crates/dbflux_core/src/driver_capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
+| `crates/dbflux_core/src/app_config.rs`                   | External RPC service runtime config (`config.json`) |
 | `crates/dbflux_core/src/error_formatter.rs`              | ErrorFormatter trait for driver errors              |
 | `crates/dbflux_core/src/query_generator.rs`              | QueryGenerator trait, MutationRequest routing       |
 | `crates/dbflux_core/src/language_service.rs`             | Dangerous query detection (SQL, MongoDB, Redis)     |
@@ -361,3 +377,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_driver_mongodb/src/query_generator.rs`    | MongoDB shell query generator                       |
 | `crates/dbflux_driver_redis/src/driver.rs`               | Redis driver implementation                         |
 | `crates/dbflux_driver_redis/src/command_generator.rs`    | Redis command generator                             |
+| `crates/dbflux_ipc/src/driver_protocol.rs`               | Driver RPC protocol schema and DTOs                 |
+| `crates/dbflux_driver_ipc/src/driver.rs`                 | IpcDriver and managed host lifecycle                |
+| `crates/dbflux_driver_ipc/src/transport.rs`              | Driver RPC client transport and handshake           |
+| `crates/dbflux_driver_host/src/main.rs`                  | External RPC host server entrypoint                 |

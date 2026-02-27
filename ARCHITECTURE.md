@@ -11,6 +11,7 @@
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis) (Cargo.toml).
+- IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -99,6 +100,20 @@ crates/
     src/table_browser.rs    # Table browsing state and pagination
     src/value.rs            # Generic Value type for cross-database data
     src/data_view.rs        # DataViewMode (Table/Document) abstraction
+    src/app_config.rs       # Runtime config for external RPC services (`config.json`)
+  dbflux_ipc/               # Versioned IPC contracts and framing
+    src/envelope.rs         # ProtocolVersion + app/driver protocol constants
+    src/protocol.rs         # Single-instance app-control messages
+    src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
+    src/framing.rs          # Length-prefixed bincode transport framing
+    src/socket.rs           # Cross-platform socket naming helpers
+  dbflux_driver_ipc/        # DbDriver adapter for external RPC services
+    src/driver.rs           # IpcDriver + managed host lifecycle
+    src/transport.rs        # RPC client transport and handshake
+    src/connection.rs       # Connection proxy over driver RPC
+  dbflux_driver_host/       # Host process that serves drivers over RPC
+    src/main.rs             # Driver RPC server entry point
+    src/session.rs          # Session manager and method dispatch
   dbflux_driver_postgres/   # PostgreSQL driver implementation
   dbflux_driver_sqlite/     # SQLite driver implementation
   dbflux_driver_mysql/      # MySQL/MariaDB driver implementation
@@ -159,6 +174,15 @@ crates/
 - Driver forms: `crates/dbflux_core/src/driver_form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
 
+### IPC/RPC Integration
+
+- `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, and cross-platform socket naming.
+- `crates/dbflux/src/main.rs` uses app-control IPC for single-instance behavior (`Focus`, `OpenScript`) with protocol-version compatibility checks.
+- `crates/dbflux_core/src/app_config.rs` loads `~/.config/dbflux/config.json` and exposes `rpc_services` runtime configuration.
+- `crates/dbflux/src/app.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
+- `crates/dbflux_driver_ipc/src/driver.rs` implements `DbDriver` as an RPC proxy and only shuts down managed hosts that DBFlux spawned itself.
+- External connection profiles use `DbConfig::External { kind, values }`, where form values come from the remote `form_definition` returned during `Hello`.
+
 ### SQL Generation
 
 - **SQL dialect**: `crates/dbflux_core/src/sql_dialect.rs` defines `SqlDialect` trait for database-specific SQL syntax (quoting, LIMIT/OFFSET, type mapping).
@@ -212,6 +236,7 @@ crates/
 ## Data Flow
 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/workspace.rs).
+- External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs). Supports both form-based configuration and direct URI input.
 - Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
 - View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
@@ -237,6 +262,7 @@ crates/
 - SQLite: `rusqlite` file-based connections with lazy schema loading (crates/dbflux_driver_sqlite/src/driver.rs).
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, and shell query generation (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
+- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and external driver communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`).
 - SSH: `ssh2` sessions with local TCP forwarding (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords and SSH passphrases (crates/dbflux_core/src/secrets.rs).
 - Export: shape-based multi-format export — CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64) via `dbflux_export` (crates/dbflux_export/src/lib.rs).
@@ -246,6 +272,7 @@ crates/
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
 - Runtime data (config dir via `dirs::config_dir`):
+  - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/app_config.rs).
   - `profiles.json` and `ssh_tunnels.json` (crates/dbflux_core/src/store.rs).
   - `history.json` for query history (crates/dbflux_core/src/history.rs).
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/saved_query.rs).
