@@ -1003,6 +1003,7 @@ fn format_value_for_edit(value: &Value) -> String {
         Value::Bytes(_) => String::new(),
         Value::Decimal(d) => d.clone(),
         Value::Json(j) => j.clone(),
+        Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
         Value::Document(_) | Value::Array(_) => String::new(),
     }
 }
@@ -1029,6 +1030,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         }
         Value::Decimal(d) => serde_json::Value::String(d.clone()),
         Value::Json(j) => serde_json::from_str(j).unwrap_or(serde_json::Value::String(j.clone())),
+        Value::Unsupported(type_name) => serde_json::json!({ "$unsupported": type_name }),
         Value::Document(fields) => {
             let obj: serde_json::Map<String, serde_json::Value> = fields
                 .iter()

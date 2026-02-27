@@ -65,6 +65,7 @@ fn value_to_csv_field(value: &Value) -> String {
         Value::Date(d) => d.format("%Y-%m-%d").to_string(),
         Value::Time(t) => t.format("%H:%M:%S%.f").to_string(),
         Value::ObjectId(id) => id.clone(),
+        Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
         Value::Array(arr) => serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string()),
         Value::Document(doc) => serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string()),
     }

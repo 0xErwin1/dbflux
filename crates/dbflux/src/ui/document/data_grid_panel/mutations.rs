@@ -394,6 +394,28 @@ impl DataGridPanel {
             }
         }
 
+        if pk_values
+            .iter()
+            .any(|value| matches!(value, Value::Unsupported(_)))
+        {
+            let message =
+                "Cannot save row: primary key uses an unsupported value type".to_string();
+            log::error!("[SAVE] {}", message);
+
+            table_state.update(cx, |state, cx| {
+                state
+                    .edit_buffer_mut()
+                    .set_row_state(row_idx, RowState::Error(message.clone()));
+                cx.notify();
+            });
+
+            self.pending_toast = Some(PendingToast {
+                message,
+                is_error: true,
+            });
+            return;
+        }
+
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
             log::error!("[SAVE] Failed to build row identity");
             return;
@@ -410,6 +432,27 @@ impl DataGridPanel {
                     .map(|col| (col.title.to_string(), cell_value.to_value()))
             })
             .collect();
+
+        if change_values
+            .iter()
+            .any(|(_, value)| matches!(value, Value::Unsupported(_)))
+        {
+            let message = "Cannot save row: unsupported values are read-only".to_string();
+            log::error!("[SAVE] {}", message);
+
+            table_state.update(cx, |state, cx| {
+                state
+                    .edit_buffer_mut()
+                    .set_row_state(row_idx, RowState::Error(message.clone()));
+                cx.notify();
+            });
+
+            self.pending_toast = Some(PendingToast {
+                message,
+                is_error: true,
+            });
+            return;
+        }
 
         let patch = RowPatch::new(
             identity,

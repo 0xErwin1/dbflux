@@ -1,5 +1,5 @@
-use dbflux_core::Value;
 use dbflux_core::chrono::{DateTime, NaiveDate, Utc};
+use dbflux_core::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -108,6 +108,7 @@ impl NodeValue {
                 Value::Bytes(_) => "bytes",
                 Value::Decimal(_) => "decimal",
                 Value::Json(_) => "json",
+                Value::Unsupported(_) => "unsupported",
                 Value::Document(_) | Value::Array(_) => unreachable!(),
             },
             NodeValue::Document(_) => "object",
@@ -208,6 +209,7 @@ fn format_value_preview(value: &Value, truncate: bool) -> String {
         Value::Time(t) => t.format("%H:%M:%S").to_string(),
         Value::Bytes(b) => format!("<{} bytes>", b.len()),
         Value::Decimal(d) => d.to_string(),
+        Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
         Value::Json(j) => {
             let escaped: String = j
                 .chars()

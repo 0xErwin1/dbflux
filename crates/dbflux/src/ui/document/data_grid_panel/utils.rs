@@ -27,6 +27,7 @@ pub(super) fn value_to_json(value: &Value) -> serde_json::Value {
             serde_json::Value::Object(map)
         }
         Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+        Value::Unsupported(type_name) => serde_json::json!({"$unsupported": type_name}),
     }
 }
 

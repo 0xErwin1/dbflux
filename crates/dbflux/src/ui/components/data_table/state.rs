@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    Size, UniformListScrollHandle, Window, px,
+    px, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
+    ScrollHandle, Size, UniformListScrollHandle, Window,
 };
 use gpui_component::input::{InputEvent, InputState};
 
@@ -502,28 +502,42 @@ impl DataTableState {
             return false;
         }
 
-        let (initial_value, needs_modal, is_json_cell) = match row_source {
+        let (initial_value, needs_modal, is_json_cell, is_unsupported_cell) = match row_source {
             Some(VisualRowSource::Base(base_idx)) => {
                 let base_cell = self.model.cell(base_idx, coord.col);
                 let base = base_cell.unwrap_or(&null_cell);
                 let cell = self.edit_buffer.get_cell(base_idx, coord.col, base);
 
-                (cell.edit_text(), cell.needs_modal_editor(), cell.is_json())
+                (
+                    cell.edit_text(),
+                    cell.needs_modal_editor(),
+                    cell.is_json(),
+                    cell.is_unsupported(),
+                )
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
                 if let Some(insert_data) = self.edit_buffer.get_pending_insert_by_idx(insert_idx) {
                     if coord.col < insert_data.len() {
                         let cell = &insert_data[coord.col];
-                        (cell.edit_text(), cell.needs_modal_editor(), cell.is_json())
+                        (
+                            cell.edit_text(),
+                            cell.needs_modal_editor(),
+                            cell.is_json(),
+                            cell.is_unsupported(),
+                        )
                     } else {
-                        (String::new(), false, false)
+                        (String::new(), false, false, false)
                     }
                 } else {
-                    (String::new(), false, false)
+                    (String::new(), false, false, false)
                 }
             }
             None => return false,
         };
+
+        if is_unsupported_cell {
+            return false;
+        }
 
         let is_json = column_kind == ColumnKind::Json || is_json_cell;
         if is_json || needs_modal {

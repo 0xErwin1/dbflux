@@ -1814,7 +1814,7 @@ fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Va
                 idx,
                 e
             );
-            Value::Null
+            Value::Unsupported(format!("{:?}", col_type))
         }
         None => Value::Null,
     }
@@ -1842,6 +1842,7 @@ fn value_to_mysql_literal(value: &Value) -> String {
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
         Value::ObjectId(id) => format!("'{}'", mysql_escape_string(id)),
+        Value::Unsupported(_) => "NULL".to_string(),
         Value::Array(arr) => {
             let json = serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string());
             format!("'{}'", mysql_escape_string(&json))
