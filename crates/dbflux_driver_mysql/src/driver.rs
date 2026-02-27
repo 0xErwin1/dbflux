@@ -2137,7 +2137,10 @@ fn fetch_foreign_keys(
 #[cfg(test)]
 mod tests {
     use super::{MysqlDialect, MysqlDriver, inject_password_into_mysql_uri};
-    use dbflux_core::{DbConfig, DbDriver, DbError, DbKind, FormValues, SqlDialect, Value};
+    use dbflux_core::{
+        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, QueryLanguage,
+        SqlDialect, Value,
+    };
 
     #[test]
     fn build_and_parse_uri_roundtrip_basics() {
@@ -2238,6 +2241,23 @@ mod tests {
     fn inject_password_into_uri_adds_password_for_user_without_one() {
         let uri = inject_password_into_mysql_uri("mysql://root@localhost:3306/app", Some("new p"));
         assert_eq!(uri, "mysql://root:new%20p@localhost:3306/app");
+    }
+
+    #[test]
+    fn mysql_and_mariadb_metadata_are_consistent() {
+        let mysql = MysqlDriver::new(DbKind::MySQL);
+        let mariadb = MysqlDriver::new(DbKind::MariaDB);
+
+        assert_eq!(mysql.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mysql.metadata().query_language, QueryLanguage::Sql);
+        assert_eq!(mysql.metadata().default_port, Some(3306));
+
+        assert_eq!(mariadb.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mariadb.metadata().query_language, QueryLanguage::Sql);
+        assert_eq!(mariadb.metadata().default_port, Some(3306));
+
+        assert!(!mysql.form_definition().tabs.is_empty());
+        assert!(!mariadb.form_definition().tabs.is_empty());
     }
 }
 

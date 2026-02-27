@@ -452,7 +452,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut dir = make_dir(tmp.path());
 
-        let external = tmp.path().join("..").join("external.sql");
         // Create a temp file outside the scripts root
         let ext_dir = TempDir::new().unwrap();
         let source = ext_dir.path().join("my_query.sql");
@@ -578,13 +577,11 @@ mod tests {
         assert!(dir.create_folder(Some(&outside), "bad").is_err());
         assert!(dir.rename(&outside.join("file.sql"), "new.sql").is_err());
         assert!(dir.delete(&outside.join("file.sql")).is_err());
-        assert!(
-            dir.move_entry(&outside.join("file.sql"), tmp.path())
-                .is_err()
-        );
-        assert!(
-            dir.move_entry(&tmp.path().join("file.sql"), &outside)
-                .is_err()
-        );
+        assert!(dir
+            .move_entry(&outside.join("file.sql"), tmp.path())
+            .is_err());
+        assert!(dir
+            .move_entry(&tmp.path().join("file.sql"), &outside)
+            .is_err());
     }
 }

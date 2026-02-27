@@ -1976,7 +1976,7 @@ fn redis_first_line_range(query: &str) -> TextPositionRange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{DbDriver, ValidationResult};
+    use dbflux_core::{DatabaseCategory, DbDriver, QueryLanguage, ValidationResult};
 
     #[test]
     fn build_config_requires_uri_when_uri_mode_enabled() {
@@ -2147,5 +2147,17 @@ mod tests {
     #[ignore = "TODO: decode percent-encoded username in redis parse_uri"]
     fn pending_redis_parse_uri_username_decoding() {
         panic!("TODO: percent-decode username in Redis parse_uri result");
+    }
+
+    #[test]
+    fn metadata_and_form_definition_match_redis_contract() {
+        let driver = RedisDriver::new();
+        let metadata = driver.metadata();
+
+        assert_eq!(metadata.category, DatabaseCategory::KeyValue);
+        assert_eq!(metadata.query_language, QueryLanguage::RedisCommands);
+        assert_eq!(metadata.default_port, Some(6379));
+        assert_eq!(metadata.uri_scheme, "redis");
+        assert!(!driver.form_definition().tabs.is_empty());
     }
 }

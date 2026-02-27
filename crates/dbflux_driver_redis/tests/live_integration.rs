@@ -1,4 +1,6 @@
-use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest};
+use dbflux_core::{
+    ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest, SchemaLoadingStrategy,
+};
 use dbflux_driver_redis::RedisDriver;
 use dbflux_test_support::containers;
 
@@ -31,6 +33,14 @@ fn redis_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbError
 
         let result = connection.execute(&QueryRequest::new("PING"))?;
         assert!(!result.rows.is_empty() || result.text_body.is_some());
+
+        assert_eq!(
+            connection.schema_loading_strategy(),
+            SchemaLoadingStrategy::SingleDatabase
+        );
+
+        let databases = connection.list_databases()?;
+        assert!(!databases.is_empty());
 
         let (handle, _) = connection.execute_with_handle(&QueryRequest::new("PING"))?;
         let cancel = connection.cancel(&handle);

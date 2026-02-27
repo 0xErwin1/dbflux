@@ -1,4 +1,4 @@
-use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, QueryRequest};
+use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, QueryRequest, SchemaLoadingStrategy};
 use dbflux_driver_sqlite::SqliteDriver;
 
 #[test]
@@ -21,6 +21,14 @@ fn sqlite_file_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbErro
 
     let result = connection.execute(&QueryRequest::new("SELECT id, name FROM users"))?;
     assert_eq!(result.rows.len(), 1);
+
+    assert_eq!(
+        connection.schema_loading_strategy(),
+        SchemaLoadingStrategy::SingleDatabase
+    );
+
+    let databases = connection.list_databases()?;
+    assert!(databases.is_empty());
 
     let schema = connection.schema()?;
     let _ = schema.databases();
