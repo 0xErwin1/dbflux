@@ -253,6 +253,10 @@ impl DbDriver for PostgresDriver {
         &METADATA
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:postgres".into()
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,

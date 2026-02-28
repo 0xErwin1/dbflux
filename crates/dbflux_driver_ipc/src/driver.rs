@@ -323,6 +323,10 @@ impl dbflux_core::DbDriver for IpcDriver {
         &self.metadata
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        format!("rpc:{}", self.socket_id)
+    }
+
     fn form_definition(&self) -> &DriverFormDef {
         &self.form_definition
     }

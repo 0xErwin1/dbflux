@@ -142,8 +142,8 @@ pub use sql_generation::{
 pub use sql_query_builder::SqlQueryBuilder;
 
 pub use app_config::{
-    AppConfig, AppConfigStore, DangerousAction, GeneralSettings, RefreshPolicySetting,
-    ServiceConfig, StartupFocus, ThemeSetting,
+    AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
+    GlobalOverrides, RefreshPolicySetting, ServiceConfig, StartupFocus, ThemeSetting,
 };
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
