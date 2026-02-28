@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
+use testcontainers::GenericImage;
 use testcontainers::clients::Cli;
 use testcontainers::core::WaitFor;
-use testcontainers::GenericImage;
 
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where

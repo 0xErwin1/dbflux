@@ -2243,7 +2243,10 @@ mod tests {
             .parse_uri("mongodb+srv://user:pass@cluster0.example.net/main?authSource=admin")
             .expect("mongodb+srv uri should parse");
 
-        assert_eq!(values.get("host").map(String::as_str), Some("cluster0.example.net"));
+        assert_eq!(
+            values.get("host").map(String::as_str),
+            Some("cluster0.example.net")
+        );
         assert_eq!(values.get("port").map(String::as_str), Some("27017"));
         assert_eq!(values.get("database").map(String::as_str), Some("main"));
         assert_eq!(
@@ -2272,10 +2275,7 @@ mod tests {
             Some("alice"),
             Some("pw"),
         );
-        assert_eq!(
-            untouched,
-            "mongodb://existing:creds@localhost:27017/admin"
-        );
+        assert_eq!(untouched, "mongodb://existing:creds@localhost:27017/admin");
     }
 
     #[test]

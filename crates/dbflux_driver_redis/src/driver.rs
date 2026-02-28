@@ -2102,8 +2102,8 @@ mod tests {
 
     #[test]
     fn parse_command_handles_quotes_and_escapes() {
-        let tokens = parse_command("SET \"my key\" 'hello world'\\n")
-            .expect("quoted command should parse");
+        let tokens =
+            parse_command("SET \"my key\" 'hello world'\\n").expect("quoted command should parse");
         assert_eq!(tokens, vec!["SET", "my key", "hello worldn"]);
     }
 
@@ -2123,7 +2123,11 @@ mod tests {
     fn check_redis_arity_reports_exact_argument_mismatch() {
         let diagnostics = check_redis_arity(&["GET".to_string()], "GET");
         assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message.contains("requires exactly 1 argument"));
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("requires exactly 1 argument")
+        );
     }
 
     #[test]
@@ -2131,15 +2135,14 @@ mod tests {
         let service = RedisLanguageService;
         let validation = service.validate("SELECT * FROM users");
 
-        assert!(matches!(
-            validation,
-            ValidationResult::WrongLanguage { .. }
-        ));
+        assert!(matches!(validation, ValidationResult::WrongLanguage { .. }));
     }
 
     #[test]
     fn uri_authority_has_credentials_detects_at_symbol() {
-        assert!(uri_authority_has_credentials("redis://:pass@localhost:6379/0"));
+        assert!(uri_authority_has_credentials(
+            "redis://:pass@localhost:6379/0"
+        ));
         assert!(!uri_authority_has_credentials("redis://localhost:6379/0"));
     }
 
