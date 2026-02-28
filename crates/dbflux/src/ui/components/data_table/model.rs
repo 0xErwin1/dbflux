@@ -1016,3 +1016,84 @@ impl EditBuffer {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CellValue, EditBuffer, VisualRowSource};
+
+    #[test]
+    fn compute_visual_order_interleaves_pending_inserts() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(3);
+
+        buffer.add_pending_insert_after(0, vec![CellValue::text("a")]);
+        buffer.add_pending_insert_after(0, vec![CellValue::text("b")]);
+        buffer.add_pending_insert(vec![CellValue::text("tail")]);
+
+        let order = buffer.compute_visual_order();
+        assert_eq!(
+            order,
+            vec![
+                VisualRowSource::Base(0),
+                VisualRowSource::Insert(0),
+                VisualRowSource::Insert(1),
+                VisualRowSource::Base(1),
+                VisualRowSource::Base(2),
+                VisualRowSource::Insert(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn undo_redo_insert_and_insert_cell_workflow() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        let insert_idx = buffer.add_pending_insert_after(0, vec![CellValue::text("old")]);
+        buffer.set_insert_cell(insert_idx, 0, CellValue::text("new"));
+
+        let current = buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .expect("pending insert should exist");
+        assert_eq!(current[0].display_text().as_ref(), "new");
+
+        assert!(buffer.undo());
+        let reverted = buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .expect("pending insert should still exist");
+        assert_eq!(reverted[0].display_text().as_ref(), "old");
+
+        assert!(buffer.redo());
+        let redone = buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .expect("pending insert should still exist");
+        assert_eq!(redone[0].display_text().as_ref(), "new");
+
+        buffer.remove_pending_insert_by_idx(insert_idx);
+        assert!(buffer.get_pending_insert_by_idx(insert_idx).is_none());
+
+        assert!(buffer.undo());
+        assert!(buffer.get_pending_insert_by_idx(insert_idx).is_some());
+
+        assert!(buffer.redo());
+        assert!(buffer.get_pending_insert_by_idx(insert_idx).is_none());
+    }
+
+    #[test]
+    fn dirty_rows_and_pending_deletes_are_tracked_separately() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(4);
+
+        buffer.set_cell(1, 0, CellValue::int(42));
+        buffer.mark_for_delete(3);
+
+        let mut dirty = buffer.dirty_rows();
+        dirty.sort_unstable();
+        assert_eq!(dirty, vec![1]);
+        assert_eq!(buffer.dirty_row_count(), 1);
+
+        let mut pending_delete = buffer.pending_delete_rows();
+        pending_delete.sort_unstable();
+        assert_eq!(pending_delete, vec![3]);
+    }
+}

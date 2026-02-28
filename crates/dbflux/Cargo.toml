@@ -63,3 +63,6 @@ mysql = ["dbflux_driver_mysql"]
 mongodb = ["dbflux_driver_mongodb"]
 redis = ["dbflux_driver_redis"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
+
+[dev-dependencies]
+dbflux_test_support.workspace = true

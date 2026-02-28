@@ -1,5 +1,35 @@
 use super::*;
 
+fn resolve_connection_for_execution(
+    connected: &dbflux_core::ConnectedProfile,
+    target_db: Option<&str>,
+) -> Result<std::sync::Arc<dyn dbflux_core::Connection>, String> {
+    let strategy = connected.connection.schema_loading_strategy();
+
+    if strategy != SchemaLoadingStrategy::ConnectionPerDatabase {
+        return Ok(connected.connection.clone());
+    }
+
+    let Some(target_db) = target_db else {
+        return Ok(connected.connection.clone());
+    };
+
+    let is_primary = connected
+        .schema
+        .as_ref()
+        .and_then(|s| s.current_database())
+        .is_some_and(|current| current == target_db);
+
+    if is_primary {
+        return Ok(connected.connection.clone());
+    }
+
+    connected
+        .database_connection(target_db)
+        .map(|db_conn| db_conn.connection.clone())
+        .ok_or_else(|| format!("Connecting to database '{}', please wait...", target_db))
+}
+
 impl SqlQueryDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
@@ -115,31 +145,12 @@ impl SqlQueryDocument {
                 return;
             };
 
-            let strategy = connected.connection.schema_loading_strategy();
-            if strategy == SchemaLoadingStrategy::ConnectionPerDatabase {
-                if let Some(ref target_db) = self.exec_ctx.database {
-                    let is_primary = connected
-                        .schema
-                        .as_ref()
-                        .and_then(|s| s.current_database())
-                        .is_some_and(|current| current == target_db);
-
-                    if is_primary {
-                        connected.connection.clone()
-                    } else if let Some(db_conn) = connected.database_connection(target_db) {
-                        db_conn.connection.clone()
-                    } else {
-                        cx.toast_error(
-                            format!("Connecting to database '{}', please wait...", target_db),
-                            window,
-                        );
-                        return;
-                    }
-                } else {
-                    connected.connection.clone()
+            match resolve_connection_for_execution(connected, self.exec_ctx.database.as_deref()) {
+                Ok(connection) => connection,
+                Err(message) => {
+                    cx.toast_error(message, window);
+                    return;
                 }
-            } else {
-                connected.connection.clone()
             }
         };
 
@@ -527,5 +538,131 @@ impl SqlQueryDocument {
         self.active_result_index
             .and_then(|i| self.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_connection_for_execution;
+    use dbflux_core::{
+        ConnectedProfile, Connection, ConnectionProfile, DatabaseConnection, DbConfig, DbDriver,
+        DbKind, RedisKeyCache,
+    };
+    use dbflux_test_support::{FakeDriver, fixtures};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn connect_arc(driver: &FakeDriver, profile: &ConnectionProfile) -> Arc<dyn Connection> {
+        let connection = driver
+            .connect(profile)
+            .expect("fake driver should connect for test");
+        Arc::from(connection)
+    }
+
+    fn connected_profile(
+        profile: ConnectionProfile,
+        primary: Arc<dyn Connection>,
+        schema: Option<dbflux_core::SchemaSnapshot>,
+        database_connections: HashMap<String, DatabaseConnection>,
+    ) -> ConnectedProfile {
+        ConnectedProfile {
+            profile,
+            connection: primary,
+            schema,
+            database_schemas: HashMap::new(),
+            table_details: HashMap::new(),
+            schema_types: HashMap::new(),
+            schema_indexes: HashMap::new(),
+            schema_foreign_keys: HashMap::new(),
+            active_database: None,
+            redis_key_cache: RedisKeyCache::default(),
+            database_connections,
+        }
+    }
+
+    #[test]
+    fn resolve_returns_primary_when_strategy_is_not_connection_per_database() {
+        let driver = FakeDriver::new(DbKind::MySQL);
+        let profile = ConnectionProfile::new(
+            "mysql",
+            DbConfig::MySQL {
+                use_uri: false,
+                uri: None,
+                host: "localhost".to_string(),
+                port: 3306,
+                user: "root".to_string(),
+                database: Some("app".to_string()),
+                ssl_mode: dbflux_core::SslMode::Disable,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let primary = connect_arc(&driver, &profile);
+        let connected = connected_profile(profile, primary.clone(), None, HashMap::new());
+
+        let resolved = resolve_connection_for_execution(&connected, Some("analytics"))
+            .expect("mysql strategy should return primary connection");
+
+        assert!(Arc::ptr_eq(&resolved, &primary));
+    }
+
+    #[test]
+    fn resolve_uses_primary_for_current_database_with_connection_per_database() {
+        let driver = FakeDriver::new(DbKind::Postgres);
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = connect_arc(&driver, &profile);
+        let schema = fixtures::relational_schema_with_table("main_db", "public", "users");
+
+        let connected = connected_profile(profile, primary.clone(), Some(schema), HashMap::new());
+
+        let resolved = resolve_connection_for_execution(&connected, Some("main_db"))
+            .expect("primary db should resolve to primary connection");
+
+        assert!(Arc::ptr_eq(&resolved, &primary));
+    }
+
+    #[test]
+    fn resolve_uses_database_connection_for_non_primary_database() {
+        let driver = FakeDriver::new(DbKind::Postgres);
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = connect_arc(&driver, &profile);
+        let analytics = connect_arc(&driver, &profile);
+
+        let mut db_connections = HashMap::new();
+        db_connections.insert(
+            "analytics".to_string(),
+            DatabaseConnection {
+                connection: analytics.clone(),
+                schema: Some(fixtures::relational_schema_with_table(
+                    "analytics",
+                    "public",
+                    "events",
+                )),
+            },
+        );
+
+        let schema = fixtures::relational_schema_with_table("main_db", "public", "users");
+        let connected = connected_profile(profile, primary, Some(schema), db_connections);
+
+        let resolved = resolve_connection_for_execution(&connected, Some("analytics"))
+            .expect("database connection should be used when available");
+
+        assert!(Arc::ptr_eq(&resolved, &analytics));
+    }
+
+    #[test]
+    fn resolve_returns_error_when_database_connection_is_missing() {
+        let driver = FakeDriver::new(DbKind::Postgres);
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = connect_arc(&driver, &profile);
+        let schema = fixtures::relational_schema_with_table("main_db", "public", "users");
+        let connected = connected_profile(profile, primary, Some(schema), HashMap::new());
+
+        let error = match resolve_connection_for_execution(&connected, Some("analytics")) {
+            Ok(_) => panic!("expected missing database connection to return an error"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("analytics"));
     }
 }

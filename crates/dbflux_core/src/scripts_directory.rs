@@ -452,7 +452,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut dir = make_dir(tmp.path());
 
-        let external = tmp.path().join("..").join("external.sql");
         // Create a temp file outside the scripts root
         let ext_dir = TempDir::new().unwrap();
         let source = ext_dir.path().join("my_query.sql");

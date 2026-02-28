@@ -1,5 +1,5 @@
 [package]
-name = "dbflux_driver_redis"
+name = "dbflux_test_support"
 version = "0.1.0"
 edition.workspace = true
 publish = false
@@ -14,11 +14,5 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core.workspace = true
-dbflux_ssh.workspace = true
-log.workspace = true
-redis = { version = "0.27", features = ["tls-rustls"] }
 serde_json.workspace = true
-urlencoding = "2"
-
-[dev-dependencies]
-dbflux_test_support.workspace = true
+testcontainers = "0.15"

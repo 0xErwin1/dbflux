@@ -1267,3 +1267,134 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
     sql.push_str(");");
     sql
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SqliteDialect, SqliteDriver, sqlite_generate_create_table};
+    use dbflux_core::{
+        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, QueryLanguage, SqlDialect,
+        TableInfo, Value,
+    };
+
+    #[test]
+    fn build_config_requires_non_empty_path() {
+        let driver = SqliteDriver::new();
+        let values = FormValues::new();
+
+        let error = driver
+            .build_config(&values)
+            .expect_err("sqlite driver should reject empty path");
+
+        assert!(matches!(error, dbflux_core::DbError::InvalidProfile(_)));
+    }
+
+    #[test]
+    fn sqlite_dialect_special_float_and_bytes_literals() {
+        let dialect = SqliteDialect;
+
+        assert_eq!(dialect.value_to_literal(&Value::Float(f64::NAN)), "NULL");
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::NEG_INFINITY)),
+            "NULL"
+        );
+        assert_eq!(
+            dialect.value_to_literal(&Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef])),
+            "X'deadbeef'"
+        );
+    }
+
+    #[test]
+    fn sqlite_create_table_uses_inline_integer_primary_key() {
+        let single_pk = TableInfo {
+            name: "users".to_string(),
+            schema: None,
+            columns: Some(vec![ColumnInfo {
+                name: "id".to_string(),
+                type_name: "INTEGER".to_string(),
+                nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                enum_values: None,
+            }]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+        };
+
+        let composite_pk = TableInfo {
+            name: "membership".to_string(),
+            schema: None,
+            columns: Some(vec![
+                ColumnInfo {
+                    name: "user_id".to_string(),
+                    type_name: "INTEGER".to_string(),
+                    nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    enum_values: None,
+                },
+                ColumnInfo {
+                    name: "role_id".to_string(),
+                    type_name: "INTEGER".to_string(),
+                    nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    enum_values: None,
+                },
+            ]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+        };
+
+        let single_sql = sqlite_generate_create_table(&single_pk);
+        assert!(single_sql.contains("\"id\" INTEGER NOT NULL PRIMARY KEY"));
+        assert!(!single_sql.contains("PRIMARY KEY (\"id\")"));
+
+        let composite_sql = sqlite_generate_create_table(&composite_pk);
+        assert!(composite_sql.contains("PRIMARY KEY (\"user_id\", \"role_id\")"));
+    }
+
+    #[test]
+    fn extract_values_returns_sqlite_path() {
+        let driver = SqliteDriver::new();
+        let config = DbConfig::SQLite {
+            path: "/tmp/dbflux-test.db".into(),
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(
+            values.get("path").map(String::as_str),
+            Some("/tmp/dbflux-test.db")
+        );
+    }
+
+    #[test]
+    fn sqlite_driver_does_not_support_uri_helpers_yet() {
+        let driver = SqliteDriver::new();
+        let values = FormValues::new();
+
+        assert!(driver.build_uri(&values, "password").is_none());
+        assert!(driver.parse_uri("sqlite:///tmp/db.sqlite").is_none());
+    }
+
+    #[test]
+    #[ignore = "TODO: sqlite URI mode support"]
+    fn pending_sqlite_uri_mode_support() {
+        panic!("TODO: implement URI mode for SQLite driver and replace this pending test");
+    }
+
+    #[test]
+    fn metadata_and_form_definition_match_sqlite_contract() {
+        let driver = SqliteDriver::new();
+        let metadata = driver.metadata();
+
+        assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.query_language, QueryLanguage::Sql);
+        assert_eq!(metadata.default_port, None);
+        assert_eq!(metadata.uri_scheme, "sqlite");
+        assert!(!driver.form_definition().tabs.is_empty());
+    }
+}
