@@ -128,10 +128,15 @@ impl SqlQueryDocument {
 
         let content = self.build_file_content(cx);
         let entity = cx.entity().clone();
+        let auto_save_ms = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .auto_save_interval_ms;
 
         self._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
             cx.background_executor()
-                .timer(std::time::Duration::from_secs(2))
+                .timer(std::time::Duration::from_millis(auto_save_ms))
                 .await;
 
             let write_result = cx

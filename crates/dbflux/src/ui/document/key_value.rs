@@ -51,6 +51,8 @@ pub struct KeyValueDocument {
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
 
+    is_active_tab: bool,
+
     // Live TTL countdown
     ttl_state: TtlState,
     ttl_display: String,
@@ -237,6 +239,8 @@ impl KeyValueDocument {
 
         let add_member_modal = cx.new(AddMemberModal::new);
 
+        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
@@ -245,7 +249,7 @@ impl KeyValueDocument {
 
             Dropdown::new("kv-auto-refresh")
                 .items(items)
-                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .selected_index(Some(default_refresh.index()))
                 .compact_trigger(true)
         });
 
@@ -277,10 +281,11 @@ impl KeyValueDocument {
                 r.set_profile_id(profile_id);
                 r
             },
-            refresh_policy: RefreshPolicy::Manual,
+            refresh_policy: default_refresh,
             refresh_dropdown,
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
+            is_active_tab: true,
             ttl_state: TtlState::NoLimit,
             ttl_display: String::new(),
             _ttl_countdown_timer: None,
@@ -345,6 +350,10 @@ impl KeyValueDocument {
         self.refresh_policy
     }
 
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
+    }
+
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
         if self.refresh_policy == policy {
             return;
@@ -373,6 +382,16 @@ impl KeyValueDocument {
 
                     entity.update(cx, |doc, cx| {
                         if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                            return;
+                        }
+
+                        let settings = doc.app_state.read(cx).general_settings();
+
+                        if settings.auto_refresh_pause_on_error && doc.last_error.is_some() {
+                            return;
+                        }
+
+                        if settings.auto_refresh_only_if_visible && !doc.is_active_tab {
                             return;
                         }
 
@@ -1285,6 +1304,12 @@ impl KeyValueDocument {
             cx.notify();
             return;
         };
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.last_error = Some("Too many background tasks running, please wait".to_string());
+            cx.notify();
+            return;
+        }
 
         let filter = self.filter_input.read(cx).value().trim().to_string();
         let is_first_page = self.current_page == 1;

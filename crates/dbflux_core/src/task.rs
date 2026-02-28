@@ -268,6 +268,27 @@ impl TaskManager {
             .count()
     }
 
+    /// Count running background tasks (non-interactive: Connect, LoadSchema,
+    /// SchemaRefresh, SwitchDatabase, Disconnect). Query and Export tasks are
+    /// excluded so manual "Run Query" is never throttled.
+    pub fn background_task_count(&self) -> usize {
+        self.tasks
+            .values()
+            .filter(|t| {
+                t.status == TaskStatus::Running
+                    && matches!(
+                        t.kind,
+                        TaskKind::Connect
+                            | TaskKind::Disconnect
+                            | TaskKind::SwitchDatabase
+                            | TaskKind::LoadSchema
+                            | TaskKind::SchemaRefresh
+                            | TaskKind::KeyScan
+                    )
+            })
+            .count()
+    }
+
     pub fn has_running_tasks(&self) -> bool {
         self.tasks.values().any(|t| t.status == TaskStatus::Running)
     }

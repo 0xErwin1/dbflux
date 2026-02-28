@@ -397,6 +397,19 @@ impl Sidebar {
             }
         };
 
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.app_state.update(cx, |state, _cx| {
+                state.finish_pending_operation(profile_id, Some(db_name));
+            });
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result =
                 state.start_task(TaskKind::LoadSchema, format!("Loading schema: {}", db_name));
@@ -535,6 +548,19 @@ impl Sidebar {
             }
         };
 
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.app_state.update(cx, |state, _cx| {
+                state.finish_pending_operation(profile_id, Some(db_name));
+            });
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::SwitchDatabase,
@@ -614,7 +640,7 @@ impl Sidebar {
         .detach();
     }
 
-    pub(super) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+    pub(crate) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         let (params, profile_name) = match self.app_state.update(cx, |state, _cx| {
             if state.is_operation_pending(profile_id, None) {
                 return Err("Connection already pending".to_string());
@@ -637,6 +663,19 @@ impl Sidebar {
                 return;
             }
         };
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.app_state.update(cx, |state, _cx| {
+                state.finish_pending_operation(profile_id, None);
+            });
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result =

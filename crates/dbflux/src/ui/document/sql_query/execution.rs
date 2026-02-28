@@ -91,14 +91,23 @@ impl SqlQueryDocument {
                 .dangerous_query_suppressions()
                 .is_suppressed(kind);
 
-            if !is_suppressed {
-                self.pending_dangerous_query = Some(PendingDangerousQuery {
-                    query,
-                    kind,
-                    in_new_tab,
-                });
-                cx.notify();
-                return;
+            let settings = self.app_state.read(cx).general_settings();
+
+            match settings.evaluate_dangerous(kind, is_suppressed) {
+                DangerousAction::Allow => {}
+                DangerousAction::Confirm(kind) => {
+                    self.pending_dangerous_query = Some(PendingDangerousQuery {
+                        query,
+                        kind,
+                        in_new_tab,
+                    });
+                    cx.notify();
+                    return;
+                }
+                DangerousAction::Block(msg) => {
+                    cx.toast_error(msg, window);
+                    return;
+                }
             }
         }
 

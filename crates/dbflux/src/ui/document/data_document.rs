@@ -229,6 +229,11 @@ impl DataDocument {
         }
     }
 
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.data_grid
+            .update(cx, |grid, _cx| grid.set_active_tab(active));
+    }
+
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         self.data_grid.read(cx).refresh_policy()
     }

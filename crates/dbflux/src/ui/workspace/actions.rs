@@ -1030,6 +1030,33 @@ impl Workspace {
             }
         }
     }
+    /// Reconnects to profiles referenced by restored session documents.
+    pub(super) fn reopen_last_connections(&mut self, cx: &mut Context<Self>) {
+        let profile_ids: std::collections::HashSet<uuid::Uuid> = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .filter_map(|doc| doc.meta_snapshot(cx).connection_id)
+            .collect();
+
+        if profile_ids.is_empty() {
+            return;
+        }
+
+        let already_connected = self.app_state.read(cx).connections().keys().copied().collect::<std::collections::HashSet<_>>();
+        let sidebar = self.sidebar.clone();
+
+        for profile_id in profile_ids {
+            if already_connected.contains(&profile_id) {
+                continue;
+            }
+
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.connect_to_profile(profile_id, cx);
+            });
+        }
+    }
 }
 
 #[cfg(test)]
