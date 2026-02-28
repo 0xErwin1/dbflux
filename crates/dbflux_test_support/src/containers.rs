@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
-use testcontainers::GenericImage;
 use testcontainers::clients::Cli;
 use testcontainers::core::WaitFor;
+use testcontainers::GenericImage;
 
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
@@ -31,13 +31,13 @@ where
     let docker = Cli::default();
     let image = GenericImage::new("mysql", "8.4")
         .with_env_var("MYSQL_ROOT_PASSWORD", "root")
-        .with_env_var("MYSQL_DATABASE", "mysql")
+        .with_env_var("MYSQL_DATABASE", "testdb")
         .with_exposed_port(3306)
         .with_wait_for(WaitFor::message_on_stderr("ready for connections"));
 
     let container = docker.run(image);
     let port = container.get_host_port_ipv4(3306);
-    let url = format!("mysql://root:root@127.0.0.1:{port}/mysql");
+    let url = format!("mysql://root:root@127.0.0.1:{port}/testdb");
 
     run(url)
 }
@@ -53,7 +53,7 @@ where
 
     let container = docker.run(image);
     let port = container.get_host_port_ipv4(27017);
-    let url = format!("mongodb://127.0.0.1:{port}/admin");
+    let url = format!("mongodb://127.0.0.1:{port}/testdb");
 
     run(url)
 }
