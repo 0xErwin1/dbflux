@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dbflux_core::{Connection, DbError, KeyValueApi};
 use dbflux_ipc::driver_protocol::{
-    CodeGeneratorInfoDto, DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto,
+    DriverRequestBody, DriverResponseBody, DriverRpcErrorCode, QueryResultDto,
 };
 use uuid::Uuid;
 
@@ -346,11 +346,7 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
 
         // === Code generation ===
         DriverRequestBody::CodeGenerators => {
-            let generators: Vec<CodeGeneratorInfoDto> = conn
-                .code_generators()
-                .iter()
-                .map(CodeGeneratorInfoDto::from)
-                .collect();
+            let generators = conn.code_generators();
             DriverResponseBody::CodeGeneratorsResult { generators }
         }
 

@@ -2,14 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_VERSION,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
-    framing,
+    framing, DRIVER_RPC_VERSION,
 };
-use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
+use interprocess::local_socket::{prelude::*, Name, Stream as IpcStream};
 use uuid::Uuid;
 
 pub struct RpcClient {
@@ -659,7 +658,7 @@ impl RpcClient {
     pub fn code_generators(
         &self,
         session_id: Uuid,
-    ) -> Result<Vec<dbflux_ipc::driver_protocol::CodeGeneratorInfoDto>, RpcError> {
+    ) -> Result<Vec<dbflux_core::CodeGeneratorInfo>, RpcError> {
         let body = self.call(Some(session_id), DriverRequestBody::CodeGenerators)?;
         match body {
             DriverResponseBody::CodeGeneratorsResult { generators } => Ok(generators),

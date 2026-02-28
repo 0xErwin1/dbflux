@@ -450,10 +450,10 @@ impl ConnectionManagerWindow {
             .collect();
 
         for field in fields {
-            let placeholder = field.placeholder;
-            let default_value = field.default_value;
+            let placeholder = &field.placeholder;
+            let default_value = &field.default_value;
             let is_masked = field.kind == FormFieldKind::Password;
-            let field_id: &'static str = field.id;
+            let field_id = field.id.clone();
 
             let input = cx.new(|cx| {
                 let mut state = InputState::new(window, cx).placeholder(placeholder);
@@ -478,7 +478,7 @@ impl ConnectionManagerWindow {
                         this.exit_edit_mode(window, cx);
                     }
                     InputEvent::Change => {
-                        this.handle_field_change(field_id, window, cx);
+                        this.handle_field_change(&field_id, window, cx);
                     }
                     _ => {}
                 },
@@ -496,13 +496,13 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for tab in form.tabs {
-            for section in tab.sections {
-                for field in section.fields {
+        for tab in &form.tabs {
+            for section in &tab.sections {
+                for field in &section.fields {
                     if field.kind == FormFieldKind::Checkbox {
-                        let is_checked = values.get(field.id).map(|v| v == "true").unwrap_or(false);
+                        let is_checked = values.get(&field.id).map(|v| v == "true").unwrap_or(false);
                         self.checkbox_states
-                            .insert(field.id.to_string(), is_checked);
+                            .insert(field.id.clone(), is_checked);
                     }
                 }
             }
@@ -524,14 +524,14 @@ impl ConnectionManagerWindow {
     ) -> dbflux_core::FormValues {
         let mut values = HashMap::new();
 
-        for tab in form.tabs {
-            for section in tab.sections {
-                for field in section.fields {
+        for tab in &form.tabs {
+            for section in &tab.sections {
+                for field in &section.fields {
                     if field.kind == FormFieldKind::Checkbox {
                         let is_checked =
-                            self.checkbox_states.get(field.id).copied().unwrap_or(false);
+                            self.checkbox_states.get(&field.id).copied().unwrap_or(false);
                         values.insert(
-                            field.id.to_string(),
+                            field.id.clone(),
                             if is_checked {
                                 "true".to_string()
                             } else {
@@ -619,10 +619,10 @@ impl ConnectionManagerWindow {
 
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
-        if let Some(checkbox_id) = field.enabled_when_checked {
+        if let Some(checkbox_id) = &field.enabled_when_checked {
             let is_checked = self
                 .checkbox_states
-                .get(checkbox_id)
+                .get(checkbox_id.as_str())
                 .copied()
                 .unwrap_or(false);
             if !is_checked {
@@ -630,10 +630,10 @@ impl ConnectionManagerWindow {
             }
         }
 
-        if let Some(checkbox_id) = field.enabled_when_unchecked {
+        if let Some(checkbox_id) = &field.enabled_when_unchecked {
             let is_checked = self
                 .checkbox_states
-                .get(checkbox_id)
+                .get(checkbox_id.as_str())
                 .copied()
                 .unwrap_or(false);
             if is_checked {

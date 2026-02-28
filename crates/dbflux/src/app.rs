@@ -4,7 +4,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -960,7 +960,7 @@ impl EventEmitter<AppStateChanged> for AppState {}
 #[cfg(test)]
 mod tests {
     use super::AppState;
-    use dbflux_core::{DbDriver, DbKind};
+    use dbflux_core::{DbDriver, DbKind, GeneralSettings};
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -973,11 +973,13 @@ mod tests {
 
     #[test]
     fn new_with_drivers_uses_injected_registry() {
-        let mut drivers: HashMap<DbKind, Arc<dyn DbDriver>> = HashMap::new();
-        drivers.insert(DbKind::SQLite, Arc::new(FakeDriver::new(DbKind::SQLite)));
+        let fake = FakeDriver::new(DbKind::SQLite);
+        let driver_id = fake.metadata().id.clone();
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        drivers.insert(driver_id.clone(), Arc::new(fake));
 
-        let state = AppState::new_with_drivers(drivers);
+        let state = AppState::new_with_drivers_and_settings(drivers, GeneralSettings::default());
         assert_eq!(state.drivers().len(), 1);
-        assert!(state.drivers().contains_key(&DbKind::SQLite));
+        assert!(state.drivers().contains_key(&driver_id));
     }
 }

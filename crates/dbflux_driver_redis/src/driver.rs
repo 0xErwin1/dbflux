@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -18,10 +19,10 @@ use dbflux_core::{
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
-pub static REDIS_METADATA: DriverMetadata = DriverMetadata {
-    id: "redis",
-    display_name: "Redis",
-    description: "In-memory key-value database",
+pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "redis".into(),
+    display_name: "Redis".into(),
+    description: "In-memory key-value database".into(),
     category: DatabaseCategory::KeyValue,
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -39,9 +40,9 @@ pub static REDIS_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::SSL.bits(),
     ),
     default_port: Some(6379),
-    uri_scheme: "redis",
+    uri_scheme: "redis".into(),
     icon: Icon::Redis,
-};
+});
 
 pub struct RedisDriver;
 
@@ -148,11 +149,11 @@ impl DbDriver for RedisDriver {
         DbKind::Redis
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &REDIS_METADATA
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &REDIS_FORM
     }
 
@@ -478,7 +479,7 @@ impl RedisConnection {
 }
 
 impl Connection for RedisConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &REDIS_METADATA
     }
 

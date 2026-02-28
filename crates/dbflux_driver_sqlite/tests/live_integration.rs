@@ -333,7 +333,7 @@ fn sqlite_code_generators() -> Result<(), DbError> {
     let table = connection.table_details("main", None, "codegen_test")?;
 
     for generator in generators {
-        let code = connection.generate_code(generator.id, &table)?;
+        let code = connection.generate_code(&generator.id, &table)?;
         assert!(
             !code.is_empty(),
             "generator '{}' returned empty code",

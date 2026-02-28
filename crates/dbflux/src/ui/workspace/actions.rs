@@ -631,7 +631,7 @@ impl Workspace {
         use dbflux_core::{ExecutionContext, QueryLanguage};
 
         let language = QueryLanguage::from_path(&path).unwrap_or(QueryLanguage::Sql);
-        let exec_ctx = ExecutionContext::parse_from_content(&content, language);
+        let exec_ctx = ExecutionContext::parse_from_content(&content, language.clone());
 
         // Determine connection from exec_ctx or fall back to active
         let connection_id = exec_ctx
@@ -640,7 +640,7 @@ impl Workspace {
             .or_else(|| self.app_state.read(cx).active_connection_id());
 
         // Strip annotation header from content before setting editor text
-        let body = Self::strip_annotation_header(&content, language);
+        let body = Self::strip_annotation_header(&content, &language);
 
         // Track in recent files
         self.app_state.update(cx, |state, cx| {
@@ -660,7 +660,7 @@ impl Workspace {
     }
 
     /// Strip leading annotation comments from file content.
-    fn strip_annotation_header(content: &str, language: QueryLanguage) -> &str {
+    fn strip_annotation_header<'a>(content: &'a str, language: &QueryLanguage) -> &'a str {
         let prefix = language.comment_prefix();
         let mut end = 0;
 
@@ -726,7 +726,7 @@ impl Workspace {
             .read(cx)
             .active_connection_id()
             .and_then(|id| self.app_state.read(cx).connections().get(&id))
-            .map(|conn| conn.connection.metadata().query_language)
+            .map(|conn| conn.connection.metadata().query_language.clone())
             .unwrap_or(dbflux_core::QueryLanguage::Sql);
 
         let extension = query_language.default_extension();
@@ -778,7 +778,7 @@ impl Workspace {
             .read(cx)
             .active_connection_id()
             .and_then(|id| self.app_state.read(cx).connections().get(&id))
-            .map(|conn| conn.connection.metadata().query_language)
+            .map(|conn| conn.connection.metadata().query_language.clone())
             .unwrap_or(dbflux_core::QueryLanguage::Sql);
 
         let extension = query_language.default_extension();
@@ -963,7 +963,7 @@ impl Workspace {
 
             let exec_ctx = tab.exec_ctx.clone();
 
-            let body = Self::strip_annotation_header(&content, language);
+            let body = Self::strip_annotation_header(&content, &language);
 
             let title = match &tab.kind {
                 SessionTabKind::Scratch { title, .. } => title.clone(),

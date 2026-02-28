@@ -1,13 +1,14 @@
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RedisLanguageService, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlLanguageService, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM,
+    REDIS_FORM, SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -127,11 +128,11 @@ impl DbDriver for FakeDriver {
         self.kind
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         metadata_for_kind(self.kind)
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         form_for_kind(self.kind)
     }
 
@@ -332,7 +333,7 @@ impl FakeConnection {
 }
 
 impl Connection for FakeConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         metadata_for_kind(self.kind)
     }
 
@@ -506,77 +507,77 @@ static DEFAULT_SQL_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
 static SQL_LANGUAGE_SERVICE: SqlLanguageService = SqlLanguageService;
 static REDIS_LANGUAGE_SERVICE: RedisLanguageService = RedisLanguageService;
 
-static FAKE_POSTGRES_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-postgres",
-    display_name: "Fake PostgreSQL",
-    description: "Deterministic fake driver for tests",
+static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-postgres".into(),
+    display_name: "Fake PostgreSQL".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(5432),
-    uri_scheme: "postgresql",
+    uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
-};
+});
 
-static FAKE_SQLITE_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-sqlite",
-    display_name: "Fake SQLite",
-    description: "Deterministic fake driver for tests",
+static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-sqlite".into(),
+    display_name: "Fake SQLite".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: None,
-    uri_scheme: "sqlite",
+    uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
-};
+});
 
-static FAKE_MYSQL_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mysql",
-    display_name: "Fake MySQL",
-    description: "Deterministic fake driver for tests",
+static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mysql".into(),
+    display_name: "Fake MySQL".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(3306),
-    uri_scheme: "mysql",
+    uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
-};
+});
 
-static FAKE_MARIADB_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mariadb",
-    display_name: "Fake MariaDB",
-    description: "Deterministic fake driver for tests",
+static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mariadb".into(),
+    display_name: "Fake MariaDB".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::RELATIONAL_BASE,
     default_port: Some(3306),
-    uri_scheme: "mysql",
+    uri_scheme: "mysql".into(),
     icon: Icon::Mariadb,
-};
+});
 
-static FAKE_MONGODB_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-mongodb",
-    display_name: "Fake MongoDB",
-    description: "Deterministic fake driver for tests",
+static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-mongodb".into(),
+    display_name: "Fake MongoDB".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::Document,
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::DOCUMENT_BASE,
     default_port: Some(27017),
-    uri_scheme: "mongodb",
+    uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
-};
+});
 
-static FAKE_REDIS_METADATA: DriverMetadata = DriverMetadata {
-    id: "fake-redis",
-    display_name: "Fake Redis",
-    description: "Deterministic fake driver for tests",
+static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-redis".into(),
+    display_name: "Fake Redis".into(),
+    description: "Deterministic fake driver for tests".into(),
     category: DatabaseCategory::KeyValue,
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::KEYVALUE_BASE,
     default_port: Some(6379),
-    uri_scheme: "redis",
+    uri_scheme: "redis".into(),
     icon: Icon::Redis,
-};
+});
 
 #[cfg(test)]
 mod tests {

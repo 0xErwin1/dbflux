@@ -2,13 +2,6 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService, NoOpCodeGenerator,
-    QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
-    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
     key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
         KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
@@ -17,6 +10,13 @@ use crate::{
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
     query_generator::QueryGenerator,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService, NoOpCodeGenerator,
+    QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
+    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -90,15 +90,15 @@ pub enum CodeGenScope {
 
 /// Metadata for a code generator available on a connection.
 ///
-/// Drivers expose their available generators as a static slice, allowing
-/// the UI to build context menus dynamically based on the selected item type.
-#[derive(Debug, Clone, Copy)]
+/// Drivers expose their available generators, allowing the UI to build
+/// context menus dynamically based on the selected item type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeGeneratorInfo {
     /// Unique identifier (e.g., "select_star", "create_table").
-    pub id: &'static str,
+    pub id: String,
 
     /// Human-readable label for the UI (e.g., "SELECT *", "CREATE TABLE").
-    pub label: &'static str,
+    pub label: String,
 
     /// Where this generator can be applied.
     pub scope: CodeGenScope,
@@ -156,20 +156,20 @@ pub trait DbDriver: Send + Sync {
     ///
     /// This is the primary way for drivers to declare what they are and what they support.
     /// The UI uses this to adapt its behavior without driver-specific logic.
-    fn metadata(&self) -> &'static DriverMetadata;
+    fn metadata(&self) -> &DriverMetadata;
 
     /// Human-readable name for UI display (e.g., "PostgreSQL", "SQLite").
     ///
     /// Default implementation uses `metadata().display_name`.
-    fn display_name(&self) -> &'static str {
-        self.metadata().display_name
+    fn display_name(&self) -> &str {
+        &self.metadata().display_name
     }
 
     /// Optional description shown in the connection manager.
     ///
     /// Default implementation uses `metadata().description`.
-    fn description(&self) -> &'static str {
-        self.metadata().description
+    fn description(&self) -> &str {
+        &self.metadata().description
     }
 
     /// Returns the capabilities supported by this driver.
@@ -188,7 +188,7 @@ pub trait DbDriver: Send + Sync {
     ///
     /// The UI uses this to render connection forms dynamically without
     /// hardcoding driver-specific logic.
-    fn form_definition(&self) -> &'static DriverFormDef;
+    fn form_definition(&self) -> &DriverFormDef;
 
     /// Build a DbConfig from form values collected by the UI.
     ///
@@ -421,7 +421,7 @@ pub trait Connection: Send + Sync {
     ///
     /// This provides access to the driver's capabilities, category, and query language
     /// without needing a reference to the driver itself.
-    fn metadata(&self) -> &'static DriverMetadata;
+    fn metadata(&self) -> &DriverMetadata;
 
     /// Returns the capabilities supported by this connection's driver.
     fn capabilities(&self) -> DriverCapabilities {
@@ -691,8 +691,8 @@ pub trait Connection: Send + Sync {
     }
 
     /// Returns available code generators for this connection.
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        &[]
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        Vec::new()
     }
 
     /// Generate code for a table. Returns `DbError::NotSupported` for unknown IDs.

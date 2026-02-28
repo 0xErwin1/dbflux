@@ -8,12 +8,12 @@ use std::sync::Arc;
 use dbflux_core::DbKind;
 use dbflux_core::{ConnectionProfile, DbDriver};
 use dbflux_ipc::driver_protocol::{
-    DriverFormDefDto, DriverHelloResponse, DriverMetadataDto, DriverRequestBody,
-    DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcErrorCode,
+    DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
+    DriverResponseEnvelope, DriverRpcErrorCode,
 };
-use dbflux_ipc::{DRIVER_RPC_VERSION, framing};
+use dbflux_ipc::{framing, DRIVER_RPC_VERSION};
 use interprocess::local_socket::{
-    GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
+    prelude::*, GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions,
 };
 use session::SessionManager;
 use uuid::Uuid;
@@ -114,8 +114,8 @@ fn handle_connection(mut stream: interprocess::local_socket::Stream, driver: &dy
                             selected_version: DRIVER_RPC_VERSION,
                             capabilities: hello_req.requested_capabilities,
                             driver_kind: driver.kind(),
-                            driver_metadata: DriverMetadataDto::from(driver.metadata()),
-                            form_definition: DriverFormDefDto::from(driver.form_definition()),
+                            driver_metadata: driver.metadata().clone(),
+                            form_definition: driver.form_definition().clone(),
                         }),
                     )
                 }
@@ -245,7 +245,7 @@ fn handle_open_session(
         Ok(conn) => {
             let session_id = Uuid::new_v4();
             let kind = conn.kind();
-            let metadata_dto = DriverMetadataDto::from(conn.metadata());
+            let metadata = conn.metadata().clone();
             let schema_loading_strategy = conn.schema_loading_strategy();
             let schema_features = conn.schema_features();
             let code_gen_capabilities = conn.code_gen_capabilities();
@@ -258,7 +258,7 @@ fn handle_open_session(
                 DriverResponseBody::SessionOpened {
                     session_id,
                     kind,
-                    metadata: metadata_dto,
+                    metadata,
                     schema_loading_strategy,
                     schema_features,
                     code_gen_capabilities,

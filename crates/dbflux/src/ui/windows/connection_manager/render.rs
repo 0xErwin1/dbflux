@@ -5,13 +5,13 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::list::ListItem;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
@@ -228,11 +228,11 @@ impl ConnectionManagerWindow {
         let ring_color = cx.theme().ring;
 
         let form_def = driver.form_definition();
-        let Some(main_tab) = form_def.main_tab() else {
+        let Some(main_tab) = form_def.main_tab().cloned() else {
             return Vec::new();
         };
 
-        let mut sections = self.render_form_tab(main_tab, false, show_focus, ring_color, cx);
+        let mut sections = self.render_form_tab(&main_tab, false, show_focus, ring_color, cx);
 
         if requires_password {
             let password_field = self.render_password_field(
@@ -1264,15 +1264,15 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let field_focus = Self::field_id_to_focus(field_def.id, is_ssh_tab);
+        let field_focus = Self::field_id_to_focus(&field_def.id, is_ssh_tab);
         let focused = show_focus && field_focus == Some(self.form_focus);
 
-        match field_def.kind {
+        match &field_def.kind {
             FormFieldKind::Text
             | FormFieldKind::Password
             | FormFieldKind::Number
             | FormFieldKind::FilePath => {
-                let Some(input_state) = self.input_state_for_field(field_def.id) else {
+                let Some(input_state) = self.input_state_for_field(&field_def.id) else {
                     return div().into_any_element();
                 };
 
@@ -1305,7 +1305,7 @@ impl ConnectionManagerWindow {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(field_def.label),
+                                    .child(field_def.label.clone()),
                             )
                             .when(field_def.required && field_enabled, |d| {
                                 d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
@@ -1316,13 +1316,17 @@ impl ConnectionManagerWindow {
             }
 
             FormFieldKind::Checkbox => {
-                let field_id = field_def.id;
+                let field_id = field_def.id.clone();
                 let is_checked = if field_id == "ssh_enabled" {
                     self.ssh_enabled
                 } else {
-                    self.checkbox_states.get(field_id).copied().unwrap_or(false)
+                    self.checkbox_states
+                        .get(&field_id)
+                        .copied()
+                        .unwrap_or(false)
                 };
 
+                let checkbox_id = gpui::SharedString::from(field_id.clone());
                 div()
                     .rounded(px(4.0))
                     .border_2()
@@ -1330,14 +1334,14 @@ impl ConnectionManagerWindow {
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
                     .p(px(2.0))
                     .child(
-                        Checkbox::new(field_id)
+                        Checkbox::new(checkbox_id)
                             .checked(is_checked)
-                            .label(field_def.label)
+                            .label(field_def.label.as_str())
                             .on_click(cx.listener(move |this, checked: &bool, window, cx| {
                                 if field_id == "ssh_enabled" {
                                     this.ssh_enabled = *checked;
                                 } else {
-                                    this.checkbox_states.insert(field_id.to_string(), *checked);
+                                    this.checkbox_states.insert(field_id.clone(), *checked);
                                 }
                                 window.focus(&this.focus_handle);
                                 cx.notify();
@@ -1361,7 +1365,7 @@ impl ConnectionManagerWindow {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child(field_def.label),
+                                .child(field_def.label.clone()),
                         )
                         .child(
                             div()
@@ -1410,7 +1414,7 @@ impl ConnectionManagerWindow {
                                                     )
                                                 }),
                                         )
-                                        .child(div().text_sm().child(opt.label))
+                                        .child(div().text_sm().child(opt.label.clone()))
                                         .into_any_element()
                                 })),
                         )
@@ -1433,7 +1437,7 @@ impl ConnectionManagerWindow {
         let theme = cx.theme().clone();
         let mut sections: Vec<AnyElement> = Vec::new();
 
-        for section in tab.sections {
+        for section in &tab.sections {
             let fields: Vec<&FormFieldDef> = section
                 .fields
                 .iter()

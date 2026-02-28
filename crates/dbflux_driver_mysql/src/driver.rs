@@ -1,8 +1,8 @@
+use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
-use std::collections::HashMap;
 
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
@@ -24,10 +24,10 @@ use mysql::prelude::*;
 use mysql::{Conn, Opts, OptsBuilder, SslOpts};
 
 /// MySQL driver metadata.
-pub static MYSQL_METADATA: DriverMetadata = DriverMetadata {
-    id: "mysql",
-    display_name: "MySQL",
-    description: "Popular open-source relational database",
+pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mysql".into(),
+    display_name: "MySQL".into(),
+    description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -40,15 +40,15 @@ pub static MYSQL_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::STORED_PROCEDURES.bits(),
     ),
     default_port: Some(3306),
-    uri_scheme: "mysql",
+    uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
-};
+});
 
 /// MariaDB driver metadata.
-pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
-    id: "mariadb",
-    display_name: "MariaDB",
-    description: "Community-developed fork of MySQL",
+pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mariadb".into(),
+    display_name: "MariaDB".into(),
+    description: "Community-developed fork of MySQL".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -63,9 +63,9 @@ pub static MARIADB_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::SEQUENCES.bits(),
     ),
     default_port: Some(3306),
-    uri_scheme: "mariadb",
+    uri_scheme: "mariadb".into(),
     icon: Icon::Mariadb,
-};
+});
 
 /// MySQL/MariaDB SQL dialect implementation.
 pub struct MysqlDialect;
@@ -217,7 +217,7 @@ impl DbDriver for MysqlDriver {
         self.kind
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         match self.kind {
             DbKind::MariaDB => &MARIADB_METADATA,
             _ => &MYSQL_METADATA,
@@ -264,7 +264,7 @@ impl DbDriver for MysqlDriver {
         conn.ping()
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &MYSQL_FORM
     }
 
@@ -976,60 +976,62 @@ impl QueryCancelHandle for MysqlCancelHandle {
     }
 }
 
-const MYSQL_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
-    CodeGeneratorInfo {
-        id: "select_star",
-        label: "SELECT *",
-        scope: CodeGenScope::TableOrView,
-        order: 0,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "insert",
-        label: "INSERT INTO",
-        scope: CodeGenScope::Table,
-        order: 5,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "update",
-        label: "UPDATE",
-        scope: CodeGenScope::Table,
-        order: 6,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "delete",
-        label: "DELETE",
-        scope: CodeGenScope::Table,
-        order: 7,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "create_table",
-        label: "CREATE TABLE",
-        scope: CodeGenScope::Table,
-        order: 10,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "truncate",
-        label: "TRUNCATE",
-        scope: CodeGenScope::Table,
-        order: 20,
-        destructive: true,
-    },
-    CodeGeneratorInfo {
-        id: "drop_table",
-        label: "DROP TABLE",
-        scope: CodeGenScope::Table,
-        order: 21,
-        destructive: true,
-    },
-];
+fn mysql_code_generators() -> Vec<CodeGeneratorInfo> {
+    vec![
+        CodeGeneratorInfo {
+            id: "select_star".into(),
+            label: "SELECT *".into(),
+            scope: CodeGenScope::TableOrView,
+            order: 0,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "insert".into(),
+            label: "INSERT INTO".into(),
+            scope: CodeGenScope::Table,
+            order: 5,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "update".into(),
+            label: "UPDATE".into(),
+            scope: CodeGenScope::Table,
+            order: 6,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "delete".into(),
+            label: "DELETE".into(),
+            scope: CodeGenScope::Table,
+            order: 7,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "create_table".into(),
+            label: "CREATE TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 10,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "truncate".into(),
+            label: "TRUNCATE".into(),
+            scope: CodeGenScope::Table,
+            order: 20,
+            destructive: true,
+        },
+        CodeGeneratorInfo {
+            id: "drop_table".into(),
+            label: "DROP TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 21,
+            destructive: true,
+        },
+    ]
+}
 
 impl Connection for MysqlConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         match self.kind {
             DbKind::MariaDB => &MARIADB_METADATA,
             _ => &MYSQL_METADATA,
@@ -1312,8 +1314,8 @@ impl Connection for MysqlConnection {
         SchemaLoadingStrategy::LazyPerDatabase
     }
 
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        MYSQL_CODE_GENERATORS
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        mysql_code_generators()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {

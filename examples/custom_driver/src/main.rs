@@ -14,15 +14,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dbflux_core::{
-    ColumnMeta, ConnectionProfile, DatabaseInfo, DbConfig, DbError, DbKind, DriverCapabilities,
-    DriverFormDef, FormFieldDef, FormFieldKind, FormSection, FormTab, KeyValueSchema, QueryResult,
-    QueryResultShape, SchemaLoadingStrategy, SchemaSnapshot, Value,
+    ColumnMeta, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbError, DbKind,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormFieldDef, FormFieldKind, FormSection,
+    FormTab, Icon, KeyValueSchema, QueryLanguage, QueryResult, QueryResultShape,
+    SchemaLoadingStrategy, SchemaSnapshot, Value,
 };
 use dbflux_ipc::{
     driver_protocol::{
-        DriverFormDefDto, DriverHelloResponse, DriverMetadataDto, DriverRequestBody,
-        DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcErrorCode,
-        QueryLanguageDto, QueryResultDto,
+        DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
+        DriverResponseEnvelope, DriverRpcErrorCode, QueryResultDto,
     },
     framing, DRIVER_RPC_VERSION,
 };
@@ -189,8 +189,8 @@ fn handle_connection(
                             selected_version: DRIVER_RPC_VERSION,
                             capabilities: hello_req.requested_capabilities,
                             driver_kind: DbKind::SQLite,
-                            driver_metadata: create_metadata_dto(),
-                            form_definition: DriverFormDefDto::from(&MOCK_FORM),
+                            driver_metadata: create_metadata(),
+                            form_definition: mock_form(),
                         }),
                     )
                 }
@@ -248,7 +248,7 @@ fn handle_connection(
                                         DriverResponseBody::SessionOpened {
                                             session_id,
                                             kind: DbKind::SQLite,
-                                            metadata: create_metadata_dto(),
+                                            metadata: create_metadata(),
                                             schema_loading_strategy:
                                                 SchemaLoadingStrategy::LazyPerDatabase,
                                             schema_features: dbflux_core::SchemaFeatures::empty(),
@@ -460,52 +460,53 @@ fn execute_query(
 }
 
 /// Create driver metadata for the mock database
-fn create_metadata_dto() -> DriverMetadataDto {
-    DriverMetadataDto {
-        id: "mockdb".to_string(),
-        display_name: "Mock Database".to_string(),
-        description: "Example custom driver for testing DBFlux integration".to_string(),
-        category: dbflux_core::DatabaseCategory::KeyValue,
-        query_language: QueryLanguageDto::Sql,
-        capabilities: DriverCapabilities::KEYVALUE_BASE.bits(),
+fn create_metadata() -> DriverMetadata {
+    DriverMetadata {
+        id: "mockdb".into(),
+        display_name: "Mock Database".into(),
+        description: "Example custom driver for testing DBFlux integration".into(),
+        category: DatabaseCategory::KeyValue,
+        query_language: QueryLanguage::Sql,
+        capabilities: DriverCapabilities::KEYVALUE_BASE,
         default_port: None,
-        uri_scheme: "mock".to_string(),
-        icon: dbflux_core::Icon::Database,
+        uri_scheme: "mock".into(),
+        icon: Icon::Database,
     }
 }
 
-const MOCK_FIELD_ENDPOINT: FormFieldDef = FormFieldDef {
-    id: "endpoint",
-    label: "Endpoint",
-    kind: FormFieldKind::Text,
-    placeholder: "localhost:8080",
-    required: true,
-    default_value: "localhost:8080",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
-
-const MOCK_FIELD_API_KEY: FormFieldDef = FormFieldDef {
-    id: "api_key",
-    label: "API Key",
-    kind: FormFieldKind::Password,
-    placeholder: "Optional API key",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
-
-static MOCK_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[FormTab {
-        id: "main",
-        label: "Main",
-        sections: &[FormSection {
-            title: "Connection",
-            fields: &[MOCK_FIELD_ENDPOINT, MOCK_FIELD_API_KEY],
+fn mock_form() -> DriverFormDef {
+    DriverFormDef {
+        tabs: vec![FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![FormSection {
+                title: "Connection".into(),
+                fields: vec![
+                    FormFieldDef {
+                        id: "endpoint".into(),
+                        label: "Endpoint".into(),
+                        kind: FormFieldKind::Text,
+                        placeholder: "localhost:8080".into(),
+                        required: true,
+                        default_value: "localhost:8080".into(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                    },
+                    FormFieldDef {
+                        id: "api_key".into(),
+                        label: "API Key".into(),
+                        kind: FormFieldKind::Password,
+                        placeholder: "Optional API key".into(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                    },
+                ],
+            }],
         }],
-    }],
-};
+    }
+}
 
 fn return_error(request_id: u64, message: &str) -> DriverResponseEnvelope {
     DriverResponseEnvelope::error(

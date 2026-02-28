@@ -30,9 +30,8 @@ impl Sidebar {
             _ => return vec![],
         };
 
-        let mut generators: Vec<_> = conn
-            .connection
-            .code_generators()
+        let all_generators = conn.connection.code_generators();
+        let mut generators: Vec<_> = all_generators
             .iter()
             .filter(|g| scope_filter(g.scope))
             .collect();

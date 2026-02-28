@@ -26,8 +26,8 @@ impl ConnectionManagerWindow {
         let form = driver.form_definition();
 
         for tab in form.tabs.iter().filter(|t| t.id != "ssh") {
-            for section in tab.sections {
-                for field in section.fields {
+            for section in &tab.sections {
+                for field in &section.fields {
                     if field.id == "password" || field.kind == FormFieldKind::Checkbox {
                         continue;
                     }
@@ -39,7 +39,7 @@ impl ConnectionManagerWindow {
 
                     let value = self
                         .driver_inputs
-                        .get(field.id)
+                        .get(&field.id)
                         .map(|input| input.read(cx).value().to_string())
                         .unwrap_or_default();
 

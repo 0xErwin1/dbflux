@@ -36,8 +36,8 @@ impl SqlQueryDocument {
     /// Open a "Save As" dialog and save to the chosen path.
     pub fn save_file_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let content = self.build_file_content(cx);
-        let default_ext = self.query_language.default_extension();
-        let language_name = self.query_language.display_name();
+        let default_ext = self.query_language.default_extension().to_string();
+        let language_name = self.query_language.display_name().to_string();
 
         let suggested_name = if let Some(path) = &self.path {
             path.file_name()
@@ -210,13 +210,13 @@ impl SqlQueryDocument {
     pub fn build_file_content(&self, cx: &App) -> String {
         let editor_content = self.input_state.read(cx).value().to_string();
 
-        let header = self.exec_ctx.to_comment_header(self.query_language);
+        let language = self.query_language.clone();
+        let header = self.exec_ctx.to_comment_header(language.clone());
         if header.is_empty() {
             return editor_content;
         }
 
-        // If the content already starts with existing annotations, strip them
-        let body = Self::strip_existing_annotations(&editor_content, self.query_language);
+        let body = Self::strip_existing_annotations(&editor_content, language);
         format!("{}\n{}", header, body)
     }
 

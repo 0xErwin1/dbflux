@@ -1,19 +1,19 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use dbflux_core::{
-    CodeGenCapabilities, CollectionBrowseRequest, CollectionCountRequest, Connection, CrudResult,
-    CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DescribeRequest, DocumentDelete,
-    DocumentInsert, DocumentUpdate, DriverCapabilities, DriverMetadata, ExplainRequest,
-    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
-    KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
-    KeyValueApi, LanguageService, ListPushRequest, ListRemoveRequest, ListSetRequest, QueryHandle,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest,
-    SetRemoveRequest, SqlDialect, StreamAddRequest, StreamDeleteRequest, TableBrowseRequest,
-    TableCountRequest, TableInfo, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
+    Connection, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverMetadata, ExplainRequest, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest,
+    KeyDeleteRequest, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest,
+    KeyType, KeyTypeRequest, KeyValueApi, LanguageService, ListPushRequest, ListRemoveRequest,
+    ListSetRequest, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SetAddRequest, SetRemoveRequest, SqlDialect, StreamAddRequest, StreamDeleteRequest,
+    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
 };
-use dbflux_ipc::driver_protocol::{CodeGeneratorInfoDto, DriverRequestBody, DriverResponseBody};
+use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
 
 use crate::transport::RpcClient;
 use uuid::Uuid;
@@ -23,12 +23,11 @@ pub struct IpcConnection {
     client: Arc<RpcClient>,
     session_id: Uuid,
     kind: DbKind,
-    metadata: &'static DriverMetadata,
+    metadata: DriverMetadata,
     capabilities: DriverCapabilities,
     schema_loading_strategy: SchemaLoadingStrategy,
     schema_features: SchemaFeatures,
     code_gen_capabilities: CodeGenCapabilities,
-    cached_code_generators: OnceLock<&'static [dbflux_core::CodeGeneratorInfo]>,
 }
 
 impl IpcConnection {
@@ -37,7 +36,7 @@ impl IpcConnection {
         client: Arc<RpcClient>,
         session_id: Uuid,
         kind: DbKind,
-        metadata: &'static DriverMetadata,
+        metadata: DriverMetadata,
         capabilities: DriverCapabilities,
         schema_loading_strategy: SchemaLoadingStrategy,
         schema_features: SchemaFeatures,
@@ -52,7 +51,6 @@ impl IpcConnection {
             schema_loading_strategy,
             schema_features,
             code_gen_capabilities,
-            cached_code_generators: OnceLock::new(),
         }
     }
 
@@ -85,8 +83,8 @@ impl IpcConnection {
 }
 
 impl Connection for IpcConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
-        self.metadata
+    fn metadata(&self) -> &DriverMetadata {
+        &self.metadata
     }
 
     fn capabilities(&self) -> DriverCapabilities {
@@ -330,20 +328,10 @@ impl Connection for IpcConnection {
         self.code_gen_capabilities
     }
 
-    fn code_generators(&self) -> &'static [dbflux_core::CodeGeneratorInfo] {
-        self.cached_code_generators.get_or_init(|| {
-            let generators = self
-                .client
-                .code_generators(self.session_id)
-                .unwrap_or_default();
-
-            let infos: Vec<dbflux_core::CodeGeneratorInfo> = generators
-                .into_iter()
-                .map(code_generator_info_from_dto)
-                .collect();
-
-            Box::leak(infos.into_boxed_slice())
-        })
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        self.client
+            .code_generators(self.session_id)
+            .unwrap_or_default()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
@@ -514,15 +502,5 @@ impl KeyValueApi for IpcConnection {
             DriverResponseBody::Error(e) => Err(DbError::QueryFailed(e.message.into())),
             _ => Err(DbError::QueryFailed("Unexpected KV response".into())),
         }
-    }
-}
-
-fn code_generator_info_from_dto(dto: CodeGeneratorInfoDto) -> dbflux_core::CodeGeneratorInfo {
-    dbflux_core::CodeGeneratorInfo {
-        id: Box::leak(dto.id.into_boxed_str()),
-        label: Box::leak(dto.label.into_boxed_str()),
-        scope: dto.scope,
-        order: dto.order,
-        destructive: dto.destructive,
     }
 }

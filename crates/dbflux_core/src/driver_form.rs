@@ -4,617 +4,476 @@
 //! fields dynamically, allowing the UI to render forms without hardcoding
 //! driver-specific logic.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 /// Option for a select field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectOption {
-    pub value: &'static str,
-    pub label: &'static str,
+    pub value: String,
+    pub label: String,
+}
+
+impl SelectOption {
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
 }
 
 /// Type of form field input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FormFieldKind {
-    /// Single-line text input.
     Text,
-    /// Password input (masked).
     Password,
-    /// Numeric input (port numbers, etc).
     Number,
-    /// File path input with browse button.
     FilePath,
-    /// Checkbox for boolean values.
     Checkbox,
-    /// Select dropdown with options.
-    Select { options: &'static [SelectOption] },
+    Select { options: Vec<SelectOption> },
 }
 
 /// Definition of a single form field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormFieldDef {
-    /// Unique identifier for this field (e.g., "host", "port", "database").
-    pub id: &'static str,
-
-    /// Display label shown to the user.
-    pub label: &'static str,
-
-    /// Type of input widget to render.
+    pub id: String,
+    pub label: String,
     pub kind: FormFieldKind,
-
-    /// Placeholder text shown when field is empty.
-    pub placeholder: &'static str,
-
+    pub placeholder: String,
     /// Whether this field is required for validation.
-    /// Note: If `enabled_when_checked` or `enabled_when_unchecked` is set,
+    /// If `enabled_when_checked` or `enabled_when_unchecked` is set,
     /// the field is only required when it's enabled.
     pub required: bool,
-
-    /// Default value for new connections.
-    pub default_value: &'static str,
-
+    pub default_value: String,
     /// Field is enabled only when this checkbox field is checked.
-    /// When None, no such dependency exists.
-    pub enabled_when_checked: Option<&'static str>,
-
+    pub enabled_when_checked: Option<String>,
     /// Field is enabled only when this checkbox field is unchecked.
-    /// When None, no such dependency exists.
-    pub enabled_when_unchecked: Option<&'static str>,
+    pub enabled_when_unchecked: Option<String>,
 }
 
 /// A section of related form fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormSection {
-    /// Section title (e.g., "Server", "Authentication").
-    pub title: &'static str,
-
-    /// Fields in this section.
-    pub fields: &'static [FormFieldDef],
+    pub title: String,
+    pub fields: Vec<FormFieldDef>,
 }
 
 /// A tab containing form sections.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormTab {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub sections: &'static [FormSection],
+    pub id: String,
+    pub label: String,
+    pub sections: Vec<FormSection>,
 }
 
 /// Complete form definition for a driver.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverFormDef {
-    pub tabs: &'static [FormTab],
+    pub tabs: Vec<FormTab>,
 }
 
 /// Values collected from a driver form.
 pub type FormValues = HashMap<String, String>;
 
-// Common field definitions that drivers can reuse
+// ---------------------------------------------------------------------------
+// Builder helpers — keep form definitions concise
+// ---------------------------------------------------------------------------
 
-pub const FIELD_PASSWORD: FormFieldDef = FormFieldDef {
-    id: "password",
-    label: "Password",
-    kind: FormFieldKind::Password,
-    placeholder: "",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+fn field(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> FormFieldDef {
+    FormFieldDef {
+        id: id.into(),
+        label: label.into(),
+        kind,
+        placeholder: placeholder.into(),
+        required: false,
+        default_value: String::new(),
+        enabled_when_checked: None,
+        enabled_when_unchecked: None,
+    }
+}
 
-pub const FIELD_FILE_PATH: FormFieldDef = FormFieldDef {
-    id: "path",
-    label: "File Path",
-    kind: FormFieldKind::FilePath,
-    placeholder: "/path/to/database.db",
-    required: true,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+fn field_required(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> FormFieldDef {
+    FormFieldDef {
+        required: true,
+        ..field(id, label, kind, placeholder)
+    }
+}
 
-// SSH tunnel field definitions (shared by Postgres, MySQL, MariaDB)
+fn with_default(mut f: FormFieldDef, default: &str) -> FormFieldDef {
+    f.default_value = default.into();
+    f
+}
 
-#[allow(dead_code)]
-pub const SSH_SSL_MODE_OPTIONS: &[SelectOption] = &[
-    SelectOption {
-        value: "disable",
-        label: "Disable",
-    },
-    SelectOption {
-        value: "prefer",
-        label: "Prefer",
-    },
-    SelectOption {
-        value: "require",
-        label: "Require",
-    },
-];
+fn when_checked(mut f: FormFieldDef, dep: &str) -> FormFieldDef {
+    f.enabled_when_checked = Some(dep.into());
+    f
+}
 
-pub const SSH_AUTH_METHOD_OPTIONS: &[SelectOption] = &[
-    SelectOption {
-        value: "private_key",
-        label: "Private Key",
-    },
-    SelectOption {
-        value: "password",
-        label: "Password",
-    },
-];
+fn when_unchecked(mut f: FormFieldDef, dep: &str) -> FormFieldDef {
+    f.enabled_when_unchecked = Some(dep.into());
+    f
+}
 
-pub const FIELD_SSH_ENABLED: FormFieldDef = FormFieldDef {
-    id: "ssh_enabled",
-    label: "Enable SSH tunnel",
-    kind: FormFieldKind::Checkbox,
-    placeholder: "",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+// ---------------------------------------------------------------------------
+// Common field constructors
+// ---------------------------------------------------------------------------
 
-pub const FIELD_SSH_HOST: FormFieldDef = FormFieldDef {
-    id: "ssh_host",
-    label: "SSH Host",
-    kind: FormFieldKind::Text,
-    placeholder: "bastion.example.com",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+pub fn field_password() -> FormFieldDef {
+    field("password", "Password", FormFieldKind::Password, "")
+}
 
-pub const FIELD_SSH_PORT: FormFieldDef = FormFieldDef {
-    id: "ssh_port",
-    label: "SSH Port",
-    kind: FormFieldKind::Number,
-    placeholder: "22",
-    required: false,
-    default_value: "22",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+pub fn field_file_path() -> FormFieldDef {
+    field_required(
+        "path",
+        "File Path",
+        FormFieldKind::FilePath,
+        "/path/to/database.db",
+    )
+}
 
-pub const FIELD_SSH_USER: FormFieldDef = FormFieldDef {
-    id: "ssh_user",
-    label: "SSH User",
-    kind: FormFieldKind::Text,
-    placeholder: "ec2-user",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+pub fn field_use_uri() -> FormFieldDef {
+    field("use_uri", "Use Connection URI", FormFieldKind::Checkbox, "")
+}
 
-pub const FIELD_SSH_AUTH_METHOD: FormFieldDef = FormFieldDef {
-    id: "ssh_auth_method",
-    label: "Auth Method",
-    kind: FormFieldKind::Select {
-        options: SSH_AUTH_METHOD_OPTIONS,
-    },
-    placeholder: "",
-    required: false,
-    default_value: "private_key",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+fn ssh_auth_method_options() -> Vec<SelectOption> {
+    vec![
+        SelectOption::new("private_key", "Private Key"),
+        SelectOption::new("password", "Password"),
+    ]
+}
 
-pub const FIELD_SSH_KEY_PATH: FormFieldDef = FormFieldDef {
-    id: "ssh_key_path",
-    label: "Private Key Path",
-    kind: FormFieldKind::FilePath,
-    placeholder: "~/.ssh/id_rsa",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
+pub fn ssh_tab() -> FormTab {
+    FormTab {
+        id: "ssh".into(),
+        label: "SSH".into(),
+        sections: vec![FormSection {
+            title: "SSH Tunnel".into(),
+            fields: vec![
+                field(
+                    "ssh_enabled",
+                    "Enable SSH tunnel",
+                    FormFieldKind::Checkbox,
+                    "",
+                ),
+                field(
+                    "ssh_host",
+                    "SSH Host",
+                    FormFieldKind::Text,
+                    "bastion.example.com",
+                ),
+                with_default(
+                    field("ssh_port", "SSH Port", FormFieldKind::Number, "22"),
+                    "22",
+                ),
+                field("ssh_user", "SSH User", FormFieldKind::Text, "ec2-user"),
+                with_default(
+                    field(
+                        "ssh_auth_method",
+                        "Auth Method",
+                        FormFieldKind::Select {
+                            options: ssh_auth_method_options(),
+                        },
+                        "",
+                    ),
+                    "private_key",
+                ),
+                field(
+                    "ssh_key_path",
+                    "Private Key Path",
+                    FormFieldKind::FilePath,
+                    "~/.ssh/id_rsa",
+                ),
+                field(
+                    "ssh_passphrase",
+                    "Key Passphrase",
+                    FormFieldKind::Password,
+                    "Key passphrase (optional)",
+                ),
+                field(
+                    "ssh_password",
+                    "SSH Password",
+                    FormFieldKind::Password,
+                    "SSH password",
+                ),
+            ],
+        }],
+    }
+}
 
-pub const FIELD_SSH_PASSPHRASE: FormFieldDef = FormFieldDef {
-    id: "ssh_passphrase",
-    label: "Key Passphrase",
-    kind: FormFieldKind::Password,
-    placeholder: "Key passphrase (optional)",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
-
-pub const FIELD_SSH_PASSWORD: FormFieldDef = FormFieldDef {
-    id: "ssh_password",
-    label: "SSH Password",
-    kind: FormFieldKind::Password,
-    placeholder: "SSH password",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
-
-pub static SSH_TAB: FormTab = FormTab {
-    id: "ssh",
-    label: "SSH",
-    sections: &[FormSection {
-        title: "SSH Tunnel",
-        fields: &[
-            FIELD_SSH_ENABLED,
-            FIELD_SSH_HOST,
-            FIELD_SSH_PORT,
-            FIELD_SSH_USER,
-            FIELD_SSH_AUTH_METHOD,
-            FIELD_SSH_KEY_PATH,
-            FIELD_SSH_PASSPHRASE,
-            FIELD_SSH_PASSWORD,
-        ],
-    }],
-};
-
+// ---------------------------------------------------------------------------
 // Pre-defined form definitions for common database types
+// ---------------------------------------------------------------------------
 
-pub static POSTGRES_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[
+pub static POSTGRES_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
         FormTab {
-            id: "main",
-            label: "Main",
-            sections: &[
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
                 FormSection {
-                    title: "Server",
-                    fields: &[
-                        FIELD_USE_URI,
-                        FormFieldDef {
-                            id: "uri",
-                            label: "Connection URI",
-                            kind: FormFieldKind::Text,
-                            placeholder: "postgresql://user:pass@localhost:5432/db",
-                            required: true,
-                            default_value: "",
-                            enabled_when_checked: Some("use_uri"),
-                            enabled_when_unchecked: None,
-                        },
-                        FormFieldDef {
-                            id: "host",
-                            label: "Host",
-                            kind: FormFieldKind::Text,
-                            placeholder: "localhost",
-                            required: true,
-                            default_value: "localhost",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "port",
-                            label: "Port",
-                            kind: FormFieldKind::Number,
-                            placeholder: "5432",
-                            required: true,
-                            default_value: "5432",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "database",
-                            label: "Database",
-                            kind: FormFieldKind::Text,
-                            placeholder: "postgres",
-                            required: true,
-                            default_value: "postgres",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "postgresql://user:pass@localhost:5432/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "5432"),
+                                "5432",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required(
+                                    "database",
+                                    "Database",
+                                    FormFieldKind::Text,
+                                    "postgres",
+                                ),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
                     ],
                 },
                 FormSection {
-                    title: "Authentication",
-                    fields: &[
-                        FormFieldDef {
-                            id: "user",
-                            label: "User",
-                            kind: FormFieldKind::Text,
-                            placeholder: "postgres",
-                            required: true,
-                            default_value: "postgres",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FIELD_PASSWORD,
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "postgres"),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
+                        field_password(),
                     ],
                 },
             ],
         },
-        SSH_TAB,
+        ssh_tab(),
     ],
-};
+});
 
-pub static MYSQL_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[
+pub static MYSQL_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
         FormTab {
-            id: "main",
-            label: "Main",
-            sections: &[
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
                 FormSection {
-                    title: "Server",
-                    fields: &[
-                        FIELD_USE_URI,
-                        FormFieldDef {
-                            id: "uri",
-                            label: "Connection URI",
-                            kind: FormFieldKind::Text,
-                            placeholder: "mysql://user:pass@localhost:3306/db",
-                            required: true,
-                            default_value: "",
-                            enabled_when_checked: Some("use_uri"),
-                            enabled_when_unchecked: None,
-                        },
-                        FormFieldDef {
-                            id: "host",
-                            label: "Host",
-                            kind: FormFieldKind::Text,
-                            placeholder: "localhost",
-                            required: true,
-                            default_value: "localhost",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "port",
-                            label: "Port",
-                            kind: FormFieldKind::Number,
-                            placeholder: "3306",
-                            required: true,
-                            default_value: "3306",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "database",
-                            label: "Database",
-                            kind: FormFieldKind::Text,
-                            placeholder: "optional - leave empty to browse all",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "mysql://user:pass@localhost:3306/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "3306"),
+                                "3306",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "database",
+                                "Database",
+                                FormFieldKind::Text,
+                                "optional - leave empty to browse all",
+                            ),
+                            "use_uri",
+                        ),
                     ],
                 },
                 FormSection {
-                    title: "Authentication",
-                    fields: &[
-                        FormFieldDef {
-                            id: "user",
-                            label: "User",
-                            kind: FormFieldKind::Text,
-                            placeholder: "root",
-                            required: true,
-                            default_value: "root",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FIELD_PASSWORD,
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "root"),
+                                "root",
+                            ),
+                            "use_uri",
+                        ),
+                        field_password(),
                     ],
                 },
             ],
         },
-        SSH_TAB,
+        ssh_tab(),
     ],
-};
+});
 
-pub static SQLITE_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[FormTab {
-        id: "main",
-        label: "Main",
-        sections: &[FormSection {
-            title: "Database",
-            fields: &[FIELD_FILE_PATH],
+pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "Database".into(),
+            fields: vec![field_file_path()],
         }],
     }],
-};
+});
 
-pub const FIELD_USE_URI: FormFieldDef = FormFieldDef {
-    id: "use_uri",
-    label: "Use Connection URI",
-    kind: FormFieldKind::Checkbox,
-    placeholder: "",
-    required: false,
-    default_value: "",
-    enabled_when_checked: None,
-    enabled_when_unchecked: None,
-};
-
-#[allow(dead_code)]
-pub const FIELD_URI: FormFieldDef = FormFieldDef {
-    id: "uri",
-    label: "Connection URI",
-    kind: FormFieldKind::Text,
-    placeholder: "",
-    required: true,
-    default_value: "",
-    enabled_when_checked: Some("use_uri"),
-    enabled_when_unchecked: None,
-};
-
-#[allow(dead_code)]
-pub const FIELD_HOST_CONDITIONAL: FormFieldDef = FormFieldDef {
-    id: "host",
-    label: "Host",
-    kind: FormFieldKind::Text,
-    placeholder: "localhost",
-    required: true,
-    default_value: "localhost",
-    enabled_when_checked: None,
-    enabled_when_unchecked: Some("use_uri"),
-};
-
-pub const FIELD_PORT_MONGODB: FormFieldDef = FormFieldDef {
-    id: "port",
-    label: "Port",
-    kind: FormFieldKind::Number,
-    placeholder: "27017",
-    required: true,
-    default_value: "27017",
-    enabled_when_checked: None,
-    enabled_when_unchecked: Some("use_uri"),
-};
-
-pub static MONGODB_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[
+pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
         FormTab {
-            id: "main",
-            label: "Main",
-            sections: &[
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
                 FormSection {
-                    title: "Server",
-                    fields: &[
-                        FIELD_USE_URI,
-                        FormFieldDef {
-                            id: "uri",
-                            label: "Connection URI",
-                            kind: FormFieldKind::Text,
-                            placeholder: "mongodb://localhost:27017",
-                            required: true,
-                            default_value: "",
-                            enabled_when_checked: Some("use_uri"),
-                            enabled_when_unchecked: None,
-                        },
-                        FormFieldDef {
-                            id: "host",
-                            label: "Host",
-                            kind: FormFieldKind::Text,
-                            placeholder: "localhost",
-                            required: true,
-                            default_value: "localhost",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FIELD_PORT_MONGODB,
-                        FormFieldDef {
-                            id: "database",
-                            label: "Database",
-                            kind: FormFieldKind::Text,
-                            placeholder: "optional - leave empty to browse all",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: None,
-                        },
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "mongodb://localhost:27017",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "27017"),
+                                "27017",
+                            ),
+                            "use_uri",
+                        ),
+                        field(
+                            "database",
+                            "Database",
+                            FormFieldKind::Text,
+                            "optional - leave empty to browse all",
+                        ),
                     ],
                 },
                 FormSection {
-                    title: "Authentication",
-                    fields: &[
-                        FormFieldDef {
-                            id: "user",
-                            label: "User",
-                            kind: FormFieldKind::Text,
-                            placeholder: "optional",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: None,
-                        },
-                        FIELD_PASSWORD,
-                        FormFieldDef {
-                            id: "auth_database",
-                            label: "Auth Database",
-                            kind: FormFieldKind::Text,
-                            placeholder: "admin (default)",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
+                    title: "Authentication".into(),
+                    fields: vec![
+                        field("user", "User", FormFieldKind::Text, "optional"),
+                        field_password(),
+                        when_unchecked(
+                            field(
+                                "auth_database",
+                                "Auth Database",
+                                FormFieldKind::Text,
+                                "admin (default)",
+                            ),
+                            "use_uri",
+                        ),
                     ],
                 },
             ],
         },
-        SSH_TAB,
+        ssh_tab(),
     ],
-};
+});
 
-pub static REDIS_FORM: DriverFormDef = DriverFormDef {
-    tabs: &[
+pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
         FormTab {
-            id: "main",
-            label: "Main",
-            sections: &[
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
                 FormSection {
-                    title: "Server",
-                    fields: &[
-                        FIELD_USE_URI,
-                        FormFieldDef {
-                            id: "uri",
-                            label: "Connection URI",
-                            kind: FormFieldKind::Text,
-                            placeholder: "redis://localhost:6379/0",
-                            required: true,
-                            default_value: "",
-                            enabled_when_checked: Some("use_uri"),
-                            enabled_when_unchecked: None,
-                        },
-                        FormFieldDef {
-                            id: "host",
-                            label: "Host",
-                            kind: FormFieldKind::Text,
-                            placeholder: "localhost",
-                            required: true,
-                            default_value: "localhost",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "port",
-                            label: "Port",
-                            kind: FormFieldKind::Number,
-                            placeholder: "6379",
-                            required: true,
-                            default_value: "6379",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "database",
-                            label: "Database Index",
-                            kind: FormFieldKind::Number,
-                            placeholder: "0",
-                            required: false,
-                            default_value: "0",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FormFieldDef {
-                            id: "tls",
-                            label: "Use TLS",
-                            kind: FormFieldKind::Checkbox,
-                            placeholder: "",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "redis://localhost:6379/0",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "6379"),
+                                "6379",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field("database", "Database Index", FormFieldKind::Number, "0"),
+                                "0",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field("tls", "Use TLS", FormFieldKind::Checkbox, ""),
+                            "use_uri",
+                        ),
                     ],
                 },
                 FormSection {
-                    title: "Authentication",
-                    fields: &[
-                        FormFieldDef {
-                            id: "user",
-                            label: "User",
-                            kind: FormFieldKind::Text,
-                            placeholder: "optional",
-                            required: false,
-                            default_value: "",
-                            enabled_when_checked: None,
-                            enabled_when_unchecked: Some("use_uri"),
-                        },
-                        FIELD_PASSWORD,
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            field("user", "User", FormFieldKind::Text, "optional"),
+                            "use_uri",
+                        ),
+                        field_password(),
                     ],
                 },
             ],
         },
-        SSH_TAB,
+        ssh_tab(),
     ],
-};
+});
+
+// ---------------------------------------------------------------------------
+// Impl blocks
+// ---------------------------------------------------------------------------
 
 impl DriverFormDef {
     pub fn main_tab(&self) -> Option<&FormTab> {

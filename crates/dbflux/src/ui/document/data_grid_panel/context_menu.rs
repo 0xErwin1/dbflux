@@ -3263,7 +3263,7 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(profile_id)
-            .map(|c| c.connection.metadata().query_language);
+            .map(|c| c.connection.metadata().query_language.clone());
 
         match language {
             Some(dbflux_core::QueryLanguage::Sql) => "Copy as SQL",

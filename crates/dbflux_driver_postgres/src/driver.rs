@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -13,14 +16,12 @@ use dbflux_core::{
     DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
     ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
-    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    IndexInfo, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition, Value, ViewInfo,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -31,10 +32,10 @@ use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// PostgreSQL driver metadata.
-pub static METADATA: DriverMetadata = DriverMetadata {
-    id: "postgres",
-    display_name: "PostgreSQL",
-    description: "Advanced open-source relational database",
+pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "postgres".into(),
+    display_name: "PostgreSQL".into(),
+    description: "Advanced open-source relational database".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -53,9 +54,9 @@ pub static METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::RETURNING.bits(),
     ),
     default_port: Some(5432),
-    uri_scheme: "postgresql",
+    uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
-};
+});
 
 /// PostgreSQL SQL dialect implementation.
 pub struct PostgresDialect;
@@ -248,7 +249,7 @@ impl DbDriver for PostgresDriver {
         DbKind::Postgres
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
     }
 
@@ -292,7 +293,7 @@ impl DbDriver for PostgresDriver {
         conn.ping()
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &POSTGRES_FORM
     }
 
@@ -721,60 +722,62 @@ impl QueryCancelHandle for PostgresCancelHandle {
     }
 }
 
-const POSTGRES_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
-    CodeGeneratorInfo {
-        id: "select_star",
-        label: "SELECT *",
-        scope: CodeGenScope::TableOrView,
-        order: 0,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "insert",
-        label: "INSERT INTO",
-        scope: CodeGenScope::Table,
-        order: 5,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "update",
-        label: "UPDATE",
-        scope: CodeGenScope::Table,
-        order: 6,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "delete",
-        label: "DELETE",
-        scope: CodeGenScope::Table,
-        order: 7,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "create_table",
-        label: "CREATE TABLE",
-        scope: CodeGenScope::Table,
-        order: 10,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "truncate",
-        label: "TRUNCATE",
-        scope: CodeGenScope::Table,
-        order: 20,
-        destructive: true,
-    },
-    CodeGeneratorInfo {
-        id: "drop_table",
-        label: "DROP TABLE",
-        scope: CodeGenScope::Table,
-        order: 21,
-        destructive: true,
-    },
-];
+fn postgres_code_generators() -> Vec<CodeGeneratorInfo> {
+    vec![
+        CodeGeneratorInfo {
+            id: "select_star".into(),
+            label: "SELECT *".into(),
+            scope: CodeGenScope::TableOrView,
+            order: 0,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "insert".into(),
+            label: "INSERT INTO".into(),
+            scope: CodeGenScope::Table,
+            order: 5,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "update".into(),
+            label: "UPDATE".into(),
+            scope: CodeGenScope::Table,
+            order: 6,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "delete".into(),
+            label: "DELETE".into(),
+            scope: CodeGenScope::Table,
+            order: 7,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "create_table".into(),
+            label: "CREATE TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 10,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "truncate".into(),
+            label: "TRUNCATE".into(),
+            scope: CodeGenScope::Table,
+            order: 20,
+            destructive: true,
+        },
+        CodeGeneratorInfo {
+            id: "drop_table".into(),
+            label: "DROP TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 21,
+            destructive: true,
+        },
+    ]
+}
 
 impl Connection for PostgresConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
     }
 
@@ -1146,8 +1149,8 @@ impl Connection for PostgresConnection {
         get_schema_foreign_keys(&mut client, schema_name)
     }
 
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        POSTGRES_CODE_GENERATORS
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        postgres_code_generators()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
@@ -2588,7 +2591,7 @@ fn get_schema_foreign_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{PostgresDialect, PostgresDriver, inject_password_into_pg_uri};
+    use super::{inject_password_into_pg_uri, PostgresDialect, PostgresDriver};
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
     };
@@ -2702,11 +2705,9 @@ mod tests {
     #[test]
     fn parse_uri_rejects_non_postgres_schemes() {
         let driver = PostgresDriver::new();
-        assert!(
-            driver
-                .parse_uri("mysql://root@localhost:3306/app")
-                .is_none()
-        );
+        assert!(driver
+            .parse_uri("mysql://root@localhost:3306/app")
+            .is_none());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -20,10 +21,10 @@ use dbflux_core::{
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
 /// SQLite driver metadata.
-pub static METADATA: DriverMetadata = DriverMetadata {
-    id: "sqlite",
-    display_name: "SQLite",
-    description: "Embedded file-based database",
+pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "sqlite".into(),
+    display_name: "SQLite".into(),
+    description: "Embedded file-based database".into(),
     category: DatabaseCategory::Relational,
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -44,9 +45,9 @@ pub static METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::QUERY_CANCELLATION.bits(),
     ),
     default_port: None,
-    uri_scheme: "sqlite",
+    uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
-};
+});
 
 /// SQLite SQL dialect implementation.
 pub struct SqliteDialect;
@@ -154,7 +155,7 @@ impl DbDriver for SqliteDriver {
         DbKind::SQLite
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
     }
 
@@ -205,7 +206,7 @@ impl DbDriver for SqliteDriver {
         Ok(())
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &SQLITE_FORM
     }
 
@@ -257,53 +258,55 @@ impl QueryCancelHandle for SqliteCancelHandle {
     }
 }
 
-const SQLITE_CODE_GENERATORS: &[CodeGeneratorInfo] = &[
-    CodeGeneratorInfo {
-        id: "select_star",
-        label: "SELECT *",
-        scope: CodeGenScope::TableOrView,
-        order: 0,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "insert",
-        label: "INSERT INTO",
-        scope: CodeGenScope::Table,
-        order: 5,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "update",
-        label: "UPDATE",
-        scope: CodeGenScope::Table,
-        order: 6,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "delete",
-        label: "DELETE",
-        scope: CodeGenScope::Table,
-        order: 7,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "create_table",
-        label: "CREATE TABLE",
-        scope: CodeGenScope::Table,
-        order: 10,
-        destructive: false,
-    },
-    CodeGeneratorInfo {
-        id: "drop_table",
-        label: "DROP TABLE",
-        scope: CodeGenScope::Table,
-        order: 20,
-        destructive: true,
-    },
-];
+fn sqlite_code_generators() -> Vec<CodeGeneratorInfo> {
+    vec![
+        CodeGeneratorInfo {
+            id: "select_star".into(),
+            label: "SELECT *".into(),
+            scope: CodeGenScope::TableOrView,
+            order: 0,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "insert".into(),
+            label: "INSERT INTO".into(),
+            scope: CodeGenScope::Table,
+            order: 5,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "update".into(),
+            label: "UPDATE".into(),
+            scope: CodeGenScope::Table,
+            order: 6,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "delete".into(),
+            label: "DELETE".into(),
+            scope: CodeGenScope::Table,
+            order: 7,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "create_table".into(),
+            label: "CREATE TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 10,
+            destructive: false,
+        },
+        CodeGeneratorInfo {
+            id: "drop_table".into(),
+            label: "DROP TABLE".into(),
+            scope: CodeGenScope::Table,
+            order: 20,
+            destructive: true,
+        },
+    ]
+}
 
 impl Connection for SqliteConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &METADATA
     }
 
@@ -518,8 +521,8 @@ impl Connection for SqliteConnection {
         self.get_all_foreign_keys(&conn)
     }
 
-    fn code_generators(&self) -> &'static [CodeGeneratorInfo] {
-        SQLITE_CODE_GENERATORS
+    fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
+        sqlite_code_generators()
     }
 
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {

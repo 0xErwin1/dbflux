@@ -349,7 +349,7 @@ impl DriverCapabilities {
 /// Query language supported by the driver.
 ///
 /// Determines which editor mode to use and how to parse/validate queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum QueryLanguage {
     /// Standard SQL (with dialect variations).
     Sql,
@@ -370,7 +370,7 @@ pub enum QueryLanguage {
     Cql,
 
     /// Custom or proprietary query language.
-    Custom(&'static str),
+    Custom(String),
 }
 
 impl QueryLanguage {
@@ -416,7 +416,7 @@ impl QueryLanguage {
         }
     }
 
-    pub fn display_name(&self) -> &'static str {
+    pub fn display_name(&self) -> &str {
         match self {
             QueryLanguage::Sql => "SQL",
             QueryLanguage::MongoQuery => "MongoDB Query",
@@ -477,20 +477,20 @@ impl QueryLanguage {
     }
 }
 
-/// Static metadata that a driver provides about itself.
+/// Metadata that a driver provides about itself.
 ///
 /// This is returned by `DbDriver::metadata()` and used by the UI
 /// to configure behavior without knowing driver-specific details.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverMetadata {
     /// Unique identifier for this driver (e.g., "postgres", "mongodb").
-    pub id: &'static str,
+    pub id: String,
 
     /// Human-readable name (e.g., "PostgreSQL", "MongoDB").
-    pub display_name: &'static str,
+    pub display_name: String,
 
     /// Short description shown in the connection manager.
-    pub description: &'static str,
+    pub description: String,
 
     /// Database category (Relational, Document, etc.).
     pub category: DatabaseCategory,
@@ -505,7 +505,7 @@ pub struct DriverMetadata {
     pub default_port: Option<u16>,
 
     /// URI scheme for connection strings (e.g., "postgresql", "mongodb").
-    pub uri_scheme: &'static str,
+    pub uri_scheme: String,
 
     /// Icon identifier for this driver.
     /// The UI resolves this to the actual asset path.

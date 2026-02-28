@@ -188,7 +188,7 @@ impl SqlQueryDocument {
         // Get query language from the active connection, default to SQL
         let query_language = connection_id
             .and_then(|id| app_state.read(cx).connections().get(&id))
-            .map(|conn| conn.connection.metadata().query_language)
+            .map(|conn| conn.connection.metadata().query_language.clone())
             .unwrap_or(QueryLanguage::Sql);
 
         Self::new_with_language(app_state, connection_id, query_language, window, cx)
@@ -214,7 +214,7 @@ impl SqlQueryDocument {
         });
 
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
-            QueryCompletionProvider::new(query_language, app_state.clone(), connection_id),
+            QueryCompletionProvider::new(query_language.clone(), app_state.clone(), connection_id),
         );
         input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = Some(completion_provider);
@@ -496,7 +496,7 @@ impl SqlQueryDocument {
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.query_language
+        self.query_language.clone()
     }
 
     /// Returns true if the editor content is empty or whitespace-only.

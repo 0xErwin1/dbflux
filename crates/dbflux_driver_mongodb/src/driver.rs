@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -19,10 +20,10 @@ use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
 
 /// MongoDB driver metadata.
-pub static MONGODB_METADATA: DriverMetadata = DriverMetadata {
-    id: "mongodb",
-    display_name: "MongoDB",
-    description: "Document database for modern applications",
+pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "mongodb".into(),
+    display_name: "MongoDB".into(),
+    description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
@@ -31,9 +32,9 @@ pub static MONGODB_METADATA: DriverMetadata = DriverMetadata {
             | DriverCapabilities::INDEXES.bits(),
     ),
     default_port: Some(27017),
-    uri_scheme: "mongodb",
+    uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
-};
+});
 
 pub struct MongoDriver;
 
@@ -54,11 +55,11 @@ impl DbDriver for MongoDriver {
         DbKind::MongoDB
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
+    fn form_definition(&self) -> &DriverFormDef {
         &MONGODB_FORM
     }
 
@@ -614,7 +615,7 @@ pub struct MongoConnection {
 }
 
 impl Connection for MongoConnection {
-    fn metadata(&self) -> &'static DriverMetadata {
+    fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
     }
 

@@ -5,10 +5,9 @@ use std::time::{Duration, Instant};
 use std::{process::Stdio, thread};
 
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbError, DbKind, DriverCapabilities, DriverFormDef,
-    DriverMetadata, FormValues,
+    ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef, DriverMetadata, FormValues,
 };
-use dbflux_ipc::driver_protocol::{DriverFormDefDto, DriverMetadataDto, DriverResponseBody};
+use dbflux_ipc::driver_protocol::DriverResponseBody;
 use interprocess::local_socket::{GenericNamespaced, Name, Stream as IpcStream, prelude::*};
 
 use crate::connection::IpcConnection;
@@ -88,8 +87,8 @@ pub fn shutdown_managed_hosts() -> usize {
 pub struct IpcDriver {
     socket_id: String,
     kind: DbKind,
-    metadata: &'static DriverMetadata,
-    form_definition: &'static DriverFormDef,
+    metadata: DriverMetadata,
+    form_definition: DriverFormDef,
     launch: Option<IpcDriverLaunchConfig>,
 }
 
@@ -105,8 +104,8 @@ impl IpcDriver {
     pub fn new(
         socket_id: String,
         kind: DbKind,
-        metadata: &'static DriverMetadata,
-        form_definition: &'static DriverFormDef,
+        metadata: DriverMetadata,
+        form_definition: DriverFormDef,
     ) -> Self {
         Self {
             socket_id,
@@ -130,17 +129,19 @@ impl IpcDriver {
     pub fn probe_driver(
         socket_id: &str,
         launch: Option<&IpcDriverLaunchConfig>,
-    ) -> Result<(DbKind, &'static DriverMetadata, &'static DriverFormDef), DbError> {
+    ) -> Result<(DbKind, DriverMetadata, DriverFormDef), DbError> {
         Self::ensure_host_running_for(socket_id, launch)?;
 
         let name = Self::parse_socket_name(socket_id)?;
 
         let client = RpcClient::connect(name).map_err(DbError::from)?;
         let hello = client.hello_response();
-        let metadata = leak_metadata(&hello.driver_metadata);
-        let form_definition = leak_form_definition(hello.form_definition.clone());
 
-        Ok((hello.driver_kind, metadata, form_definition))
+        Ok((
+            hello.driver_kind,
+            hello.driver_metadata.clone(),
+            hello.form_definition.clone(),
+        ))
     }
 
     #[allow(clippy::result_large_err)]
@@ -313,44 +314,17 @@ impl IpcDriver {
     }
 }
 
-/// Converts a `DriverMetadataDto` into a `&'static DriverMetadata`.
-///
-/// This leaks memory intentionally — drivers live for the entire process
-/// lifetime, so the metadata is never deallocated.
-pub fn leak_metadata(dto: &DriverMetadataDto) -> &'static DriverMetadata {
-    let query_language: dbflux_core::QueryLanguage = dto.query_language.clone().into();
-
-    let metadata = DriverMetadata {
-        id: Box::leak(dto.id.clone().into_boxed_str()),
-        display_name: Box::leak(dto.display_name.clone().into_boxed_str()),
-        description: Box::leak(dto.description.clone().into_boxed_str()),
-        category: dto.category,
-        query_language,
-        capabilities: DriverCapabilities::from_bits(dto.capabilities)
-            .unwrap_or_else(DriverCapabilities::empty),
-        default_port: dto.default_port,
-        uri_scheme: Box::leak(dto.uri_scheme.clone().into_boxed_str()),
-        icon: dto.icon,
-    };
-
-    Box::leak(Box::new(metadata))
-}
-
-fn leak_form_definition(dto: DriverFormDefDto) -> &'static DriverFormDef {
-    Box::leak(Box::new(dto.into()))
-}
-
 impl dbflux_core::DbDriver for IpcDriver {
     fn kind(&self) -> DbKind {
         self.kind
     }
 
-    fn metadata(&self) -> &'static DriverMetadata {
-        self.metadata
+    fn metadata(&self) -> &DriverMetadata {
+        &self.metadata
     }
 
-    fn form_definition(&self) -> &'static DriverFormDef {
-        self.form_definition
+    fn form_definition(&self) -> &DriverFormDef {
+        &self.form_definition
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
@@ -389,7 +363,7 @@ impl dbflux_core::DbDriver for IpcDriver {
         let DriverResponseBody::SessionOpened {
             session_id,
             kind,
-            metadata: metadata_dto,
+            metadata,
             schema_loading_strategy,
             schema_features,
             code_gen_capabilities,
@@ -400,14 +374,13 @@ impl dbflux_core::DbDriver for IpcDriver {
             ));
         };
 
-        let connection_metadata = leak_metadata(&metadata_dto);
-        let capabilities = connection_metadata.capabilities;
+        let capabilities = metadata.capabilities;
 
         Ok(Box::new(IpcConnection::new(
             Arc::new(client),
             session_id,
             kind,
-            connection_metadata,
+            metadata,
             capabilities,
             schema_loading_strategy,
             schema_features,

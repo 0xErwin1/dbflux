@@ -140,7 +140,7 @@ impl SqlQueryDocument {
         // Update completion provider
         let completion_provider: Rc<dyn CompletionProvider> =
             Rc::new(QueryCompletionProvider::new(
-                self.query_language,
+                self.query_language.clone(),
                 self.app_state.clone(),
                 Some(new_conn_id),
             ));

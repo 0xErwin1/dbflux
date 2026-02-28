@@ -7,10 +7,10 @@ use dbflux_core::{
     SqlValueMode, TableInfo, Value,
 };
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use uuid::Uuid;
 
 /// Type of SQL statement to generate.
@@ -214,6 +214,7 @@ impl SqlPreviewModal {
         cx: &mut Context<Self>,
     ) {
         self.context = None;
+        let editor_mode = language.editor_mode();
         self.query_language = Some(language);
         self.badge_label = Some(badge.to_string());
         self.visible = true;
@@ -222,7 +223,7 @@ impl SqlPreviewModal {
 
         self.sql_display = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
-                .code_editor(language.editor_mode())
+                .code_editor(editor_mode)
                 .line_number(true)
                 .soft_wrap(true);
             state.set_value(&query, window, cx);
