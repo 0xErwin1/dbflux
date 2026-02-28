@@ -4,7 +4,30 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [0.4.0-dev.1] – 2026-02-28
 
-_Placeholder – will be filled after reviewing changes._
+### Added
+
+* Comprehensive live integration tests for all five database drivers (43 tests covering schema introspection, CRUD, browse/count, explain, describe, cancellation, code generators, document CRUD, and KeyValueApi)
+* Docker-based test infrastructure for PostgreSQL, MySQL, MongoDB, and Redis with automatic container lifecycle management
+* Driver contract validation tests for metadata, form definitions, and capability declarations
+* Explicit unsupported-value representation in query results (`UNSUPPORTED<type>`) to distinguish decode gaps from real `NULL` values
+* Full PostgreSQL `tsvector` and `tsquery` support in data grid (browsing, query results, filtering)
+
+### Changed
+
+* AppState now accepts an external driver registry (`new_with_drivers`), making driver wiring controllable across different runtime contexts
+* Document open and query connection selection extracted into explicit decision paths for consistent handling of missing connections and per-database routing
+* MySQL `information_schema` queries migrated from `format!()` string interpolation to parameterized queries (`conn.exec` with `?` placeholders)
+* MySQL nullable column reads (`Option<String>`) now use `row.get_opt()` to correctly distinguish SQL NULL from missing columns
+* PostgreSQL custom type text decoding limited to safe textual types (enum/domain variants) to avoid silent mis-decoding
+* Version bumped from `0.4.0-dev.0` to `0.4.0-dev.1`
+
+### Fixed
+
+* MySQL schema introspection panic on MySQL 8.4 where `column_key` in `information_schema.columns` can be NULL
+* MySQL constraint introspection panic where `GROUP_CONCAT` over a `LEFT JOIN` returns NULL for CHECK constraints without key columns
+* Windows portable builds no longer open a CMD console window when launched outside a terminal
+* False startup exit when the app-control IPC check raced with window creation
+* Filter submenu action dispatch repaired
 
 ---
 
