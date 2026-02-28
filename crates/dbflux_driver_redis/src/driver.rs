@@ -3,19 +3,22 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use std::sync::Arc;
+
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
     DiagnosticSeverity, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
-    FormValues, FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest,
-    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
-    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy,
-    SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
-    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
-    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, HashDeleteRequest,
+    HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage,
+    KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest,
+    KeyValueApi, KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest,
+    ListSetRequest, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, REDIS_FORM, SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition,
+    SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest,
+    StreamEntryId, TextPosition, TextPositionRange, ValidationResult, Value, ValueRepr,
+    ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -155,6 +158,55 @@ impl DbDriver for RedisDriver {
 
     fn driver_key(&self) -> dbflux_core::DriverKey {
         "builtin:redis".into()
+    }
+
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        Some(Arc::new(DriverFormDef {
+            tabs: vec![FormTab {
+                id: "settings".into(),
+                label: "Settings".into(),
+                sections: vec![
+                    FormSection {
+                        title: "Key Scanning".into(),
+                        fields: vec![
+                            FormFieldDef {
+                                id: "scan_batch_size".into(),
+                                label: "Scan batch size".into(),
+                                kind: FormFieldKind::Number,
+                                placeholder: "100".into(),
+                                required: false,
+                                default_value: "100".into(),
+                                enabled_when_checked: None,
+                                enabled_when_unchecked: None,
+                            },
+                            FormFieldDef {
+                                id: "stream_preview_limit".into(),
+                                label: "Stream preview limit".into(),
+                                kind: FormFieldKind::Number,
+                                placeholder: "50".into(),
+                                required: false,
+                                default_value: "50".into(),
+                                enabled_when_checked: None,
+                                enabled_when_unchecked: None,
+                            },
+                        ],
+                    },
+                    FormSection {
+                        title: "Safety".into(),
+                        fields: vec![FormFieldDef {
+                            id: "allow_flush".into(),
+                            label: "Allow FLUSHALL / FLUSHDB".into(),
+                            kind: FormFieldKind::Checkbox,
+                            placeholder: String::new(),
+                            required: false,
+                            default_value: "false".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        }],
+                    },
+                ],
+            }],
+        }))
     }
 
     fn form_definition(&self) -> &DriverFormDef {
@@ -2167,5 +2219,36 @@ mod tests {
         assert_eq!(metadata.default_port, Some(6379));
         assert_eq!(metadata.uri_scheme, "redis");
         assert!(!driver.form_definition().tabs.is_empty());
+    }
+
+    #[test]
+    fn settings_schema_exposes_scan_and_safety_fields() {
+        let driver = RedisDriver::new();
+        let schema = driver
+            .settings_schema()
+            .expect("redis should have a settings schema");
+
+        assert_eq!(schema.tabs.len(), 1);
+        assert_eq!(schema.tabs[0].sections.len(), 2);
+
+        let scanning = &schema.tabs[0].sections[0];
+        assert_eq!(scanning.title, "Key Scanning");
+        assert_eq!(scanning.fields.len(), 2);
+        assert_eq!(scanning.fields[0].id, "scan_batch_size");
+        assert_eq!(scanning.fields[0].default_value, "100");
+        assert_eq!(scanning.fields[1].id, "stream_preview_limit");
+        assert_eq!(scanning.fields[1].default_value, "50");
+
+        let safety = &schema.tabs[0].sections[1];
+        assert_eq!(safety.title, "Safety");
+        assert_eq!(safety.fields.len(), 1);
+        assert_eq!(safety.fields[0].id, "allow_flush");
+        assert_eq!(safety.fields[0].default_value, "false");
+    }
+
+    #[test]
+    fn driver_key_is_builtin_redis() {
+        let driver = RedisDriver::new();
+        assert_eq!(driver.driver_key(), "builtin:redis");
     }
 }

@@ -3,18 +3,20 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use std::sync::Arc;
+
 use bson::{Bson, Document, doc};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo, FormValues,
-    FormattedError, Icon, IndexData, IndexDirection, LanguageService, MONGODB_FORM,
-    PlaceholderStyle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SshTunnelConfig, TableInfo, TextPosition, TextPositionRange, ValidationResult, Value, ViewInfo,
-    detect_dangerous_mongo, sanitize_uri,
+    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    IndexDirection, LanguageService, MONGODB_FORM, PlaceholderStyle, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
+    TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -61,6 +63,40 @@ impl DbDriver for MongoDriver {
 
     fn driver_key(&self) -> dbflux_core::DriverKey {
         "builtin:mongodb".into()
+    }
+
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        Some(Arc::new(DriverFormDef {
+            tabs: vec![FormTab {
+                id: "settings".into(),
+                label: "Settings".into(),
+                sections: vec![FormSection {
+                    title: "Schema".into(),
+                    fields: vec![
+                        FormFieldDef {
+                            id: "schema_sample_size".into(),
+                            label: "Schema sample size".into(),
+                            kind: FormFieldKind::Number,
+                            placeholder: "100".into(),
+                            required: false,
+                            default_value: "100".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        },
+                        FormFieldDef {
+                            id: "show_system_databases".into(),
+                            label: "Show system databases".into(),
+                            kind: FormFieldKind::Checkbox,
+                            placeholder: String::new(),
+                            required: false,
+                            default_value: "false".into(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                        },
+                    ],
+                }],
+            }],
+        }))
     }
 
     fn form_definition(&self) -> &DriverFormDef {
@@ -2372,5 +2408,30 @@ mod tests {
         if let Value::Document(map) = value {
             assert_eq!(map.len(), 2);
         }
+    }
+
+    #[test]
+    fn settings_schema_exposes_schema_fields() {
+        let driver = MongoDriver::new();
+        let schema = driver
+            .settings_schema()
+            .expect("mongodb should have a settings schema");
+
+        assert_eq!(schema.tabs.len(), 1);
+        assert_eq!(schema.tabs[0].sections.len(), 1);
+
+        let section = &schema.tabs[0].sections[0];
+        assert_eq!(section.title, "Schema");
+        assert_eq!(section.fields.len(), 2);
+        assert_eq!(section.fields[0].id, "schema_sample_size");
+        assert_eq!(section.fields[0].default_value, "100");
+        assert_eq!(section.fields[1].id, "show_system_databases");
+        assert_eq!(section.fields[1].default_value, "false");
+    }
+
+    #[test]
+    fn driver_key_is_builtin_mongodb() {
+        let driver = MongoDriver::new();
+        assert_eq!(driver.driver_key(), "builtin:mongodb");
     }
 }
