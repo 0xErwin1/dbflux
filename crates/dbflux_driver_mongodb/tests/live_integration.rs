@@ -17,7 +17,7 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbErr
                 host: String::new(),
                 port: 27017,
                 user: None,
-                database: Some("admin".to_string()),
+                database: Some("testdb".to_string()),
                 auth_database: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
@@ -36,8 +36,10 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbErr
 
         assert_eq!(
             connection.schema_loading_strategy(),
-            SchemaLoadingStrategy::SingleDatabase
+            SchemaLoadingStrategy::LazyPerDatabase
         );
+
+        connection.execute(&QueryRequest::new("db.test_col.insertOne({\"x\": 1})"))?;
 
         let databases = connection.list_databases()?;
         assert!(!databases.is_empty());
@@ -52,10 +54,4 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbErr
 
         Ok(())
     })
-}
-
-#[test]
-#[ignore = "TODO: mongodb query cancellation support"]
-fn pending_mongodb_cancel_support() {
-    panic!("TODO: implement MongoDB query cancellation and replace this pending test");
 }

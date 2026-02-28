@@ -36,7 +36,7 @@ fn redis_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbError
 
         assert_eq!(
             connection.schema_loading_strategy(),
-            SchemaLoadingStrategy::SingleDatabase
+            SchemaLoadingStrategy::LazyPerDatabase
         );
 
         let databases = connection.list_databases()?;
@@ -51,10 +51,4 @@ fn redis_live_connect_ping_query_and_schema() -> Result<(), dbflux_core::DbError
 
         Ok(())
     })
-}
-
-#[test]
-#[ignore = "TODO: redis query cancellation support"]
-fn pending_redis_cancel_support() {
-    panic!("TODO: implement Redis query cancellation and replace this pending test");
 }
