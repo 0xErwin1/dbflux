@@ -10,7 +10,7 @@ impl SettingsWindow {
     pub(super) fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_tunnel_id = None;
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
-        self.form_save_secret = false;
+        self.form_save_secret = true;
         self.ssh_test_status = SshTestStatus::None;
         self.ssh_test_error = None;
 

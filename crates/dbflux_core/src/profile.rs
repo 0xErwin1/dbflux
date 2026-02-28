@@ -95,7 +95,7 @@ impl SshTunnelProfile {
             id: Uuid::new_v4(),
             name: name.into(),
             config,
-            save_secret: false,
+            save_secret: true,
         }
     }
 
@@ -319,7 +319,7 @@ impl ConnectionProfile {
             kind: Some(kind),
             driver_id: Some(Self::builtin_driver_id_for_kind(kind).to_string()),
             config,
-            save_password: false,
+            save_password: true,
         }
     }
 
@@ -351,7 +351,7 @@ impl ConnectionProfile {
             kind: Some(kind),
             driver_id: Some(driver_id.into()),
             config,
-            save_password: false,
+            save_password: true,
         }
     }
 
