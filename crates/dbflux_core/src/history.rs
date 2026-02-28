@@ -132,6 +132,31 @@ impl HistoryStore {
         }
     }
 
+    pub fn set_max_entries(&mut self, max: usize) {
+        self.max_entries = max.max(10);
+
+        if self.entries.len() > self.max_entries {
+            let favorites: Vec<_> = self
+                .entries
+                .iter()
+                .filter(|e| e.is_favorite)
+                .cloned()
+                .collect();
+
+            let non_favorites: Vec<_> = self
+                .entries
+                .iter()
+                .filter(|e| !e.is_favorite)
+                .take(self.max_entries.saturating_sub(favorites.len()))
+                .cloned()
+                .collect();
+
+            self.entries = favorites;
+            self.entries.extend(non_favorites);
+            self.entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        }
+    }
+
     pub fn entries(&self) -> &[HistoryEntry] {
         &self.entries
     }

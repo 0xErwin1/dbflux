@@ -270,9 +270,23 @@ impl Workspace {
                             modal.open(context, *generation_type, window, cx);
                         });
                     }
+                    TabManagerEvent::Activated(new_id) => {
+                        let docs: Vec<_> = this
+                            .tab_manager
+                            .read(cx)
+                            .documents()
+                            .iter()
+                            .map(|d| (d.clone(), d.id() == *new_id))
+                            .collect();
+
+                        for (doc, is_active) in docs {
+                            doc.set_active_tab(is_active, cx);
+                        }
+
+                        this.write_session_manifest(cx);
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
-                    | TabManagerEvent::Activated(_)
                     | TabManagerEvent::Reordered => {
                         this.write_session_manifest(cx);
                     }
@@ -307,10 +321,28 @@ impl Workspace {
             focus_handle,
         };
 
-        workspace.restore_session(window, cx);
+        {
+            let settings = workspace.app_state.read(cx).general_settings().clone();
 
-        if workspace.tab_manager.read(cx).is_empty() {
-            workspace.pending_focus = Some(FocusTarget::Sidebar);
+            if settings.restore_session_on_startup {
+                workspace.restore_session(window, cx);
+
+                if settings.reopen_last_connections {
+                    workspace.reopen_last_connections(cx);
+                }
+            }
+
+            let has_tabs = !workspace.tab_manager.read(cx).is_empty();
+            match settings.default_focus_on_startup {
+                dbflux_core::StartupFocus::Sidebar => {
+                    workspace.pending_focus = Some(FocusTarget::Sidebar);
+                }
+                dbflux_core::StartupFocus::LastTab => {
+                    if !has_tabs {
+                        workspace.pending_focus = Some(FocusTarget::Sidebar);
+                    }
+                }
+            }
         }
 
         workspace

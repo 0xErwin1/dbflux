@@ -36,12 +36,21 @@ impl SettingsWindow {
             .p_2()
             .gap_1()
             .child(self.render_sidebar_item(
+                "section-general",
+                "General",
+                AppIcon::Settings,
+                SettingsSection::General,
+                active,
+                focused && self.sidebar_index_for_section(active) == 0,
+                cx,
+            ))
+            .child(self.render_sidebar_item(
                 "section-keybindings",
                 "Keybindings",
                 AppIcon::Keyboard,
                 SettingsSection::Keybindings,
                 active,
-                focused && self.sidebar_index_for_section(active) == 0,
+                focused && self.sidebar_index_for_section(active) == 1,
                 cx,
             ))
             .child(self.render_sidebar_item(
@@ -50,7 +59,7 @@ impl SettingsWindow {
                 AppIcon::FingerprintPattern,
                 SettingsSection::SshTunnels,
                 active,
-                focused && self.sidebar_index_for_section(active) == 1,
+                focused && self.sidebar_index_for_section(active) == 2,
                 cx,
             ))
             .child(self.render_sidebar_item(
@@ -59,7 +68,7 @@ impl SettingsWindow {
                 AppIcon::Plug,
                 SettingsSection::Services,
                 active,
-                focused && self.sidebar_index_for_section(active) == 2,
+                focused && self.sidebar_index_for_section(active) == 3,
                 cx,
             ))
             .child(self.render_sidebar_item(
@@ -68,7 +77,7 @@ impl SettingsWindow {
                 AppIcon::Info,
                 SettingsSection::About,
                 active,
-                focused && self.sidebar_index_for_section(active) == 3,
+                focused && self.sidebar_index_for_section(active) == 4,
                 cx,
             ))
     }
@@ -1722,8 +1731,15 @@ impl Render for SettingsWindow {
         });
 
         let theme = cx.theme();
+        let dialog_backdrop_bg = theme.background.opacity(0.6);
+        let dialog_card_bg = theme.background;
+        let dialog_border = theme.border;
+        let dialog_fg = theme.foreground;
+        let dialog_muted_fg = theme.muted_foreground;
+
         let show_ssh_delete = self.pending_delete_tunnel_id.is_some();
         let show_svc_delete = self.pending_delete_svc_idx.is_some();
+        let show_close_confirm = self.pending_close_confirm;
 
         let tunnel_name = self
             .pending_delete_tunnel_id
@@ -1753,6 +1769,7 @@ impl Render for SettingsWindow {
             }))
             .child(self.render_sidebar(cx))
             .child(match self.active_section {
+                SettingsSection::General => self.render_general_section(cx).into_any_element(),
                 SettingsSection::Keybindings => {
                     self.render_keybindings_section(cx).into_any_element()
                 }
@@ -1812,6 +1829,87 @@ impl Render for SettingsWindow {
                             "Are you sure you want to delete \"{}\"?",
                             svc_delete_name
                         ))),
+                )
+            })
+            .when(show_close_confirm, |el| {
+                let this_cancel = cx.entity().clone();
+                let this_discard = cx.entity().clone();
+                let this_save = cx.entity().clone();
+
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(dialog_backdrop_bg)
+                        .child(
+                            div()
+                                .w(px(400.0))
+                                .bg(dialog_card_bg)
+                                .border_1()
+                                .border_color(dialog_border)
+                                .rounded(px(8.0))
+                                .p_6()
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(dialog_fg)
+                                        .child("Unsaved Changes"),
+                                )
+                                .child(
+                                    div().text_sm().text_color(dialog_muted_fg).child(
+                                        "You have unsaved changes. What would you like to do?",
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_end()
+                                        .gap_2()
+                                        .child(
+                                            Button::new("close-cancel")
+                                                .label("Cancel")
+                                                .ghost()
+                                                .small()
+                                                .on_click(move |_, _, cx| {
+                                                    this_cancel.update(cx, |this, cx| {
+                                                        this.pending_close_confirm = false;
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new("close-discard")
+                                                .label("Discard")
+                                                .danger()
+                                                .small()
+                                                .on_click(move |_, window, cx| {
+                                                    this_discard.update(cx, |this, _cx| {
+                                                        this.pending_close_confirm = false;
+                                                    });
+                                                    window.remove_window();
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new("close-save")
+                                                .label("Save & Close")
+                                                .primary()
+                                                .small()
+                                                .on_click(move |_, window, cx| {
+                                                    this_save.update(cx, |this, cx| {
+                                                        this.pending_close_confirm = false;
+                                                        this.save_all_and_close(window, cx);
+                                                    });
+                                                }),
+                                        ),
+                                ),
+                        ),
                 )
             })
     }

@@ -22,6 +22,12 @@ impl HistoryManager {
         Self { store }
     }
 
+    pub fn set_max_entries(&mut self, max: usize) {
+        if let Some(ref mut store) = self.store {
+            store.set_max_entries(max);
+        }
+    }
+
     pub fn entries(&self) -> &[HistoryEntry] {
         self.store.as_ref().map(|s| s.entries()).unwrap_or(&[])
     }

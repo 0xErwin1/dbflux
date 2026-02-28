@@ -10,10 +10,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity, DriverCapabilities,
-    EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry, QueryLanguage,
-    QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy, ValidationResult,
-    detect_dangerous_query,
+    DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
+    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
+    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
+    ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -132,6 +132,8 @@ pub struct SqlQueryDocument {
     pending_auto_refresh: bool,
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
+
+    is_active_tab: bool,
 
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
@@ -258,6 +260,8 @@ impl SqlQueryDocument {
             r
         };
 
+        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
@@ -266,7 +270,7 @@ impl SqlQueryDocument {
 
             Dropdown::new("sql-auto-refresh")
                 .items(items)
-                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .selected_index(Some(default_refresh.index()))
                 .compact_trigger(true)
         });
 
@@ -328,6 +332,8 @@ impl SqlQueryDocument {
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
 
+        let refresh_policy = app_state.read(cx).general_settings().resolve_refresh_policy();
+
         Self {
             id: doc_id,
             title: "Query 1".to_string(),
@@ -363,11 +369,12 @@ impl SqlQueryDocument {
             context_bar_index: 0,
             results_maximized: false,
             runner,
-            refresh_policy: RefreshPolicy::Manual,
+            refresh_policy,
             refresh_dropdown,
             pending_auto_refresh: false,
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
+            is_active_tab: true,
             pending_dangerous_query: None,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
@@ -383,6 +390,10 @@ impl SqlQueryDocument {
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
         dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
+    }
+
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
@@ -413,6 +424,18 @@ impl SqlQueryDocument {
 
                     entity.update(cx, |doc, cx| {
                         if !doc.refresh_policy.is_auto() || doc.runner.is_primary_active() {
+                            return;
+                        }
+
+                        let settings = doc.app_state.read(cx).general_settings();
+
+                        if settings.auto_refresh_pause_on_error
+                            && doc.state == DocumentState::Error
+                        {
+                            return;
+                        }
+
+                        if settings.auto_refresh_only_if_visible && !doc.is_active_tab {
                             return;
                         }
 

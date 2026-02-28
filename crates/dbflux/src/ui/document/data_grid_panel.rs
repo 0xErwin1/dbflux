@@ -308,6 +308,7 @@ pub struct DataGridPanel {
     pending_refresh: bool,
     pending_toast: Option<PendingToast>,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    is_active_tab: bool,
 
     // Focus
     focus_handle: FocusHandle,
@@ -629,6 +630,8 @@ impl DataGridPanel {
             DataSource::Table { .. } | DataSource::Collection { .. }
         );
 
+        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
@@ -637,7 +640,7 @@ impl DataGridPanel {
 
             Dropdown::new("data-grid-auto-refresh")
                 .items(items)
-                .selected_index(Some(RefreshPolicy::Manual.index()))
+                .selected_index(Some(default_refresh.index()))
                 .disabled(!supports_auto_refresh)
                 .compact_trigger(true)
         });
@@ -689,7 +692,7 @@ impl DataGridPanel {
             original_row_order: None,
             pk_columns,
             runner,
-            refresh_policy: RefreshPolicy::Manual,
+            refresh_policy: default_refresh,
             refresh_dropdown,
             _refresh_timer: None,
             _refresh_subscriptions: vec![refresh_policy_sub],
@@ -700,6 +703,7 @@ impl DataGridPanel {
             pending_refresh: false,
             pending_toast: None,
             pending_delete_confirm: None,
+            is_active_tab: true,
             focus_handle,
             focus_mode: GridFocusMode::default(),
             toolbar_focus: ToolbarFocus::default(),
@@ -859,6 +863,10 @@ impl DataGridPanel {
         )
     }
 
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
+    }
+
     pub fn refresh_policy(&self) -> RefreshPolicy {
         self.refresh_policy
     }
@@ -898,6 +906,18 @@ impl DataGridPanel {
                             || !panel.supports_auto_refresh()
                             || panel.runner.is_primary_active()
                         {
+                            return;
+                        }
+
+                        let settings = panel.app_state.read(cx).general_settings();
+
+                        if settings.auto_refresh_pause_on_error
+                            && panel.state == GridState::Error
+                        {
+                            return;
+                        }
+
+                        if settings.auto_refresh_only_if_visible && !panel.is_active_tab {
                             return;
                         }
 

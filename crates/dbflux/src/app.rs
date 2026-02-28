@@ -1,10 +1,10 @@
 use dbflux_core::{
     AppConfigStore, CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo,
-    HistoryEntry, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase,
-    SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    GeneralSettings, HistoryEntry, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -43,6 +43,7 @@ fn rpc_registry_id(socket_id: &str) -> String {
 pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
+    general_settings: GeneralSettings,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -50,10 +51,18 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self::new_with_drivers(Self::build_default_drivers())
+        let (drivers, general_settings) = Self::build_default_drivers();
+        Self::new_with_drivers_and_settings(drivers, general_settings)
     }
 
     pub fn new_with_drivers(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
+        Self::new_with_drivers_and_settings(drivers, GeneralSettings::default())
+    }
+
+    fn new_with_drivers_and_settings(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        general_settings: GeneralSettings,
+    ) -> Self {
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
             .ok();
@@ -66,16 +75,22 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
             .ok();
 
+        let mut facade = SessionFacade::new(drivers);
+        facade
+            .history
+            .set_max_entries(general_settings.max_history_entries);
+
         Self {
-            facade: SessionFacade::new(drivers),
+            facade,
             settings_window: None,
+            general_settings,
             recent_files,
             scripts_directory,
             session_store,
         }
     }
 
-    fn build_default_drivers() -> HashMap<String, Arc<dyn DbDriver>> {
+    fn build_default_drivers() -> (HashMap<String, Arc<dyn DbDriver>>, GeneralSettings) {
         let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
 
         #[cfg(feature = "sqlite")]
@@ -114,6 +129,11 @@ impl AppState {
             .and_then(|store| store.load())
             .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
             .ok();
+
+        let general_settings = app_config
+            .as_ref()
+            .map(|c| c.general.clone())
+            .unwrap_or_default();
 
         if let Some(config) = app_config {
             for service in config.services {
@@ -165,7 +185,7 @@ impl AppState {
             }
         }
 
-        drivers
+        (drivers, general_settings)
     }
 
     // --- ConnectionManager ---
@@ -913,6 +933,23 @@ impl AppState {
 
     pub fn shutdown(&self) -> &dbflux_core::ShutdownCoordinator {
         &self.facade.shutdown
+    }
+
+    pub fn general_settings(&self) -> &GeneralSettings {
+        &self.general_settings
+    }
+
+    pub fn is_background_task_limit_reached(&self) -> bool {
+        let limit = self.general_settings.max_concurrent_background_tasks;
+        self.facade.tasks.background_task_count() >= limit
+    }
+
+    pub fn update_general_settings(&mut self, settings: GeneralSettings) {
+        self.facade
+            .history
+            .set_max_entries(settings.max_history_entries);
+
+        self.general_settings = settings;
     }
 }
 

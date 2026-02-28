@@ -183,6 +183,20 @@ impl DocumentHandle {
         }
     }
 
+    pub fn set_active_tab(&self, active: bool, cx: &mut App) {
+        match self {
+            Self::SqlQuery { entity, .. } => {
+                entity.update(cx, |doc, _cx| doc.set_active_tab(active));
+            }
+            Self::Data { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.set_active_tab(active, cx));
+            }
+            Self::KeyValue { entity, .. } => {
+                entity.update(cx, |doc, _cx| doc.set_active_tab(active));
+            }
+        }
+    }
+
     pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
         match self {
             Self::SqlQuery { entity, .. } => {
