@@ -4,6 +4,7 @@ members = [
     "crates/dbflux_core",
     "crates/dbflux_ipc",
     "crates/dbflux_driver_ipc",
+    "crates/dbflux_test_support",
     "crates/dbflux_driver_sqlite",
     "crates/dbflux_driver_postgres",
     "crates/dbflux_driver_mysql",
@@ -18,7 +19,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.4.0-dev.0"
+version = "0.4.0-dev.1"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -28,6 +29,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_test_support = { path = "crates/dbflux_test_support" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
 dbflux_driver_mysql = { path = "crates/dbflux_driver_mysql" }

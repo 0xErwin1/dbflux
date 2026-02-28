@@ -1909,19 +1909,16 @@ fn mysql_escape_string(s: &str) -> String {
 }
 
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT table_name
         FROM information_schema.tables
-        WHERE table_schema = '{}'
+        WHERE table_schema = ?
           AND table_type = 'BASE TABLE'
         ORDER BY table_name
-        "#,
-        database
-    );
+    ";
 
     let table_names: Vec<String> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(table_names
@@ -1939,19 +1936,16 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
 }
 
 fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT table_name
         FROM information_schema.tables
-        WHERE table_schema = '{}'
+        WHERE table_schema = ?
           AND table_type = 'VIEW'
         ORDER BY table_name
-        "#,
-        database
-    );
+    ";
 
     let view_names: Vec<String> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(view_names
@@ -1964,8 +1958,7 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             column_name,
             column_type,
@@ -1973,15 +1966,13 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
             column_default,
             column_key
         FROM information_schema.columns
-        WHERE table_schema = '{}'
-          AND table_name = '{}'
+        WHERE table_schema = ?
+          AND table_name = ?
         ORDER BY ordinal_position
-        "#,
-        database, table
-    );
+    ";
 
-    let rows: Vec<(String, String, String, Option<String>, String)> = conn
-        .query(&query)
+    let rows: Vec<(String, String, String, Option<String>, Option<String>)> = conn
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     log::debug!(
@@ -1994,10 +1985,10 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
     Ok(rows
         .into_iter()
         .map(|(name, type_name, nullable, default, key)| {
-            let is_pk = key == "PRI";
+            let is_pk = key.as_deref() == Some("PRI");
             if is_pk {
                 log::info!(
-                    "[MYSQL] Column '{}' has Key='{}' -> is_primary_key={}",
+                    "[MYSQL] Column '{}' has Key='{:?}' -> is_primary_key={}",
                     name,
                     key,
                     is_pk
@@ -2083,8 +2074,7 @@ fn fetch_foreign_keys(
     database: &str,
     table: &str,
 ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             kcu.CONSTRAINT_NAME,
             kcu.COLUMN_NAME,
@@ -2097,16 +2087,14 @@ fn fetch_foreign_keys(
         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
             ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
             AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-        WHERE kcu.TABLE_SCHEMA = '{}'
-            AND kcu.TABLE_NAME = '{}'
+        WHERE kcu.TABLE_SCHEMA = ?
+            AND kcu.TABLE_NAME = ?
             AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-        "#,
-        database, table
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut builder = ForeignKeyBuilder::new();
@@ -2114,11 +2102,14 @@ fn fetch_foreign_keys(
     for row in rows {
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
         let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
-        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_schema: Option<String> =
+            row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> = row.get("DELETE_RULE");
-        let on_update: Option<String> = row.get("UPDATE_RULE");
+        let on_delete: Option<String> =
+            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> =
+            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             constraint_name,
@@ -2134,13 +2125,139 @@ fn fetch_foreign_keys(
     Ok(builder.build())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{MysqlDialect, MysqlDriver, inject_password_into_mysql_uri};
+    use dbflux_core::{
+        DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, QueryLanguage,
+        SqlDialect, Value,
+    };
+
+    #[test]
+    fn build_and_parse_uri_roundtrip_basics() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "127.0.0.1".to_string());
+        values.insert("port".to_string(), "3307".to_string());
+        values.insert("user".to_string(), "root user".to_string());
+        values.insert("database".to_string(), "app".to_string());
+
+        let uri = driver
+            .build_uri(&values, "s3cr@t")
+            .expect("mysql driver should support URI building");
+        assert_eq!(uri, "mysql://root%20user:s3cr%40t@127.0.0.1:3307/app");
+
+        let parsed = driver
+            .parse_uri(&uri)
+            .expect("uri built by driver should parse");
+
+        assert_eq!(parsed.get("user").map(String::as_str), Some("root user"));
+        assert_eq!(parsed.get("host").map(String::as_str), Some("127.0.0.1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("3307"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("app"));
+    }
+
+    #[test]
+    fn mysql_dialect_handles_special_floats_and_identifier_escaping() {
+        let dialect = MysqlDialect;
+
+        assert_eq!(dialect.value_to_literal(&Value::Float(f64::NAN)), "NULL");
+        assert_eq!(
+            dialect.value_to_literal(&Value::Float(f64::INFINITY)),
+            "NULL"
+        );
+        assert_eq!(dialect.quote_identifier("a`b"), "`a``b`");
+        assert_eq!(
+            dialect.qualified_table(Some("main"), "user`table"),
+            "`main`.`user``table`"
+        );
+    }
+
+    #[test]
+    fn build_config_requires_uri_when_uri_mode_is_enabled() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_validates_port_in_manual_mode() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "bad".to_string());
+        values.insert("user".to_string(), "root".to_string());
+
+        let result = driver.build_config(&values);
+        assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn extract_values_includes_uri_mode_flags() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        let config = DbConfig::MySQL {
+            use_uri: true,
+            uri: Some("mysql://root:root@localhost:3306/app".to_string()),
+            host: String::new(),
+            port: 3306,
+            user: String::new(),
+            database: None,
+            ssl_mode: dbflux_core::SslMode::Disable,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(
+            values.get("uri").map(String::as_str),
+            Some("mysql://root:root@localhost:3306/app")
+        );
+    }
+
+    #[test]
+    fn parse_uri_rejects_non_mysql_schemes() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+        assert!(
+            driver
+                .parse_uri("postgres://postgres@localhost:5432/app")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inject_password_into_uri_adds_password_for_user_without_one() {
+        let uri = inject_password_into_mysql_uri("mysql://root@localhost:3306/app", Some("new p"));
+        assert_eq!(uri, "mysql://root:new%20p@localhost:3306/app");
+    }
+
+    #[test]
+    fn mysql_and_mariadb_metadata_are_consistent() {
+        let mysql = MysqlDriver::new(DbKind::MySQL);
+        let mariadb = MysqlDriver::new(DbKind::MariaDB);
+
+        assert_eq!(mysql.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mysql.metadata().query_language, QueryLanguage::Sql);
+        assert_eq!(mysql.metadata().default_port, Some(3306));
+
+        assert_eq!(mariadb.metadata().category, DatabaseCategory::Relational);
+        assert_eq!(mariadb.metadata().query_language, QueryLanguage::Sql);
+        assert_eq!(mariadb.metadata().default_port, Some(3306));
+
+        assert!(!mysql.form_definition().tabs.is_empty());
+        assert!(!mariadb.form_definition().tabs.is_empty());
+    }
+}
+
 fn fetch_constraints(
     conn: &mut Conn,
     database: &str,
     table: &str,
 ) -> Result<Vec<ConstraintInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             tc.CONSTRAINT_NAME,
             tc.CONSTRAINT_TYPE,
@@ -2154,17 +2271,15 @@ fn fetch_constraints(
         LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
             ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
             AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
-        WHERE tc.TABLE_SCHEMA = '{}'
-            AND tc.TABLE_NAME = '{}'
+        WHERE tc.TABLE_SCHEMA = ?
+            AND tc.TABLE_NAME = ?
             AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
         GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
         ORDER BY tc.CONSTRAINT_NAME
-        "#,
-        database, table
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
@@ -2172,8 +2287,10 @@ fn fetch_constraints(
         .filter_map(|row| {
             let name: String = row.get("CONSTRAINT_NAME")?;
             let constraint_type: String = row.get("CONSTRAINT_TYPE")?;
-            let columns_str: Option<String> = row.get("COLUMNS");
-            let check_clause: Option<String> = row.get("CHECK_CLAUSE");
+            let columns_str: Option<String> =
+                row.get_opt("COLUMNS").and_then(|r| r.ok());
+            let check_clause: Option<String> =
+                row.get_opt("CHECK_CLAUSE").and_then(|r| r.ok());
 
             let kind = match constraint_type.as_str() {
                 "UNIQUE" => ConstraintKind::Unique,
@@ -2196,23 +2313,20 @@ fn fetch_constraints(
 }
 
 fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaIndexInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             s.INDEX_NAME,
             s.TABLE_NAME,
             GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX) as COLUMNS,
             s.NON_UNIQUE
         FROM information_schema.STATISTICS s
-        WHERE s.TABLE_SCHEMA = '{}'
+        WHERE s.TABLE_SCHEMA = ?
         GROUP BY s.INDEX_NAME, s.TABLE_NAME, s.NON_UNIQUE
         ORDER BY s.TABLE_NAME, s.INDEX_NAME
-        "#,
-        database
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
@@ -2220,10 +2334,11 @@ fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaInd
         .filter_map(|row| {
             let name: String = row.get("INDEX_NAME")?;
             let table_name: String = row.get("TABLE_NAME")?;
-            let columns_str: String = row.get("COLUMNS")?;
+            let columns_str: Option<String> =
+                row.get_opt("COLUMNS").and_then(|r| r.ok());
             let non_unique: i32 = row.get("NON_UNIQUE").unwrap_or(1);
 
-            let columns: Vec<String> = columns_str
+            let columns: Vec<String> = columns_str?
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect();
@@ -2245,8 +2360,7 @@ fn fetch_schema_foreign_keys(
     conn: &mut Conn,
     database: &str,
 ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             kcu.CONSTRAINT_NAME,
             kcu.TABLE_NAME,
@@ -2260,15 +2374,13 @@ fn fetch_schema_foreign_keys(
         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
             ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
             AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-        WHERE kcu.TABLE_SCHEMA = '{}'
+        WHERE kcu.TABLE_SCHEMA = ?
             AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-        "#,
-        database
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut builder = SchemaForeignKeyBuilder::new();
@@ -2277,11 +2389,14 @@ fn fetch_schema_foreign_keys(
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
         let table_name: String = row.get("TABLE_NAME").unwrap_or_default();
         let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
-        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_schema: Option<String> =
+            row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> = row.get("DELETE_RULE");
-        let on_update: Option<String> = row.get("UPDATE_RULE");
+        let on_delete: Option<String> =
+            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> =
+            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             table_name,

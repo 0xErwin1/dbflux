@@ -398,8 +398,7 @@ impl DataGridPanel {
             .iter()
             .any(|value| matches!(value, Value::Unsupported(_)))
         {
-            let message =
-                "Cannot save row: primary key uses an unsupported value type".to_string();
+            let message = "Cannot save row: primary key uses an unsupported value type".to_string();
             log::error!("[SAVE] {}", message);
 
             table_state.update(cx, |state, cx| {
