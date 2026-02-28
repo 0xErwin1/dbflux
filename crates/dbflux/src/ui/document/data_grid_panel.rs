@@ -630,9 +630,15 @@ impl DataGridPanel {
             DataSource::Table { .. } | DataSource::Collection { .. }
         );
 
+        let connection_id = match &source {
+            DataSource::Table { profile_id, .. } => Some(*profile_id),
+            DataSource::Collection { profile_id, .. } => Some(*profile_id),
+            DataSource::QueryResult { .. } => None,
+        };
+
         let default_refresh = app_state
             .read(cx)
-            .general_settings()
+            .effective_settings_for_connection(connection_id)
             .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {

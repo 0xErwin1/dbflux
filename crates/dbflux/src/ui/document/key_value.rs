@@ -241,7 +241,7 @@ impl KeyValueDocument {
 
         let default_refresh = app_state
             .read(cx)
-            .general_settings()
+            .effective_settings_for_connection(Some(profile_id))
             .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {
@@ -1331,6 +1331,16 @@ impl KeyValueDocument {
             .start_primary(TaskKind::KeyScan, description, cx);
         cx.notify();
 
+        let scan_batch_size = self
+            .app_state
+            .read(cx)
+            .effective_settings_for_connection(Some(self.profile_id))
+            .driver_values
+            .get("scan_batch_size")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(100);
+
         let request = KeyScanRequest {
             cursor: self.current_cursor.clone(),
             filter: if filter.is_empty() {
@@ -1338,7 +1348,7 @@ impl KeyValueDocument {
             } else {
                 Some(format!("*{}*", filter))
             },
-            limit: 200,
+            limit: scan_batch_size,
             keyspace: parse_database_name(&database),
         };
 

@@ -191,6 +191,7 @@ fn handle_connection(
                             driver_kind: DbKind::SQLite,
                             driver_metadata: create_metadata(),
                             form_definition: mock_form(),
+                            settings_schema: None,
                         }),
                     )
                 }

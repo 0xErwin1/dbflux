@@ -30,6 +30,39 @@ fn resolve_connection_for_execution(
         .ok_or_else(|| format!("Connecting to database '{}', please wait...", target_db))
 }
 
+fn evaluate_dangerous_with_effective_settings(
+    kind: dbflux_core::DangerousQueryKind,
+    is_suppressed: bool,
+    effective: &dbflux_core::EffectiveSettings,
+    allow_redis_flush: bool,
+) -> dbflux_core::DangerousAction {
+    use dbflux_core::DangerousQueryKind::*;
+
+    if !allow_redis_flush && matches!(kind, RedisFlushAll | RedisFlushDb) {
+        return dbflux_core::DangerousAction::Block(
+            "FLUSHALL / FLUSHDB is disabled in settings".to_string(),
+        );
+    }
+
+    if !effective.confirm_dangerous {
+        return dbflux_core::DangerousAction::Allow;
+    }
+
+    if !effective.requires_where && matches!(kind, DeleteNoWhere | UpdateNoWhere) {
+        return dbflux_core::DangerousAction::Allow;
+    }
+
+    if effective.requires_preview {
+        return dbflux_core::DangerousAction::Confirm(kind);
+    }
+
+    if is_suppressed {
+        return dbflux_core::DangerousAction::Allow;
+    }
+
+    dbflux_core::DangerousAction::Confirm(kind)
+}
+
 impl SqlQueryDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
@@ -91,9 +124,24 @@ impl SqlQueryDocument {
                 .dangerous_query_suppressions()
                 .is_suppressed(kind);
 
-            let settings = self.app_state.read(cx).general_settings();
+            let (effective, allow_redis_flush) = {
+                let state = self.app_state.read(cx);
+                let effective = state.effective_settings_for_connection(self.connection_id);
+                let allow_redis_flush = effective
+                    .driver_values
+                    .get("allow_flush")
+                    .map(|value| value == "true")
+                    .unwrap_or(state.general_settings().allow_redis_flush);
 
-            match settings.evaluate_dangerous(kind, is_suppressed) {
+                (effective, allow_redis_flush)
+            };
+
+            match evaluate_dangerous_with_effective_settings(
+                kind,
+                is_suppressed,
+                &effective,
+                allow_redis_flush,
+            ) {
                 DangerousAction::Allow => {}
                 DangerousAction::Confirm(kind) => {
                     self.pending_dangerous_query = Some(PendingDangerousQuery {

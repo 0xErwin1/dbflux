@@ -186,6 +186,8 @@ pub struct DriverHelloResponse {
     pub driver_kind: dbflux_core::DbKind,
     pub driver_metadata: DriverMetadata,
     pub form_definition: DriverFormDef,
+    #[serde(default)]
+    pub settings_schema: Option<DriverFormDef>,
 }
 
 /// Request body for a single driver RPC call.

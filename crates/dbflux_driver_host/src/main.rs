@@ -116,6 +116,9 @@ fn handle_connection(mut stream: interprocess::local_socket::Stream, driver: &dy
                             driver_kind: driver.kind(),
                             driver_metadata: driver.metadata().clone(),
                             form_definition: driver.form_definition().clone(),
+                            settings_schema: driver
+                                .settings_schema()
+                                .map(|schema| schema.as_ref().clone()),
                         }),
                     )
                 }

@@ -1,8 +1,9 @@
 use dbflux_core::{
     AppConfigStore, CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo,
-    GeneralSettings, HistoryEntry, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    DriverKey, EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, HistoryEntry,
+    RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
+    TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
@@ -44,6 +45,8 @@ pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
     general_settings: GeneralSettings,
+    driver_overrides: HashMap<DriverKey, GlobalOverrides>,
+    driver_settings: HashMap<DriverKey, FormValues>,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -51,13 +54,22 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let (drivers, general_settings) = Self::build_default_drivers();
-        Self::new_with_drivers_and_settings(drivers, general_settings)
+        let (drivers, general_settings, driver_overrides, driver_settings) =
+            Self::build_default_drivers();
+
+        Self::new_with_drivers_and_settings(
+            drivers,
+            general_settings,
+            driver_overrides,
+            driver_settings,
+        )
     }
 
     fn new_with_drivers_and_settings(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         general_settings: GeneralSettings,
+        driver_overrides: HashMap<DriverKey, GlobalOverrides>,
+        driver_settings: HashMap<DriverKey, FormValues>,
     ) -> Self {
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
@@ -80,13 +92,20 @@ impl AppState {
             facade,
             settings_window: None,
             general_settings,
+            driver_overrides,
+            driver_settings,
             recent_files,
             scripts_directory,
             session_store,
         }
     }
 
-    fn build_default_drivers() -> (HashMap<String, Arc<dyn DbDriver>>, GeneralSettings) {
+    fn build_default_drivers() -> (
+        HashMap<String, Arc<dyn DbDriver>>,
+        GeneralSettings,
+        HashMap<DriverKey, GlobalOverrides>,
+        HashMap<DriverKey, FormValues>,
+    ) {
         let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
 
         #[cfg(feature = "sqlite")]
@@ -126,10 +145,16 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
             .ok();
 
-        let general_settings = app_config
+        let (general_settings, driver_overrides, driver_settings) = app_config
             .as_ref()
-            .map(|c| c.general.clone())
-            .unwrap_or_default();
+            .map(|config| {
+                (
+                    config.general.clone(),
+                    config.driver_overrides.clone(),
+                    config.driver_settings.clone(),
+                )
+            })
+            .unwrap_or_else(|| (GeneralSettings::default(), HashMap::new(), HashMap::new()));
 
         if let Some(config) = app_config {
             for service in config.services {
@@ -160,7 +185,7 @@ impl AppState {
                     ),
                 };
 
-                let (kind, metadata, form_definition) =
+                let (kind, metadata, form_definition, settings_schema) =
                     match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
                         Ok(info) => info,
                         Err(error) => {
@@ -173,15 +198,20 @@ impl AppState {
                         }
                     };
 
-                let ipc_driver =
-                    IpcDriver::new(service.socket_id.clone(), kind, metadata, form_definition)
-                        .with_launch_config(launch);
+                let ipc_driver = IpcDriver::new(
+                    service.socket_id.clone(),
+                    kind,
+                    metadata,
+                    form_definition,
+                    settings_schema,
+                )
+                .with_launch_config(launch);
 
                 drivers.insert(driver_id, Arc::new(ipc_driver));
             }
         }
 
-        (drivers, general_settings)
+        (drivers, general_settings, driver_overrides, driver_settings)
     }
 
     // --- ConnectionManager ---
@@ -935,6 +965,57 @@ impl AppState {
         &self.general_settings
     }
 
+    pub fn effective_settings(&self, driver_key: &str) -> EffectiveSettings {
+        let empty_values = FormValues::new();
+        let driver_values = self
+            .driver_settings
+            .get(driver_key)
+            .unwrap_or(&empty_values);
+
+        EffectiveSettings::resolve(
+            &self.general_settings,
+            self.driver_overrides.get(driver_key),
+            driver_values,
+        )
+    }
+
+    pub fn effective_settings_for_connection(
+        &self,
+        connection_id: Option<Uuid>,
+    ) -> EffectiveSettings {
+        let Some(connection_id) = connection_id else {
+            let empty_values = FormValues::new();
+            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+        };
+
+        let profile = self
+            .connections()
+            .get(&connection_id)
+            .map(|connected| connected.profile.clone());
+
+        let Some(profile) = profile else {
+            let empty_values = FormValues::new();
+            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+        };
+
+        let Some(driver) = self.driver_for_profile(&profile) else {
+            let empty_values = FormValues::new();
+            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+        };
+
+        self.effective_settings(&driver.driver_key())
+    }
+
+    #[allow(dead_code)]
+    pub fn driver_overrides(&self) -> &HashMap<DriverKey, GlobalOverrides> {
+        &self.driver_overrides
+    }
+
+    #[allow(dead_code)]
+    pub fn driver_settings(&self) -> &HashMap<DriverKey, FormValues> {
+        &self.driver_settings
+    }
+
     pub fn is_background_task_limit_reached(&self) -> bool {
         let limit = self.general_settings.max_concurrent_background_tasks;
         self.facade.tasks.background_task_count() >= limit
@@ -946,6 +1027,26 @@ impl AppState {
             .set_max_entries(settings.max_history_entries);
 
         self.general_settings = settings;
+    }
+
+    #[allow(dead_code)]
+    pub fn update_driver_overrides(&mut self, key: DriverKey, overrides: GlobalOverrides) {
+        if overrides.is_empty() {
+            self.driver_overrides.remove(&key);
+            return;
+        }
+
+        self.driver_overrides.insert(key, overrides);
+    }
+
+    #[allow(dead_code)]
+    pub fn update_driver_settings(&mut self, key: DriverKey, values: FormValues) {
+        if values.is_empty() {
+            self.driver_settings.remove(&key);
+            return;
+        }
+
+        self.driver_settings.insert(key, values);
     }
 }
 
@@ -960,10 +1061,23 @@ impl EventEmitter<AppStateChanged> for AppState {}
 #[cfg(test)]
 mod tests {
     use super::AppState;
-    use dbflux_core::{DbDriver, DbKind, GeneralSettings};
+    use dbflux_core::{DbDriver, DbKind, FormValues, GeneralSettings, RefreshPolicySetting};
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    fn test_state(general_settings: GeneralSettings) -> AppState {
+        let fake = FakeDriver::new(DbKind::SQLite);
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        drivers.insert(fake.metadata().id.clone(), Arc::new(fake));
+
+        AppState::new_with_drivers_and_settings(
+            drivers,
+            general_settings,
+            HashMap::new(),
+            HashMap::new(),
+        )
+    }
 
     #[test]
     fn saved_query_store_is_optional() {
@@ -978,8 +1092,106 @@ mod tests {
         let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
         drivers.insert(driver_id.clone(), Arc::new(fake));
 
-        let state = AppState::new_with_drivers_and_settings(drivers, GeneralSettings::default());
+        let state = AppState::new_with_drivers_and_settings(
+            drivers,
+            GeneralSettings::default(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+
         assert_eq!(state.drivers().len(), 1);
         assert!(state.drivers().contains_key(&driver_id));
+    }
+
+    #[test]
+    fn effective_settings_use_global_defaults_without_driver_entries() {
+        let mut general_settings = GeneralSettings::default();
+        general_settings.default_refresh_policy = RefreshPolicySetting::Interval;
+        general_settings.default_refresh_interval_secs = 15;
+        general_settings.confirm_dangerous_queries = false;
+        general_settings.dangerous_requires_where = false;
+        general_settings.dangerous_requires_preview = true;
+
+        let state = test_state(general_settings.clone());
+        let effective = state.effective_settings("builtin:redis");
+
+        assert_eq!(
+            effective.refresh_policy,
+            general_settings.default_refresh_policy
+        );
+        assert_eq!(
+            effective.refresh_interval_secs,
+            general_settings.default_refresh_interval_secs
+        );
+        assert_eq!(
+            effective.confirm_dangerous,
+            general_settings.confirm_dangerous_queries
+        );
+        assert_eq!(
+            effective.requires_where,
+            general_settings.dangerous_requires_where
+        );
+        assert_eq!(
+            effective.requires_preview,
+            general_settings.dangerous_requires_preview
+        );
+        assert!(effective.driver_values.is_empty());
+    }
+
+    #[test]
+    fn effective_settings_apply_driver_overrides_and_values() {
+        let mut state = test_state(GeneralSettings::default());
+        state.update_driver_overrides(
+            "builtin:redis".to_string(),
+            dbflux_core::GlobalOverrides {
+                refresh_policy: Some(RefreshPolicySetting::Interval),
+                refresh_interval_secs: Some(3),
+                confirm_dangerous: Some(false),
+                requires_where: Some(false),
+                requires_preview: Some(true),
+            },
+        );
+
+        let mut values = FormValues::new();
+        values.insert("scan_batch_size".to_string(), "500".to_string());
+        state.update_driver_settings("builtin:redis".to_string(), values.clone());
+
+        let effective = state.effective_settings("builtin:redis");
+
+        assert_eq!(effective.refresh_policy, RefreshPolicySetting::Interval);
+        assert_eq!(effective.refresh_interval_secs, 3);
+        assert!(!effective.confirm_dangerous);
+        assert!(!effective.requires_where);
+        assert!(effective.requires_preview);
+        assert_eq!(effective.driver_values, values);
+    }
+
+    #[test]
+    fn update_driver_maps_remove_empty_entries() {
+        let mut state = test_state(GeneralSettings::default());
+
+        state.update_driver_overrides(
+            "builtin:redis".to_string(),
+            dbflux_core::GlobalOverrides {
+                confirm_dangerous: Some(false),
+                ..Default::default()
+            },
+        );
+
+        let mut values = FormValues::new();
+        values.insert("allow_flush".to_string(), "true".to_string());
+        state.update_driver_settings("builtin:redis".to_string(), values);
+
+        assert!(state.driver_overrides().contains_key("builtin:redis"));
+        assert!(state.driver_settings().contains_key("builtin:redis"));
+
+        state.update_driver_overrides(
+            "builtin:redis".to_string(),
+            dbflux_core::GlobalOverrides::default(),
+        );
+        state.update_driver_settings("builtin:redis".to_string(), FormValues::new());
+
+        assert!(!state.driver_overrides().contains_key("builtin:redis"));
+        assert!(!state.driver_settings().contains_key("builtin:redis"));
     }
 }

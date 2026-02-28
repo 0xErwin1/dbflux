@@ -262,7 +262,7 @@ impl SqlQueryDocument {
 
         let default_refresh = app_state
             .read(cx)
-            .general_settings()
+            .effective_settings_for_connection(connection_id)
             .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {
@@ -335,10 +335,7 @@ impl SqlQueryDocument {
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
 
-        let refresh_policy = app_state
-            .read(cx)
-            .general_settings()
-            .resolve_refresh_policy();
+        let refresh_policy = default_refresh;
 
         Self {
             id: doc_id,

@@ -89,6 +89,7 @@ pub struct IpcDriver {
     kind: DbKind,
     metadata: DriverMetadata,
     form_definition: DriverFormDef,
+    settings_schema: Option<Arc<DriverFormDef>>,
     launch: Option<IpcDriverLaunchConfig>,
 }
 
@@ -106,12 +107,14 @@ impl IpcDriver {
         kind: DbKind,
         metadata: DriverMetadata,
         form_definition: DriverFormDef,
+        settings_schema: Option<DriverFormDef>,
     ) -> Self {
         Self {
             socket_id,
             kind,
             metadata,
             form_definition,
+            settings_schema: settings_schema.map(Arc::new),
             launch: None,
         }
     }
@@ -129,7 +132,7 @@ impl IpcDriver {
     pub fn probe_driver(
         socket_id: &str,
         launch: Option<&IpcDriverLaunchConfig>,
-    ) -> Result<(DbKind, DriverMetadata, DriverFormDef), DbError> {
+    ) -> Result<(DbKind, DriverMetadata, DriverFormDef, Option<DriverFormDef>), DbError> {
         Self::ensure_host_running_for(socket_id, launch)?;
 
         let name = Self::parse_socket_name(socket_id)?;
@@ -141,6 +144,7 @@ impl IpcDriver {
             hello.driver_kind,
             hello.driver_metadata.clone(),
             hello.form_definition.clone(),
+            hello.settings_schema.clone(),
         ))
     }
 
@@ -329,6 +333,10 @@ impl dbflux_core::DbDriver for IpcDriver {
 
     fn form_definition(&self) -> &DriverFormDef {
         &self.form_definition
+    }
+
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        self.settings_schema.clone()
     }
 
     fn build_config(&self, values: &FormValues) -> Result<DbConfig, DbError> {
