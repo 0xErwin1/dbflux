@@ -96,7 +96,7 @@ impl ConnectionManagerWindow {
         });
 
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
-        self.form_save_ssh_secret = false;
+        self.form_save_ssh_secret = true;
         self.ssh_test_status = TestStatus::None;
         self.ssh_test_error = None;
         cx.notify();

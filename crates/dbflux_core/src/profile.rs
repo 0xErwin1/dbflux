@@ -94,7 +94,7 @@ impl SshTunnelProfile {
             id: Uuid::new_v4(),
             name: name.into(),
             config,
-            save_secret: false,
+            save_secret: true,
         }
     }
 
@@ -299,7 +299,7 @@ impl ConnectionProfile {
             name: name.into(),
             kind: Some(kind),
             config,
-            save_password: false,
+            save_password: true,
         }
     }
 
@@ -313,7 +313,7 @@ impl ConnectionProfile {
             name: name.into(),
             kind: Some(kind),
             config,
-            save_password: false,
+            save_password: true,
         }
     }
 
