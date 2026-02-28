@@ -140,8 +140,13 @@ fn postgres_schema_introspection() -> Result<(), DbError> {
         };
         assert!(idx_data.iter().any(|i| i.is_primary));
 
-        let view = connection.view_details("postgres", Some("public"), "test_user_view")?;
-        assert_eq!(view.name, "test_user_view");
+        let relational = schema.as_relational().expect("should be relational schema");
+        let has_view = relational
+            .schemas
+            .iter()
+            .flat_map(|s| s.views.iter())
+            .any(|v| v.name == "test_user_view");
+        assert!(has_view, "view should appear in schema");
 
         let orders_table = connection.table_details("postgres", Some("public"), "test_orders")?;
         let fks = orders_table
