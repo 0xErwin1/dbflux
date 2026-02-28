@@ -7,12 +7,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
-    pub rpc_services: Vec<RpcServiceConfig>,
+    pub services: Vec<ServiceConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RpcServiceConfig {
+pub struct ServiceConfig {
     pub socket_id: String,
+
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 
     #[serde(default)]
     pub command: Option<String>,
@@ -25,6 +28,10 @@ pub struct RpcServiceConfig {
 
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 pub struct AppConfigStore {
@@ -55,6 +62,18 @@ impl AppConfigStore {
             serde_json::from_str(&content).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
 
         Ok(config)
+    }
+
+    pub fn save(&self, config: &AppConfig) -> Result<(), DbError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(DbError::IoError)?;
+        }
+
+        let content = serde_json::to_string_pretty(config)
+            .map_err(|e| DbError::InvalidProfile(e.to_string()))?;
+        fs::write(&self.path, content).map_err(DbError::IoError)?;
+
+        Ok(())
     }
 
     pub fn path(&self) -> &PathBuf {

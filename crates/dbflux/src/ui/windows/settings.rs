@@ -1,10 +1,12 @@
 mod keybindings;
 mod render;
+mod rpc_services;
 mod ssh_tunnels;
 
 use crate::app::AppState;
 use crate::keymap::{ContextId, KeyChord, Modifiers};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
+use dbflux_core::{AppConfigStore, ServiceConfig};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::InputState;
@@ -15,6 +17,7 @@ use uuid::Uuid;
 enum SettingsSection {
     Keybindings,
     SshTunnels,
+    Services,
     About,
 }
 
@@ -92,6 +95,26 @@ enum SshTestStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ServiceFocus {
+    List,
+    Form,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ServiceFormRow {
+    SocketId,
+    Command,
+    Timeout,
+    Enabled,
+    Arg(usize),
+    AddArg,
+    EnvKey(usize),
+    AddEnv,
+    DeleteButton,
+    SaveButton,
+}
+
 pub struct SettingsWindow {
     app_state: Entity<AppState>,
     active_section: SettingsSection,
@@ -132,6 +155,29 @@ pub struct SettingsWindow {
 
     pending_ssh_key_path: Option<String>,
     pending_delete_tunnel_id: Option<Uuid>,
+
+    // Services section state
+    svc_services: Vec<ServiceConfig>,
+    svc_config_store: Option<AppConfigStore>,
+
+    svc_focus: ServiceFocus,
+    svc_selected_idx: Option<usize>,
+    svc_form_cursor: usize,
+    svc_env_col: usize,
+    svc_editing_field: bool,
+
+    input_socket_id: Entity<InputState>,
+    input_svc_command: Entity<InputState>,
+    input_svc_timeout: Entity<InputState>,
+    svc_enabled: bool,
+
+    svc_arg_inputs: Vec<Entity<InputState>>,
+    svc_env_key_inputs: Vec<Entity<InputState>>,
+    svc_env_value_inputs: Vec<Entity<InputState>>,
+
+    editing_svc_idx: Option<usize>,
+    pending_delete_svc_idx: Option<usize>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -172,10 +218,17 @@ impl SettingsWindow {
         let mut keybindings_expanded = HashSet::new();
         keybindings_expanded.insert(ContextId::Global);
 
+        // Services inputs
+        let input_socket_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder("my-driver.sock"));
+        let input_svc_command =
+            cx.new(|cx| InputState::new(window, cx).placeholder("dbflux-driver-host"));
+        let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
+
         // Focus the window on creation
         focus_handle.focus(window);
 
-        Self {
+        let mut this = Self {
             app_state,
             active_section: SettingsSection::Keybindings,
             focus_area: SettingsFocus::Sidebar,
@@ -211,15 +264,37 @@ impl SettingsWindow {
 
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
+
+            svc_services: Vec::new(),
+            svc_config_store: None,
+            svc_focus: ServiceFocus::List,
+            svc_selected_idx: None,
+            svc_form_cursor: 0,
+            svc_env_col: 0,
+            svc_editing_field: false,
+            input_socket_id,
+            input_svc_command,
+            input_svc_timeout,
+            svc_enabled: true,
+            svc_arg_inputs: Vec::new(),
+            svc_env_key_inputs: Vec::new(),
+            svc_env_value_inputs: Vec::new(),
+            editing_svc_idx: None,
+            pending_delete_svc_idx: None,
+
             _subscriptions: vec![subscription],
-        }
+        };
+
+        this.load_services();
+        this
     }
 
     fn sidebar_index_for_section(&self, section: SettingsSection) -> usize {
         match section {
             SettingsSection::Keybindings => 0,
             SettingsSection::SshTunnels => 1,
-            SettingsSection::About => 2,
+            SettingsSection::Services => 2,
+            SettingsSection::About => 3,
         }
     }
 
@@ -227,13 +302,14 @@ impl SettingsWindow {
         match idx {
             0 => SettingsSection::Keybindings,
             1 => SettingsSection::SshTunnels,
-            2 => SettingsSection::About,
+            2 => SettingsSection::Services,
+            3 => SettingsSection::About,
             _ => SettingsSection::Keybindings,
         }
     }
 
     fn sidebar_section_count(&self) -> usize {
-        3
+        4
     }
 
     fn handle_key_event(
@@ -253,6 +329,158 @@ impl SettingsWindow {
             return;
         }
 
+        if self.pending_delete_tunnel_id.is_some() || self.pending_delete_svc_idx.is_some() {
+            return;
+        }
+
+        // Services: editing input mode
+        if self.active_section == SettingsSection::Services
+            && self.svc_focus == ServiceFocus::Form
+            && self.svc_editing_field
+        {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("escape", m) if m == Modifiers::none() => {
+                    self.svc_editing_field = false;
+                    self.focus_handle.focus(window);
+                    cx.notify();
+                }
+                ("enter", m) if m == Modifiers::none() => {
+                    self.svc_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.svc_move_down();
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::none() => {
+                    self.svc_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.svc_tab_next();
+                    self.svc_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::shift() => {
+                    self.svc_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.svc_tab_prev();
+                    self.svc_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Services: list and form navigation
+        if self.active_section == SettingsSection::Services
+            && self.focus_area == SettingsFocus::Content
+        {
+            match self.svc_focus {
+                ServiceFocus::List => match (chord.key.as_str(), chord.modifiers) {
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.svc_move_next_profile();
+                        self.svc_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.svc_move_prev_profile();
+                        self.svc_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("l", m) | ("right", m) | ("enter", m) if m == Modifiers::none() => {
+                        self.svc_enter_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("d", m) if m == Modifiers::none() => {
+                        if let Some(idx) = self.svc_selected_idx {
+                            self.request_delete_service(idx, cx);
+                        }
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.svc_selected_idx = None;
+                        self.svc_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        if !self.svc_services.is_empty() {
+                            self.svc_selected_idx = Some(self.svc_services.len() - 1);
+                            self.svc_load_selected_profile(window, cx);
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.focus_area = SettingsFocus::Sidebar;
+                        cx.notify();
+                        return;
+                    }
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.focus_area = SettingsFocus::Sidebar;
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
+                ServiceFocus::Form => match (chord.key.as_str(), chord.modifiers) {
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.svc_exit_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.svc_move_down();
+                        cx.notify();
+                        return;
+                    }
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.svc_move_up();
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.svc_move_left();
+                        cx.notify();
+                        return;
+                    }
+                    ("l", m) | ("right", m) if m == Modifiers::none() => {
+                        self.svc_move_right();
+                        cx.notify();
+                        return;
+                    }
+                    ("enter", m) | ("space", m) if m == Modifiers::none() => {
+                        self.svc_activate_current_field(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::none() => {
+                        self.svc_tab_next();
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::shift() => {
+                        self.svc_tab_prev();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.svc_move_first();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        self.svc_move_last();
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
+            }
+        }
+
+        // SSH: editing input mode
         if self.active_section == SettingsSection::SshTunnels
             && self.ssh_focus == SshFocus::Form
             && self.ssh_editing_field

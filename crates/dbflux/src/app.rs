@@ -4,7 +4,7 @@ use dbflux_core::{
     SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase,
     SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -116,7 +116,12 @@ impl AppState {
             .ok();
 
         if let Some(config) = app_config {
-            for service in config.rpc_services {
+            for service in config.services {
+                if !service.enabled {
+                    log::info!("Skipping disabled service '{}'", service.socket_id);
+                    continue;
+                }
+
                 let driver_id = rpc_registry_id(&service.socket_id);
 
                 if drivers.contains_key(&driver_id) {

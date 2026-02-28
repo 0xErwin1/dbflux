@@ -140,7 +140,7 @@ pub use sql_generation::{
 };
 pub use sql_query_builder::SqlQueryBuilder;
 
-pub use app_config::{AppConfig, AppConfigStore, RpcServiceConfig};
+pub use app_config::{AppConfig, AppConfigStore, ServiceConfig};
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
     ConnectionManager, DatabaseConnection, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,

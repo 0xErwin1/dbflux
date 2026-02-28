@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.3.3"
+version = "0.4.0-dev.1"
 dependencies = [
  "bitflags",
  "chrono",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ipc"
-version = "0.3.3"
+version = "0.4.0-dev.1"
 dependencies = [
  "bincode",
  "dbflux_core",

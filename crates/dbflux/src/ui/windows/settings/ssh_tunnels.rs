@@ -193,6 +193,7 @@ impl SettingsWindow {
     }
 
     pub(super) fn request_delete_tunnel(&mut self, tunnel_id: Uuid, cx: &mut Context<Self>) {
+        self.pending_delete_svc_idx = None;
         self.pending_delete_tunnel_id = Some(tunnel_id);
         cx.notify();
     }
