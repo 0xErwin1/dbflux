@@ -239,7 +239,10 @@ impl KeyValueDocument {
 
         let add_member_modal = cx.new(AddMemberModal::new);
 
-        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+        let default_refresh = app_state
+            .read(cx)
+            .general_settings()
+            .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL

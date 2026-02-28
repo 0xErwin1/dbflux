@@ -107,17 +107,12 @@ pub enum RefreshPolicySetting {
     Interval,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeSetting {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for ThemeSetting {
-    fn default() -> Self {
-        ThemeSetting::Dark
-    }
 }
 
 fn default_true() -> bool {

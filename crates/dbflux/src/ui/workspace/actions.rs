@@ -1044,7 +1044,13 @@ impl Workspace {
             return;
         }
 
-        let already_connected = self.app_state.read(cx).connections().keys().copied().collect::<std::collections::HashSet<_>>();
+        let already_connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .keys()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
         let sidebar = self.sidebar.clone();
 
         for profile_id in profile_ids {

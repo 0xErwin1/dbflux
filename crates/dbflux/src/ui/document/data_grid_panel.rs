@@ -630,7 +630,10 @@ impl DataGridPanel {
             DataSource::Table { .. } | DataSource::Collection { .. }
         );
 
-        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+        let default_refresh = app_state
+            .read(cx)
+            .general_settings()
+            .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -911,9 +914,7 @@ impl DataGridPanel {
 
                         let settings = panel.app_state.read(cx).general_settings();
 
-                        if settings.auto_refresh_pause_on_error
-                            && panel.state == GridState::Error
-                        {
+                        if settings.auto_refresh_pause_on_error && panel.state == GridState::Error {
                             return;
                         }
 

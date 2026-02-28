@@ -19,7 +19,7 @@ pub enum FakeQueryOutcome {
 }
 
 impl FakeQueryOutcome {
-    fn into_result(&self) -> Result<QueryResult, DbError> {
+    fn to_result(&self) -> Result<QueryResult, DbError> {
         match self {
             Self::Success(result) => Ok(result.clone()),
             Self::Error(message) => Err(DbError::query_failed(message.clone())),
@@ -320,11 +320,11 @@ impl FakeConnection {
             .get(&req.sql)
             .cloned()
         {
-            return outcome.into_result();
+            return outcome.to_result();
         }
 
         if let Some(outcome) = rwlock_read(&self.state.default_outcome).clone() {
-            return outcome.into_result();
+            return outcome.to_result();
         }
 
         Ok(QueryResult::empty())

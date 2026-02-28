@@ -4,7 +4,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -53,10 +53,6 @@ impl AppState {
     pub fn new() -> Self {
         let (drivers, general_settings) = Self::build_default_drivers();
         Self::new_with_drivers_and_settings(drivers, general_settings)
-    }
-
-    pub fn new_with_drivers(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
-        Self::new_with_drivers_and_settings(drivers, GeneralSettings::default())
     }
 
     fn new_with_drivers_and_settings(

@@ -275,10 +275,7 @@ impl SettingsWindow {
         };
         let dropdown_theme = cx.new(|_cx| {
             Dropdown::new("gen-theme")
-                .items(vec![
-                    DropdownItem::new("Dark"),
-                    DropdownItem::new("Light"),
-                ])
+                .items(vec![DropdownItem::new("Dark"), DropdownItem::new("Light")])
                 .selected_index(Some(theme_selected))
         });
 
@@ -348,18 +345,18 @@ impl SettingsWindow {
         // General inputs
         let input_max_history = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("1000");
-            s.set_value(&gen_settings.max_history_entries.to_string(), window, cx);
+            s.set_value(gen_settings.max_history_entries.to_string(), window, cx);
             s
         });
         let input_auto_save = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("2000");
-            s.set_value(&gen_settings.auto_save_interval_ms.to_string(), window, cx);
+            s.set_value(gen_settings.auto_save_interval_ms.to_string(), window, cx);
             s
         });
         let input_refresh_interval = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("5");
             s.set_value(
-                &gen_settings.default_refresh_interval_secs.to_string(),
+                gen_settings.default_refresh_interval_secs.to_string(),
                 window,
                 cx,
             );
@@ -368,7 +365,7 @@ impl SettingsWindow {
         let input_max_bg_tasks = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("8");
             s.set_value(
-                &gen_settings.max_concurrent_background_tasks.to_string(),
+                gen_settings.max_concurrent_background_tasks.to_string(),
                 window,
                 cx,
             );
@@ -539,7 +536,12 @@ impl SettingsWindow {
             return true;
         }
 
-        let refresh_val = self.input_refresh_interval.read(cx).value().trim().to_string();
+        let refresh_val = self
+            .input_refresh_interval
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         if refresh_val != saved.default_refresh_interval_secs.to_string() {
             return true;
         }
@@ -574,10 +576,7 @@ impl SettingsWindow {
             }
 
             match (&self.ssh_auth_method, &saved.config.auth_method) {
-                (
-                    SshAuthSelection::PrivateKey,
-                    dbflux_core::SshAuthMethod::PrivateKey { .. },
-                ) => {
+                (SshAuthSelection::PrivateKey, dbflux_core::SshAuthMethod::PrivateKey { .. }) => {
                     let key_path = self.input_ssh_key_path.read(cx).value().trim().to_string();
                     let saved_key_path = match &saved.config.auth_method {
                         dbflux_core::SshAuthMethod::PrivateKey { key_path } => key_path
@@ -648,8 +647,11 @@ impl SettingsWindow {
                     Some((key, v.read(cx).value().to_string()))
                 })
                 .collect();
-            let mut saved_env: Vec<(String, String)> =
-                saved.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut saved_env: Vec<(String, String)> = saved
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             saved_env.sort_by(|a, b| a.0.cmp(&b.0));
             let mut form_env_sorted = form_env;
             form_env_sorted.sort_by(|a, b| a.0.cmp(&b.0));

@@ -47,7 +47,7 @@ impl SettingsWindow {
 
         if let Err(e) = store.save(&config) {
             log::error!("Failed to save config: {}", e);
-            cx.toast_error(&format!("Failed to save config: {}", e), window);
+            cx.toast_error(format!("Failed to save config: {}", e), window);
         }
     }
 
@@ -148,7 +148,7 @@ impl SettingsWindow {
             .any(|(i, s)| s.socket_id == socket_id && Some(i) != self.editing_svc_idx);
         if is_duplicate {
             cx.toast_error(
-                &format!("A service with socket ID \"{}\" already exists", socket_id),
+                format!("A service with socket ID \"{}\" already exists", socket_id),
                 window,
             );
             return;
@@ -242,10 +242,10 @@ impl SettingsWindow {
 
         if self.editing_svc_idx == Some(idx) {
             self.clear_svc_form(window, cx);
-        } else if let Some(edit_idx) = self.editing_svc_idx {
-            if edit_idx > idx {
-                self.editing_svc_idx = Some(edit_idx - 1);
-            }
+        } else if let Some(edit_idx) = self.editing_svc_idx
+            && edit_idx > idx
+        {
+            self.editing_svc_idx = Some(edit_idx - 1);
         }
 
         let count = self.svc_services.len();
@@ -370,14 +370,14 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(idx) = self.svc_selected_idx {
-            if idx >= self.svc_services.len() {
-                self.svc_selected_idx = if self.svc_services.is_empty() {
-                    None
-                } else {
-                    Some(self.svc_services.len() - 1)
-                };
-            }
+        if let Some(idx) = self.svc_selected_idx
+            && idx >= self.svc_services.len()
+        {
+            self.svc_selected_idx = if self.svc_services.is_empty() {
+                None
+            } else {
+                Some(self.svc_services.len() - 1)
+            };
         }
 
         if let Some(idx) = self.svc_selected_idx {

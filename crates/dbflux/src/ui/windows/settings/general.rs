@@ -2,12 +2,12 @@ use crate::ui::dropdown::Dropdown;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore};
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 
 use super::{GeneralFormRow, SettingsFocus, SettingsSection, SettingsWindow};
 
@@ -211,7 +211,7 @@ impl SettingsWindow {
         let store = match AppConfigStore::new() {
             Ok(s) => s,
             Err(e) => {
-                cx.toast_error(&format!("Cannot save: {}", e), window);
+                cx.toast_error(format!("Cannot save: {}", e), window);
                 return;
             }
         };
@@ -228,7 +228,7 @@ impl SettingsWindow {
 
         if let Err(e) = store.save(&config) {
             log::error!("Failed to save config: {}", e);
-            cx.toast_error(&format!("Failed to save: {}", e), window);
+            cx.toast_error(format!("Failed to save: {}", e), window);
             return;
         }
 
@@ -306,7 +306,6 @@ impl SettingsWindow {
                         "Restore session on startup",
                         self.gen_settings.restore_session_on_startup,
                         is_at(GeneralFormRow::RestoreSession),
-                        primary,
                         |this, val| this.gen_settings.restore_session_on_startup = val,
                         cx,
                     ))
@@ -315,7 +314,6 @@ impl SettingsWindow {
                         "Reopen last connections",
                         self.gen_settings.reopen_last_connections,
                         is_at(GeneralFormRow::ReopenConnections),
-                        primary,
                         |this, val| this.gen_settings.reopen_last_connections = val,
                         cx,
                     ))
@@ -370,7 +368,6 @@ impl SettingsWindow {
                         "Pause auto-refresh on error",
                         self.gen_settings.auto_refresh_pause_on_error,
                         is_at(GeneralFormRow::PauseRefreshOnError),
-                        primary,
                         |this, val| this.gen_settings.auto_refresh_pause_on_error = val,
                         cx,
                     ))
@@ -379,7 +376,6 @@ impl SettingsWindow {
                         "Auto-refresh only if tab is visible",
                         self.gen_settings.auto_refresh_only_if_visible,
                         is_at(GeneralFormRow::RefreshOnlyIfVisible),
-                        primary,
                         |this, val| this.gen_settings.auto_refresh_only_if_visible = val,
                         cx,
                     ))
@@ -390,7 +386,6 @@ impl SettingsWindow {
                         "Confirm dangerous queries",
                         self.gen_settings.confirm_dangerous_queries,
                         is_at(GeneralFormRow::ConfirmDangerous),
-                        primary,
                         |this, val| this.gen_settings.confirm_dangerous_queries = val,
                         cx,
                     ))
@@ -399,7 +394,6 @@ impl SettingsWindow {
                         "Require WHERE for DELETE/UPDATE",
                         self.gen_settings.dangerous_requires_where,
                         is_at(GeneralFormRow::RequiresWhere),
-                        primary,
                         |this, val| this.gen_settings.dangerous_requires_where = val,
                         cx,
                     ))
@@ -408,7 +402,6 @@ impl SettingsWindow {
                         "Always require preview (ignore suppressions)",
                         self.gen_settings.dangerous_requires_preview,
                         is_at(GeneralFormRow::RequiresPreview),
-                        primary,
                         |this, val| this.gen_settings.dangerous_requires_preview = val,
                         cx,
                     ))
@@ -417,7 +410,6 @@ impl SettingsWindow {
                         "Allow FLUSHALL / FLUSHDB",
                         self.gen_settings.allow_redis_flush,
                         is_at(GeneralFormRow::AllowRedisFlush),
-                        primary,
                         |this, val| this.gen_settings.allow_redis_flush = val,
                         cx,
                     )),
@@ -474,10 +466,11 @@ impl SettingsWindow {
         label: &'static str,
         checked: bool,
         is_focused: bool,
-        primary: Hsla,
         setter: fn(&mut Self, bool),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let primary = cx.theme().primary;
+
         div()
             .flex()
             .items_center()

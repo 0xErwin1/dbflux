@@ -260,7 +260,10 @@ impl SqlQueryDocument {
             r
         };
 
-        let default_refresh = app_state.read(cx).general_settings().resolve_refresh_policy();
+        let default_refresh = app_state
+            .read(cx)
+            .general_settings()
+            .resolve_refresh_policy();
 
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -332,7 +335,10 @@ impl SqlQueryDocument {
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
 
-        let refresh_policy = app_state.read(cx).general_settings().resolve_refresh_policy();
+        let refresh_policy = app_state
+            .read(cx)
+            .general_settings()
+            .resolve_refresh_policy();
 
         Self {
             id: doc_id,
@@ -429,8 +435,7 @@ impl SqlQueryDocument {
 
                         let settings = doc.app_state.read(cx).general_settings();
 
-                        if settings.auto_refresh_pause_on_error
-                            && doc.state == DocumentState::Error
+                        if settings.auto_refresh_pause_on_error && doc.state == DocumentState::Error
                         {
                             return;
                         }

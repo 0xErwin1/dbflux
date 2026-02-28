@@ -1,5 +1,5 @@
 use dbflux_core::ThemeSetting;
-use gpui::{hsla, App, Hsla, Window};
+use gpui::{App, Hsla, Window, hsla};
 use gpui_component::theme::{Theme, ThemeMode};
 
 pub fn init(cx: &mut App) {
