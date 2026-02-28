@@ -6,6 +6,7 @@ mod ssh_tunnels;
 
 use crate::app::AppState;
 use crate::keymap::{ContextId, KeyChord, Modifiers};
+use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{AppConfigStore, GeneralSettings, ServiceConfig};
 use gpui::prelude::*;
@@ -119,6 +120,9 @@ enum ServiceFormRow {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum GeneralFormRow {
+    // Appearance
+    Theme,
+
     // Startup & Session
     RestoreSession,
     ReopenConnections,
@@ -211,6 +215,10 @@ pub struct SettingsWindow {
     gen_form_cursor: usize,
     gen_editing_field: bool,
 
+    dropdown_theme: Entity<Dropdown>,
+    dropdown_default_focus: Entity<Dropdown>,
+    dropdown_refresh_policy: Entity<Dropdown>,
+
     input_max_history: Entity<InputState>,
     input_auto_save: Entity<InputState>,
     input_refresh_interval: Entity<InputState>,
@@ -258,9 +266,86 @@ impl SettingsWindow {
         let mut keybindings_expanded = HashSet::new();
         keybindings_expanded.insert(ContextId::Global);
 
-        // General inputs
+        // General dropdowns
         let gen_settings = app_state.read(cx).general_settings().clone();
 
+        let theme_selected = match gen_settings.theme {
+            dbflux_core::ThemeSetting::Dark => 0,
+            dbflux_core::ThemeSetting::Light => 1,
+        };
+        let dropdown_theme = cx.new(|_cx| {
+            Dropdown::new("gen-theme")
+                .items(vec![
+                    DropdownItem::new("Dark"),
+                    DropdownItem::new("Light"),
+                ])
+                .selected_index(Some(theme_selected))
+        });
+
+        let focus_selected = match gen_settings.default_focus_on_startup {
+            dbflux_core::StartupFocus::Sidebar => 0,
+            dbflux_core::StartupFocus::LastTab => 1,
+        };
+        let dropdown_default_focus = cx.new(|_cx| {
+            Dropdown::new("gen-default-focus")
+                .items(vec![
+                    DropdownItem::new("Sidebar"),
+                    DropdownItem::new("Last Tab"),
+                ])
+                .selected_index(Some(focus_selected))
+        });
+
+        let refresh_selected = match gen_settings.default_refresh_policy {
+            dbflux_core::RefreshPolicySetting::Manual => 0,
+            dbflux_core::RefreshPolicySetting::Interval => 1,
+        };
+        let dropdown_refresh_policy = cx.new(|_cx| {
+            Dropdown::new("gen-refresh-policy")
+                .items(vec![
+                    DropdownItem::new("Manual"),
+                    DropdownItem::new("Interval"),
+                ])
+                .selected_index(Some(refresh_selected))
+        });
+
+        let theme_sub = cx.subscribe_in(
+            &dropdown_theme,
+            window,
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                this.gen_settings.theme = match event.index {
+                    0 => dbflux_core::ThemeSetting::Dark,
+                    _ => dbflux_core::ThemeSetting::Light,
+                };
+                crate::ui::theme::apply_theme(this.gen_settings.theme, Some(window), cx);
+                cx.notify();
+            },
+        );
+
+        let focus_sub = cx.subscribe_in(
+            &dropdown_default_focus,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.gen_settings.default_focus_on_startup = match event.index {
+                    0 => dbflux_core::StartupFocus::Sidebar,
+                    _ => dbflux_core::StartupFocus::LastTab,
+                };
+                cx.notify();
+            },
+        );
+
+        let refresh_sub = cx.subscribe_in(
+            &dropdown_refresh_policy,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.gen_settings.default_refresh_policy = match event.index {
+                    0 => dbflux_core::RefreshPolicySetting::Manual,
+                    _ => dbflux_core::RefreshPolicySetting::Interval,
+                };
+                cx.notify();
+            },
+        );
+
+        // General inputs
         let input_max_history = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("1000");
             s.set_value(&gen_settings.max_history_entries.to_string(), window, cx);
@@ -357,6 +442,9 @@ impl SettingsWindow {
             gen_settings,
             gen_form_cursor: 0,
             gen_editing_field: false,
+            dropdown_theme,
+            dropdown_default_focus,
+            dropdown_refresh_policy,
             input_max_history,
             input_auto_save,
             input_refresh_interval,
@@ -364,7 +452,7 @@ impl SettingsWindow {
 
             pending_close_confirm: false,
 
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, theme_sub, focus_sub, refresh_sub],
         };
 
         this.load_services();
@@ -424,7 +512,8 @@ impl SettingsWindow {
 
         // Toggle/enum fields are modified directly on self.gen_settings,
         // so compare them against persisted state.
-        if self.gen_settings.restore_session_on_startup != saved.restore_session_on_startup
+        if self.gen_settings.theme != saved.theme
+            || self.gen_settings.restore_session_on_startup != saved.restore_session_on_startup
             || self.gen_settings.reopen_last_connections != saved.reopen_last_connections
             || self.gen_settings.default_focus_on_startup != saved.default_focus_on_startup
             || self.gen_settings.default_refresh_policy != saved.default_refresh_policy

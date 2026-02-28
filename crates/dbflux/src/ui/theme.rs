@@ -1,14 +1,23 @@
-use gpui::{App, Hsla, hsla};
+use dbflux_core::ThemeSetting;
+use gpui::{hsla, App, Hsla, Window};
 use gpui_component::theme::{Theme, ThemeMode};
-use log::info;
 
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
+    apply_theme(ThemeSetting::Dark, None, cx);
+}
 
-    info!("Setting Ayu Dark theme");
-    Theme::change(ThemeMode::Dark, None, cx);
-
-    apply_ayu_dark(cx);
+pub fn apply_theme(setting: ThemeSetting, window: Option<&mut Window>, cx: &mut App) {
+    match setting {
+        ThemeSetting::Dark => {
+            Theme::change(ThemeMode::Dark, window, cx);
+            apply_ayu_dark(cx);
+        }
+        ThemeSetting::Light => {
+            Theme::change(ThemeMode::Light, window, cx);
+            apply_ayu_light(cx);
+        }
+    }
 }
 
 fn rgb_to_hsla(hex: u32) -> Hsla {
@@ -246,4 +255,165 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.magenta_light = rgb_to_hsla(0xE4CCFF);
     theme.cyan = rgb_to_hsla(0x95E6CB);
     theme.cyan_light = rgb_to_hsla(0xBBF0DF);
+}
+
+fn apply_ayu_light(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+
+    let background = rgb_to_hsla(0xFAFAFA);
+    let panel = rgb_to_hsla(0xF3F3F3);
+    let foreground = rgb_to_hsla(0x5C6166);
+    let muted = rgb_to_hsla(0xABB0B6);
+    let accent = rgb_to_hsla(0xFF9940);
+    let border = rgb_to_hsla(0xDCDCDC);
+
+    let raised = rgb_to_hsla(0xEEEEEE);
+    let selection = rgb_to_hsla(0xD3E8F8);
+
+    let error = rgb_to_hsla(0xE65050);
+    let success = rgb_to_hsla(0x86B300);
+    let warning = rgb_to_hsla(0xF2AE49);
+    let info = rgb_to_hsla(0x399EE6);
+
+    theme.background = background;
+    theme.foreground = foreground;
+    theme.border = border;
+    theme.caret = accent;
+
+    theme.muted = muted;
+    theme.muted_foreground = muted;
+
+    theme.primary = accent;
+    theme.primary_hover = rgb_to_hsla(0xE68A3A);
+    theme.primary_active = rgb_to_hsla(0xCC7A33);
+    theme.primary_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.secondary = raised;
+    theme.secondary_hover = rgb_to_hsla(0xE4E4E4);
+    theme.secondary_active = rgb_to_hsla(0xDADADA);
+    theme.secondary_foreground = foreground;
+
+    theme.accent = rgb_to_hsla_alpha(0x5C6166, 0.06);
+    theme.accent_foreground = foreground;
+
+    theme.danger = error;
+    theme.danger_hover = rgb_to_hsla(0xCF4848);
+    theme.danger_active = rgb_to_hsla(0xB84040);
+    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.success = success;
+    theme.success_hover = rgb_to_hsla(0x79A100);
+    theme.success_active = rgb_to_hsla(0x6D9000);
+    theme.success_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.warning = warning;
+    theme.warning_hover = rgb_to_hsla(0xDA9D42);
+    theme.warning_active = rgb_to_hsla(0xC28C3B);
+    theme.warning_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.info = info;
+    theme.info_hover = rgb_to_hsla(0x338ECF);
+    theme.info_active = rgb_to_hsla(0x2D7EB8);
+    theme.info_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.popover = rgb_to_hsla(0xFFFFFF);
+    theme.popover_foreground = foreground;
+
+    theme.selection = selection;
+
+    theme.ring = rgb_to_hsla_alpha(0xFF9940, 0.5);
+
+    theme.input = rgb_to_hsla_alpha(0x5C6166, 0.08);
+
+    theme.scrollbar = background;
+    theme.scrollbar_thumb = rgb_to_hsla_alpha(0x5C6166, 0.15);
+    theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0x5C6166, 0.3);
+
+    theme.sidebar = panel;
+    theme.sidebar_foreground = foreground;
+    theme.sidebar_border = border;
+    theme.sidebar_accent = rgb_to_hsla_alpha(0x5C6166, 0.06);
+    theme.sidebar_accent_foreground = foreground;
+    theme.sidebar_primary = accent;
+    theme.sidebar_primary_foreground = rgb_to_hsla(0xFFFFFF);
+
+    theme.tab = panel;
+    theme.tab_bar = panel;
+    theme.tab_foreground = muted;
+    theme.tab_active = background;
+    theme.tab_active_foreground = foreground;
+    theme.tab_bar_segmented = raised;
+
+    theme.table = background;
+    theme.table_head = panel;
+    theme.table_head_foreground = muted;
+    theme.table_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
+    theme.table_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
+    theme.table_active = rgb_to_hsla_alpha(0x399EE6, 0.12);
+    theme.table_active_border = rgb_to_hsla_alpha(0x399EE6, 0.4);
+    theme.table_row_border = border;
+
+    theme.list = background;
+    theme.list_head = panel;
+    theme.list_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
+    theme.list_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
+    theme.list_active = selection;
+    theme.list_active_border = accent;
+
+    theme.accordion = panel;
+    theme.accordion_hover = raised;
+
+    theme.title_bar = panel;
+    theme.title_bar_border = border;
+
+    theme.tiles = rgb_to_hsla(0xE8E8E8);
+
+    theme.overlay = rgb_to_hsla_alpha(0x000000, 0.3);
+
+    theme.window_border = border;
+
+    theme.link = info;
+    theme.link_hover = rgb_to_hsla(0x4CADF0);
+    theme.link_active = rgb_to_hsla(0x338ECF);
+
+    theme.switch = muted;
+    theme.switch_thumb = rgb_to_hsla(0xFFFFFF);
+
+    theme.slider_bar = muted;
+    theme.slider_thumb = accent;
+
+    theme.progress_bar = accent;
+
+    theme.skeleton = raised;
+
+    theme.description_list_label = panel;
+    theme.description_list_label_foreground = muted;
+
+    theme.drag_border = accent;
+    theme.drop_target = rgb_to_hsla_alpha(0xFF9940, 0.1);
+
+    theme.group_box = panel;
+    theme.group_box_foreground = foreground;
+
+    theme.chart_1 = rgb_to_hsla(0x399EE6);
+    theme.chart_2 = rgb_to_hsla(0x86B300);
+    theme.chart_3 = rgb_to_hsla(0xFF9940);
+    theme.chart_4 = rgb_to_hsla(0xE65050);
+    theme.chart_5 = rgb_to_hsla(0xA37ACC);
+
+    theme.bullish = success;
+    theme.bearish = error;
+
+    theme.red = error;
+    theme.red_light = rgb_to_hsla(0xF09090);
+    theme.green = success;
+    theme.green_light = rgb_to_hsla(0xB8D96E);
+    theme.blue = info;
+    theme.blue_light = rgb_to_hsla(0x73B8F0);
+    theme.yellow = warning;
+    theme.yellow_light = rgb_to_hsla(0xF5C880);
+    theme.magenta = rgb_to_hsla(0xA37ACC);
+    theme.magenta_light = rgb_to_hsla(0xC4A6E0);
+    theme.cyan = rgb_to_hsla(0x4CBF99);
+    theme.cyan_light = rgb_to_hsla(0x86D9BF);
 }
