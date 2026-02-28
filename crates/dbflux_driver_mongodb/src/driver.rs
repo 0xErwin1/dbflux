@@ -59,6 +59,10 @@ impl DbDriver for MongoDriver {
         &MONGODB_METADATA
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:mongodb".into()
+    }
+
     fn form_definition(&self) -> &DriverFormDef {
         &MONGODB_FORM
     }

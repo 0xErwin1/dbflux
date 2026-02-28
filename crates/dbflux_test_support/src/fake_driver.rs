@@ -132,6 +132,10 @@ impl DbDriver for FakeDriver {
         metadata_for_kind(self.kind)
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        format!("builtin:fake-{}", self.metadata().id)
+    }
+
     fn form_definition(&self) -> &DriverFormDef {
         form_for_kind(self.kind)
     }

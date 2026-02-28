@@ -159,6 +159,10 @@ impl DbDriver for SqliteDriver {
         &METADATA
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:sqlite".into()
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,

@@ -1,4 +1,4 @@
-use dbflux_core::{ColumnMeta, DefaultSqlDialect, KeySetRequest};
+use dbflux_core::{ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate, GeneratedQuery,
     MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult, RowInsert,
@@ -118,4 +118,70 @@ fn count_table_falls_back_to_zero_for_non_integer_cell() {
         .expect("count_table should succeed");
 
     assert_eq!(count, 0);
+}
+
+// =========================================================================
+// driver_key() and settings_schema()
+// =========================================================================
+
+#[test]
+fn driver_key_has_builtin_prefix_for_fake_drivers() {
+    let kinds = [
+        DbKind::Postgres,
+        DbKind::SQLite,
+        DbKind::MySQL,
+        DbKind::MariaDB,
+        DbKind::MongoDB,
+        DbKind::Redis,
+    ];
+
+    for kind in &kinds {
+        let driver = FakeDriver::new(*kind);
+        let key: DriverKey = driver.driver_key();
+
+        assert!(
+            key.starts_with("builtin:"),
+            "driver_key for {:?} should start with 'builtin:', got '{}'",
+            kind,
+            key
+        );
+    }
+}
+
+#[test]
+fn driver_key_is_unique_per_kind() {
+    let kinds = [
+        DbKind::Postgres,
+        DbKind::SQLite,
+        DbKind::MySQL,
+        DbKind::MariaDB,
+        DbKind::MongoDB,
+        DbKind::Redis,
+    ];
+
+    let keys: Vec<DriverKey> = kinds
+        .iter()
+        .map(|k| FakeDriver::new(*k).driver_key())
+        .collect();
+
+    for (i, key) in keys.iter().enumerate() {
+        for (j, other) in keys.iter().enumerate() {
+            if i != j {
+                assert_ne!(
+                    key, other,
+                    "driver_key collision between {:?} and {:?}: '{}'",
+                    kinds[i], kinds[j], key
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn settings_schema_defaults_to_none() {
+    let driver = FakeDriver::new(DbKind::Postgres);
+    assert!(
+        driver.settings_schema().is_none(),
+        "default settings_schema() should return None"
+    );
 }

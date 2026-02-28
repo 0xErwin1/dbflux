@@ -153,6 +153,10 @@ impl DbDriver for RedisDriver {
         &REDIS_METADATA
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        "builtin:redis".into()
+    }
+
     fn form_definition(&self) -> &DriverFormDef {
         &REDIS_FORM
     }

@@ -224,6 +224,13 @@ impl DbDriver for MysqlDriver {
         }
     }
 
+    fn driver_key(&self) -> dbflux_core::DriverKey {
+        match self.kind {
+            DbKind::MariaDB => "builtin:mariadb".into(),
+            _ => "builtin:mysql".into(),
+        }
+    }
+
     fn connect_with_secrets(
         &self,
         profile: &ConnectionProfile,

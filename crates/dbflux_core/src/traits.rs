@@ -2,6 +2,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    app_config::DriverKey,
     key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
         KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
@@ -189,6 +190,23 @@ pub trait DbDriver: Send + Sync {
     /// The UI uses this to render connection forms dynamically without
     /// hardcoding driver-specific logic.
     fn form_definition(&self) -> &DriverFormDef;
+
+    /// Stable identifier for this driver in config and settings maps.
+    ///
+    /// Built-in drivers return `"builtin:<name>"` (e.g. `"builtin:redis"`).
+    /// External RPC drivers return `"rpc:<socket_id>"`.
+    fn driver_key(&self) -> DriverKey;
+
+    /// Returns the settings schema for driver-specific configuration.
+    ///
+    /// Drivers that expose configurable settings (e.g. scan batch size,
+    /// allow flush) return a form definition here. The UI renders it
+    /// in the "Drivers" settings section.
+    ///
+    /// Returns `None` by default (no driver-specific settings).
+    fn settings_schema(&self) -> Option<Arc<DriverFormDef>> {
+        None
+    }
 
     /// Build a DbConfig from form values collected by the UI.
     ///
