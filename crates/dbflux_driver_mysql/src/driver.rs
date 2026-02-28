@@ -1909,19 +1909,16 @@ fn mysql_escape_string(s: &str) -> String {
 }
 
 fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT table_name
         FROM information_schema.tables
-        WHERE table_schema = '{}'
+        WHERE table_schema = ?
           AND table_type = 'BASE TABLE'
         ORDER BY table_name
-        "#,
-        database
-    );
+    ";
 
     let table_names: Vec<String> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(table_names
@@ -1939,19 +1936,16 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
 }
 
 fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT table_name
         FROM information_schema.tables
-        WHERE table_schema = '{}'
+        WHERE table_schema = ?
           AND table_type = 'VIEW'
         ORDER BY table_name
-        "#,
-        database
-    );
+    ";
 
     let view_names: Vec<String> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(view_names
@@ -1964,8 +1958,7 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             column_name,
             column_type,
@@ -1973,15 +1966,13 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
             column_default,
             column_key
         FROM information_schema.columns
-        WHERE table_schema = '{}'
-          AND table_name = '{}'
+        WHERE table_schema = ?
+          AND table_name = ?
         ORDER BY ordinal_position
-        "#,
-        database, table
-    );
+    ";
 
     let rows: Vec<(String, String, String, Option<String>, Option<String>)> = conn
-        .query(&query)
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     log::debug!(
@@ -2083,8 +2074,7 @@ fn fetch_foreign_keys(
     database: &str,
     table: &str,
 ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             kcu.CONSTRAINT_NAME,
             kcu.COLUMN_NAME,
@@ -2097,16 +2087,14 @@ fn fetch_foreign_keys(
         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
             ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
             AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-        WHERE kcu.TABLE_SCHEMA = '{}'
-            AND kcu.TABLE_NAME = '{}'
+        WHERE kcu.TABLE_SCHEMA = ?
+            AND kcu.TABLE_NAME = ?
             AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-        "#,
-        database, table
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut builder = ForeignKeyBuilder::new();
@@ -2114,11 +2102,14 @@ fn fetch_foreign_keys(
     for row in rows {
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
         let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
-        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_schema: Option<String> =
+            row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> = row.get("DELETE_RULE");
-        let on_update: Option<String> = row.get("UPDATE_RULE");
+        let on_delete: Option<String> =
+            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> =
+            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             constraint_name,
@@ -2266,8 +2257,7 @@ fn fetch_constraints(
     database: &str,
     table: &str,
 ) -> Result<Vec<ConstraintInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             tc.CONSTRAINT_NAME,
             tc.CONSTRAINT_TYPE,
@@ -2281,17 +2271,15 @@ fn fetch_constraints(
         LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
             ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
             AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
-        WHERE tc.TABLE_SCHEMA = '{}'
-            AND tc.TABLE_NAME = '{}'
+        WHERE tc.TABLE_SCHEMA = ?
+            AND tc.TABLE_NAME = ?
             AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
         GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
         ORDER BY tc.CONSTRAINT_NAME
-        "#,
-        database, table
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
@@ -2325,23 +2313,20 @@ fn fetch_constraints(
 }
 
 fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaIndexInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             s.INDEX_NAME,
             s.TABLE_NAME,
             GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX) as COLUMNS,
             s.NON_UNIQUE
         FROM information_schema.STATISTICS s
-        WHERE s.TABLE_SCHEMA = '{}'
+        WHERE s.TABLE_SCHEMA = ?
         GROUP BY s.INDEX_NAME, s.TABLE_NAME, s.NON_UNIQUE
         ORDER BY s.TABLE_NAME, s.INDEX_NAME
-        "#,
-        database
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     Ok(rows
@@ -2349,10 +2334,11 @@ fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaInd
         .filter_map(|row| {
             let name: String = row.get("INDEX_NAME")?;
             let table_name: String = row.get("TABLE_NAME")?;
-            let columns_str: String = row.get("COLUMNS")?;
+            let columns_str: Option<String> =
+                row.get_opt("COLUMNS").and_then(|r| r.ok());
             let non_unique: i32 = row.get("NON_UNIQUE").unwrap_or(1);
 
-            let columns: Vec<String> = columns_str
+            let columns: Vec<String> = columns_str?
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect();
@@ -2374,8 +2360,7 @@ fn fetch_schema_foreign_keys(
     conn: &mut Conn,
     database: &str,
 ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
-    let query = format!(
-        r#"
+    let query = r"
         SELECT
             kcu.CONSTRAINT_NAME,
             kcu.TABLE_NAME,
@@ -2389,15 +2374,13 @@ fn fetch_schema_foreign_keys(
         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
             ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
             AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-        WHERE kcu.TABLE_SCHEMA = '{}'
+        WHERE kcu.TABLE_SCHEMA = ?
             AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-        "#,
-        database
-    );
+    ";
 
     let rows: Vec<mysql::Row> = conn
-        .query(&query)
+        .exec(query, (database,))
         .map_err(|e| format_mysql_query_error(&e))?;
 
     let mut builder = SchemaForeignKeyBuilder::new();
@@ -2406,11 +2389,14 @@ fn fetch_schema_foreign_keys(
         let constraint_name: String = row.get("CONSTRAINT_NAME").unwrap_or_default();
         let table_name: String = row.get("TABLE_NAME").unwrap_or_default();
         let column_name: String = row.get("COLUMN_NAME").unwrap_or_default();
-        let ref_schema: Option<String> = row.get("REFERENCED_TABLE_SCHEMA");
+        let ref_schema: Option<String> =
+            row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> = row.get("DELETE_RULE");
-        let on_update: Option<String> = row.get("UPDATE_RULE");
+        let on_delete: Option<String> =
+            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> =
+            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             table_name,
