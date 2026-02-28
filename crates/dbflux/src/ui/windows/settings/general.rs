@@ -1,5 +1,6 @@
+use crate::ui::dropdown::Dropdown;
 use crate::ui::toast::ToastExt;
-use dbflux_core::{AppConfig, AppConfigStore, RefreshPolicySetting, StartupFocus};
+use dbflux_core::{AppConfig, AppConfigStore};
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -15,6 +16,8 @@ impl SettingsWindow {
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
         vec![
+            // Appearance
+            GeneralFormRow::Theme,
             // Startup & Session
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
@@ -62,6 +65,10 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) {
         match self.gen_current_row() {
+            Some(GeneralFormRow::Theme) => {
+                self.dropdown_theme.update(cx, |dd, cx| dd.toggle_open(cx));
+                cx.notify();
+            }
             Some(GeneralFormRow::RestoreSession) => {
                 self.gen_settings.restore_session_on_startup =
                     !self.gen_settings.restore_session_on_startup;
@@ -73,19 +80,13 @@ impl SettingsWindow {
                 cx.notify();
             }
             Some(GeneralFormRow::DefaultFocus) => {
-                self.gen_settings.default_focus_on_startup =
-                    match self.gen_settings.default_focus_on_startup {
-                        StartupFocus::Sidebar => StartupFocus::LastTab,
-                        StartupFocus::LastTab => StartupFocus::Sidebar,
-                    };
+                self.dropdown_default_focus
+                    .update(cx, |dd, cx| dd.toggle_open(cx));
                 cx.notify();
             }
             Some(GeneralFormRow::DefaultRefreshPolicy) => {
-                self.gen_settings.default_refresh_policy =
-                    match self.gen_settings.default_refresh_policy {
-                        RefreshPolicySetting::Manual => RefreshPolicySetting::Interval,
-                        RefreshPolicySetting::Interval => RefreshPolicySetting::Manual,
-                    };
+                self.dropdown_refresh_policy
+                    .update(cx, |dd, cx| dd.toggle_open(cx));
                 cx.notify();
             }
             Some(GeneralFormRow::PauseRefreshOnError) => {
@@ -235,6 +236,8 @@ impl SettingsWindow {
             state.update_general_settings(self.gen_settings.clone());
         });
 
+        crate::ui::theme::apply_theme(self.gen_settings.theme, Some(window), cx);
+
         cx.toast_success(
             "Settings saved. Some changes apply on next startup.",
             window,
@@ -288,6 +291,14 @@ impl SettingsWindow {
                     .flex()
                     .flex_col()
                     .gap_6()
+                    // -- Appearance --
+                    .child(self.render_gen_group_header("Appearance", border, muted_fg))
+                    .child(self.render_gen_dropdown(
+                        "Theme",
+                        &self.dropdown_theme,
+                        is_at(GeneralFormRow::Theme),
+                        primary,
+                    ))
                     // -- Startup & Session --
                     .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
                     .child(self.render_gen_checkbox(
@@ -308,12 +319,9 @@ impl SettingsWindow {
                         |this, val| this.gen_settings.reopen_last_connections = val,
                         cx,
                     ))
-                    .child(Self::render_gen_toggle(
+                    .child(self.render_gen_dropdown(
                         "Default focus",
-                        match self.gen_settings.default_focus_on_startup {
-                            StartupFocus::Sidebar => "Sidebar",
-                            StartupFocus::LastTab => "Last Tab",
-                        },
+                        &self.dropdown_default_focus,
                         is_at(GeneralFormRow::DefaultFocus),
                         primary,
                     ))
@@ -335,12 +343,9 @@ impl SettingsWindow {
                     ))
                     // -- Refresh & Background --
                     .child(self.render_gen_group_header("Refresh & Background", border, muted_fg))
-                    .child(Self::render_gen_toggle(
+                    .child(self.render_gen_dropdown(
                         "Default refresh policy",
-                        match self.gen_settings.default_refresh_policy {
-                            RefreshPolicySetting::Manual => "Manual",
-                            RefreshPolicySetting::Interval => "Interval",
-                        },
+                        &self.dropdown_refresh_policy,
                         is_at(GeneralFormRow::DefaultRefreshPolicy),
                         primary,
                     ))
@@ -495,9 +500,10 @@ impl SettingsWindow {
             .child(div().text_sm().child(label))
     }
 
-    fn render_gen_toggle(
+    fn render_gen_dropdown(
+        &self,
         label: &str,
-        value: &str,
+        dropdown: &Entity<Dropdown>,
         is_focused: bool,
         primary: Hsla,
     ) -> impl IntoElement {
@@ -515,12 +521,7 @@ impl SettingsWindow {
                 gpui::transparent_black()
             })
             .child(div().text_sm().child(label.to_string()))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(value.to_string()),
-            )
+            .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
 
     fn render_gen_input_field(

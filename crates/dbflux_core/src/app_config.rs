@@ -19,6 +19,10 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeneralSettings {
+    // -- Appearance --
+    #[serde(default)]
+    pub theme: ThemeSetting,
+
     // -- Startup & Session --
     #[serde(default = "default_true")]
     pub restore_session_on_startup: bool,
@@ -68,6 +72,7 @@ pub struct GeneralSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
+            theme: ThemeSetting::Dark,
             restore_session_on_startup: true,
             reopen_last_connections: false,
             default_focus_on_startup: StartupFocus::Sidebar,
@@ -100,6 +105,19 @@ pub enum StartupFocus {
 pub enum RefreshPolicySetting {
     Manual,
     Interval,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeSetting {
+    Dark,
+    Light,
+}
+
+impl Default for ThemeSetting {
+    fn default() -> Self {
+        ThemeSetting::Dark
+    }
 }
 
 fn default_true() -> bool {

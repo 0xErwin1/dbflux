@@ -128,6 +128,9 @@ fn run_gui() {
         ui::components::document_tree::init(cx);
         let app_state = cx.new(|_cx| AppState::new());
 
+        let theme_setting = app_state.read(cx).general_settings().theme;
+        ui::theme::apply_theme(theme_setting, None, cx);
+
         let window_handle = cx
             .open_window(
                 WindowOptions {
