@@ -197,7 +197,7 @@ impl SettingsWindow {
             input_ssh_key_passphrase,
             input_ssh_password,
             ssh_auth_method: SshAuthSelection::PrivateKey,
-            form_save_secret: false,
+            form_save_secret: true,
             show_ssh_passphrase: false,
             show_ssh_password: false,
 
