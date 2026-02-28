@@ -273,8 +273,8 @@ impl ConnectionManagerWindow {
             available_drivers,
             selected_driver_id: None,
             selected_driver: None,
-            form_save_password: false,
-            form_save_ssh_secret: false,
+            form_save_password: true,
+            form_save_ssh_secret: true,
             editing_profile_id: None,
             input_name,
             driver_inputs: HashMap::new(),
@@ -407,10 +407,10 @@ impl ConnectionManagerWindow {
         let driver = self.app_state.read(cx).drivers().get(driver_id).cloned();
         self.selected_driver_id = Some(driver_id.to_string());
         self.selected_driver = driver.clone();
-        self.form_save_password = false;
+        self.form_save_password = true;
         self.ssh_enabled = false;
         self.ssh_auth_method = SshAuthSelection::PrivateKey;
-        self.form_save_ssh_secret = false;
+        self.form_save_ssh_secret = true;
         self.active_tab = ActiveTab::Main;
         self.validation_errors.clear();
         self.test_status = TestStatus::None;
