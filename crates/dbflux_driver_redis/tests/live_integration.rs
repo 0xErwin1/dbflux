@@ -145,21 +145,22 @@ fn redis_key_ttl_and_expiry() -> Result<(), DbError> {
 
         kv.set_key(&KeySetRequest::new("test:ttl", b"value".to_vec()))?;
 
+        // Driver returns None for keys with no expiry (Redis TTL == -1)
         let ttl = kv.key_ttl(&KeyTtlRequest::new("test:ttl"))?;
-        assert_eq!(ttl, Some(-1));
+        assert_eq!(ttl, None);
 
         let expired = kv.expire_key(&KeyExpireRequest::new("test:ttl", 300))?;
         assert!(expired);
 
         let ttl = kv.key_ttl(&KeyTtlRequest::new("test:ttl"))?;
-        let ttl_val = ttl.expect("should have TTL");
+        let ttl_val = ttl.expect("should have TTL after EXPIRE");
         assert!(ttl_val > 0 && ttl_val <= 300);
 
         let persisted = kv.persist_key(&KeyPersistRequest::new("test:ttl"))?;
         assert!(persisted);
 
         let ttl = kv.key_ttl(&KeyTtlRequest::new("test:ttl"))?;
-        assert_eq!(ttl, Some(-1));
+        assert_eq!(ttl, None);
 
         kv.set_key(&KeySetRequest::new("test:ttl_set", b"value".to_vec()).with_ttl(60))?;
         let ttl = kv.key_ttl(&KeyTtlRequest::new("test:ttl_set"))?;

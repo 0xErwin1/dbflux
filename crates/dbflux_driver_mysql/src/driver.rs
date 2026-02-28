@@ -1980,7 +1980,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
         database, table
     );
 
-    let rows: Vec<(String, String, String, Option<String>, String)> = conn
+    let rows: Vec<(String, String, String, Option<String>, Option<String>)> = conn
         .query(&query)
         .map_err(|e| format_mysql_query_error(&e))?;
 
@@ -1994,10 +1994,10 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
     Ok(rows
         .into_iter()
         .map(|(name, type_name, nullable, default, key)| {
-            let is_pk = key == "PRI";
+            let is_pk = key.as_deref() == Some("PRI");
             if is_pk {
                 log::info!(
-                    "[MYSQL] Column '{}' has Key='{}' -> is_primary_key={}",
+                    "[MYSQL] Column '{}' has Key='{:?}' -> is_primary_key={}",
                     name,
                     key,
                     is_pk
@@ -2299,8 +2299,10 @@ fn fetch_constraints(
         .filter_map(|row| {
             let name: String = row.get("CONSTRAINT_NAME")?;
             let constraint_type: String = row.get("CONSTRAINT_TYPE")?;
-            let columns_str: Option<String> = row.get("COLUMNS");
-            let check_clause: Option<String> = row.get("CHECK_CLAUSE");
+            let columns_str: Option<String> =
+                row.get_opt("COLUMNS").and_then(|r| r.ok());
+            let check_clause: Option<String> =
+                row.get_opt("CHECK_CLAUSE").and_then(|r| r.ok());
 
             let kind = match constraint_type.as_str() {
                 "UNIQUE" => ConstraintKind::Unique,
