@@ -2,6 +2,30 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.6] – 2026-02-28
+
+### Added
+
+* Comprehensive live integration tests for all five database drivers (43 tests covering schema introspection, CRUD, browse/count, explain, describe, cancellation, code generators, document CRUD, and KeyValueApi)
+* Docker-based test infrastructure for PostgreSQL, MySQL, MongoDB, and Redis with automatic container lifecycle management
+* Driver contract validation tests for metadata, form definitions, and capability declarations
+
+### Changed
+
+* AppState now accepts an external driver registry, making driver wiring controllable across different runtime contexts
+* Document open and query connection selection extracted into explicit decision paths for consistent handling of missing connections and per-database routing
+* MySQL `information_schema` queries migrated from `format!()` string interpolation to parameterized queries (`conn.exec` with `?` placeholders)
+* MySQL nullable column reads (`Option<String>`) now use `row.get_opt()` to correctly distinguish SQL NULL from missing columns
+
+### Fixed
+
+* MySQL schema introspection panic on MySQL 8.4 where `column_key` in `information_schema.columns` can be NULL
+* MySQL constraint introspection panic where `GROUP_CONCAT` over a `LEFT JOIN` returns NULL for CHECK constraints without key columns
+* Windows portable builds no longer open a CMD console window when launched outside a terminal
+* CI integration test job now installs required system dependencies (`libdbus-1-dev`, `libxkbcommon-dev`)
+
+---
+
 ## [0.3.5] – 2026-02-26
 
 ### Added

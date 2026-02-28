@@ -16,7 +16,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
