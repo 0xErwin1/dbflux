@@ -447,7 +447,30 @@ impl SettingsWindow {
 
         self.drv_dirty = false;
         self.drv_editor_dirty = false;
-        cx.toast_success("Driver settings saved.", window);
+
+        let mut all_warnings = Vec::new();
+        for entry in &self.drv_entries {
+            if let Some(schema) = &entry.settings_schema
+                && let Some(values) = self.drv_settings.get(&entry.driver_key)
+            {
+                let warnings = form_renderer::validate_values(schema, values);
+                for warning in warnings {
+                    all_warnings.push(format!("{}: {}", entry.metadata.display_name, warning));
+                }
+            }
+        }
+
+        if all_warnings.is_empty() {
+            cx.toast_success("Driver settings saved.", window);
+        } else {
+            cx.toast_warning(
+                format!(
+                    "Driver settings saved with warnings:\n{}",
+                    all_warnings.join("\n")
+                ),
+                window,
+            );
+        }
     }
 
     pub(super) fn render_drivers_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -704,6 +727,7 @@ impl SettingsWindow {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let caps = entry.metadata.capabilities;
+        let relevant = entry.metadata.category.relevant_capabilities();
 
         div()
             .flex()
@@ -720,22 +744,31 @@ impl SettingsWindow {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .children(CAPABILITY_CATALOG.iter().map(|(capability, label)| {
-                        let supported = caps.contains(*capability);
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(if supported {
-                                theme.secondary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .text_xs()
-                            .child(format!("{} {}", if supported { "✓" } else { "-" }, label))
-                    })),
+                    .children(
+                        CAPABILITY_CATALOG
+                            .iter()
+                            .filter(|(capability, _)| relevant.contains(*capability))
+                            .map(|(capability, label)| {
+                                let supported = caps.contains(*capability);
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .bg(if supported {
+                                        theme.secondary
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .text_xs()
+                                    .child(format!(
+                                        "{} {}",
+                                        if supported { "✓" } else { "-" },
+                                        label
+                                    ))
+                            }),
+                    ),
             )
     }
 

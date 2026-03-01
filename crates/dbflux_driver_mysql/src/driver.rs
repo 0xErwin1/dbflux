@@ -36,8 +36,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::SSL.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits(),
+            | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -58,9 +58,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits()
-            | DriverCapabilities::SEQUENCES.bits(),
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),

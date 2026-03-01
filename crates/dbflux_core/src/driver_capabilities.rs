@@ -110,6 +110,79 @@ impl DatabaseCategory {
             DatabaseCategory::WideColumn => "Row",
         }
     }
+
+    /// Bitmask of capabilities the UI should display for this category.
+    /// Capabilities outside the mask are hidden (e.g. KV flags on a
+    /// relational driver).
+    pub fn relevant_capabilities(&self) -> DriverCapabilities {
+        let common = DriverCapabilities::from_bits_truncate(
+            DriverCapabilities::MULTIPLE_DATABASES.bits()
+                | DriverCapabilities::SSH_TUNNEL.bits()
+                | DriverCapabilities::SSL.bits()
+                | DriverCapabilities::AUTHENTICATION.bits()
+                | DriverCapabilities::QUERY_CANCELLATION.bits()
+                | DriverCapabilities::QUERY_TIMEOUT.bits()
+                | DriverCapabilities::TRANSACTIONS.bits()
+                | DriverCapabilities::PREPARED_STATEMENTS.bits()
+                | DriverCapabilities::INSERT.bits()
+                | DriverCapabilities::UPDATE.bits()
+                | DriverCapabilities::DELETE.bits()
+                | DriverCapabilities::PAGINATION.bits()
+                | DriverCapabilities::SORTING.bits()
+                | DriverCapabilities::FILTERING.bits()
+                | DriverCapabilities::EXPORT_CSV.bits()
+                | DriverCapabilities::EXPORT_JSON.bits()
+                | DriverCapabilities::PUBSUB.bits(),
+        );
+
+        let category_specific = match self {
+            DatabaseCategory::Relational
+            | DatabaseCategory::TimeSeries
+            | DatabaseCategory::WideColumn => DriverCapabilities::from_bits_truncate(
+                DriverCapabilities::SCHEMAS.bits()
+                    | DriverCapabilities::VIEWS.bits()
+                    | DriverCapabilities::FOREIGN_KEYS.bits()
+                    | DriverCapabilities::INDEXES.bits()
+                    | DriverCapabilities::CHECK_CONSTRAINTS.bits()
+                    | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+                    | DriverCapabilities::CUSTOM_TYPES.bits()
+                    | DriverCapabilities::TRIGGERS.bits()
+                    | DriverCapabilities::STORED_PROCEDURES.bits()
+                    | DriverCapabilities::SEQUENCES.bits()
+                    | DriverCapabilities::RETURNING.bits(),
+            ),
+
+            DatabaseCategory::Document => DriverCapabilities::from_bits_truncate(
+                DriverCapabilities::INDEXES.bits()
+                    | DriverCapabilities::NESTED_DOCUMENTS.bits()
+                    | DriverCapabilities::ARRAYS.bits()
+                    | DriverCapabilities::AGGREGATION.bits(),
+            ),
+
+            DatabaseCategory::KeyValue => DriverCapabilities::from_bits_truncate(
+                DriverCapabilities::KV_SCAN.bits()
+                    | DriverCapabilities::KV_GET.bits()
+                    | DriverCapabilities::KV_SET.bits()
+                    | DriverCapabilities::KV_DELETE.bits()
+                    | DriverCapabilities::KV_EXISTS.bits()
+                    | DriverCapabilities::KV_TTL.bits()
+                    | DriverCapabilities::KV_KEY_TYPES.bits()
+                    | DriverCapabilities::KV_VALUE_SIZE.bits()
+                    | DriverCapabilities::KV_RENAME.bits()
+                    | DriverCapabilities::KV_BULK_GET.bits()
+                    | DriverCapabilities::KV_STREAM_RANGE.bits()
+                    | DriverCapabilities::KV_STREAM_ADD.bits()
+                    | DriverCapabilities::KV_STREAM_DELETE.bits(),
+            ),
+
+            DatabaseCategory::Graph => DriverCapabilities::from_bits_truncate(
+                DriverCapabilities::GRAPH_TRAVERSAL.bits()
+                    | DriverCapabilities::EDGE_PROPERTIES.bits(),
+            ),
+        };
+
+        common.union(category_specific)
+    }
 }
 
 bitflags! {
@@ -304,7 +377,6 @@ impl DriverCapabilities {
     pub const RELATIONAL_BASE: Self = Self::from_bits_truncate(
         Self::MULTIPLE_DATABASES.bits()
             | Self::QUERY_CANCELLATION.bits()
-            | Self::QUERY_TIMEOUT.bits()
             | Self::TRANSACTIONS.bits()
             | Self::PREPARED_STATEMENTS.bits()
             | Self::VIEWS.bits()
@@ -587,5 +659,59 @@ mod tests {
             QueryLanguage::RedisCommands.display_name(),
             "Redis Commands"
         );
+    }
+
+    #[test]
+    fn test_relevant_capabilities_excludes_cross_category() {
+        let relational = DatabaseCategory::Relational.relevant_capabilities();
+        assert!(relational.contains(DriverCapabilities::SCHEMAS));
+        assert!(relational.contains(DriverCapabilities::FOREIGN_KEYS));
+        assert!(!relational.contains(DriverCapabilities::KV_SCAN));
+        assert!(!relational.contains(DriverCapabilities::NESTED_DOCUMENTS));
+        assert!(!relational.contains(DriverCapabilities::GRAPH_TRAVERSAL));
+
+        let document = DatabaseCategory::Document.relevant_capabilities();
+        assert!(document.contains(DriverCapabilities::NESTED_DOCUMENTS));
+        assert!(document.contains(DriverCapabilities::AGGREGATION));
+        assert!(!document.contains(DriverCapabilities::KV_SCAN));
+        assert!(!document.contains(DriverCapabilities::SCHEMAS));
+
+        let kv = DatabaseCategory::KeyValue.relevant_capabilities();
+        assert!(kv.contains(DriverCapabilities::KV_SCAN));
+        assert!(kv.contains(DriverCapabilities::KV_TTL));
+        assert!(!kv.contains(DriverCapabilities::SCHEMAS));
+        assert!(!kv.contains(DriverCapabilities::NESTED_DOCUMENTS));
+
+        let graph = DatabaseCategory::Graph.relevant_capabilities();
+        assert!(graph.contains(DriverCapabilities::GRAPH_TRAVERSAL));
+        assert!(!graph.contains(DriverCapabilities::KV_SCAN));
+        assert!(!graph.contains(DriverCapabilities::SCHEMAS));
+    }
+
+    #[test]
+    fn test_relevant_capabilities_includes_common() {
+        for category in [
+            DatabaseCategory::Relational,
+            DatabaseCategory::Document,
+            DatabaseCategory::KeyValue,
+            DatabaseCategory::Graph,
+        ] {
+            let relevant = category.relevant_capabilities();
+            assert!(
+                relevant.contains(DriverCapabilities::SSH_TUNNEL),
+                "{:?} should include SSH_TUNNEL",
+                category
+            );
+            assert!(
+                relevant.contains(DriverCapabilities::AUTHENTICATION),
+                "{:?} should include AUTHENTICATION",
+                category
+            );
+            assert!(
+                relevant.contains(DriverCapabilities::EXPORT_JSON),
+                "{:?} should include EXPORT_JSON",
+                category
+            );
+        }
     }
 }

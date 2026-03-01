@@ -48,9 +48,6 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::CUSTOM_TYPES.bits()
-            | DriverCapabilities::TRIGGERS.bits()
-            | DriverCapabilities::STORED_PROCEDURES.bits()
-            | DriverCapabilities::SEQUENCES.bits()
             | DriverCapabilities::RETURNING.bits(),
     ),
     default_port: Some(5432),
