@@ -5,6 +5,7 @@ mod ssh;
 
 use crate::app::AppState;
 use crate::keymap::KeymapStack;
+use crate::ui::components::form_renderer;
 use crate::ui::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind};
@@ -500,9 +501,9 @@ impl ConnectionManagerWindow {
             for section in &tab.sections {
                 for field in &section.fields {
                     if field.kind == FormFieldKind::Checkbox {
-                        let is_checked = values.get(&field.id).map(|v| v == "true").unwrap_or(false);
-                        self.checkbox_states
-                            .insert(field.id.clone(), is_checked);
+                        let is_checked =
+                            values.get(&field.id).map(|v| v == "true").unwrap_or(false);
+                        self.checkbox_states.insert(field.id.clone(), is_checked);
                     }
                 }
             }
@@ -522,34 +523,15 @@ impl ConnectionManagerWindow {
         form: &DriverFormDef,
         cx: &Context<Self>,
     ) -> dbflux_core::FormValues {
-        let mut values = HashMap::new();
+        let dropdowns = HashMap::new();
 
-        for tab in &form.tabs {
-            for section in &tab.sections {
-                for field in &section.fields {
-                    if field.kind == FormFieldKind::Checkbox {
-                        let is_checked =
-                            self.checkbox_states.get(&field.id).copied().unwrap_or(false);
-                        values.insert(
-                            field.id.clone(),
-                            if is_checked {
-                                "true".to_string()
-                            } else {
-                                String::new()
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
-        for (field_id, input) in &self.driver_inputs {
-            if !values.contains_key(field_id) {
-                values.insert(field_id.clone(), input.read(cx).value().to_string());
-            }
-        }
-
-        values
+        form_renderer::collect_values(
+            form,
+            &self.driver_inputs,
+            &self.checkbox_states,
+            &dropdowns,
+            cx,
+        )
     }
 
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -619,29 +601,7 @@ impl ConnectionManagerWindow {
 
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
-        if let Some(checkbox_id) = &field.enabled_when_checked {
-            let is_checked = self
-                .checkbox_states
-                .get(checkbox_id.as_str())
-                .copied()
-                .unwrap_or(false);
-            if !is_checked {
-                return false;
-            }
-        }
-
-        if let Some(checkbox_id) = &field.enabled_when_unchecked {
-            let is_checked = self
-                .checkbox_states
-                .get(checkbox_id.as_str())
-                .copied()
-                .unwrap_or(false);
-            if is_checked {
-                return false;
-            }
-        }
-
-        true
+        form_renderer::is_field_enabled(field, &self.checkbox_states)
     }
 
     /// Map a field ID to its FormFocus variant.

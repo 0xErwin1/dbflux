@@ -31,6 +31,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::DOCUMENT_BASE.bits()
             | DriverCapabilities::AGGREGATION.bits()
+            | DriverCapabilities::SSH_TUNNEL.bits()
             | DriverCapabilities::INDEXES.bits(),
     ),
     default_port: Some(27017),

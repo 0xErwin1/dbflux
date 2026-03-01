@@ -1,3 +1,4 @@
+mod drivers;
 mod general;
 mod keybindings;
 mod render;
@@ -6,13 +7,18 @@ mod ssh_tunnels;
 
 use crate::app::AppState;
 use crate::keymap::{ContextId, KeyChord, Modifiers};
+use crate::ui::components::form_renderer::FormRendererState;
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
-use dbflux_core::{AppConfigStore, GeneralSettings, ServiceConfig};
+use dbflux_core::{
+    AppConfigStore, DriverFormDef, DriverKey, DriverMetadata, FormValues, GeneralSettings,
+    GlobalOverrides, ServiceConfig,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::InputState;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -21,7 +27,15 @@ enum SettingsSection {
     Keybindings,
     SshTunnels,
     Services,
+    Drivers,
     About,
+}
+
+#[derive(Clone)]
+struct DriverSettingsEntry {
+    driver_key: DriverKey,
+    metadata: DriverMetadata,
+    settings_schema: Option<Arc<DriverFormDef>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -141,7 +155,6 @@ enum GeneralFormRow {
     ConfirmDangerous,
     RequiresWhere,
     RequiresPreview,
-    AllowRedisFlush,
 
     // Actions
     SaveButton,
@@ -209,6 +222,25 @@ pub struct SettingsWindow {
 
     editing_svc_idx: Option<usize>,
     pending_delete_svc_idx: Option<usize>,
+
+    // Drivers section state
+    drv_entries: Vec<DriverSettingsEntry>,
+    drv_selected_idx: Option<usize>,
+    drv_overrides: HashMap<DriverKey, GlobalOverrides>,
+    drv_settings: HashMap<DriverKey, FormValues>,
+    drv_dirty: bool,
+
+    drv_override_refresh_policy: bool,
+    drv_override_refresh_interval: bool,
+
+    drv_refresh_policy_dropdown: Entity<Dropdown>,
+    drv_refresh_interval_input: Entity<InputState>,
+    drv_confirm_dangerous_dropdown: Entity<Dropdown>,
+    drv_requires_where_dropdown: Entity<Dropdown>,
+    drv_requires_preview_dropdown: Entity<Dropdown>,
+
+    drv_form_state: FormRendererState,
+    drv_form_subscriptions: Vec<Subscription>,
 
     // General section state
     gen_settings: GeneralSettings,
@@ -342,6 +374,98 @@ impl SettingsWindow {
             },
         );
 
+        let drv_refresh_policy_dropdown = cx.new(|_cx| {
+            Dropdown::new("drv-refresh-policy")
+                .items(vec![
+                    DropdownItem::with_value("Manual", "manual"),
+                    DropdownItem::with_value("Interval", "interval"),
+                ])
+                .selected_index(Some(0))
+        });
+
+        let drv_refresh_interval_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("5");
+            state.set_value("5", window, cx);
+            state
+        });
+
+        let drv_confirm_dangerous_dropdown = cx.new(|_cx| {
+            Dropdown::new("drv-confirm-dangerous")
+                .items(vec![
+                    DropdownItem::with_value("Use Global", "default"),
+                    DropdownItem::with_value("On", "true"),
+                    DropdownItem::with_value("Off", "false"),
+                ])
+                .selected_index(Some(0))
+        });
+
+        let drv_requires_where_dropdown = cx.new(|_cx| {
+            Dropdown::new("drv-requires-where")
+                .items(vec![
+                    DropdownItem::with_value("Use Global", "default"),
+                    DropdownItem::with_value("On", "true"),
+                    DropdownItem::with_value("Off", "false"),
+                ])
+                .selected_index(Some(0))
+        });
+
+        let drv_requires_preview_dropdown = cx.new(|_cx| {
+            Dropdown::new("drv-requires-preview")
+                .items(vec![
+                    DropdownItem::with_value("Use Global", "default"),
+                    DropdownItem::with_value("On", "true"),
+                    DropdownItem::with_value("Off", "false"),
+                ])
+                .selected_index(Some(0))
+        });
+
+        let drv_refresh_dropdown_sub = cx.subscribe_in(
+            &drv_refresh_policy_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                this.drv_dirty = true;
+                cx.notify();
+            },
+        );
+
+        let drv_refresh_input_sub = cx.subscribe_in(
+            &drv_refresh_interval_input,
+            window,
+            |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
+                if matches!(event, gpui_component::input::InputEvent::Change) {
+                    this.drv_dirty = true;
+                    cx.notify();
+                }
+            },
+        );
+
+        let drv_confirm_dangerous_sub = cx.subscribe_in(
+            &drv_confirm_dangerous_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                this.drv_dirty = true;
+                cx.notify();
+            },
+        );
+
+        let drv_requires_where_sub = cx.subscribe_in(
+            &drv_requires_where_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                this.drv_dirty = true;
+                cx.notify();
+            },
+        );
+
+        let drv_requires_preview_sub = cx.subscribe_in(
+            &drv_requires_preview_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                this.drv_dirty = true;
+                cx.notify();
+            },
+        );
+
         // General inputs
         let input_max_history = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("1000");
@@ -378,6 +502,14 @@ impl SettingsWindow {
         let input_svc_command =
             cx.new(|cx| InputState::new(window, cx).placeholder("dbflux-driver-host"));
         let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
+
+        let (drv_overrides, drv_settings) = {
+            let state = app_state.read(cx);
+            (
+                state.driver_overrides().clone(),
+                state.driver_settings().clone(),
+            )
+        };
 
         // Focus the window on creation
         focus_handle.focus(window);
@@ -436,6 +568,21 @@ impl SettingsWindow {
             editing_svc_idx: None,
             pending_delete_svc_idx: None,
 
+            drv_entries: Vec::new(),
+            drv_selected_idx: None,
+            drv_overrides,
+            drv_settings,
+            drv_dirty: false,
+            drv_override_refresh_policy: false,
+            drv_override_refresh_interval: false,
+            drv_refresh_policy_dropdown,
+            drv_refresh_interval_input,
+            drv_confirm_dangerous_dropdown,
+            drv_requires_where_dropdown,
+            drv_requires_preview_dropdown,
+            drv_form_state: FormRendererState::default(),
+            drv_form_subscriptions: Vec::new(),
+
             gen_settings,
             gen_form_cursor: 0,
             gen_editing_field: false,
@@ -449,10 +596,21 @@ impl SettingsWindow {
 
             pending_close_confirm: false,
 
-            _subscriptions: vec![subscription, theme_sub, focus_sub, refresh_sub],
+            _subscriptions: vec![
+                subscription,
+                theme_sub,
+                focus_sub,
+                refresh_sub,
+                drv_refresh_dropdown_sub,
+                drv_refresh_input_sub,
+                drv_confirm_dangerous_sub,
+                drv_requires_where_sub,
+                drv_requires_preview_sub,
+            ],
         };
 
         this.load_services();
+        this.drv_load_entries(window, cx);
 
         let entity = cx.entity().clone();
         window.on_window_should_close(cx, move |_window, cx| {
@@ -477,7 +635,8 @@ impl SettingsWindow {
             SettingsSection::Keybindings => 1,
             SettingsSection::SshTunnels => 2,
             SettingsSection::Services => 3,
-            SettingsSection::About => 4,
+            SettingsSection::Drivers => 4,
+            SettingsSection::About => 5,
         }
     }
 
@@ -487,13 +646,14 @@ impl SettingsWindow {
             1 => SettingsSection::Keybindings,
             2 => SettingsSection::SshTunnels,
             3 => SettingsSection::Services,
-            4 => SettingsSection::About,
+            4 => SettingsSection::Drivers,
+            5 => SettingsSection::About,
             _ => SettingsSection::General,
         }
     }
 
     fn sidebar_section_count(&self) -> usize {
-        5
+        6
     }
 
     // -- Unsaved-changes detection --
@@ -502,6 +662,7 @@ impl SettingsWindow {
         self.has_unsaved_general_changes(cx)
             || self.has_unsaved_ssh_changes(cx)
             || self.has_unsaved_svc_changes(cx)
+            || self.has_unsaved_driver_changes()
     }
 
     fn has_unsaved_general_changes(&self, cx: &App) -> bool {
@@ -519,7 +680,6 @@ impl SettingsWindow {
             || self.gen_settings.confirm_dangerous_queries != saved.confirm_dangerous_queries
             || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
             || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
-            || self.gen_settings.allow_redis_flush != saved.allow_redis_flush
         {
             return true;
         }
@@ -687,6 +847,13 @@ impl SettingsWindow {
         if self.has_unsaved_svc_changes(cx) {
             self.save_service(window, cx);
             if self.has_unsaved_svc_changes(cx) {
+                return;
+            }
+        }
+
+        if self.has_unsaved_driver_changes() {
+            self.save_driver_settings(window, cx);
+            if self.has_unsaved_driver_changes() {
                 return;
             }
         }
@@ -940,6 +1107,40 @@ impl SettingsWindow {
                     }
                     _ => {}
                 },
+            }
+        }
+
+        if self.active_section == SettingsSection::Drivers
+            && self.focus_area == SettingsFocus::Content
+        {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("j", m) | ("down", m) if m == Modifiers::none() => {
+                    if let Some(current) = self.drv_selected_idx
+                        && current + 1 < self.drv_entries.len()
+                    {
+                        self.drv_select_driver(current + 1, window, cx);
+                    }
+                    return;
+                }
+                ("k", m) | ("up", m) if m == Modifiers::none() => {
+                    if let Some(current) = self.drv_selected_idx
+                        && current > 0
+                    {
+                        self.drv_select_driver(current - 1, window, cx);
+                    }
+                    return;
+                }
+                ("h", m) | ("left", m) if m == Modifiers::none() => {
+                    self.focus_area = SettingsFocus::Sidebar;
+                    cx.notify();
+                    return;
+                }
+                ("escape", m) if m == Modifiers::none() => {
+                    self.focus_area = SettingsFocus::Sidebar;
+                    cx.notify();
+                    return;
+                }
+                _ => {}
             }
         }
 

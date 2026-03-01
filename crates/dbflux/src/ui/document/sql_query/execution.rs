@@ -131,7 +131,7 @@ impl SqlQueryDocument {
                     .driver_values
                     .get("allow_flush")
                     .map(|value| value == "true")
-                    .unwrap_or(state.general_settings().allow_redis_flush);
+                    .unwrap_or(false);
 
                 (effective, allow_redis_flush)
             };
