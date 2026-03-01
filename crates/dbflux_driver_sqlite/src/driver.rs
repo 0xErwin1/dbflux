@@ -33,7 +33,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-            | DriverCapabilities::TRIGGERS.bits()
+            | DriverCapabilities::PREPARED_STATEMENTS.bits()
             | DriverCapabilities::INSERT.bits()
             | DriverCapabilities::UPDATE.bits()
             | DriverCapabilities::DELETE.bits()

@@ -149,6 +149,49 @@ pub fn collect_values(
     values
 }
 
+/// Returns warnings for values that don't match the expected field type
+/// (e.g. non-numeric text in a Number field). Empty values are skipped
+/// because the runtime falls back to defaults.
+pub fn validate_values(schema: &DriverFormDef, values: &FormValues) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for tab in &schema.tabs {
+        for section in &tab.sections {
+            for field in &section.fields {
+                let Some(raw) = values.get(&field.id) else {
+                    continue;
+                };
+
+                if raw.is_empty() {
+                    continue;
+                }
+
+                match &field.kind {
+                    FormFieldKind::Number => {
+                        if raw.parse::<f64>().is_err() {
+                            warnings.push(format!(
+                                "{}: \"{}\" is not a valid number (will use default: {})",
+                                field.label, raw, field.default_value
+                            ));
+                        }
+                    }
+                    FormFieldKind::Select { options } => {
+                        if !options.iter().any(|opt| opt.value == *raw) {
+                            warnings.push(format!(
+                                "{}: \"{}\" is not a recognized option (will use default: {})",
+                                field.label, raw, field.default_value
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
 pub fn is_field_enabled(field: &FormFieldDef, checkboxes: &HashMap<String, bool>) -> bool {
     if let Some(checkbox_id) = &field.enabled_when_checked {
         let is_checked = checkboxes

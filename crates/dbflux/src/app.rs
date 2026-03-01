@@ -41,6 +41,13 @@ fn rpc_registry_id(socket_id: &str) -> String {
     format!("rpc:{}", socket_id)
 }
 
+struct BuiltDrivers {
+    drivers: HashMap<String, Arc<dyn DbDriver>>,
+    general_settings: GeneralSettings,
+    driver_overrides: HashMap<DriverKey, GlobalOverrides>,
+    driver_settings: HashMap<DriverKey, FormValues>,
+}
+
 pub struct AppState {
     pub facade: SessionFacade,
     pub settings_window: Option<WindowHandle<Root>>,
@@ -54,14 +61,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let (drivers, general_settings, driver_overrides, driver_settings) =
-            Self::build_default_drivers();
+        let built = Self::build_default_drivers();
 
         Self::new_with_drivers_and_settings(
-            drivers,
-            general_settings,
-            driver_overrides,
-            driver_settings,
+            built.drivers,
+            built.general_settings,
+            built.driver_overrides,
+            built.driver_settings,
         )
     }
 
@@ -100,12 +106,7 @@ impl AppState {
         }
     }
 
-    fn build_default_drivers() -> (
-        HashMap<String, Arc<dyn DbDriver>>,
-        GeneralSettings,
-        HashMap<DriverKey, GlobalOverrides>,
-        HashMap<DriverKey, FormValues>,
-    ) {
+    fn build_default_drivers() -> BuiltDrivers {
         let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
 
         #[cfg(feature = "sqlite")]
@@ -211,7 +212,12 @@ impl AppState {
             }
         }
 
-        (drivers, general_settings, driver_overrides, driver_settings)
+        BuiltDrivers {
+            drivers,
+            general_settings,
+            driver_overrides,
+            driver_settings,
+        }
     }
 
     // --- ConnectionManager ---

@@ -30,6 +30,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::KEYVALUE_BASE.bits()
+            | DriverCapabilities::MULTIPLE_DATABASES.bits()
             | DriverCapabilities::KV_TTL.bits()
             | DriverCapabilities::KV_KEY_TYPES.bits()
             | DriverCapabilities::KV_VALUE_SIZE.bits()
