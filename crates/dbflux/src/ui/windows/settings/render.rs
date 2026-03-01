@@ -72,12 +72,21 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_sidebar_item(
+                "section-drivers",
+                "Drivers",
+                AppIcon::Database,
+                SettingsSection::Drivers,
+                active,
+                focused && self.sidebar_index_for_section(active) == 4,
+                cx,
+            ))
+            .child(self.render_sidebar_item(
                 "section-about",
                 "About",
                 AppIcon::Info,
                 SettingsSection::About,
                 active,
-                focused && self.sidebar_index_for_section(active) == 4,
+                focused && self.sidebar_index_for_section(active) == 5,
                 cx,
             ))
     }
@@ -1777,6 +1786,7 @@ impl Render for SettingsWindow {
                     self.render_ssh_tunnels_section(cx).into_any_element()
                 }
                 SettingsSection::Services => self.render_services_section(cx).into_any_element(),
+                SettingsSection::Drivers => self.render_drivers_section(cx).into_any_element(),
                 SettingsSection::About => self.render_about_section(cx).into_any_element(),
             })
             .when(show_ssh_delete, |el| {

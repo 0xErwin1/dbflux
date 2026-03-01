@@ -34,7 +34,6 @@ impl SettingsWindow {
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
-            GeneralFormRow::AllowRedisFlush,
             // Actions
             GeneralFormRow::SaveButton,
         ]
@@ -112,10 +111,6 @@ impl SettingsWindow {
             Some(GeneralFormRow::RequiresPreview) => {
                 self.gen_settings.dangerous_requires_preview =
                     !self.gen_settings.dangerous_requires_preview;
-                cx.notify();
-            }
-            Some(GeneralFormRow::AllowRedisFlush) => {
-                self.gen_settings.allow_redis_flush = !self.gen_settings.allow_redis_flush;
                 cx.notify();
             }
 
@@ -403,14 +398,6 @@ impl SettingsWindow {
                         self.gen_settings.dangerous_requires_preview,
                         is_at(GeneralFormRow::RequiresPreview),
                         |this, val| this.gen_settings.dangerous_requires_preview = val,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "allow-redis-flush",
-                        "Allow FLUSHALL / FLUSHDB",
-                        self.gen_settings.allow_redis_flush,
-                        is_at(GeneralFormRow::AllowRedisFlush),
-                        |this, val| this.gen_settings.allow_redis_flush = val,
                         cx,
                     )),
             )

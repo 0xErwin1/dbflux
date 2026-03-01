@@ -10,7 +10,10 @@ use std::path::PathBuf;
 /// External RPC drivers use `"rpc:<socket_id>"`.
 pub type DriverKey = String;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+const CONFIG_VERSION_1: u32 = 1;
+const CONFIG_VERSION_2: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_config_version")]
     pub version: u32,
@@ -31,7 +34,19 @@ pub struct AppConfig {
 }
 
 fn default_config_version() -> u32 {
-    1
+    CONFIG_VERSION_1
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            version: CONFIG_VERSION_2,
+            services: Vec::new(),
+            general: GeneralSettings::default(),
+            driver_overrides: HashMap::new(),
+            driver_settings: HashMap::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,9 +206,6 @@ pub struct GeneralSettings {
 
     #[serde(default)]
     pub dangerous_requires_preview: bool,
-
-    #[serde(default)]
-    pub allow_redis_flush: bool,
 }
 
 impl Default for GeneralSettings {
@@ -215,7 +227,6 @@ impl Default for GeneralSettings {
             confirm_dangerous_queries: true,
             dangerous_requires_where: true,
             dangerous_requires_preview: false,
-            allow_redis_flush: false,
         }
     }
 }
@@ -292,12 +303,6 @@ impl GeneralSettings {
         is_suppressed: bool,
     ) -> DangerousAction {
         use crate::DangerousQueryKind::*;
-
-        if !self.allow_redis_flush && matches!(kind, RedisFlushAll | RedisFlushDb) {
-            return DangerousAction::Block(
-                "FLUSHALL / FLUSHDB is disabled in settings".to_string(),
-            );
-        }
 
         if !self.confirm_dangerous_queries {
             return DangerousAction::Allow;
@@ -377,10 +382,41 @@ impl AppConfigStore {
         }
 
         let content = fs::read_to_string(&self.path).map_err(DbError::IoError)?;
-        let config: AppConfig =
+        let json: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
 
+        let legacy_allow_redis_flush = json
+            .get("general")
+            .and_then(|general| general.get("allow_redis_flush"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+        let mut config: AppConfig =
+            serde_json::from_value(json).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
+
+        if self.migrate_v1_to_v2(&mut config, legacy_allow_redis_flush) {
+            self.save(&config)?;
+        }
+
         Ok(config)
+    }
+
+    fn migrate_v1_to_v2(&self, config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
+        if config.version > CONFIG_VERSION_1 {
+            return false;
+        }
+
+        if legacy_allow_redis_flush {
+            config
+                .driver_settings
+                .entry("builtin:redis".to_string())
+                .or_default()
+                .entry("allow_flush".to_string())
+                .or_insert_with(|| "true".to_string());
+        }
+
+        config.version = CONFIG_VERSION_2;
+        true
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), DbError> {
@@ -681,10 +717,79 @@ mod tests {
     #[test]
     fn app_config_default_version_is_one() {
         let config = AppConfig::default();
-        assert_eq!(config.version, 0); // Default::default() gives u32 default (0)
+        assert_eq!(config.version, 2);
 
         // But deserialization uses the serde default function
         let config: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(config.version, 1);
+    }
+
+    #[test]
+    fn migration_moves_legacy_allow_redis_flush_to_driver_settings() {
+        let store = AppConfigStore {
+            path: PathBuf::from("/tmp/unused"),
+        };
+
+        let mut config = AppConfig {
+            version: 1,
+            ..AppConfig::default()
+        };
+
+        let migrated = store.migrate_v1_to_v2(&mut config, true);
+
+        assert!(migrated);
+        assert_eq!(config.version, 2);
+        assert_eq!(
+            config
+                .driver_settings
+                .get("builtin:redis")
+                .and_then(|values| values.get("allow_flush"))
+                .map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn migration_keeps_existing_allow_flush_value() {
+        let store = AppConfigStore {
+            path: PathBuf::from("/tmp/unused"),
+        };
+
+        let mut config = AppConfig {
+            version: 1,
+            ..AppConfig::default()
+        };
+
+        config
+            .driver_settings
+            .entry("builtin:redis".to_string())
+            .or_default()
+            .insert("allow_flush".to_string(), "false".to_string());
+
+        let migrated = store.migrate_v1_to_v2(&mut config, true);
+
+        assert!(migrated);
+        assert_eq!(
+            config
+                .driver_settings
+                .get("builtin:redis")
+                .and_then(|values| values.get("allow_flush"))
+                .map(String::as_str),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn migration_skips_when_version_is_already_two() {
+        let store = AppConfigStore {
+            path: PathBuf::from("/tmp/unused"),
+        };
+
+        let mut config = AppConfig::default();
+
+        let migrated = store.migrate_v1_to_v2(&mut config, true);
+
+        assert!(!migrated);
+        assert!(config.driver_settings.is_empty());
     }
 }
