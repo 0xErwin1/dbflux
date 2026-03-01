@@ -4,13 +4,13 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{ServiceConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
@@ -24,6 +24,7 @@ impl SettingsWindow {
         let theme = cx.theme();
         let active = self.active_section;
         let focused = self.focus_area == SettingsFocus::Sidebar;
+        let sidebar_border = theme.border;
 
         div()
             .w(px(180.0))
@@ -89,6 +90,18 @@ impl SettingsWindow {
                 focused && self.sidebar_index_for_section(active) == 5,
                 cx,
             ))
+            .child(div().flex_1())
+            .child({
+                div().p_1().border_t_1().border_color(sidebar_border).child(
+                    Button::new("close-settings")
+                        .label("Close")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.try_close(window, cx);
+                        })),
+                )
+            })
     }
 
     #[allow(clippy::too_many_arguments)]

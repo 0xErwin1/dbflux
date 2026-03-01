@@ -228,7 +228,7 @@ pub struct SettingsWindow {
     drv_selected_idx: Option<usize>,
     drv_overrides: HashMap<DriverKey, GlobalOverrides>,
     drv_settings: HashMap<DriverKey, FormValues>,
-    drv_dirty: bool,
+
     drv_editor_dirty: bool,
     drv_loading_selected_editor: bool,
 
@@ -429,7 +429,6 @@ impl SettingsWindow {
                     return;
                 }
 
-                this.drv_dirty = true;
                 this.drv_editor_dirty = true;
                 cx.notify();
             },
@@ -444,7 +443,6 @@ impl SettingsWindow {
                         return;
                     }
 
-                    this.drv_dirty = true;
                     this.drv_editor_dirty = true;
                     cx.notify();
                 }
@@ -459,7 +457,6 @@ impl SettingsWindow {
                     return;
                 }
 
-                this.drv_dirty = true;
                 this.drv_editor_dirty = true;
                 cx.notify();
             },
@@ -473,7 +470,6 @@ impl SettingsWindow {
                     return;
                 }
 
-                this.drv_dirty = true;
                 this.drv_editor_dirty = true;
                 cx.notify();
             },
@@ -487,7 +483,6 @@ impl SettingsWindow {
                     return;
                 }
 
-                this.drv_dirty = true;
                 this.drv_editor_dirty = true;
                 cx.notify();
             },
@@ -599,7 +594,7 @@ impl SettingsWindow {
             drv_selected_idx: None,
             drv_overrides,
             drv_settings,
-            drv_dirty: false,
+
             drv_editor_dirty: false,
             drv_loading_selected_editor: false,
             drv_override_refresh_policy: false,
@@ -658,6 +653,15 @@ impl SettingsWindow {
         this
     }
 
+    fn try_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_unsaved_changes(cx) {
+            self.pending_close_confirm = true;
+            cx.notify();
+        } else {
+            window.remove_window();
+        }
+    }
+
     fn sidebar_index_for_section(&self, section: SettingsSection) -> usize {
         match section {
             SettingsSection::General => 0,
@@ -691,7 +695,7 @@ impl SettingsWindow {
         self.has_unsaved_general_changes(cx)
             || self.has_unsaved_ssh_changes(cx)
             || self.has_unsaved_svc_changes(cx)
-            || self.has_unsaved_driver_changes()
+            || self.has_unsaved_driver_changes(cx)
     }
 
     fn has_unsaved_general_changes(&self, cx: &App) -> bool {
@@ -880,9 +884,9 @@ impl SettingsWindow {
             }
         }
 
-        if self.has_unsaved_driver_changes() {
+        if self.has_unsaved_driver_changes(cx) {
             self.save_driver_settings(window, cx);
-            if self.has_unsaved_driver_changes() {
+            if self.has_unsaved_driver_changes(cx) {
                 return;
             }
         }
