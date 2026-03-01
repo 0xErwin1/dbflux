@@ -144,6 +144,7 @@ pub use sql_query_builder::SqlQueryBuilder;
 pub use app_config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
     GlobalOverrides, RefreshPolicySetting, ServiceConfig, StartupFocus, ThemeSetting,
+    driver_maps_differ,
 };
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,

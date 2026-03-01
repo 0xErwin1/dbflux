@@ -1,3 +1,4 @@
+use crate::driver_form::FormValues;
 use crate::DbError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -457,6 +458,23 @@ impl AppConfigStore {
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+}
+
+/// Compare working driver maps against saved state after stripping empty entries.
+///
+/// Returns `true` when working state differs from saved state, meaning there
+/// are unsaved driver changes. The caller merges any live editor state into
+/// the working maps before calling this function.
+pub fn driver_maps_differ(
+    working_overrides: &mut HashMap<DriverKey, GlobalOverrides>,
+    working_settings: &mut HashMap<DriverKey, FormValues>,
+    saved_overrides: &HashMap<DriverKey, GlobalOverrides>,
+    saved_settings: &HashMap<DriverKey, FormValues>,
+) -> bool {
+    working_overrides.retain(|_, ov| !ov.is_empty());
+    working_settings.retain(|_, v: &mut FormValues| !v.is_empty());
+
+    working_overrides != saved_overrides || working_settings != saved_settings
 }
 
 #[cfg(test)]
@@ -991,5 +1009,105 @@ mod tests {
 
         assert!(!migrated);
         assert!(config.driver_settings.is_empty());
+    }
+
+    // =========================================================================
+    // driver_maps_differ
+    // =========================================================================
+
+    #[test]
+    fn identical_maps_are_not_dirty() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "builtin:redis".to_string(),
+            GlobalOverrides {
+                confirm_dangerous: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let mut settings = HashMap::new();
+        let mut vals = FormValues::new();
+        vals.insert("key".to_string(), "value".to_string());
+        settings.insert("builtin:redis".to_string(), vals);
+
+        assert!(!super::driver_maps_differ(
+            &mut overrides.clone(),
+            &mut settings.clone(),
+            &overrides,
+            &settings,
+        ));
+    }
+
+    #[test]
+    fn empty_overrides_stripped_before_compare() {
+        let mut working_overrides = HashMap::new();
+        working_overrides.insert("builtin:redis".to_string(), GlobalOverrides::default());
+
+        assert!(!super::driver_maps_differ(
+            &mut working_overrides,
+            &mut HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn different_override_value_is_dirty() {
+        let mut working = HashMap::new();
+        working.insert(
+            "builtin:redis".to_string(),
+            GlobalOverrides {
+                confirm_dangerous: Some(false),
+                ..Default::default()
+            },
+        );
+
+        let mut saved = HashMap::new();
+        saved.insert(
+            "builtin:redis".to_string(),
+            GlobalOverrides {
+                confirm_dangerous: Some(true),
+                ..Default::default()
+            },
+        );
+
+        assert!(super::driver_maps_differ(
+            &mut working,
+            &mut HashMap::new(),
+            &saved,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn empty_inner_map_settings_stripped() {
+        let mut working_settings = HashMap::new();
+        working_settings.insert("builtin:redis".to_string(), FormValues::new());
+
+        assert!(!super::driver_maps_differ(
+            &mut HashMap::new(),
+            &mut working_settings,
+            &HashMap::new(),
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn nonempty_settings_with_empty_string_values_are_dirty() {
+        let mut working_settings = HashMap::new();
+        let mut vals = FormValues::new();
+        vals.insert("allow_flush".to_string(), String::new());
+        working_settings.insert("builtin:redis".to_string(), vals);
+
+        assert!(
+            super::driver_maps_differ(
+                &mut HashMap::new(),
+                &mut working_settings,
+                &HashMap::new(),
+                &HashMap::new(),
+            ),
+            "caller is responsible for stripping empty-string values before calling"
+        );
     }
 }

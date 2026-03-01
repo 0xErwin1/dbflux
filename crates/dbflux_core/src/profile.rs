@@ -429,3 +429,168 @@ impl ConnectionProfile {
         crate::secrets::ssh_secret_ref(&self.id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_config::GlobalOverrides;
+    use crate::driver_form::FormValues;
+    use crate::RefreshPolicySetting;
+
+    fn sqlite_profile() -> ConnectionProfile {
+        ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
+    }
+
+    #[test]
+    fn legacy_profile_deserializes_without_new_fields() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "old-pg",
+            "config": {
+                "Postgres": {
+                    "host": "localhost",
+                    "port": 5432,
+                    "user": "pg",
+                    "database": "mydb",
+                    "ssl_mode": "Disable"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile = serde_json::from_str(json).unwrap();
+
+        assert_eq!(profile.name, "old-pg");
+        assert!(profile.settings_overrides.is_none());
+        assert!(profile.connection_settings.is_none());
+        assert!(profile.kind.is_none());
+        assert!(profile.driver_id.is_none());
+    }
+
+    #[test]
+    fn profile_serde_roundtrip_with_overrides() {
+        let mut profile = sqlite_profile();
+        profile.settings_overrides = Some(GlobalOverrides {
+            refresh_policy: Some(RefreshPolicySetting::Interval),
+            refresh_interval_secs: Some(10),
+            confirm_dangerous: Some(false),
+            ..Default::default()
+        });
+
+        let mut settings = FormValues::new();
+        settings.insert("scan_batch_size".to_string(), "500".to_string());
+        profile.connection_settings = Some(settings);
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let restored: ConnectionProfile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            restored.settings_overrides.as_ref().unwrap().refresh_policy,
+            Some(RefreshPolicySetting::Interval)
+        );
+        assert_eq!(
+            restored
+                .settings_overrides
+                .as_ref()
+                .unwrap()
+                .refresh_interval_secs,
+            Some(10)
+        );
+        assert_eq!(
+            restored
+                .settings_overrides
+                .as_ref()
+                .unwrap()
+                .confirm_dangerous,
+            Some(false)
+        );
+        assert_eq!(
+            restored
+                .connection_settings
+                .as_ref()
+                .unwrap()
+                .get("scan_batch_size"),
+            Some(&"500".to_string())
+        );
+    }
+
+    #[test]
+    fn kind_falls_back_to_config_kind() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000002",
+            "name": "legacy-pg",
+            "config": {
+                "Postgres": {
+                    "host": "localhost",
+                    "port": 5432,
+                    "user": "pg",
+                    "database": "db",
+                    "ssl_mode": "Disable"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile = serde_json::from_str(json).unwrap();
+
+        assert!(profile.kind.is_none());
+        assert_eq!(profile.kind(), DbKind::Postgres);
+    }
+
+    #[test]
+    fn driver_id_falls_back_to_builtin() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000003",
+            "name": "legacy-redis",
+            "config": {
+                "Redis": {
+                    "host": "localhost",
+                    "port": 6379
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile = serde_json::from_str(json).unwrap();
+
+        assert!(profile.driver_id.is_none());
+        assert_eq!(profile.driver_id(), "redis");
+    }
+
+    #[test]
+    fn set_kind_populates_driver_id_when_none() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000004",
+            "name": "legacy-mysql",
+            "config": {
+                "MySQL": {
+                    "host": "localhost",
+                    "port": 3306,
+                    "user": "root",
+                    "ssl_mode": "Disable"
+                }
+            }
+        }"#;
+
+        let mut profile: ConnectionProfile = serde_json::from_str(json).unwrap();
+
+        assert!(profile.driver_id.is_none());
+
+        profile.set_kind(DbKind::MariaDB);
+
+        assert_eq!(profile.kind(), DbKind::MariaDB);
+        assert_eq!(profile.driver_id(), "mariadb");
+    }
+
+    #[test]
+    fn new_with_driver_sets_explicit_driver_id() {
+        let profile = ConnectionProfile::new_with_driver(
+            "custom-redis",
+            DbKind::Redis,
+            "rpc:my_redis",
+            DbConfig::default_redis(),
+        );
+
+        assert_eq!(profile.kind(), DbKind::Redis);
+        assert_eq!(profile.driver_id(), "rpc:my_redis");
+        assert!(profile.settings_overrides.is_none());
+        assert!(profile.connection_settings.is_none());
+    }
+}

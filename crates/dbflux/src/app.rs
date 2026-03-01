@@ -5,7 +5,7 @@ use dbflux_core::{
     ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
     TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -1201,6 +1201,142 @@ mod tests {
         assert!(!effective.requires_where);
         assert!(effective.requires_preview);
         assert_eq!(effective.driver_values, values);
+    }
+
+    fn insert_connected_profile(state: &mut AppState, profile: &dbflux_core::ConnectionProfile) {
+        let driver = state
+            .drivers()
+            .get(&profile.driver_id())
+            .expect("driver must be registered")
+            .clone();
+
+        let connection: Arc<dyn dbflux_core::Connection> = Arc::from(
+            driver
+                .connect_with_secrets(profile, None, None)
+                .expect("FakeDriver never fails"),
+        );
+
+        state.connections_mut().insert(
+            profile.id,
+            dbflux_core::ConnectedProfile {
+                profile: profile.clone(),
+                connection,
+                schema: None,
+                database_schemas: HashMap::new(),
+                table_details: HashMap::new(),
+                schema_types: HashMap::new(),
+                schema_indexes: HashMap::new(),
+                schema_foreign_keys: HashMap::new(),
+                active_database: None,
+                redis_key_cache: Default::default(),
+                database_connections: HashMap::new(),
+            },
+        );
+    }
+
+    fn fake_driver_key(state: &AppState) -> String {
+        state.drivers().values().next().unwrap().driver_key()
+    }
+
+    fn fake_profile(state: &AppState) -> dbflux_core::ConnectionProfile {
+        let driver_id = state.drivers().keys().next().unwrap().clone();
+        let mut profile =
+            dbflux_core::ConnectionProfile::new("test", dbflux_core::DbConfig::default_sqlite());
+        profile.set_driver_id(driver_id);
+        profile
+    }
+
+    #[test]
+    fn connection_overrides_win_over_driver_overrides() {
+        let mut state = test_state(GeneralSettings::default());
+        let driver_key = fake_driver_key(&state);
+
+        state.update_driver_overrides(
+            driver_key,
+            dbflux_core::GlobalOverrides {
+                confirm_dangerous: Some(true),
+                requires_where: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let mut profile = fake_profile(&state);
+        profile.settings_overrides = Some(dbflux_core::GlobalOverrides {
+            confirm_dangerous: Some(false),
+            ..Default::default()
+        });
+
+        insert_connected_profile(&mut state, &profile);
+
+        let effective = state.effective_settings_for_connection(Some(profile.id));
+
+        assert!(
+            !effective.confirm_dangerous,
+            "connection override should win"
+        );
+        assert!(
+            effective.requires_where,
+            "driver override should fall through"
+        );
+    }
+
+    #[test]
+    fn connection_without_overrides_falls_through_to_driver() {
+        let mut general = GeneralSettings::default();
+        general.confirm_dangerous_queries = false;
+
+        let mut state = test_state(general);
+        let driver_key = fake_driver_key(&state);
+
+        state.update_driver_overrides(
+            driver_key,
+            dbflux_core::GlobalOverrides {
+                confirm_dangerous: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let profile = fake_profile(&state);
+        insert_connected_profile(&mut state, &profile);
+
+        let effective = state.effective_settings_for_connection(Some(profile.id));
+
+        assert!(
+            effective.confirm_dangerous,
+            "driver override should apply when connection has no overrides"
+        );
+    }
+
+    #[test]
+    fn connection_settings_merge_on_top_of_driver_settings() {
+        let mut state = test_state(GeneralSettings::default());
+        let driver_key = fake_driver_key(&state);
+
+        let mut driver_vals = FormValues::new();
+        driver_vals.insert("scan_batch_size".to_string(), "100".to_string());
+        driver_vals.insert("allow_flush".to_string(), "false".to_string());
+        state.update_driver_settings(driver_key, driver_vals);
+
+        let mut profile = fake_profile(&state);
+
+        let mut conn_settings = FormValues::new();
+        conn_settings.insert("scan_batch_size".to_string(), "500".to_string());
+        profile.connection_settings = Some(conn_settings);
+
+        insert_connected_profile(&mut state, &profile);
+
+        let effective = state.effective_settings_for_connection(Some(profile.id));
+
+        assert_eq!(
+            effective.driver_values.get("scan_batch_size"),
+            Some(&"500".to_string()),
+            "connection setting should override driver setting"
+        );
+        assert_eq!(
+            effective.driver_values.get("allow_flush"),
+            Some(&"false".to_string()),
+            "driver setting should fall through when connection doesn't override"
+        );
     }
 
     #[test]

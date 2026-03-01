@@ -138,10 +138,12 @@ impl SettingsWindow {
             }
         }
 
-        working_overrides.retain(|_, ov| !ov.is_empty());
-        working_settings.retain(|_, v| !v.is_empty());
-
-        working_overrides != *saved_overrides || working_settings != *saved_settings
+        dbflux_core::driver_maps_differ(
+            &mut working_overrides,
+            &mut working_settings,
+            saved_overrides,
+            saved_settings,
+        )
     }
 
     /// Read the current editor's override widgets into a `GlobalOverrides`
@@ -1165,3 +1167,5 @@ impl SettingsWindow {
             )
     }
 }
+
+
