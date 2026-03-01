@@ -501,9 +501,9 @@ impl ConnectionManagerWindow {
             for section in &tab.sections {
                 for field in &section.fields {
                     if field.kind == FormFieldKind::Checkbox {
-                        let is_checked =
-                            values.get(&field.id).map(|v| v == "true").unwrap_or(false);
-                        self.checkbox_states.insert(field.id.clone(), is_checked);
+                        let is_checked = values.get(&field.id).map(|v| v == "true").unwrap_or(false);
+                        self.checkbox_states
+                            .insert(field.id.clone(), is_checked);
                     }
                 }
             }

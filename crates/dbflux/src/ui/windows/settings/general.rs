@@ -2,12 +2,12 @@ use crate::ui::dropdown::Dropdown;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore};
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::{GeneralFormRow, SettingsFocus, SettingsSection, SettingsWindow};
 

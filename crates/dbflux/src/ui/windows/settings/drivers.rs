@@ -8,12 +8,12 @@ use dbflux_core::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
@@ -69,7 +69,11 @@ fn policy_label(policy: RefreshPolicySetting) -> &'static str {
 }
 
 fn bool_label(value: bool) -> &'static str {
-    if value { "On" } else { "Off" }
+    if value {
+        "On"
+    } else {
+        "Off"
+    }
 }
 
 fn bool_override_index(value: Option<bool>) -> usize {

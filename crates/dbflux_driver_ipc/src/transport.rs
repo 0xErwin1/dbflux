@@ -2,14 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_VERSION,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
-    framing,
+    framing, DRIVER_RPC_VERSION,
 };
-use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
+use interprocess::local_socket::{prelude::*, Name, Stream as IpcStream};
 use uuid::Uuid;
 
 pub struct RpcClient {
