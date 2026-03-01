@@ -104,35 +104,58 @@ pub struct EffectiveSettings {
 }
 
 impl EffectiveSettings {
+    /// Resolves effective settings from up to three layers:
+    ///
+    /// 1. `global` — base defaults from GeneralSettings
+    /// 2. `driver_overrides` — per-driver overrides from config.json
+    /// 3. `conn_overrides` — per-connection overrides from the profile
+    ///
+    /// For each field, the most specific non-None value wins:
+    /// `conn_override → driver_override → global_default`.
+    ///
+    /// For driver-owned values (`driver_values` + `conn_values`), the connection
+    /// layer merges on top of the driver layer. Empty strings in the connection
+    /// layer are stripped (treated as "use driver default").
     pub fn resolve(
         global: &GeneralSettings,
-        overrides: Option<&GlobalOverrides>,
+        driver_overrides: Option<&GlobalOverrides>,
         driver_values: &crate::FormValues,
+        conn_overrides: Option<&GlobalOverrides>,
+        conn_values: Option<&crate::FormValues>,
     ) -> Self {
-        let (
-            refresh_policy,
-            refresh_interval_secs,
-            confirm_dangerous,
-            requires_where,
-            requires_preview,
-        ) = match overrides {
-            Some(ov) => (
-                ov.refresh_policy.unwrap_or(global.default_refresh_policy),
-                ov.refresh_interval_secs
-                    .unwrap_or(global.default_refresh_interval_secs),
-                ov.confirm_dangerous
-                    .unwrap_or(global.confirm_dangerous_queries),
-                ov.requires_where.unwrap_or(global.dangerous_requires_where),
-                ov.requires_preview
-                    .unwrap_or(global.dangerous_requires_preview),
-            ),
-            None => (
-                global.default_refresh_policy,
-                global.default_refresh_interval_secs,
-                global.confirm_dangerous_queries,
-                global.dangerous_requires_where,
-                global.dangerous_requires_preview,
-            ),
+        macro_rules! resolve_field {
+            ($field:ident, $global_val:expr) => {
+                conn_overrides
+                    .and_then(|ov| ov.$field)
+                    .or_else(|| driver_overrides.and_then(|ov| ov.$field))
+                    .unwrap_or($global_val)
+            };
+        }
+
+        let refresh_policy = resolve_field!(refresh_policy, global.default_refresh_policy);
+
+        let refresh_interval_secs =
+            resolve_field!(refresh_interval_secs, global.default_refresh_interval_secs);
+
+        let confirm_dangerous = resolve_field!(confirm_dangerous, global.confirm_dangerous_queries);
+
+        let requires_where = resolve_field!(requires_where, global.dangerous_requires_where);
+
+        let requires_preview = resolve_field!(requires_preview, global.dangerous_requires_preview);
+
+        let merged_values = match conn_values {
+            Some(cv) => {
+                let mut merged = driver_values.clone();
+                for (key, value) in cv {
+                    if value.is_empty() {
+                        merged.remove(key);
+                    } else {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+                merged
+            }
+            None => driver_values.clone(),
         };
 
         Self {
@@ -141,7 +164,7 @@ impl EffectiveSettings {
             confirm_dangerous,
             requires_where,
             requires_preview,
-            driver_values: driver_values.clone(),
+            driver_values: merged_values,
         }
     }
 
@@ -538,7 +561,7 @@ mod tests {
         let global = test_global();
         let values = HashMap::new();
 
-        let effective = EffectiveSettings::resolve(&global, None, &values);
+        let effective = EffectiveSettings::resolve(&global, None, &values, None, None);
 
         assert_eq!(effective.refresh_policy, RefreshPolicySetting::Manual);
         assert_eq!(effective.refresh_interval_secs, 5);
@@ -554,7 +577,7 @@ mod tests {
         let overrides = GlobalOverrides::default();
         let values = HashMap::new();
 
-        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values);
+        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values, None, None);
 
         assert_eq!(effective.refresh_policy, RefreshPolicySetting::Manual);
         assert_eq!(effective.refresh_interval_secs, 5);
@@ -575,7 +598,7 @@ mod tests {
         };
         let values = HashMap::new();
 
-        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values);
+        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values, None, None);
 
         assert_eq!(effective.refresh_policy, RefreshPolicySetting::Interval);
         assert_eq!(effective.refresh_interval_secs, 30);
@@ -598,7 +621,7 @@ mod tests {
         };
         let values = HashMap::new();
 
-        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values);
+        let effective = EffectiveSettings::resolve(&global, Some(&overrides), &values, None, None);
 
         assert_eq!(effective.refresh_policy, RefreshPolicySetting::Interval);
         assert_eq!(effective.refresh_interval_secs, 60);
@@ -614,7 +637,7 @@ mod tests {
         values.insert("scan_batch_size".to_string(), "200".to_string());
         values.insert("allow_flush".to_string(), "true".to_string());
 
-        let effective = EffectiveSettings::resolve(&global, None, &values);
+        let effective = EffectiveSettings::resolve(&global, None, &values, None, None);
 
         assert_eq!(effective.driver_values.len(), 2);
         assert_eq!(effective.driver_values["scan_batch_size"], "200");
@@ -627,7 +650,8 @@ mod tests {
 
     #[test]
     fn resolve_refresh_policy_manual() {
-        let effective = EffectiveSettings::resolve(&test_global(), None, &HashMap::new());
+        let effective =
+            EffectiveSettings::resolve(&test_global(), None, &HashMap::new(), None, None);
         assert!(matches!(
             effective.resolve_refresh_policy(),
             crate::RefreshPolicy::Manual
@@ -642,13 +666,189 @@ mod tests {
             ..Default::default()
         };
 
-        let effective =
-            EffectiveSettings::resolve(&test_global(), Some(&overrides), &HashMap::new());
+        let effective = EffectiveSettings::resolve(
+            &test_global(),
+            Some(&overrides),
+            &HashMap::new(),
+            None,
+            None,
+        );
 
         match effective.resolve_refresh_policy() {
             crate::RefreshPolicy::Interval { every_secs } => assert_eq!(every_secs, 15),
             other => panic!("expected Interval, got {:?}", other),
         }
+    }
+
+    // =========================================================================
+    // EffectiveSettings::resolve — connection-level overrides (3-layer)
+    // =========================================================================
+
+    #[test]
+    fn connection_overrides_win_over_driver_overrides() {
+        let global = test_global();
+        let driver_ov = GlobalOverrides {
+            confirm_dangerous: Some(false),
+            requires_where: Some(false),
+            ..Default::default()
+        };
+        let conn_ov = GlobalOverrides {
+            confirm_dangerous: Some(true),
+            ..Default::default()
+        };
+
+        let effective = EffectiveSettings::resolve(
+            &global,
+            Some(&driver_ov),
+            &HashMap::new(),
+            Some(&conn_ov),
+            None,
+        );
+
+        // Connection override wins
+        assert!(effective.confirm_dangerous);
+        // Driver override used (connection didn't set this)
+        assert!(!effective.requires_where);
+        // Global default used (neither layer set this)
+        assert!(!effective.requires_preview);
+    }
+
+    #[test]
+    fn connection_overrides_fall_through_to_driver_then_global() {
+        let global = test_global();
+        let driver_ov = GlobalOverrides {
+            refresh_policy: Some(RefreshPolicySetting::Interval),
+            refresh_interval_secs: Some(30),
+            ..Default::default()
+        };
+        let conn_ov = GlobalOverrides {
+            refresh_interval_secs: Some(10),
+            ..Default::default()
+        };
+
+        let effective = EffectiveSettings::resolve(
+            &global,
+            Some(&driver_ov),
+            &HashMap::new(),
+            Some(&conn_ov),
+            None,
+        );
+
+        // Connection overrides interval
+        assert_eq!(effective.refresh_interval_secs, 10);
+        // Driver overrides policy (connection didn't set it)
+        assert_eq!(effective.refresh_policy, RefreshPolicySetting::Interval);
+        // Global default for the rest
+        assert!(effective.confirm_dangerous);
+    }
+
+    #[test]
+    fn connection_values_merge_on_top_of_driver_values() {
+        let mut driver_values = HashMap::new();
+        driver_values.insert("scan_batch_size".to_string(), "200".to_string());
+        driver_values.insert("allow_flush".to_string(), "true".to_string());
+
+        let mut conn_values = HashMap::new();
+        conn_values.insert("scan_batch_size".to_string(), "500".to_string());
+
+        let effective = EffectiveSettings::resolve(
+            &test_global(),
+            None,
+            &driver_values,
+            None,
+            Some(&conn_values),
+        );
+
+        assert_eq!(effective.driver_values["scan_batch_size"], "500");
+        assert_eq!(effective.driver_values["allow_flush"], "true");
+    }
+
+    #[test]
+    fn connection_values_empty_string_removes_driver_value() {
+        let mut driver_values = HashMap::new();
+        driver_values.insert("scan_batch_size".to_string(), "200".to_string());
+        driver_values.insert("allow_flush".to_string(), "true".to_string());
+
+        let mut conn_values = HashMap::new();
+        conn_values.insert("scan_batch_size".to_string(), String::new());
+
+        let effective = EffectiveSettings::resolve(
+            &test_global(),
+            None,
+            &driver_values,
+            None,
+            Some(&conn_values),
+        );
+
+        assert!(!effective.driver_values.contains_key("scan_batch_size"));
+        assert_eq!(effective.driver_values["allow_flush"], "true");
+    }
+
+    #[test]
+    fn connection_values_none_uses_driver_values_unchanged() {
+        let mut driver_values = HashMap::new();
+        driver_values.insert("key".to_string(), "val".to_string());
+
+        let effective =
+            EffectiveSettings::resolve(&test_global(), None, &driver_values, None, None);
+
+        assert_eq!(effective.driver_values.len(), 1);
+        assert_eq!(effective.driver_values["key"], "val");
+    }
+
+    #[test]
+    fn full_three_layer_resolution() {
+        let global = GeneralSettings {
+            default_refresh_policy: RefreshPolicySetting::Manual,
+            default_refresh_interval_secs: 5,
+            confirm_dangerous_queries: true,
+            dangerous_requires_where: true,
+            dangerous_requires_preview: false,
+            ..Default::default()
+        };
+
+        let driver_ov = GlobalOverrides {
+            refresh_policy: Some(RefreshPolicySetting::Interval),
+            refresh_interval_secs: Some(30),
+            confirm_dangerous: Some(false),
+            ..Default::default()
+        };
+
+        let conn_ov = GlobalOverrides {
+            confirm_dangerous: Some(true),
+            requires_preview: Some(true),
+            ..Default::default()
+        };
+
+        let mut driver_values = HashMap::new();
+        driver_values.insert("scan_batch_size".to_string(), "100".to_string());
+
+        let mut conn_values = HashMap::new();
+        conn_values.insert("scan_batch_size".to_string(), "999".to_string());
+        conn_values.insert("extra_key".to_string(), "extra_val".to_string());
+
+        let effective = EffectiveSettings::resolve(
+            &global,
+            Some(&driver_ov),
+            &driver_values,
+            Some(&conn_ov),
+            Some(&conn_values),
+        );
+
+        // Connection: confirm_dangerous=true wins over driver's false
+        assert!(effective.confirm_dangerous);
+        // Connection: requires_preview=true wins over global false
+        assert!(effective.requires_preview);
+        // Driver: refresh_policy=Interval wins over global Manual
+        assert_eq!(effective.refresh_policy, RefreshPolicySetting::Interval);
+        // Driver: refresh_interval_secs=30 (connection didn't override)
+        assert_eq!(effective.refresh_interval_secs, 30);
+        // Global: requires_where=true (nobody overrode)
+        assert!(effective.requires_where);
+        // Connection value wins over driver value
+        assert_eq!(effective.driver_values["scan_batch_size"], "999");
+        // Connection adds new key
+        assert_eq!(effective.driver_values["extra_key"], "extra_val");
     }
 
     // =========================================================================

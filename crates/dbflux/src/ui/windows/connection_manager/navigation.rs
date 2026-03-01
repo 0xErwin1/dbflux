@@ -1,6 +1,7 @@
 use crate::keymap::{Command, ContextId};
 use crate::ui::dropdown::DropdownItem;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
+use dbflux_core::FormFieldKind;
 use gpui::*;
 
 use super::{
@@ -346,6 +347,78 @@ impl FormFocus {
         }
     }
 
+    // === Settings Tab: Vertical Navigation (j/k) ===
+
+    pub(super) fn down_settings(self, driver_field_count: u8) -> Self {
+        use FormFocus::*;
+        match self {
+            Name => SettingsRefreshPolicy,
+            SettingsRefreshPolicy => SettingsRefreshInterval,
+            SettingsRefreshInterval => SettingsConfirmDangerous,
+            SettingsConfirmDangerous => SettingsRequiresWhere,
+            SettingsRequiresWhere => SettingsRequiresPreview,
+            SettingsRequiresPreview => {
+                if driver_field_count > 0 {
+                    SettingsDriverField(0)
+                } else {
+                    TestConnection
+                }
+            }
+            SettingsDriverField(idx) => {
+                let next = idx + 1;
+                if next < driver_field_count {
+                    SettingsDriverField(next)
+                } else {
+                    TestConnection
+                }
+            }
+            TestConnection => Save,
+            Save => Name,
+            _ => Name,
+        }
+    }
+
+    pub(super) fn up_settings(self, driver_field_count: u8) -> Self {
+        use FormFocus::*;
+        match self {
+            Name => Save,
+            SettingsRefreshPolicy => Name,
+            SettingsRefreshInterval => SettingsRefreshPolicy,
+            SettingsConfirmDangerous => SettingsRefreshInterval,
+            SettingsRequiresWhere => SettingsConfirmDangerous,
+            SettingsRequiresPreview => SettingsRequiresWhere,
+            SettingsDriverField(0) => SettingsRequiresPreview,
+            SettingsDriverField(idx) => SettingsDriverField(idx - 1),
+            TestConnection => {
+                if driver_field_count > 0 {
+                    SettingsDriverField(driver_field_count - 1)
+                } else {
+                    SettingsRequiresPreview
+                }
+            }
+            Save => TestConnection,
+            _ => Save,
+        }
+    }
+
+    // === Settings Tab: Horizontal Navigation (h/l) ===
+
+    pub(super) fn left_settings(self) -> Self {
+        use FormFocus::*;
+        match self {
+            Save => TestConnection,
+            other => other,
+        }
+    }
+
+    pub(super) fn right_settings(self) -> Self {
+        use FormFocus::*;
+        match self {
+            TestConnection => Save,
+            other => other,
+        }
+    }
+
     #[allow(dead_code)]
     pub(super) fn is_input_field(self) -> bool {
         use FormFocus::*;
@@ -637,6 +710,12 @@ impl ConnectionManagerWindow {
                     _ => 0,
                 }
             }
+            ActiveTab::Settings => match self.form_focus {
+                SettingsRefreshPolicy | SettingsRefreshInterval => 0,
+                SettingsConfirmDangerous | SettingsRequiresWhere | SettingsRequiresPreview => 1,
+                SettingsDriverField(idx) => 2 + idx as usize,
+                _ => 0,
+            },
         }
     }
 
@@ -649,6 +728,9 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.down_main(self.main_nav_state()),
             ActiveTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Settings => self
+                .form_focus
+                .down_settings(self.settings_driver_field_count()),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -658,6 +740,9 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.up_main(self.main_nav_state()),
             ActiveTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Settings => self
+                .form_focus
+                .up_settings(self.settings_driver_field_count()),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -667,6 +752,7 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state()),
             ActiveTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Settings => self.form_focus.left_settings(),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -676,28 +762,50 @@ impl ConnectionManagerWindow {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.right_main(self.main_nav_state()),
             ActiveTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Settings => self.form_focus.right_settings(),
         };
         self.scroll_to_focused();
         cx.notify();
     }
 
     fn next_tab(&mut self, cx: &mut Context<Self>) {
-        if self.supports_ssh() {
-            self.active_tab = match self.active_tab {
-                ActiveTab::Main => ActiveTab::Ssh,
-                ActiveTab::Ssh => ActiveTab::Main,
-            };
-            self.form_focus = match self.active_tab {
-                ActiveTab::Main => FormFocus::Name,
-                ActiveTab::Ssh => FormFocus::SshEnabled,
-            };
-            self.scroll_to_focused();
-            cx.notify();
-        }
+        let supports_ssh = self.supports_ssh();
+
+        self.active_tab = match (self.active_tab, supports_ssh) {
+            (ActiveTab::Main, true) => ActiveTab::Ssh,
+            (ActiveTab::Main, false) => ActiveTab::Settings,
+            (ActiveTab::Ssh, _) => ActiveTab::Settings,
+            (ActiveTab::Settings, _) => ActiveTab::Main,
+        };
+
+        self.form_focus = match self.active_tab {
+            ActiveTab::Main => FormFocus::Name,
+            ActiveTab::Ssh => FormFocus::SshEnabled,
+            ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
+        };
+
+        self.scroll_to_focused();
+        cx.notify();
     }
 
     fn prev_tab(&mut self, cx: &mut Context<Self>) {
-        self.next_tab(cx);
+        let supports_ssh = self.supports_ssh();
+
+        self.active_tab = match (self.active_tab, supports_ssh) {
+            (ActiveTab::Main, _) => ActiveTab::Settings,
+            (ActiveTab::Ssh, _) => ActiveTab::Main,
+            (ActiveTab::Settings, true) => ActiveTab::Ssh,
+            (ActiveTab::Settings, false) => ActiveTab::Main,
+        };
+
+        self.form_focus = match self.active_tab {
+            ActiveTab::Main => FormFocus::Name,
+            ActiveTab::Ssh => FormFocus::SshEnabled,
+            ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
+        };
+
+        self.scroll_to_focused();
+        cx.notify();
     }
 
     pub(super) fn activate_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -822,6 +930,53 @@ impl ConnectionManagerWindow {
             }
             FormFocus::SaveAsTunnel => {
                 self.save_current_ssh_as_tunnel(cx);
+            }
+
+            FormFocus::SettingsRefreshPolicy => {
+                self.conn_override_refresh_policy = !self.conn_override_refresh_policy;
+            }
+            FormFocus::SettingsRefreshInterval => {
+                if self.conn_override_refresh_interval {
+                    self.edit_state = EditState::Editing;
+                    self.conn_refresh_interval_input.update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
+                } else {
+                    self.conn_override_refresh_interval = true;
+                }
+            }
+            FormFocus::SettingsConfirmDangerous
+            | FormFocus::SettingsRequiresWhere
+            | FormFocus::SettingsRequiresPreview => {
+                // These are dropdowns — no toggle action needed in navigate mode
+            }
+
+            FormFocus::SettingsDriverField(idx) => {
+                if let Some(field) = self.settings_driver_field_def(idx) {
+                    match &field.kind {
+                        FormFieldKind::Checkbox => {
+                            let current = self
+                                .conn_form_state
+                                .checkboxes
+                                .get(&field.id)
+                                .copied()
+                                .unwrap_or(false);
+                            self.conn_form_state
+                                .checkboxes
+                                .insert(field.id.clone(), !current);
+                        }
+                        FormFieldKind::Select { .. } => {}
+                        _ => {
+                            if let Some(input) = self.conn_form_state.inputs.get(&field.id).cloned()
+                            {
+                                self.edit_state = EditState::Editing;
+                                input.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                });
+                            }
+                        }
+                    }
+                }
             }
 
             FormFocus::TestConnection => {

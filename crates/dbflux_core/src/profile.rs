@@ -1,3 +1,4 @@
+use crate::app_config::GlobalOverrides;
 use crate::driver_form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -308,6 +309,20 @@ pub struct ConnectionProfile {
     /// Whether to persist the password in the system keyring.
     #[serde(default)]
     pub save_password: bool,
+
+    /// Per-connection overrides for global/driver-level settings
+    /// (refresh policy, dangerous query checks, etc.).
+    ///
+    /// `None` means "use the driver-level (or global) defaults".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_overrides: Option<GlobalOverrides>,
+
+    /// Per-connection overrides for driver-owned schema settings
+    /// (e.g. scan_batch_size, allow_flush).
+    ///
+    /// `None` means "use the driver-level defaults".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_settings: Option<FormValues>,
 }
 
 impl ConnectionProfile {
@@ -320,6 +335,8 @@ impl ConnectionProfile {
             driver_id: Some(Self::builtin_driver_id_for_kind(kind).to_string()),
             config,
             save_password: true,
+            settings_overrides: None,
+            connection_settings: None,
         }
     }
 
@@ -335,6 +352,8 @@ impl ConnectionProfile {
             driver_id: Some(Self::builtin_driver_id_for_kind(kind).to_string()),
             config,
             save_password: false,
+            settings_overrides: None,
+            connection_settings: None,
         }
     }
 
@@ -352,6 +371,8 @@ impl ConnectionProfile {
             driver_id: Some(driver_id.into()),
             config,
             save_password: true,
+            settings_overrides: None,
+            connection_settings: None,
         }
     }
 

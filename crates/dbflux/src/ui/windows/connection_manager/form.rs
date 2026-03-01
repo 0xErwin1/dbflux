@@ -1,3 +1,5 @@
+use crate::ui::components::form_renderer;
+use crate::ui::toast::ToastExt;
 use crate::ui::windows::ssh_shared;
 use dbflux_core::{ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig};
 use gpui::*;
@@ -161,6 +163,8 @@ impl ConnectionManagerWindow {
         };
 
         profile.save_password = self.form_save_password;
+        profile.settings_overrides = self.collect_connection_overrides(cx);
+        profile.connection_settings = self.collect_connection_settings(cx);
         Some(profile)
     }
 
@@ -198,6 +202,28 @@ impl ConnectionManagerWindow {
             self.ssh_enabled,
             self.ssh_auth_method
         );
+
+        if self.conn_override_refresh_interval
+            && profile
+                .settings_overrides
+                .as_ref()
+                .is_none_or(|ov| ov.refresh_interval_secs.is_none())
+        {
+            cx.toast_warning(
+                "Refresh interval override ignored: value must be a positive number".to_string(),
+                window,
+            );
+        }
+
+        if let Some(ref conn_settings) = profile.connection_settings
+            && let Some(driver) = &self.selected_driver
+            && let Some(schema) = driver.settings_schema()
+        {
+            let warnings = form_renderer::validate_values(&schema, conn_settings);
+            for warning in warnings {
+                cx.toast_warning(warning, window);
+            }
+        }
 
         self.app_state.update(cx, |state, cx| {
             if profile.save_password && !password.is_empty() {

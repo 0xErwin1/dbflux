@@ -5,14 +5,16 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::list::ListItem;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
+
+use crate::ui::components::form_renderer;
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
 
@@ -121,7 +123,11 @@ impl ConnectionManagerWindow {
             )
     }
 
-    pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_tab_bar(
+        &self,
+        supports_ssh: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let active_tab = self.active_tab;
 
@@ -164,23 +170,71 @@ impl ConnectionManagerWindow {
                             .child(div().text_sm().child("Main")),
                     ),
             )
+            .when(supports_ssh, |d| {
+                d.child(
+                    div()
+                        .id("tab-ssh")
+                        .px_4()
+                        .py_2()
+                        .cursor_pointer()
+                        .border_b_2()
+                        .when(active_tab == ActiveTab::Ssh, |dd| {
+                            dd.border_color(theme.primary).text_color(theme.foreground)
+                        })
+                        .when(active_tab != ActiveTab::Ssh, |dd| {
+                            dd.border_color(gpui::transparent_black())
+                                .text_color(theme.muted_foreground)
+                        })
+                        .hover(|dd| dd.bg(theme.secondary))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.active_tab = ActiveTab::Ssh;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    svg()
+                                        .path(AppIcon::FingerprintPattern.path())
+                                        .size_4()
+                                        .text_color(if active_tab == ActiveTab::Ssh {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                )
+                                .child(div().text_sm().child("SSH"))
+                                .when(self.ssh_enabled, |dd| {
+                                    dd.child(
+                                        div()
+                                            .w(px(6.0))
+                                            .h(px(6.0))
+                                            .rounded_full()
+                                            .bg(gpui::rgb(0x22C55E)),
+                                    )
+                                }),
+                        ),
+                )
+            })
             .child(
                 div()
-                    .id("tab-ssh")
+                    .id("tab-settings")
                     .px_4()
                     .py_2()
                     .cursor_pointer()
                     .border_b_2()
-                    .when(active_tab == ActiveTab::Ssh, |d| {
+                    .when(active_tab == ActiveTab::Settings, |d| {
                         d.border_color(theme.primary).text_color(theme.foreground)
                     })
-                    .when(active_tab != ActiveTab::Ssh, |d| {
+                    .when(active_tab != ActiveTab::Settings, |d| {
                         d.border_color(gpui::transparent_black())
                             .text_color(theme.muted_foreground)
                     })
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Ssh;
+                        this.active_tab = ActiveTab::Settings;
                         cx.notify();
                     }))
                     .child(
@@ -188,26 +242,14 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                svg()
-                                    .path(AppIcon::FingerprintPattern.path())
-                                    .size_4()
-                                    .text_color(if active_tab == ActiveTab::Ssh {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            )
-                            .child(div().text_sm().child("SSH"))
-                            .when(self.ssh_enabled, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(6.0))
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(gpui::rgb(0x22C55E)),
-                                )
-                            }),
+                            .child(svg().path(AppIcon::Settings.path()).size_4().text_color(
+                                if active_tab == ActiveTab::Settings {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(div().text_sm().child("Settings")),
                     ),
             )
     }
@@ -245,6 +287,430 @@ impl ConnectionManagerWindow {
             );
 
             sections.push(password_field);
+        }
+
+        sections
+    }
+
+    pub(super) fn render_settings_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+        let effective = self.resolve_driver_effective_settings(cx);
+
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Settings;
+        let focus = self.form_focus;
+
+        let ring_color = theme.ring;
+        let muted = theme.muted_foreground;
+
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        // --- Global Overrides Section ---
+        let policy_label = match effective.refresh_policy {
+            dbflux_core::RefreshPolicySetting::Manual => "Manual",
+            dbflux_core::RefreshPolicySetting::Interval => "Interval",
+        };
+
+        let override_rows = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(div().w(px(200.0)))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .text_xs()
+                            .text_color(muted)
+                            .child("Override Value"),
+                    ),
+            )
+            // Refresh policy row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(
+                        show_focus && focus == FormFocus::SettingsRefreshPolicy,
+                        |d| d.border_color(ring_color),
+                    )
+                    .when(
+                        !(show_focus && focus == FormFocus::SettingsRefreshPolicy),
+                        |d| d.border_color(gpui::transparent_black()),
+                    )
+                    .p(px(2.0))
+                    .child(
+                        Checkbox::new("conn-override-refresh-policy")
+                            .checked(self.conn_override_refresh_policy)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.conn_override_refresh_policy = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().w(px(180.0)).text_sm().child("Refresh policy"))
+                    .child(
+                        div()
+                            .min_w(px(160.0))
+                            .relative()
+                            .opacity(if self.conn_override_refresh_policy {
+                                1.0
+                            } else {
+                                0.6
+                            })
+                            .child(self.conn_refresh_policy_dropdown.clone())
+                            .when(!self.conn_override_refresh_policy, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full()
+                                        .cursor_default(),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("Default: {}", policy_label)),
+                    ),
+            )
+            // Refresh interval row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(
+                        show_focus && focus == FormFocus::SettingsRefreshInterval,
+                        |d| d.border_color(ring_color),
+                    )
+                    .when(
+                        !(show_focus && focus == FormFocus::SettingsRefreshInterval),
+                        |d| d.border_color(gpui::transparent_black()),
+                    )
+                    .p(px(2.0))
+                    .child(
+                        Checkbox::new("conn-override-refresh-interval")
+                            .checked(self.conn_override_refresh_interval)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.conn_override_refresh_interval = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().w(px(180.0)).text_sm().child("Refresh interval (s)"))
+                    .child(
+                        div()
+                            .w(px(100.0))
+                            .opacity(if self.conn_override_refresh_interval {
+                                1.0
+                            } else {
+                                0.6
+                            })
+                            .child(
+                                Input::new(&self.conn_refresh_interval_input)
+                                    .small()
+                                    .disabled(!self.conn_override_refresh_interval),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("Default: {}s", effective.refresh_interval_secs)),
+                    ),
+            )
+            // Confirm dangerous queries
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(
+                        show_focus && focus == FormFocus::SettingsConfirmDangerous,
+                        |d| d.border_color(ring_color),
+                    )
+                    .when(
+                        !(show_focus && focus == FormFocus::SettingsConfirmDangerous),
+                        |d| d.border_color(gpui::transparent_black()),
+                    )
+                    .p(px(2.0))
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .text_sm()
+                            .child("Confirm dangerous queries"),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(160.0))
+                            .child(self.conn_confirm_dangerous_dropdown.clone()),
+                    )
+                    .child(div().text_xs().text_color(muted).child(format!(
+                        "Default: {}",
+                        if effective.confirm_dangerous {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ))),
+            )
+            // Requires WHERE clause
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(
+                        show_focus && focus == FormFocus::SettingsRequiresWhere,
+                        |d| d.border_color(ring_color),
+                    )
+                    .when(
+                        !(show_focus && focus == FormFocus::SettingsRequiresWhere),
+                        |d| d.border_color(gpui::transparent_black()),
+                    )
+                    .p(px(2.0))
+                    .child(div().w(px(200.0)).text_sm().child("Requires WHERE clause"))
+                    .child(
+                        div()
+                            .min_w(px(160.0))
+                            .child(self.conn_requires_where_dropdown.clone()),
+                    )
+                    .child(div().text_xs().text_color(muted).child(format!(
+                        "Default: {}",
+                        if effective.requires_where {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ))),
+            )
+            // Requires preview
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(4.0))
+                    .border_2()
+                    .when(
+                        show_focus && focus == FormFocus::SettingsRequiresPreview,
+                        |d| d.border_color(ring_color),
+                    )
+                    .when(
+                        !(show_focus && focus == FormFocus::SettingsRequiresPreview),
+                        |d| d.border_color(gpui::transparent_black()),
+                    )
+                    .p(px(2.0))
+                    .child(div().w(px(200.0)).text_sm().child("Requires preview"))
+                    .child(
+                        div()
+                            .min_w(px(160.0))
+                            .child(self.conn_requires_preview_dropdown.clone()),
+                    )
+                    .child(div().text_xs().text_color(muted).child(format!(
+                        "Default: {}",
+                        if effective.requires_preview {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ))),
+            );
+
+        sections.push(
+            self.render_section("Connection Overrides", override_rows, &theme)
+                .into_any_element(),
+        );
+
+        // --- Driver Schema Section ---
+        if let Some(driver) = &self.selected_driver
+            && let Some(schema) = driver.settings_schema()
+        {
+            let mut field_idx: u8 = 0;
+
+            let schema_fields = div().flex().flex_col().gap_2().children(
+                schema
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| tab.sections.iter())
+                    .flat_map(|section| section.fields.iter())
+                    .filter_map(|field| {
+                        let current_idx = field_idx;
+                        field_idx += 1;
+                        let field_focused =
+                            show_focus && focus == FormFocus::SettingsDriverField(current_idx);
+                        let enabled = form_renderer::is_field_enabled(
+                            field,
+                            &self.conn_form_state.checkboxes,
+                        );
+
+                        match &field.kind {
+                            FormFieldKind::Checkbox => {
+                                let checked = self
+                                    .conn_form_state
+                                    .checkboxes
+                                    .get(&field.id)
+                                    .copied()
+                                    .unwrap_or(false);
+                                let field_id = field.id.clone();
+                                let default_val = effective
+                                    .driver_values
+                                    .get(&field.id)
+                                    .map(|v| if v == "true" { "On" } else { "Off" })
+                                    .unwrap_or("Off");
+
+                                Some(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .rounded(px(4.0))
+                                        .border_2()
+                                        .when(field_focused, |d| d.border_color(ring_color))
+                                        .when(!field_focused, |d| {
+                                            d.border_color(gpui::transparent_black())
+                                        })
+                                        .p(px(2.0))
+                                        .opacity(if enabled { 1.0 } else { 0.6 })
+                                        .child(
+                                            Checkbox::new(SharedString::from(format!(
+                                                "conn-schema-{}",
+                                                field.id
+                                            )))
+                                            .checked(checked)
+                                            .label(field.label.as_str())
+                                            .on_click(cx.listener(
+                                                move |this, checked: &bool, _, cx| {
+                                                    if !enabled {
+                                                        return;
+                                                    }
+                                                    this.conn_form_state
+                                                        .checkboxes
+                                                        .insert(field_id.clone(), *checked);
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child(format!("Default: {}", default_val)),
+                                        )
+                                        .into_any_element(),
+                                )
+                            }
+
+                            FormFieldKind::Select { .. } => {
+                                let dropdown =
+                                    self.conn_form_state.dropdowns.get(&field.id)?.clone();
+                                let default_val = effective
+                                    .driver_values
+                                    .get(&field.id)
+                                    .cloned()
+                                    .unwrap_or_else(|| field.default_value.clone());
+
+                                Some(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .rounded(px(4.0))
+                                        .border_2()
+                                        .when(field_focused, |d| d.border_color(ring_color))
+                                        .when(!field_focused, |d| {
+                                            d.border_color(gpui::transparent_black())
+                                        })
+                                        .p(px(2.0))
+                                        .opacity(if enabled { 1.0 } else { 0.6 })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(muted)
+                                                        .child(format!("Default: {}", default_val)),
+                                                ),
+                                        )
+                                        .child(div().w(px(240.0)).child(dropdown))
+                                        .into_any_element(),
+                                )
+                            }
+
+                            _ => {
+                                let input = self.conn_form_state.inputs.get(&field.id)?.clone();
+                                let default_val = effective
+                                    .driver_values
+                                    .get(&field.id)
+                                    .cloned()
+                                    .unwrap_or_else(|| field.default_value.clone());
+
+                                Some(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .rounded(px(4.0))
+                                        .border_2()
+                                        .when(field_focused, |d| d.border_color(ring_color))
+                                        .when(!field_focused, |d| {
+                                            d.border_color(gpui::transparent_black())
+                                        })
+                                        .p(px(2.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(muted)
+                                                        .child(format!("Default: {}", default_val)),
+                                                ),
+                                        )
+                                        .child(Input::new(&input).small().disabled(!enabled))
+                                        .into_any_element(),
+                                )
+                            }
+                        }
+                    }),
+            );
+
+            sections.push(
+                self.render_section("Driver Settings", schema_fields, &theme)
+                    .into_any_element(),
+            );
+        }
+
+        if sections.len() == 1 {
+            sections.push(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("This driver has no custom settings.")
+                    .into_any_element(),
+            );
         }
 
         sections
@@ -1072,16 +1538,13 @@ impl ConnectionManagerWindow {
         let test_focused = show_focus && focus == FormFocus::TestConnection;
         let save_focused = show_focus && focus == FormFocus::Save;
 
-        let tab_bar = if supports_ssh {
-            Some(self.render_tab_bar(cx).into_any_element())
-        } else {
-            None
-        };
+        let tab_bar = self.render_tab_bar(supports_ssh, cx).into_any_element();
 
-        let tab_content: Vec<AnyElement> = match (supports_ssh, self.active_tab) {
-            (true, ActiveTab::Main) => self.render_main_tab(cx),
-            (true, ActiveTab::Ssh) => self.render_ssh_tab(cx),
-            (false, _) => self.render_main_tab(cx),
+        let tab_content: Vec<AnyElement> = match self.active_tab {
+            ActiveTab::Main => self.render_main_tab(cx),
+            ActiveTab::Ssh if supports_ssh => self.render_ssh_tab(cx),
+            ActiveTab::Ssh => self.render_main_tab(cx),
+            ActiveTab::Settings => self.render_settings_tab(cx),
         };
 
         let theme = cx.theme();
@@ -1142,7 +1605,7 @@ impl ConnectionManagerWindow {
                         cx,
                     )),
             )
-            .when_some(tab_bar, |d, tab_bar| d.child(tab_bar))
+            .child(tab_bar)
             .child(
                 div()
                     .id("form-scroll-content")

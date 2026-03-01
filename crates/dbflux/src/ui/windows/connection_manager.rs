@@ -5,10 +5,10 @@ mod ssh;
 
 use crate::app::AppState;
 use crate::keymap::KeymapStack;
-use crate::ui::components::form_renderer;
+use crate::ui::components::form_renderer::{self, FormRendererState};
 use crate::ui::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
-use dbflux_core::{DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind};
+use dbflux_core::{DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides};
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
 use std::collections::HashMap;
@@ -61,6 +61,13 @@ enum FormFocus {
     SshPassword,
     TestSsh,
     SaveAsTunnel,
+    // Settings tab fields
+    SettingsRefreshPolicy,
+    SettingsRefreshInterval,
+    SettingsConfirmDangerous,
+    SettingsRequiresWhere,
+    SettingsRequiresPreview,
+    SettingsDriverField(u8),
     // Actions (shared between tabs)
     TestConnection,
     Save,
@@ -80,6 +87,7 @@ enum View {
 enum ActiveTab {
     Main,
     Ssh,
+    Settings,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -158,6 +166,18 @@ pub struct ConnectionManagerWindow {
     target_folder_id: Option<Uuid>,
 
     syncing_uri: bool,
+
+    // Settings tab state
+    conn_override_refresh_policy: bool,
+    conn_override_refresh_interval: bool,
+    conn_refresh_policy_dropdown: Entity<Dropdown>,
+    conn_refresh_interval_input: Entity<InputState>,
+    conn_confirm_dangerous_dropdown: Entity<Dropdown>,
+    conn_requires_where_dropdown: Entity<Dropdown>,
+    conn_requires_preview_dropdown: Entity<Dropdown>,
+    conn_form_state: FormRendererState,
+    conn_form_subscriptions: Vec<Subscription>,
+    conn_loading_settings: bool,
 }
 
 impl ConnectionManagerWindow {
@@ -204,6 +224,20 @@ impl ConnectionManagerWindow {
 
         let ssh_tunnel_dropdown =
             cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
+
+        let conn_refresh_policy_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-refresh-policy").placeholder("Use Driver Default"));
+        let conn_refresh_interval_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("seconds")
+                .default_value("5")
+        });
+        let conn_confirm_dangerous_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-confirm-dangerous").placeholder("Use Driver Default"));
+        let conn_requires_where_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-requires-where").placeholder("Use Driver Default"));
+        let conn_requires_preview_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-requires-preview").placeholder("Use Driver Default"));
 
         let dropdown_subscription = cx.subscribe(
             &ssh_tunnel_dropdown,
@@ -311,6 +345,17 @@ impl ConnectionManagerWindow {
             _subscriptions: subscriptions,
             target_folder_id: None,
             syncing_uri: false,
+
+            conn_override_refresh_policy: false,
+            conn_override_refresh_interval: false,
+            conn_refresh_policy_dropdown,
+            conn_refresh_interval_input,
+            conn_confirm_dangerous_dropdown,
+            conn_requires_where_dropdown,
+            conn_requires_preview_dropdown,
+            conn_form_state: FormRendererState::default(),
+            conn_form_subscriptions: Vec::new(),
+            conn_loading_settings: false,
         }
     }
 
@@ -356,6 +401,13 @@ impl ConnectionManagerWindow {
                 state.set_value(&password, window, cx);
             });
         }
+
+        instance.load_settings_tab(
+            profile.settings_overrides.as_ref(),
+            profile.connection_settings.as_ref(),
+            window,
+            cx,
+        );
 
         if let Some(ssh) = profile.config.ssh_tunnel() {
             instance.ssh_enabled = true;
@@ -424,6 +476,8 @@ impl ConnectionManagerWindow {
         if let Some(driver) = driver {
             self.create_driver_inputs(driver.form_definition(), window, cx);
         }
+
+        self.load_settings_tab(None, None, window, cx);
 
         self.view = View::EditForm;
         self.edit_state = EditState::Navigating;
@@ -501,9 +555,9 @@ impl ConnectionManagerWindow {
             for section in &tab.sections {
                 for field in &section.fields {
                     if field.kind == FormFieldKind::Checkbox {
-                        let is_checked = values.get(&field.id).map(|v| v == "true").unwrap_or(false);
-                        self.checkbox_states
-                            .insert(field.id.clone(), is_checked);
+                        let is_checked =
+                            values.get(&field.id).map(|v| v == "true").unwrap_or(false);
+                        self.checkbox_states.insert(field.id.clone(), is_checked);
                     }
                 }
             }
@@ -679,6 +733,263 @@ impl ConnectionManagerWindow {
                 .or_else(|| self.driver_inputs.get("database")),
             _ => None,
         }
+    }
+
+    /// Initialize the Settings tab controls from the selected driver's defaults
+    /// and (if editing) the profile's saved overrides.
+    fn load_settings_tab(
+        &mut self,
+        overrides: Option<&GlobalOverrides>,
+        connection_settings: Option<&dbflux_core::FormValues>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.conn_loading_settings = true;
+        self.conn_form_subscriptions.clear();
+        self.conn_form_state.clear();
+
+        let overrides = overrides.cloned().unwrap_or_default();
+
+        self.conn_override_refresh_policy = overrides.refresh_policy.is_some();
+        self.conn_override_refresh_interval = overrides.refresh_interval_secs.is_some();
+
+        let effective = self.resolve_driver_effective_settings(cx);
+
+        let policy_items = vec![
+            crate::ui::dropdown::DropdownItem::with_value("Manual", "manual"),
+            crate::ui::dropdown::DropdownItem::with_value("Interval", "interval"),
+        ];
+        let policy_index = match overrides.refresh_policy.unwrap_or(effective.refresh_policy) {
+            dbflux_core::RefreshPolicySetting::Manual => 0,
+            dbflux_core::RefreshPolicySetting::Interval => 1,
+        };
+        self.conn_refresh_policy_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(policy_items, cx);
+                dropdown.set_selected_index(Some(policy_index), cx);
+            });
+
+        let interval_val = overrides
+            .refresh_interval_secs
+            .unwrap_or(effective.refresh_interval_secs);
+        self.conn_refresh_interval_input.update(cx, |input, cx| {
+            input.set_value(interval_val.to_string(), window, cx);
+        });
+
+        let boolean_items = vec![
+            crate::ui::dropdown::DropdownItem::with_value("Use Driver Default", "default"),
+            crate::ui::dropdown::DropdownItem::with_value("On", "on"),
+            crate::ui::dropdown::DropdownItem::with_value("Off", "off"),
+        ];
+
+        let bool_index = |opt: Option<bool>| -> usize {
+            match opt {
+                None => 0,
+                Some(true) => 1,
+                Some(false) => 2,
+            }
+        };
+
+        self.conn_confirm_dangerous_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(boolean_items.clone(), cx);
+                dropdown.set_selected_index(Some(bool_index(overrides.confirm_dangerous)), cx);
+            });
+        self.conn_requires_where_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(boolean_items.clone(), cx);
+                dropdown.set_selected_index(Some(bool_index(overrides.requires_where)), cx);
+            });
+        self.conn_requires_preview_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(boolean_items, cx);
+                dropdown.set_selected_index(Some(bool_index(overrides.requires_preview)), cx);
+            });
+
+        if let Some(driver) = &self.selected_driver
+            && let Some(schema) = driver.settings_schema()
+        {
+            let values = connection_settings.cloned().unwrap_or_default();
+            self.conn_form_state = form_renderer::create_inputs(&schema, &values, window, cx);
+
+            let mut subscriptions = Vec::new();
+            for input in self.conn_form_state.inputs.values() {
+                subscriptions.push(cx.subscribe_in(
+                    input,
+                    window,
+                    |_this, _, event: &InputEvent, _window, _cx| {
+                        if matches!(event, InputEvent::Change) {
+                            // Nothing to track — the form state is read on save
+                        }
+                    },
+                ));
+            }
+            for dropdown in self.conn_form_state.dropdowns.values() {
+                subscriptions.push(cx.subscribe(
+                    dropdown,
+                    |_this, _dropdown, _event: &DropdownSelectionChanged, _cx| {
+                        // Nothing to track — the form state is read on save
+                    },
+                ));
+            }
+            self.conn_form_subscriptions = subscriptions;
+        }
+
+        self.conn_loading_settings = false;
+    }
+
+    /// Resolve driver-level effective settings (without connection overrides)
+    /// for showing defaults in the Settings tab.
+    fn resolve_driver_effective_settings(
+        &self,
+        cx: &Context<Self>,
+    ) -> dbflux_core::EffectiveSettings {
+        let state = self.app_state.read(cx);
+        if let Some(driver) = &self.selected_driver {
+            state.effective_settings(&driver.driver_key())
+        } else {
+            let empty = dbflux_core::FormValues::new();
+            dbflux_core::EffectiveSettings::resolve(
+                state.general_settings(),
+                None,
+                &empty,
+                None,
+                None,
+            )
+        }
+    }
+
+    /// Collect connection-level global overrides from the Settings tab controls.
+    fn collect_connection_overrides(&self, cx: &Context<Self>) -> Option<GlobalOverrides> {
+        let mut overrides = GlobalOverrides::default();
+
+        if self.conn_override_refresh_policy {
+            let value = self
+                .conn_refresh_policy_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+
+            overrides.refresh_policy = Some(if value == "interval" {
+                dbflux_core::RefreshPolicySetting::Interval
+            } else {
+                dbflux_core::RefreshPolicySetting::Manual
+            });
+        }
+
+        if self.conn_override_refresh_interval {
+            let text = self
+                .conn_refresh_interval_input
+                .read(cx)
+                .value()
+                .to_string();
+
+            if let Ok(secs) = text.parse::<u32>()
+                && secs > 0
+            {
+                overrides.refresh_interval_secs = Some(secs);
+            }
+        }
+
+        fn parse_boolean_dropdown(
+            dropdown: &Entity<Dropdown>,
+            cx: &Context<ConnectionManagerWindow>,
+        ) -> Option<bool> {
+            match dropdown
+                .read(cx)
+                .selected_value()
+                .map(|v| v.to_string())
+                .as_deref()
+            {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            }
+        }
+
+        overrides.confirm_dangerous =
+            parse_boolean_dropdown(&self.conn_confirm_dangerous_dropdown, cx);
+        overrides.requires_where = parse_boolean_dropdown(&self.conn_requires_where_dropdown, cx);
+        overrides.requires_preview =
+            parse_boolean_dropdown(&self.conn_requires_preview_dropdown, cx);
+
+        if overrides.is_empty() {
+            None
+        } else {
+            Some(overrides)
+        }
+    }
+
+    /// Collect connection-level driver settings from the Settings tab form.
+    ///
+    /// Unchecked checkboxes are stored as `"false"` (not stripped) so they can
+    /// explicitly override a driver-level `"true"` value.
+    fn collect_connection_settings(&self, cx: &Context<Self>) -> Option<dbflux_core::FormValues> {
+        let driver = self.selected_driver.as_ref()?;
+        let schema = driver.settings_schema()?;
+
+        let collected = form_renderer::collect_values(
+            &schema,
+            &self.conn_form_state.inputs,
+            &self.conn_form_state.checkboxes,
+            &self.conn_form_state.dropdowns,
+            cx,
+        );
+
+        let checkbox_ids: std::collections::HashSet<&str> = schema
+            .tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .filter(|f| matches!(f.kind, FormFieldKind::Checkbox))
+            .map(|f| f.id.as_str())
+            .collect();
+
+        let mut values = collected;
+
+        for (key, val) in values.iter_mut() {
+            if val.is_empty() && checkbox_ids.contains(key.as_str()) {
+                *val = "false".to_string();
+            }
+        }
+
+        values.retain(|k, v| !v.is_empty() || checkbox_ids.contains(k.as_str()));
+
+        if values.is_empty() {
+            None
+        } else {
+            Some(values)
+        }
+    }
+
+    /// Returns the number of driver schema fields (for Settings tab navigation).
+    fn settings_driver_field_count(&self) -> u8 {
+        let Some(driver) = &self.selected_driver else {
+            return 0;
+        };
+        let Some(schema) = driver.settings_schema() else {
+            return 0;
+        };
+        schema
+            .tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .count() as u8
+    }
+
+    /// Returns the field definition for a driver schema field at the given flat index.
+    fn settings_driver_field_def(&self, idx: u8) -> Option<FormFieldDef> {
+        let driver = self.selected_driver.as_ref()?;
+        let schema = driver.settings_schema()?;
+        schema
+            .tabs
+            .iter()
+            .flat_map(|t| t.sections.iter())
+            .flat_map(|s| s.fields.iter())
+            .nth(idx as usize)
+            .cloned()
     }
 
     fn handle_field_change(&mut self, field_id: &str, window: &mut Window, cx: &mut Context<Self>) {

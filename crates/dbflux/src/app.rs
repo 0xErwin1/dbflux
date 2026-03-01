@@ -5,7 +5,7 @@ use dbflux_core::{
     ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
     TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -982,6 +982,8 @@ impl AppState {
             &self.general_settings,
             self.driver_overrides.get(driver_key),
             driver_values,
+            None,
+            None,
         )
     }
 
@@ -989,9 +991,16 @@ impl AppState {
         &self,
         connection_id: Option<Uuid>,
     ) -> EffectiveSettings {
+        let empty_values = FormValues::new();
+
         let Some(connection_id) = connection_id else {
-            let empty_values = FormValues::new();
-            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+            return EffectiveSettings::resolve(
+                &self.general_settings,
+                None,
+                &empty_values,
+                None,
+                None,
+            );
         };
 
         let profile = self
@@ -1000,16 +1009,38 @@ impl AppState {
             .map(|connected| connected.profile.clone());
 
         let Some(profile) = profile else {
-            let empty_values = FormValues::new();
-            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+            return EffectiveSettings::resolve(
+                &self.general_settings,
+                None,
+                &empty_values,
+                None,
+                None,
+            );
         };
 
         let Some(driver) = self.driver_for_profile(&profile) else {
-            let empty_values = FormValues::new();
-            return EffectiveSettings::resolve(&self.general_settings, None, &empty_values);
+            return EffectiveSettings::resolve(
+                &self.general_settings,
+                None,
+                &empty_values,
+                None,
+                None,
+            );
         };
 
-        self.effective_settings(&driver.driver_key())
+        let driver_key = driver.driver_key();
+        let driver_values = self
+            .driver_settings
+            .get(&driver_key)
+            .unwrap_or(&empty_values);
+
+        EffectiveSettings::resolve(
+            &self.general_settings,
+            self.driver_overrides.get(&driver_key),
+            driver_values,
+            profile.settings_overrides.as_ref(),
+            profile.connection_settings.as_ref(),
+        )
     }
 
     #[allow(dead_code)]
