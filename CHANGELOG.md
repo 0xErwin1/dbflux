@@ -2,6 +2,28 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.2] – 2026-03-01
+
+### Added
+
+* Settings now includes General, Services, and Drivers sections, with schema-backed per-driver override controls
+* New Services settings section for configuring external RPC driver services
+* Connection Manager now includes a Settings tab for per-connection overrides of global/driver policies and driver-owned settings
+
+### Changed
+
+* Driver settings now flow end-to-end through core types, AppState, and IPC contracts via `driver_key`-based resolution
+* Driver capability declarations were audited, and the Drivers UI now shows capability chips filtered by database category
+* Settings safety controls moved from toggle rows to explicit dropdowns, and theme changes now apply live
+
+### Fixed
+
+* False Drivers "Unsaved Changes" prompts were removed by switching dirty detection to deterministic value comparison against persisted settings
+* Settings sidebar now provides a dedicated Close action that respects unsaved-change confirmation
+* Save-password now defaults to enabled in the connection flow
+
+---
+
 ## [0.4.0-dev.1] – 2026-02-28
 
 ### Added
