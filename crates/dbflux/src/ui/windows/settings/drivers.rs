@@ -81,8 +81,124 @@ fn bool_override_index(value: Option<bool>) -> usize {
 }
 
 impl SettingsWindow {
-    pub(super) fn has_unsaved_driver_changes(&self) -> bool {
-        self.drv_dirty
+    /// Deterministic dirty check: compare the working driver overrides and
+    /// settings (including the currently-open editor) against what is persisted
+    /// in AppState.  This avoids false positives from transient UI events.
+    pub(super) fn has_unsaved_driver_changes(&self, cx: &App) -> bool {
+        let state = self.app_state.read(cx);
+        let saved_overrides = state.driver_overrides();
+        let saved_settings = state.driver_settings();
+
+        let mut working_overrides = self.drv_overrides.clone();
+        let mut working_settings = self.drv_settings.clone();
+
+        if let Some(entry) = self.drv_selected_entry() {
+            let editor_overrides = self.drv_read_editor_overrides(cx);
+
+            if editor_overrides.is_empty() {
+                working_overrides.remove(&entry.driver_key);
+            } else {
+                working_overrides.insert(entry.driver_key.clone(), editor_overrides);
+            }
+
+            if let Some(schema) = &entry.settings_schema {
+                let collected = form_renderer::collect_values(
+                    schema,
+                    &self.drv_form_state.inputs,
+                    &self.drv_form_state.checkboxes,
+                    &self.drv_form_state.dropdowns,
+                    cx,
+                );
+
+                let mut merged = self
+                    .drv_settings
+                    .get(&entry.driver_key)
+                    .cloned()
+                    .unwrap_or_default();
+
+                for tab in &schema.tabs {
+                    for section in &tab.sections {
+                        for field in &section.fields {
+                            merged.remove(&field.id);
+                        }
+                    }
+                }
+
+                for (field_id, value) in collected {
+                    merged.insert(field_id, value);
+                }
+
+                merged.retain(|_, value| !value.is_empty());
+
+                if merged.is_empty() {
+                    working_settings.remove(&entry.driver_key);
+                } else {
+                    working_settings.insert(entry.driver_key.clone(), merged);
+                }
+            }
+        }
+
+        working_overrides.retain(|_, ov| !ov.is_empty());
+        working_settings.retain(|_, v| !v.is_empty());
+
+        working_overrides != *saved_overrides || working_settings != *saved_settings
+    }
+
+    /// Read the current editor's override widgets into a `GlobalOverrides`
+    /// without mutating `self`.
+    fn drv_read_editor_overrides(&self, cx: &App) -> GlobalOverrides {
+        let mut overrides = GlobalOverrides::default();
+
+        if self.drv_override_refresh_policy {
+            let selected = self
+                .drv_refresh_policy_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "manual".to_string());
+
+            overrides.refresh_policy = Some(if selected == "interval" {
+                RefreshPolicySetting::Interval
+            } else {
+                RefreshPolicySetting::Manual
+            });
+        }
+
+        if self.drv_override_refresh_interval {
+            let raw = self
+                .drv_refresh_interval_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_string();
+
+            if let Ok(value) = raw.parse::<u32>()
+                && value > 0
+            {
+                overrides.refresh_interval_secs = Some(value);
+            }
+        }
+
+        let parse_boolean_override = |selection: Option<SharedString>| match selection
+            .as_ref()
+            .map(|v| v.as_ref())
+        {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        };
+
+        overrides.confirm_dangerous = parse_boolean_override(
+            self.drv_confirm_dangerous_dropdown
+                .read(cx)
+                .selected_value(),
+        );
+        overrides.requires_where =
+            parse_boolean_override(self.drv_requires_where_dropdown.read(cx).selected_value());
+        overrides.requires_preview =
+            parse_boolean_override(self.drv_requires_preview_dropdown.read(cx).selected_value());
+
+        overrides
     }
 
     pub(super) fn drv_load_entries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -223,7 +339,6 @@ impl SettingsWindow {
                                 return;
                             }
 
-                            this.drv_dirty = true;
                             this.drv_editor_dirty = true;
                             cx.notify();
                         }
@@ -240,7 +355,6 @@ impl SettingsWindow {
                             return;
                         }
 
-                        this.drv_dirty = true;
                         this.drv_editor_dirty = true;
                         cx.notify();
                     },
@@ -441,7 +555,6 @@ impl SettingsWindow {
             }
         });
 
-        self.drv_dirty = false;
         self.drv_editor_dirty = false;
 
         let mut all_warnings = Vec::new();
@@ -812,7 +925,6 @@ impl SettingsWindow {
                                     .checked(self.drv_override_refresh_policy)
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.drv_override_refresh_policy = *checked;
-                                        this.drv_dirty = true;
                                         this.drv_editor_dirty = true;
                                         cx.notify();
                                     })),
@@ -842,7 +954,6 @@ impl SettingsWindow {
                                     .checked(self.drv_override_refresh_interval)
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.drv_override_refresh_interval = *checked;
-                                        this.drv_dirty = true;
                                         this.drv_editor_dirty = true;
                                         cx.notify();
                                     })),
@@ -1011,7 +1122,6 @@ impl SettingsWindow {
                                                             this.drv_form_state
                                                                 .checkboxes
                                                                 .insert(field_id.clone(), *checked);
-                                                            this.drv_dirty = true;
                                                             this.drv_editor_dirty = true;
                                                             cx.notify();
                                                         }
