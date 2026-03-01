@@ -140,7 +140,9 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = self.drv_sync_selected_editor(cx, false);
+        if self.drv_editor_dirty {
+            let _ = self.drv_sync_selected_editor(cx, false);
+        }
 
         self.drv_selected_idx = Some(idx);
         self.drv_load_selected_editor(window, cx);
@@ -149,10 +151,13 @@ impl SettingsWindow {
     }
 
     fn drv_load_selected_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drv_loading_selected_editor = true;
         self.drv_form_subscriptions.clear();
         self.drv_form_state.clear();
 
         let Some(entry) = self.drv_selected_entry().cloned() else {
+            self.drv_loading_selected_editor = false;
+            self.drv_editor_dirty = false;
             return;
         };
 
@@ -218,7 +223,12 @@ impl SettingsWindow {
                     window,
                     |this, _, event: &InputEvent, _window, cx| {
                         if matches!(event, InputEvent::Change) {
+                            if this.drv_loading_selected_editor {
+                                return;
+                            }
+
                             this.drv_dirty = true;
+                            this.drv_editor_dirty = true;
                             cx.notify();
                         }
                     },
@@ -230,7 +240,12 @@ impl SettingsWindow {
                     dropdown,
                     window,
                     |this, _, _: &crate::ui::dropdown::DropdownSelectionChanged, _window, cx| {
+                        if this.drv_loading_selected_editor {
+                            return;
+                        }
+
                         this.drv_dirty = true;
+                        this.drv_editor_dirty = true;
                         cx.notify();
                     },
                 ));
@@ -238,6 +253,9 @@ impl SettingsWindow {
 
             self.drv_form_subscriptions = subscriptions;
         }
+
+        self.drv_loading_selected_editor = false;
+        self.drv_editor_dirty = false;
     }
 
     fn drv_sync_selected_editor(&mut self, cx: &App, strict: bool) -> Result<(), String> {
@@ -353,11 +371,15 @@ impl SettingsWindow {
             }
         }
 
+        self.drv_editor_dirty = false;
+
         Ok(())
     }
 
     pub(super) fn save_driver_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(message) = self.drv_sync_selected_editor(cx, true) {
+        if self.drv_editor_dirty
+            && let Err(message) = self.drv_sync_selected_editor(cx, true)
+        {
             cx.toast_error(message, window);
             return;
         }
@@ -424,6 +446,7 @@ impl SettingsWindow {
         });
 
         self.drv_dirty = false;
+        self.drv_editor_dirty = false;
         cx.toast_success("Driver settings saved.", window);
     }
 
@@ -769,6 +792,7 @@ impl SettingsWindow {
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.drv_override_refresh_policy = *checked;
                                         this.drv_dirty = true;
+                                        this.drv_editor_dirty = true;
                                         cx.notify();
                                     })),
                             )
@@ -798,6 +822,7 @@ impl SettingsWindow {
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.drv_override_refresh_interval = *checked;
                                         this.drv_dirty = true;
+                                        this.drv_editor_dirty = true;
                                         cx.notify();
                                     })),
                             )
@@ -966,6 +991,7 @@ impl SettingsWindow {
                                                                 .checkboxes
                                                                 .insert(field_id.clone(), *checked);
                                                             this.drv_dirty = true;
+                                                            this.drv_editor_dirty = true;
                                                             cx.notify();
                                                         }
                                                     })),

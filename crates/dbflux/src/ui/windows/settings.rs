@@ -229,6 +229,8 @@ pub struct SettingsWindow {
     drv_overrides: HashMap<DriverKey, GlobalOverrides>,
     drv_settings: HashMap<DriverKey, FormValues>,
     drv_dirty: bool,
+    drv_editor_dirty: bool,
+    drv_loading_selected_editor: bool,
 
     drv_override_refresh_policy: bool,
     drv_override_refresh_interval: bool,
@@ -423,7 +425,12 @@ impl SettingsWindow {
             &drv_refresh_policy_dropdown,
             window,
             |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                if this.drv_loading_selected_editor {
+                    return;
+                }
+
                 this.drv_dirty = true;
+                this.drv_editor_dirty = true;
                 cx.notify();
             },
         );
@@ -433,7 +440,12 @@ impl SettingsWindow {
             window,
             |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
                 if matches!(event, gpui_component::input::InputEvent::Change) {
+                    if this.drv_loading_selected_editor {
+                        return;
+                    }
+
                     this.drv_dirty = true;
+                    this.drv_editor_dirty = true;
                     cx.notify();
                 }
             },
@@ -443,7 +455,12 @@ impl SettingsWindow {
             &drv_confirm_dangerous_dropdown,
             window,
             |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                if this.drv_loading_selected_editor {
+                    return;
+                }
+
                 this.drv_dirty = true;
+                this.drv_editor_dirty = true;
                 cx.notify();
             },
         );
@@ -452,7 +469,12 @@ impl SettingsWindow {
             &drv_requires_where_dropdown,
             window,
             |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                if this.drv_loading_selected_editor {
+                    return;
+                }
+
                 this.drv_dirty = true;
+                this.drv_editor_dirty = true;
                 cx.notify();
             },
         );
@@ -461,7 +483,12 @@ impl SettingsWindow {
             &drv_requires_preview_dropdown,
             window,
             |this, _, _: &DropdownSelectionChanged, _window, cx| {
+                if this.drv_loading_selected_editor {
+                    return;
+                }
+
                 this.drv_dirty = true;
+                this.drv_editor_dirty = true;
                 cx.notify();
             },
         );
@@ -570,6 +597,8 @@ impl SettingsWindow {
             drv_overrides,
             drv_settings,
             drv_dirty: false,
+            drv_editor_dirty: false,
+            drv_loading_selected_editor: false,
             drv_override_refresh_policy: false,
             drv_override_refresh_interval: false,
             drv_refresh_policy_dropdown,
