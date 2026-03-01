@@ -184,13 +184,7 @@ impl Workspace {
                     query,
                 } => {
                     this.sql_preview_modal.update(cx, |modal, cx| {
-                        modal.open_query_preview(
-                            language.clone(),
-                            badge,
-                            query.clone(),
-                            window,
-                            cx,
-                        );
+                        modal.open_query_preview(language.clone(), badge, query.clone(), window, cx);
                     });
                 }
                 SidebarEvent::OpenScript { path } => {

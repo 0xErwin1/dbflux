@@ -1,4 +1,4 @@
-use crate::envelope::{DRIVER_RPC_VERSION, ProtocolVersion};
+use crate::envelope::{ProtocolVersion, DRIVER_RPC_VERSION};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,

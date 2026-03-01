@@ -6,8 +6,8 @@ mod rpc_services;
 mod ssh_tunnels;
 
 use crate::app::AppState;
-use crate::keymap::{ContextId, KeyChord, Modifiers};
 use crate::ui::components::form_renderer::FormRendererState;
+use crate::keymap::{ContextId, KeyChord, Modifiers};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{
@@ -505,10 +505,7 @@ impl SettingsWindow {
 
         let (drv_overrides, drv_settings) = {
             let state = app_state.read(cx);
-            (
-                state.driver_overrides().clone(),
-                state.driver_settings().clone(),
-            )
+            (state.driver_overrides().clone(), state.driver_settings().clone())
         };
 
         // Focus the window on creation

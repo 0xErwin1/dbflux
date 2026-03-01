@@ -7,10 +7,10 @@ use dbflux_core::{
     SqlValueMode, TableInfo, Value,
 };
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use uuid::Uuid;
 
 /// Type of SQL statement to generate.
