@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 pub struct TasksPanel {
     app_state: Entity<AppState>,
+    expanded_task_ids: HashSet<TaskId>,
     _timer: Option<Task<()>>,
 }
 
@@ -26,8 +27,17 @@ impl TasksPanel {
 
         Self {
             app_state,
+            expanded_task_ids: HashSet::new(),
             _timer: Some(timer),
         }
+    }
+
+    fn toggle_task_expanded(&mut self, task_id: TaskId, cx: &mut Context<Self>) {
+        if !self.expanded_task_ids.insert(task_id) {
+            self.expanded_task_ids.remove(&task_id);
+        }
+
+        cx.notify();
     }
 
     async fn timer_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
@@ -119,8 +129,6 @@ impl TasksPanel {
             state.tasks_mut().cancel(task_id);
             cx.emit(AppStateChanged);
         });
-
-        log::info!("Cancelled task from panel");
     }
 
     fn format_elapsed(secs: f64) -> String {
@@ -135,12 +143,20 @@ impl TasksPanel {
         }
     }
 
-    fn render_task_row(&self, task: &TaskSnapshot, cx: &mut Context<Self>) -> Div {
+    fn render_task_row(&mut self, task: &TaskSnapshot, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let task_id = task.id;
         let task_kind = task.kind;
         let task_profile_id = task.profile_id;
         let is_running = matches!(task.status, TaskStatus::Running);
+        let details_text = task.details.clone().or_else(|| match &task.status {
+            TaskStatus::Failed(error) => Some(error.clone()),
+            _ => None,
+        });
+        let has_details = details_text
+            .as_ref()
+            .is_some_and(|details| !details.trim().is_empty());
+        let is_expanded = self.expanded_task_ids.contains(&task_id);
 
         let status_icon = match &task.status {
             TaskStatus::Running => "⋯",
@@ -157,58 +173,113 @@ impl TasksPanel {
         };
 
         div()
-            .flex()
-            .items_center()
-            .justify_between()
             .w_full()
-            .px_3()
-            .py_1()
             .border_b_1()
             .border_color(theme.border)
-            .hover(|s| s.bg(theme.secondary))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(div().text_sm().text_color(status_color).child(status_icon))
+                    .justify_between()
+                    .w_full()
+                    .px_3()
+                    .py_1()
+                    .hover(|s| s.bg(theme.secondary))
+                    .when(has_details, |el| {
+                        el.cursor_pointer().on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.toggle_task_expanded(task_id, cx);
+                            }),
+                        )
+                    })
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .text_ellipsis()
-                            .child(task.description.clone()),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_1()
+                            .overflow_hidden()
+                            .when(has_details, |el| {
+                                el.child(
+                                    svg()
+                                        .path(if is_expanded {
+                                            AppIcon::ChevronDown.path()
+                                        } else {
+                                            AppIcon::ChevronRight.path()
+                                        })
+                                        .size_3()
+                                        .text_color(theme.muted_foreground),
+                                )
+                            })
+                            .child(div().text_sm().text_color(status_color).child(status_icon))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .text_ellipsis()
+                                    .child(task.description.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!(
+                                        "({})",
+                                        Self::format_elapsed(task.elapsed_secs)
+                                    )),
+                            ),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("({})", Self::format_elapsed(task.elapsed_secs))),
-                    ),
+                    .when(is_running, |el| {
+                        el.child(
+                            div()
+                                .id(SharedString::from(format!("cancel-task-{}", task_id)))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size_5()
+                                .rounded(px(2.0))
+                                .cursor_pointer()
+                                .text_color(gpui::rgb(0xDC2626))
+                                .hover(|s| s.bg(gpui::rgb(0xFEE2E2)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.cancel_task(task_id, task_kind, task_profile_id, cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path(AppIcon::Power.path())
+                                        .size_3()
+                                        .text_color(gpui::rgb(0xDC2626)),
+                                ),
+                        )
+                    }),
             )
-            .when(is_running, |el| {
+            .when(has_details && is_expanded, |el| {
+                let mut lines: Vec<String> = details_text
+                    .unwrap_or_default()
+                    .lines()
+                    .map(|line| line.to_string())
+                    .collect();
+
+                if lines.len() > 40 {
+                    lines.truncate(40);
+                    lines.push("... output truncated in panel".to_string());
+                }
+
                 el.child(
                     div()
-                        .id(SharedString::from(format!("cancel-task-{}", task_id)))
+                        .px_4()
+                        .pb_2()
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .size_5()
-                        .rounded(px(2.0))
-                        .cursor_pointer()
-                        .text_color(gpui::rgb(0xDC2626))
-                        .hover(|s| s.bg(gpui::rgb(0xFEE2E2)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.cancel_task(task_id, task_kind, task_profile_id, cx);
-                        }))
-                        .child(
-                            svg()
-                                .path(AppIcon::Power.path())
-                                .size_3()
-                                .text_color(gpui::rgb(0xDC2626)),
-                        ),
+                        .flex_col()
+                        .gap_1()
+                        .bg(theme.secondary)
+                        .children(lines.into_iter().map(|line| {
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(line)
+                        })),
                 )
             })
     }
@@ -230,6 +301,9 @@ impl Render for TasksPanel {
             .collect();
 
         let all_tasks: Vec<TaskSnapshot> = running_tasks.into_iter().chain(recent_tasks).collect();
+        let visible_task_ids: HashSet<TaskId> = all_tasks.iter().map(|task| task.id).collect();
+        self.expanded_task_ids
+            .retain(|task_id| visible_task_ids.contains(task_id));
 
         let mut task_rows: Vec<Div> = Vec::new();
         for task in &all_tasks {

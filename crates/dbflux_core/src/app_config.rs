@@ -1,5 +1,6 @@
-use crate::driver_form::FormValues;
+use crate::ConnectionHook;
 use crate::DbError;
+use crate::driver_form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -32,6 +33,10 @@ pub struct AppConfig {
     /// Per-driver settings from driver-owned schemas (scan batch size, etc.).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub driver_settings: HashMap<DriverKey, crate::FormValues>,
+
+    /// Reusable connection hooks, referenced by connection profiles.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub hook_definitions: HashMap<String, ConnectionHook>,
 }
 
 fn default_config_version() -> u32 {
@@ -46,6 +51,7 @@ impl Default for AppConfig {
             general: GeneralSettings::default(),
             driver_overrides: HashMap::new(),
             driver_settings: HashMap::new(),
+            hook_definitions: HashMap::new(),
         }
     }
 }
@@ -887,6 +893,7 @@ mod tests {
         assert_eq!(config.version, 1);
         assert!(config.driver_overrides.is_empty());
         assert!(config.driver_settings.is_empty());
+        assert!(config.hook_definitions.is_empty());
         assert!(config.general.confirm_dangerous_queries);
     }
 
@@ -921,6 +928,7 @@ mod tests {
             restored.driver_settings["builtin:redis"]["scan_batch_size"],
             "500"
         );
+        assert!(restored.hook_definitions.is_empty());
     }
 
     #[test]
@@ -930,6 +938,7 @@ mod tests {
 
         assert!(!json.contains("driver_overrides"));
         assert!(!json.contains("driver_settings"));
+        assert!(!json.contains("hook_definitions"));
     }
 
     #[test]

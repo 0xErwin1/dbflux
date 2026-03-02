@@ -4,13 +4,13 @@ use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{ServiceConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
@@ -73,12 +73,21 @@ impl SettingsWindow {
                 cx,
             ))
             .child(self.render_sidebar_item(
+                "section-hooks",
+                "Hooks",
+                AppIcon::SquareTerminal,
+                SettingsSection::Hooks,
+                active,
+                focused && self.sidebar_index_for_section(active) == 4,
+                cx,
+            ))
+            .child(self.render_sidebar_item(
                 "section-drivers",
                 "Drivers",
                 AppIcon::Database,
                 SettingsSection::Drivers,
                 active,
-                focused && self.sidebar_index_for_section(active) == 4,
+                focused && self.sidebar_index_for_section(active) == 5,
                 cx,
             ))
             .child(self.render_sidebar_item(
@@ -87,7 +96,7 @@ impl SettingsWindow {
                 AppIcon::Info,
                 SettingsSection::About,
                 active,
-                focused && self.sidebar_index_for_section(active) == 5,
+                focused && self.sidebar_index_for_section(active) == 6,
                 cx,
             ))
             .child(div().flex_1())
@@ -1761,6 +1770,7 @@ impl Render for SettingsWindow {
 
         let show_ssh_delete = self.pending_delete_tunnel_id.is_some();
         let show_svc_delete = self.pending_delete_svc_idx.is_some();
+        let show_hook_delete = self.pending_delete_hook_id.is_some();
         let show_close_confirm = self.pending_close_confirm;
 
         let tunnel_name = self
@@ -1781,6 +1791,8 @@ impl Render for SettingsWindow {
             .map(|s| s.socket_id.clone())
             .unwrap_or_default();
 
+        let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
+
         div()
             .size_full()
             .bg(theme.background)
@@ -1799,6 +1811,7 @@ impl Render for SettingsWindow {
                     self.render_ssh_tunnels_section(cx).into_any_element()
                 }
                 SettingsSection::Services => self.render_services_section(cx).into_any_element(),
+                SettingsSection::Hooks => self.render_hooks_section(cx).into_any_element(),
                 SettingsSection::Drivers => self.render_drivers_section(cx).into_any_element(),
                 SettingsSection::About => self.render_about_section(cx).into_any_element(),
             })
@@ -1851,6 +1864,32 @@ impl Render for SettingsWindow {
                         .child(div().text_sm().child(format!(
                             "Are you sure you want to delete \"{}\"?",
                             svc_delete_name
+                        ))),
+                )
+            })
+            .when(show_hook_delete, |el| {
+                let this = cx.entity().clone();
+                let this_cancel = this.clone();
+
+                el.child(
+                    Dialog::new(window, cx)
+                        .title("Delete Hook")
+                        .confirm()
+                        .on_ok(move |_, window, cx| {
+                            this.update(cx, |settings, cx| {
+                                settings.confirm_delete_hook(window, cx);
+                            });
+                            true
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            this_cancel.update(cx, |settings, cx| {
+                                settings.cancel_delete_hook(cx);
+                            });
+                            true
+                        })
+                        .child(div().text_sm().child(format!(
+                            "Are you sure you want to delete hook \"{}\"?",
+                            hook_delete_name
                         ))),
                 )
             })

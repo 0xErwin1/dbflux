@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use crate::HookPhase;
+
 pub type TaskId = Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +14,9 @@ pub enum TaskKind {
     Query,
     Connect,
     Disconnect,
+    Hook {
+        phase: HookPhase,
+    },
     SwitchDatabase,
     /// Lazy schema loading for a single database (MySQL/MariaDB).
     LoadSchema,
@@ -28,6 +33,7 @@ impl TaskKind {
             TaskKind::Query => "Query",
             TaskKind::Connect => "Connect",
             TaskKind::Disconnect => "Disconnect",
+            TaskKind::Hook { phase } => phase.label(),
             TaskKind::SwitchDatabase => "Switch Database",
             TaskKind::LoadSchema => "Load Schema",
             TaskKind::SchemaRefresh => "Schema Refresh",
@@ -88,6 +94,7 @@ pub struct Task {
     pub started_at: Instant,
     pub completed_at: Option<Instant>,
     pub progress: Option<f32>,
+    pub details: Option<String>,
     pub profile_id: Option<Uuid>,
     cancel_token: CancelToken,
 }
@@ -117,6 +124,7 @@ pub struct TaskSnapshot {
     pub status: TaskStatus,
     pub elapsed_secs: f64,
     pub progress: Option<f32>,
+    pub details: Option<String>,
     pub is_cancellable: bool,
     pub profile_id: Option<Uuid>,
 }
@@ -130,6 +138,7 @@ impl From<&Task> for TaskSnapshot {
             status: task.status.clone(),
             elapsed_secs: task.elapsed().as_secs_f64(),
             progress: task.progress,
+            details: task.details.clone(),
             is_cancellable: task.is_cancellable(),
             profile_id: task.profile_id,
         }
@@ -173,6 +182,7 @@ impl TaskManager {
             started_at: Instant::now(),
             completed_at: None,
             progress: None,
+            details: None,
             profile_id,
             cancel_token: cancel_token.clone(),
         };
@@ -190,12 +200,49 @@ impl TaskManager {
         }
     }
 
+    pub fn complete_with_details(&mut self, id: TaskId, details: impl Into<String>) {
+        if let Some(task) = self.tasks.get_mut(&id)
+            && task.status == TaskStatus::Running
+        {
+            task.status = TaskStatus::Completed;
+            task.completed_at = Some(Instant::now());
+
+            let details = details.into();
+            task.details = if details.trim().is_empty() {
+                None
+            } else {
+                Some(details)
+            };
+        }
+    }
+
     pub fn fail(&mut self, id: TaskId, error: impl Into<String>) {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
             task.status = TaskStatus::Failed(error.into());
             task.completed_at = Some(Instant::now());
+        }
+    }
+
+    pub fn fail_with_details(
+        &mut self,
+        id: TaskId,
+        error: impl Into<String>,
+        details: impl Into<String>,
+    ) {
+        if let Some(task) = self.tasks.get_mut(&id)
+            && task.status == TaskStatus::Running
+        {
+            task.status = TaskStatus::Failed(error.into());
+            task.completed_at = Some(Instant::now());
+
+            let details = details.into();
+            task.details = if details.trim().is_empty() {
+                None
+            } else {
+                Some(details)
+            };
         }
     }
 
@@ -280,6 +327,7 @@ impl TaskManager {
                         t.kind,
                         TaskKind::Connect
                             | TaskKind::Disconnect
+                            | TaskKind::Hook { .. }
                             | TaskKind::SwitchDatabase
                             | TaskKind::LoadSchema
                             | TaskKind::SchemaRefresh

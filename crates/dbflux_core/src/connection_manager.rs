@@ -1481,7 +1481,10 @@ mod tests {
     #[test]
     fn resolve_uses_primary_for_current_database_with_connection_per_database() {
         let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
-        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
         let schema = relational_schema_with_current_database("main_db");
 
         let connected = connected_profile(profile, primary.clone(), Some(schema), HashMap::new());
@@ -1496,8 +1499,14 @@ mod tests {
     #[test]
     fn resolve_uses_database_connection_for_non_primary_database() {
         let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
-        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
-        let analytics = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let analytics = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
 
         let mut db_connections = HashMap::new();
         db_connections.insert(
@@ -1521,7 +1530,10 @@ mod tests {
     #[test]
     fn resolve_returns_error_when_database_connection_is_missing() {
         let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
-        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
         let schema = relational_schema_with_current_database("main_db");
         let connected = connected_profile(profile, primary, Some(schema), HashMap::new());
 

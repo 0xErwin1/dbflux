@@ -181,14 +181,12 @@ impl SettingsWindow {
             }
         }
 
-        let parse_boolean_override = |selection: Option<SharedString>| match selection
-            .as_ref()
-            .map(|v| v.as_ref())
-        {
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            _ => None,
-        };
+        let parse_boolean_override =
+            |selection: Option<SharedString>| match selection.as_ref().map(|v| v.as_ref()) {
+                Some("true") => Some(true),
+                Some("false") => Some(false),
+                _ => None,
+            };
 
         overrides.confirm_dangerous = parse_boolean_override(
             self.drv_confirm_dangerous_dropdown
@@ -1167,5 +1165,3 @@ impl SettingsWindow {
             )
     }
 }
-
-

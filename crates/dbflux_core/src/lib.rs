@@ -2,6 +2,7 @@
 
 mod app_config;
 mod code_generation;
+mod connection_hook;
 mod connection_tree;
 mod connection_tree_store;
 mod crud;
@@ -51,6 +52,10 @@ pub use code_generation::{
     CreateIndexRequest, CreateTypeRequest, DropForeignKeyRequest, DropIndexRequest,
     DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeDefinition,
 };
+pub use connection_hook::{
+    ConnectionHook, ConnectionHookBindings, ConnectionHooks, HookContext, HookExecution,
+    HookFailureMode, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+};
 pub use connection_tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use connection_tree_store::ConnectionTreeStore;
 pub use crud::{
@@ -85,8 +90,7 @@ pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
     RedisLanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
     ValidationResult, detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis,
-    detect_dangerous_sql, language_service_for_query_language,
-    strip_leading_comments,
+    detect_dangerous_sql, language_service_for_query_language, strip_leading_comments,
 };
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,

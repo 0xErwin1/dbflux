@@ -1,11 +1,11 @@
 use dbflux_core::{
-    AppConfigStore, CancelToken, Connection, ConnectionProfile, DbDriver, DbKind, DbSchemaInfo,
-    DriverKey, EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, HistoryEntry,
-    RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    ScriptsDirectory, SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile,
-    TaskId, TaskKind, TaskSnapshot,
+    AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
+    DbDriver, DbKind, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
+    GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
+    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -46,6 +46,7 @@ struct BuiltDrivers {
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
+    hook_definitions: HashMap<String, ConnectionHook>,
 }
 
 pub struct AppState {
@@ -54,6 +55,7 @@ pub struct AppState {
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
+    hook_definitions: HashMap<String, ConnectionHook>,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -68,6 +70,7 @@ impl AppState {
             built.general_settings,
             built.driver_overrides,
             built.driver_settings,
+            built.hook_definitions,
         )
     }
 
@@ -76,6 +79,7 @@ impl AppState {
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
+        hook_definitions: HashMap<String, ConnectionHook>,
     ) -> Self {
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
@@ -100,6 +104,7 @@ impl AppState {
             general_settings,
             driver_overrides,
             driver_settings,
+            hook_definitions,
             recent_files,
             scripts_directory,
             session_store,
@@ -146,16 +151,24 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
             .ok();
 
-        let (general_settings, driver_overrides, driver_settings) = app_config
+        let (general_settings, driver_overrides, driver_settings, hook_definitions) = app_config
             .as_ref()
             .map(|config| {
                 (
                     config.general.clone(),
                     config.driver_overrides.clone(),
                     config.driver_settings.clone(),
+                    config.hook_definitions.clone(),
                 )
             })
-            .unwrap_or_else(|| (GeneralSettings::default(), HashMap::new(), HashMap::new()));
+            .unwrap_or_else(|| {
+                (
+                    GeneralSettings::default(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                )
+            });
 
         if let Some(config) = app_config {
             for service in config.services {
@@ -217,6 +230,7 @@ impl AppState {
             general_settings,
             driver_overrides,
             driver_settings,
+            hook_definitions,
         }
     }
 
@@ -846,12 +860,39 @@ impl AppState {
             .start_for_profile(kind, description, profile_id)
     }
 
+    pub fn start_hook_task_for_profile(
+        &mut self,
+        phase: HookPhase,
+        profile_id: Uuid,
+        profile_name: &str,
+        command: &str,
+    ) -> (TaskId, CancelToken) {
+        self.start_task_for_profile(
+            TaskKind::Hook { phase },
+            format!("Hook: {} — {} — {}", phase.label(), profile_name, command),
+            Some(profile_id),
+        )
+    }
+
     pub fn complete_task(&mut self, id: TaskId) {
         self.facade.tasks.complete(id);
     }
 
+    pub fn complete_task_with_details(&mut self, id: TaskId, details: impl Into<String>) {
+        self.facade.tasks.complete_with_details(id, details);
+    }
+
     pub fn fail_task(&mut self, id: TaskId, error: impl Into<String>) {
         self.facade.tasks.fail(id, error);
+    }
+
+    pub fn fail_task_with_details(
+        &mut self,
+        id: TaskId,
+        error: impl Into<String>,
+        details: impl Into<String>,
+    ) {
+        self.facade.tasks.fail_with_details(id, error, details);
     }
 
     #[allow(dead_code)]
@@ -903,6 +944,10 @@ impl AppState {
 // --- Field accessors ---
 
 impl AppState {
+    pub fn build_hook_context(&self, profile: &ConnectionProfile) -> HookContext {
+        HookContext::from_profile(profile)
+    }
+
     pub fn drivers(&self) -> &HashMap<String, Arc<dyn DbDriver>> {
         &self.facade.connections.drivers
     }
@@ -1085,6 +1130,44 @@ impl AppState {
 
         self.driver_settings.insert(key, values);
     }
+
+    pub fn hook_definitions(&self) -> &HashMap<String, ConnectionHook> {
+        &self.hook_definitions
+    }
+
+    pub fn set_hook_definitions(&mut self, definitions: HashMap<String, ConnectionHook>) {
+        self.hook_definitions = definitions;
+    }
+
+    pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
+        if let Some(bindings) = &profile.hook_bindings {
+            let mut hooks = ConnectionHooks::default();
+
+            for phase in [
+                HookPhase::PreConnect,
+                HookPhase::PostConnect,
+                HookPhase::PreDisconnect,
+                HookPhase::PostDisconnect,
+            ] {
+                for hook_id in bindings.phase_bindings(phase) {
+                    if let Some(hook) = self.hook_definitions.get(hook_id) {
+                        hooks.phase_hooks_mut(phase).push(hook.clone());
+                    } else {
+                        log::warn!(
+                            "Profile '{}' references missing {} hook '{}'",
+                            profile.name,
+                            phase.label().to_ascii_lowercase(),
+                            hook_id
+                        );
+                    }
+                }
+            }
+
+            return hooks;
+        }
+
+        profile.hooks.clone().unwrap_or_default()
+    }
 }
 
 impl Default for AppState {
@@ -1113,6 +1196,7 @@ mod tests {
             general_settings,
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
         )
     }
 
@@ -1132,6 +1216,7 @@ mod tests {
         let state = AppState::new_with_drivers_and_settings(
             drivers,
             GeneralSettings::default(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
         );

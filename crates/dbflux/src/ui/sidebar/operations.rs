@@ -1,4 +1,165 @@
 use super::*;
+use dbflux_core::{
+    CancelToken, ConnectionHook, HookContext, HookFailureMode, HookPhase, HookResult,
+};
+
+enum HookPhaseState {
+    Continue { warnings: Vec<String> },
+    Aborted { error: String },
+    Cancelled,
+}
+
+fn hook_task_details(
+    phase: HookPhase,
+    command_display: &str,
+    result: &Result<HookResult, String>,
+) -> String {
+    match result {
+        Ok(output) => {
+            let mut lines = vec![
+                format!("Phase: {}", phase.label()),
+                format!("Command: {}", command_display),
+                format!("Timed out: {}", output.timed_out),
+                format!("Exit code: {:?}", output.exit_code),
+                String::new(),
+                "stdout:".to_string(),
+            ];
+
+            if output.stdout.trim().is_empty() {
+                lines.push("<empty>".to_string());
+            } else {
+                lines.push(output.stdout.clone());
+            }
+
+            lines.push(String::new());
+            lines.push("stderr:".to_string());
+
+            if output.stderr.trim().is_empty() {
+                lines.push("<empty>".to_string());
+            } else {
+                lines.push(output.stderr.clone());
+            }
+
+            lines.join("\n")
+        }
+        Err(error) => {
+            format!(
+                "Phase: {}\nCommand: {}\nError: {}",
+                phase.label(),
+                command_display,
+                error
+            )
+        }
+    }
+}
+
+async fn run_hook_phase(
+    app_state: Entity<AppState>,
+    profile_id: Uuid,
+    profile_name: String,
+    phase: HookPhase,
+    hooks: Vec<ConnectionHook>,
+    context: HookContext,
+    parent_cancel: Option<CancelToken>,
+    cx: &mut AsyncApp,
+) -> HookPhaseState {
+    let mut warnings = Vec::new();
+
+    for hook in hooks {
+        if !hook.enabled {
+            continue;
+        }
+
+        if parent_cancel
+            .as_ref()
+            .is_some_and(CancelToken::is_cancelled)
+        {
+            return HookPhaseState::Cancelled;
+        }
+
+        let command_display = hook.display_command();
+
+        let (task_id, hook_cancel_token) = match cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let task = state.start_hook_task_for_profile(
+                    phase,
+                    profile_id,
+                    &profile_name,
+                    &command_display,
+                );
+                cx.emit(AppStateChanged);
+                task
+            })
+        }) {
+            Ok(value) => value,
+            Err(_) => return HookPhaseState::Cancelled,
+        };
+
+        let parent_cancel_for_hook = parent_cancel.clone();
+        let hook_for_execution = hook.clone();
+        let hook_context = context.clone();
+        let hook_cancel_for_execution = hook_cancel_token.clone();
+
+        let hook_result = cx
+            .background_executor()
+            .spawn(async move {
+                hook_for_execution.execute(
+                    &hook_context,
+                    &hook_cancel_for_execution,
+                    parent_cancel_for_hook.as_ref(),
+                )
+            })
+            .await;
+
+        let succeeded = hook_result
+            .as_ref()
+            .is_ok_and(|output: &HookResult| output.is_success());
+
+        let failure_message = (!succeeded).then(|| hook.failure_message(phase, &hook_result));
+        let details = hook_task_details(phase, &command_display, &hook_result);
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                if let Some(message) = &failure_message {
+                    state.fail_task_with_details(task_id, message.clone(), details.clone());
+                } else {
+                    state.complete_task_with_details(task_id, details.clone());
+                }
+
+                cx.emit(AppStateChanged);
+            });
+        })
+        .ok();
+
+        if succeeded {
+            continue;
+        }
+
+        if hook_cancel_token.is_cancelled()
+            || parent_cancel
+                .as_ref()
+                .is_some_and(CancelToken::is_cancelled)
+        {
+            return HookPhaseState::Cancelled;
+        }
+
+        let message = failure_message.unwrap_or_else(|| hook.failure_message(phase, &hook_result));
+
+        match hook.on_failure {
+            HookFailureMode::Disconnect => {
+                return HookPhaseState::Aborted { error: message };
+            }
+            HookFailureMode::Warn => {
+                warnings.push(message);
+            }
+            HookFailureMode::Ignore => {
+                log::warn!("{}", message);
+            }
+        }
+    }
+
+    HookPhaseState::Continue { warnings }
+}
 
 impl Sidebar {
     pub(super) fn handle_database_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
@@ -641,28 +802,32 @@ impl Sidebar {
     }
 
     pub(crate) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        let (params, profile_name) = match self.app_state.update(cx, |state, _cx| {
-            if state.is_operation_pending(profile_id, None) {
-                return Err("Connection already pending".to_string());
-            }
+        let (params, profile_name, pre_connect_hooks, post_connect_hooks, hook_context) =
+            match self.app_state.update(cx, |state, _cx| {
+                if state.is_operation_pending(profile_id, None) {
+                    return Err("Connection already pending".to_string());
+                }
 
-            let result = state.prepare_connect_profile(profile_id);
+                let result = state.prepare_connect_profile(profile_id);
 
-            if result.is_ok() && !state.start_pending_operation(profile_id, None) {
-                return Err("Operation started by another thread".to_string());
-            }
+                if result.is_ok() && !state.start_pending_operation(profile_id, None) {
+                    return Err("Operation started by another thread".to_string());
+                }
 
-            result.map(|p| {
-                let name = p.profile.name.clone();
-                (p, name)
-            })
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                log::info!("Connect skipped: {}", e);
-                return;
-            }
-        };
+                result.map(|p| {
+                    let name = p.profile.name.clone();
+                    let hooks = state.resolve_profile_hooks(&p.profile);
+                    let hook_context = state.build_hook_context(&p.profile);
+
+                    (p, name, hooks.pre_connect, hooks.post_connect, hook_context)
+                })
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::info!("Connect skipped: {}", e);
+                    return;
+                }
+            };
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.app_state.update(cx, |state, _cx| {
@@ -688,60 +853,227 @@ impl Sidebar {
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut hook_warnings = Vec::new();
 
-            cx.update(|cx| {
-                if cancel_token.is_cancelled() {
+            match run_hook_phase(
+                app_state.clone(),
+                profile_id,
+                profile_name.clone(),
+                HookPhase::PreConnect,
+                pre_connect_hooks,
+                hook_context.clone(),
+                Some(cancel_token.clone()),
+                cx,
+            )
+            .await
+            {
+                HookPhaseState::Continue { warnings } => {
+                    hook_warnings.extend(warnings);
+                }
+                HookPhaseState::Aborted { error } => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, error.clone());
+                            state.finish_pending_operation(profile_id, None);
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: error,
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+                HookPhaseState::Cancelled => {
+                    cx.update(|cx| {
+                        if cancel_token.is_cancelled() {
+                            app_state.update(cx, |state, cx| {
+                                state.finish_pending_operation(profile_id, None);
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.refresh_tree(cx);
+                            });
+
+                            return;
+                        }
+
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, "Connection hook cancelled");
+                            state.finish_pending_operation(profile_id, None);
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: "Connection cancelled by hook".to_string(),
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+            }
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { params.execute() })
+                .await;
+
+            if cancel_token.is_cancelled() {
+                cx.update(|cx| {
                     log::info!("Connection task was cancelled, discarding result");
+
                     app_state.update(cx, |state, cx| {
                         state.finish_pending_operation(profile_id, None);
                         cx.emit(AppStateChanged);
                     });
+
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.refresh_tree(cx);
                     });
+                })
+                .ok();
+                return;
+            }
+
+            let connected = match result {
+                Ok(value) => value,
+                Err(error) => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, error.clone());
+                            state.finish_pending_operation(profile_id, None);
+                            cx.emit(AppStateChanged);
+                            cx.notify();
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: error,
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
                     return;
                 }
+            };
 
-                let toast = match &result {
-                    Ok(res) => {
-                        app_state.update(cx, |state, _| {
-                            state.complete_task(task_id);
+            match run_hook_phase(
+                app_state.clone(),
+                profile_id,
+                profile_name,
+                HookPhase::PostConnect,
+                post_connect_hooks,
+                hook_context,
+                Some(cancel_token.clone()),
+                cx,
+            )
+            .await
+            {
+                HookPhaseState::Continue { warnings } => {
+                    hook_warnings.extend(warnings);
+                }
+                HookPhaseState::Aborted { error } => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, error.clone());
+                            state.finish_pending_operation(profile_id, None);
+                            cx.emit(AppStateChanged);
                         });
-                        Some(PendingToast {
-                            message: format!("Connected to {}", res.profile.name),
-                            is_error: false,
-                        })
-                    }
-                    Err(e) => {
-                        app_state.update(cx, |state, _| {
-                            state.fail_task(task_id, e.clone());
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: error,
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
                         });
-                        Some(PendingToast {
-                            message: e.clone(),
-                            is_error: true,
-                        })
-                    }
-                };
+                    })
+                    .ok();
+                    return;
+                }
+                HookPhaseState::Cancelled => {
+                    cx.update(|cx| {
+                        if cancel_token.is_cancelled() {
+                            app_state.update(cx, |state, cx| {
+                                state.finish_pending_operation(profile_id, None);
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.refresh_tree(cx);
+                            });
+
+                            return;
+                        }
+
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, "Post-connect hook cancelled");
+                            state.finish_pending_operation(profile_id, None);
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: "Connection cancelled by post-connect hook".to_string(),
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+            }
+
+            let connected_profile_name = connected.profile.name.clone();
+
+            cx.update(|cx| {
+                for warning in &hook_warnings {
+                    log::warn!("{}", warning);
+                }
 
                 app_state.update(cx, |state, cx| {
+                    state.complete_task(task_id);
                     state.finish_pending_operation(profile_id, None);
-
-                    if let Ok(res) = result {
-                        state.apply_connect_profile(res.profile, res.connection, res.schema);
-                    }
-
+                    state.apply_connect_profile(
+                        connected.profile,
+                        connected.connection,
+                        connected.schema,
+                    );
                     cx.emit(AppStateChanged);
                     cx.notify();
                 });
 
+                let message = if hook_warnings.is_empty() {
+                    format!("Connected to {}", connected_profile_name)
+                } else {
+                    format!(
+                        "Connected to {} (with {} hook warning{})",
+                        connected_profile_name,
+                        hook_warnings.len(),
+                        if hook_warnings.len() == 1 { "" } else { "s" }
+                    )
+                };
+
                 sidebar.update(cx, |sidebar, cx| {
-                    sidebar.pending_toast = toast;
+                    sidebar.pending_toast = Some(PendingToast {
+                        message,
+                        is_error: false,
+                    });
                     sidebar.refresh_tree(cx);
                 });
             })
@@ -750,12 +1082,216 @@ impl Sidebar {
         .detach();
     }
 
-    pub(super) fn disconnect_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, cx| {
-            state.disconnect(profile_id);
-            log::info!("Disconnected profile {}", profile_id);
+    pub(crate) fn disconnect_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        let Some(profile) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|conn| conn.profile.clone())
+        else {
+            return;
+        };
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
             cx.notify();
+            return;
+        }
+
+        let profile_name = profile.name.clone();
+        let hook_context = self.app_state.read(cx).build_hook_context(&profile);
+        let hooks = self.app_state.read(cx).resolve_profile_hooks(&profile);
+
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            let task = state.start_task_for_profile(
+                TaskKind::Disconnect,
+                format!("Disconnecting {}", profile_name),
+                Some(profile_id),
+            );
+            cx.emit(AppStateChanged);
+            task
         });
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let mut hook_warnings = Vec::new();
+
+            match run_hook_phase(
+                app_state.clone(),
+                profile_id,
+                profile_name.clone(),
+                HookPhase::PreDisconnect,
+                hooks.pre_disconnect,
+                hook_context.clone(),
+                Some(cancel_token.clone()),
+                cx,
+            )
+            .await
+            {
+                HookPhaseState::Continue { warnings } => {
+                    hook_warnings.extend(warnings);
+                }
+                HookPhaseState::Aborted { error } => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, error.clone());
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: error,
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+                HookPhaseState::Cancelled => {
+                    cx.update(|cx| {
+                        if !cancel_token.is_cancelled() {
+                            app_state.update(cx, |state, cx| {
+                                state.fail_task(task_id, "Disconnect hook cancelled");
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: "Disconnect cancelled by hook".to_string(),
+                                    is_error: true,
+                                });
+                                sidebar.refresh_tree(cx);
+                            });
+
+                            return;
+                        }
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+            }
+
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    state.disconnect(profile_id);
+                    cx.emit(AppStateChanged);
+                    cx.notify();
+                });
+            })
+            .ok();
+
+            match run_hook_phase(
+                app_state.clone(),
+                profile_id,
+                profile_name.clone(),
+                HookPhase::PostDisconnect,
+                hooks.post_disconnect,
+                hook_context,
+                Some(cancel_token.clone()),
+                cx,
+            )
+            .await
+            {
+                HookPhaseState::Continue { warnings } => {
+                    hook_warnings.extend(warnings);
+                }
+                HookPhaseState::Aborted { error } => {
+                    cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.fail_task(task_id, error.clone());
+                            cx.emit(AppStateChanged);
+                        });
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: format!(
+                                    "Disconnected from {}, but {}",
+                                    profile_name,
+                                    error.to_lowercase()
+                                ),
+                                is_error: true,
+                            });
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+                HookPhaseState::Cancelled => {
+                    cx.update(|cx| {
+                        if !cancel_token.is_cancelled() {
+                            app_state.update(cx, |state, cx| {
+                                state.fail_task(task_id, "Post-disconnect hook cancelled");
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: "Disconnected, but post-disconnect hook was cancelled"
+                                        .to_string(),
+                                    is_error: true,
+                                });
+                                sidebar.refresh_tree(cx);
+                            });
+
+                            return;
+                        }
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.refresh_tree(cx);
+                        });
+                    })
+                    .ok();
+                    return;
+                }
+            }
+
+            cx.update(|cx| {
+                for warning in &hook_warnings {
+                    log::warn!("{}", warning);
+                }
+
+                app_state.update(cx, |state, cx| {
+                    state.complete_task(task_id);
+                    cx.emit(AppStateChanged);
+                });
+
+                let message = if hook_warnings.is_empty() {
+                    format!("Disconnected from {}", profile_name)
+                } else {
+                    format!(
+                        "Disconnected from {} (with {} hook warning{})",
+                        profile_name,
+                        hook_warnings.len(),
+                        if hook_warnings.len() == 1 { "" } else { "s" }
+                    )
+                };
+
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_toast = Some(PendingToast {
+                        message,
+                        is_error: false,
+                    });
+                    sidebar.refresh_tree(cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+
         self.refresh_tree(cx);
     }
 

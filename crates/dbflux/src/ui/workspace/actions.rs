@@ -112,13 +112,12 @@ impl Workspace {
                 .get(&id)
                 .map(|c| c.profile.name.clone());
 
-            self.app_state.update(cx, |state, cx| {
-                state.disconnect(id);
-                cx.emit(AppStateChanged);
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.disconnect_profile(id, cx);
             });
 
             if let Some(name) = name {
-                cx.toast_info(format!("Disconnected from {}", name), window);
+                cx.toast_info(format!("Disconnecting from {}...", name), window);
             }
         }
     }

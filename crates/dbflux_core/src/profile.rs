@@ -1,4 +1,5 @@
 use crate::app_config::GlobalOverrides;
+use crate::connection_hook::{ConnectionHookBindings, ConnectionHooks};
 use crate::driver_form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -323,6 +324,14 @@ pub struct ConnectionProfile {
     /// `None` means "use the driver-level defaults".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_settings: Option<FormValues>,
+
+    /// Optional command hooks executed during connect/disconnect flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<ConnectionHooks>,
+
+    /// Optional references to globally defined hooks from config.json.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_bindings: Option<ConnectionHookBindings>,
 }
 
 impl ConnectionProfile {
@@ -337,6 +346,8 @@ impl ConnectionProfile {
             save_password: true,
             settings_overrides: None,
             connection_settings: None,
+            hooks: None,
+            hook_bindings: None,
         }
     }
 
@@ -354,6 +365,8 @@ impl ConnectionProfile {
             save_password: false,
             settings_overrides: None,
             connection_settings: None,
+            hooks: None,
+            hook_bindings: None,
         }
     }
 
@@ -373,6 +386,8 @@ impl ConnectionProfile {
             save_password: true,
             settings_overrides: None,
             connection_settings: None,
+            hooks: None,
+            hook_bindings: None,
         }
     }
 
@@ -433,9 +448,9 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RefreshPolicySetting;
     use crate::app_config::GlobalOverrides;
     use crate::driver_form::FormValues;
-    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
@@ -464,6 +479,8 @@ mod tests {
         assert!(profile.connection_settings.is_none());
         assert!(profile.kind.is_none());
         assert!(profile.driver_id.is_none());
+        assert!(profile.hooks.is_none());
+        assert!(profile.hook_bindings.is_none());
     }
 
     #[test]
@@ -511,6 +528,8 @@ mod tests {
                 .get("scan_batch_size"),
             Some(&"500".to_string())
         );
+        assert!(restored.hooks.is_none());
+        assert!(restored.hook_bindings.is_none());
     }
 
     #[test]
@@ -592,5 +611,7 @@ mod tests {
         assert_eq!(profile.driver_id(), "rpc:my_redis");
         assert!(profile.settings_overrides.is_none());
         assert!(profile.connection_settings.is_none());
+        assert!(profile.hooks.is_none());
+        assert!(profile.hook_bindings.is_none());
     }
 }

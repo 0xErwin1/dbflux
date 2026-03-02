@@ -8,7 +8,10 @@ use crate::keymap::KeymapStack;
 use crate::ui::components::form_renderer::{self, FormRendererState};
 use crate::ui::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
-use dbflux_core::{DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides};
+use dbflux_core::{
+    ConnectionHookBindings, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
+    GlobalOverrides,
+};
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
 use std::collections::HashMap;
@@ -175,6 +178,14 @@ pub struct ConnectionManagerWindow {
     conn_confirm_dangerous_dropdown: Entity<Dropdown>,
     conn_requires_where_dropdown: Entity<Dropdown>,
     conn_requires_preview_dropdown: Entity<Dropdown>,
+    conn_pre_hook_dropdown: Entity<Dropdown>,
+    conn_post_hook_dropdown: Entity<Dropdown>,
+    conn_pre_disconnect_hook_dropdown: Entity<Dropdown>,
+    conn_post_disconnect_hook_dropdown: Entity<Dropdown>,
+    conn_pre_hook_extra_input: Entity<InputState>,
+    conn_post_hook_extra_input: Entity<InputState>,
+    conn_pre_disconnect_hook_extra_input: Entity<InputState>,
+    conn_post_disconnect_hook_extra_input: Entity<InputState>,
     conn_form_state: FormRendererState,
     conn_form_subscriptions: Vec<Subscription>,
     conn_loading_settings: bool,
@@ -238,6 +249,22 @@ impl ConnectionManagerWindow {
             cx.new(|_cx| Dropdown::new("conn-requires-where").placeholder("Use Driver Default"));
         let conn_requires_preview_dropdown =
             cx.new(|_cx| Dropdown::new("conn-requires-preview").placeholder("Use Driver Default"));
+        let conn_pre_hook_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-pre-hook").placeholder("No hook"));
+        let conn_post_hook_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-post-hook").placeholder("No hook"));
+        let conn_pre_disconnect_hook_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-pre-disconnect-hook").placeholder("No hook"));
+        let conn_post_disconnect_hook_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-post-disconnect-hook").placeholder("No hook"));
+        let conn_pre_hook_extra_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
+        let conn_post_hook_extra_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
+        let conn_pre_disconnect_hook_extra_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
+        let conn_post_disconnect_hook_extra_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
 
         let dropdown_subscription = cx.subscribe(
             &ssh_tunnel_dropdown,
@@ -353,6 +380,14 @@ impl ConnectionManagerWindow {
             conn_confirm_dangerous_dropdown,
             conn_requires_where_dropdown,
             conn_requires_preview_dropdown,
+            conn_pre_hook_dropdown,
+            conn_post_hook_dropdown,
+            conn_pre_disconnect_hook_dropdown,
+            conn_post_disconnect_hook_dropdown,
+            conn_pre_hook_extra_input,
+            conn_post_hook_extra_input,
+            conn_pre_disconnect_hook_extra_input,
+            conn_post_disconnect_hook_extra_input,
             conn_form_state: FormRendererState::default(),
             conn_form_subscriptions: Vec::new(),
             conn_loading_settings: false,
@@ -405,6 +440,7 @@ impl ConnectionManagerWindow {
         instance.load_settings_tab(
             profile.settings_overrides.as_ref(),
             profile.connection_settings.as_ref(),
+            profile.hook_bindings.as_ref(),
             window,
             cx,
         );
@@ -477,7 +513,7 @@ impl ConnectionManagerWindow {
             self.create_driver_inputs(driver.form_definition(), window, cx);
         }
 
-        self.load_settings_tab(None, None, window, cx);
+        self.load_settings_tab(None, None, None, window, cx);
 
         self.view = View::EditForm;
         self.edit_state = EditState::Navigating;
@@ -741,6 +777,7 @@ impl ConnectionManagerWindow {
         &mut self,
         overrides: Option<&GlobalOverrides>,
         connection_settings: Option<&dbflux_core::FormValues>,
+        hook_bindings: Option<&ConnectionHookBindings>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -806,6 +843,87 @@ impl ConnectionManagerWindow {
                 dropdown.set_selected_index(Some(bool_index(overrides.requires_preview)), cx);
             });
 
+        let mut hook_items = vec![crate::ui::dropdown::DropdownItem::with_value("No hook", "")];
+
+        let mut hook_ids: Vec<String> = self
+            .app_state
+            .read(cx)
+            .hook_definitions()
+            .keys()
+            .cloned()
+            .collect();
+        hook_ids.sort();
+        hook_items.extend(
+            hook_ids
+                .iter()
+                .map(|hook_id| crate::ui::dropdown::DropdownItem::with_value(hook_id, hook_id)),
+        );
+
+        let (pre_selected, pre_extra) = hook_bindings
+            .map(|bindings| Self::split_primary_and_extra(&bindings.pre_connect))
+            .unwrap_or_default();
+        let (post_selected, post_extra) = hook_bindings
+            .map(|bindings| Self::split_primary_and_extra(&bindings.post_connect))
+            .unwrap_or_default();
+        let (pre_disconnect_selected, pre_disconnect_extra) = hook_bindings
+            .map(|bindings| Self::split_primary_and_extra(&bindings.pre_disconnect))
+            .unwrap_or_default();
+        let (post_disconnect_selected, post_disconnect_extra) = hook_bindings
+            .map(|bindings| Self::split_primary_and_extra(&bindings.post_disconnect))
+            .unwrap_or_default();
+
+        let selection_index = |selected: &str| {
+            hook_items
+                .iter()
+                .position(|item| item.value.as_ref() == selected)
+                .unwrap_or(0)
+        };
+
+        let pre_index = selection_index(&pre_selected);
+        let post_index = selection_index(&post_selected);
+        let pre_disconnect_index = selection_index(&pre_disconnect_selected);
+        let post_disconnect_index = selection_index(&post_disconnect_selected);
+
+        self.conn_pre_hook_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(hook_items.clone(), cx);
+            dropdown.set_selected_index(Some(pre_index), cx);
+        });
+
+        self.conn_post_hook_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(hook_items.clone(), cx);
+            dropdown.set_selected_index(Some(post_index), cx);
+        });
+
+        self.conn_pre_hook_extra_input.update(cx, |input, cx| {
+            input.set_value(pre_extra, window, cx);
+        });
+
+        self.conn_post_hook_extra_input.update(cx, |input, cx| {
+            input.set_value(post_extra, window, cx);
+        });
+
+        self.conn_pre_disconnect_hook_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(hook_items.clone(), cx);
+                dropdown.set_selected_index(Some(pre_disconnect_index), cx);
+            });
+
+        self.conn_pre_disconnect_hook_extra_input
+            .update(cx, |input, cx| {
+                input.set_value(pre_disconnect_extra, window, cx);
+            });
+
+        self.conn_post_disconnect_hook_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_items(hook_items, cx);
+                dropdown.set_selected_index(Some(post_disconnect_index), cx);
+            });
+
+        self.conn_post_disconnect_hook_extra_input
+            .update(cx, |input, cx| {
+                input.set_value(post_disconnect_extra, window, cx);
+            });
+
         if let Some(driver) = &self.selected_driver
             && let Some(schema) = driver.settings_schema()
         {
@@ -817,19 +935,13 @@ impl ConnectionManagerWindow {
                 subscriptions.push(cx.subscribe_in(
                     input,
                     window,
-                    |_this, _, event: &InputEvent, _window, _cx| {
-                        if matches!(event, InputEvent::Change) {
-                            // Nothing to track — the form state is read on save
-                        }
-                    },
+                    |_this, _, _event: &InputEvent, _window, _cx| {},
                 ));
             }
             for dropdown in self.conn_form_state.dropdowns.values() {
                 subscriptions.push(cx.subscribe(
                     dropdown,
-                    |_this, _dropdown, _event: &DropdownSelectionChanged, _cx| {
-                        // Nothing to track — the form state is read on save
-                    },
+                    |_this, _dropdown, _event: &DropdownSelectionChanged, _cx| {},
                 ));
             }
             self.conn_form_subscriptions = subscriptions;
@@ -961,6 +1073,93 @@ impl ConnectionManagerWindow {
         } else {
             Some(values)
         }
+    }
+
+    fn collect_hook_bindings(&self, cx: &Context<Self>) -> Option<ConnectionHookBindings> {
+        let pre_connect = Self::merge_hook_ids(
+            self.conn_pre_hook_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|value| value.to_string()),
+            self.conn_pre_hook_extra_input.read(cx).value().to_string(),
+        );
+
+        let post_connect = Self::merge_hook_ids(
+            self.conn_post_hook_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|value| value.to_string()),
+            self.conn_post_hook_extra_input.read(cx).value().to_string(),
+        );
+
+        let pre_disconnect = Self::merge_hook_ids(
+            self.conn_pre_disconnect_hook_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|value| value.to_string()),
+            self.conn_pre_disconnect_hook_extra_input
+                .read(cx)
+                .value()
+                .to_string(),
+        );
+
+        let post_disconnect = Self::merge_hook_ids(
+            self.conn_post_disconnect_hook_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|value| value.to_string()),
+            self.conn_post_disconnect_hook_extra_input
+                .read(cx)
+                .value()
+                .to_string(),
+        );
+
+        if pre_connect.is_empty()
+            && post_connect.is_empty()
+            && pre_disconnect.is_empty()
+            && post_disconnect.is_empty()
+        {
+            return None;
+        }
+
+        Some(ConnectionHookBindings {
+            pre_connect,
+            post_connect,
+            pre_disconnect,
+            post_disconnect,
+        })
+    }
+
+    fn split_primary_and_extra(hooks: &[String]) -> (String, String) {
+        let Some((first, rest)) = hooks.split_first() else {
+            return (String::new(), String::new());
+        };
+
+        (first.clone(), rest.join(", "))
+    }
+
+    fn merge_hook_ids(primary: Option<String>, extra_text: String) -> Vec<String> {
+        let mut ordered = Vec::new();
+
+        if let Some(primary) = primary.filter(|value| !value.trim().is_empty()) {
+            ordered.push(primary);
+        }
+
+        for id in Self::parse_hook_ids(&extra_text) {
+            if !ordered.iter().any(|existing| existing == &id) {
+                ordered.push(id);
+            }
+        }
+
+        ordered
+    }
+
+    fn parse_hook_ids(text: &str) -> Vec<String> {
+        text.split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect()
     }
 
     /// Returns the number of driver schema fields (for Settings tab navigation).

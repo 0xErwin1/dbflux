@@ -1,5 +1,6 @@
 mod drivers;
 mod general;
+mod hooks;
 mod keybindings;
 mod render;
 mod rpc_services;
@@ -11,8 +12,8 @@ use crate::ui::components::form_renderer::FormRendererState;
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{
-    AppConfigStore, DriverFormDef, DriverKey, DriverMetadata, FormValues, GeneralSettings,
-    GlobalOverrides, ServiceConfig,
+    AppConfigStore, ConnectionHook, DriverFormDef, DriverKey, DriverMetadata, FormValues,
+    GeneralSettings, GlobalOverrides, ServiceConfig,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -27,6 +28,7 @@ enum SettingsSection {
     Keybindings,
     SshTunnels,
     Services,
+    Hooks,
     Drivers,
     About,
 }
@@ -222,6 +224,21 @@ pub struct SettingsWindow {
 
     editing_svc_idx: Option<usize>,
     pending_delete_svc_idx: Option<usize>,
+
+    // Hooks section state
+    hook_definitions: HashMap<String, ConnectionHook>,
+    hook_selected_id: Option<String>,
+    editing_hook_id: Option<String>,
+    pending_delete_hook_id: Option<String>,
+    input_hook_id: Entity<InputState>,
+    input_hook_command: Entity<InputState>,
+    input_hook_args: Entity<InputState>,
+    input_hook_cwd: Entity<InputState>,
+    input_hook_env: Entity<InputState>,
+    input_hook_timeout: Entity<InputState>,
+    hook_enabled: bool,
+    hook_inherit_env: bool,
+    hook_failure_dropdown: Entity<Dropdown>,
 
     // Drivers section state
     drv_entries: Vec<DriverSettingsEntry>,
@@ -525,6 +542,25 @@ impl SettingsWindow {
             cx.new(|cx| InputState::new(window, cx).placeholder("dbflux-driver-host"));
         let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
 
+        let input_hook_id = cx.new(|cx| InputState::new(window, cx).placeholder("hook-id"));
+        let input_hook_command = cx.new(|cx| InputState::new(window, cx).placeholder("command"));
+        let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 ..."));
+        let input_hook_cwd =
+            cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/working-dir"));
+        let input_hook_env =
+            cx.new(|cx| InputState::new(window, cx).placeholder("KEY=value, OTHER=value"));
+        let input_hook_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("30000"));
+
+        let hook_failure_dropdown = cx.new(|_cx| {
+            Dropdown::new("hook-failure-mode")
+                .items(vec![
+                    DropdownItem::with_value("Disconnect", "disconnect"),
+                    DropdownItem::with_value("Warn", "warn"),
+                    DropdownItem::with_value("Ignore", "ignore"),
+                ])
+                .selected_index(Some(0))
+        });
+
         let (drv_overrides, drv_settings) = {
             let state = app_state.read(cx);
             (
@@ -532,6 +568,8 @@ impl SettingsWindow {
                 state.driver_settings().clone(),
             )
         };
+
+        let hook_definitions = app_state.read(cx).hook_definitions().clone();
 
         // Focus the window on creation
         focus_handle.focus(window);
@@ -589,6 +627,20 @@ impl SettingsWindow {
             svc_env_value_inputs: Vec::new(),
             editing_svc_idx: None,
             pending_delete_svc_idx: None,
+
+            hook_definitions,
+            hook_selected_id: None,
+            editing_hook_id: None,
+            pending_delete_hook_id: None,
+            input_hook_id,
+            input_hook_command,
+            input_hook_args,
+            input_hook_cwd,
+            input_hook_env,
+            input_hook_timeout,
+            hook_enabled: true,
+            hook_inherit_env: true,
+            hook_failure_dropdown,
 
             drv_entries: Vec::new(),
             drv_selected_idx: None,
@@ -668,8 +720,9 @@ impl SettingsWindow {
             SettingsSection::Keybindings => 1,
             SettingsSection::SshTunnels => 2,
             SettingsSection::Services => 3,
-            SettingsSection::Drivers => 4,
-            SettingsSection::About => 5,
+            SettingsSection::Hooks => 4,
+            SettingsSection::Drivers => 5,
+            SettingsSection::About => 6,
         }
     }
 
@@ -679,14 +732,15 @@ impl SettingsWindow {
             1 => SettingsSection::Keybindings,
             2 => SettingsSection::SshTunnels,
             3 => SettingsSection::Services,
-            4 => SettingsSection::Drivers,
-            5 => SettingsSection::About,
+            4 => SettingsSection::Hooks,
+            5 => SettingsSection::Drivers,
+            6 => SettingsSection::About,
             _ => SettingsSection::General,
         }
     }
 
     fn sidebar_section_count(&self) -> usize {
-        6
+        7
     }
 
     // -- Unsaved-changes detection --
@@ -695,6 +749,7 @@ impl SettingsWindow {
         self.has_unsaved_general_changes(cx)
             || self.has_unsaved_ssh_changes(cx)
             || self.has_unsaved_svc_changes(cx)
+            || self.has_unsaved_hook_changes(cx)
             || self.has_unsaved_driver_changes(cx)
     }
 
@@ -884,6 +939,13 @@ impl SettingsWindow {
             }
         }
 
+        if self.has_unsaved_hook_changes(cx) {
+            self.save_hook(window, cx);
+            if self.has_unsaved_hook_changes(cx) {
+                return;
+            }
+        }
+
         if self.has_unsaved_driver_changes(cx) {
             self.save_driver_settings(window, cx);
             if self.has_unsaved_driver_changes(cx) {
@@ -913,6 +975,7 @@ impl SettingsWindow {
 
         if self.pending_delete_tunnel_id.is_some()
             || self.pending_delete_svc_idx.is_some()
+            || self.pending_delete_hook_id.is_some()
             || self.pending_close_confirm
         {
             return;
