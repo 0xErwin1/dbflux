@@ -5,7 +5,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -1140,33 +1140,7 @@ impl AppState {
     }
 
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
-        if let Some(bindings) = &profile.hook_bindings {
-            let mut hooks = ConnectionHooks::default();
-
-            for phase in [
-                HookPhase::PreConnect,
-                HookPhase::PostConnect,
-                HookPhase::PreDisconnect,
-                HookPhase::PostDisconnect,
-            ] {
-                for hook_id in bindings.phase_bindings(phase) {
-                    if let Some(hook) = self.hook_definitions.get(hook_id) {
-                        hooks.phase_hooks_mut(phase).push(hook.clone());
-                    } else {
-                        log::warn!(
-                            "Profile '{}' references missing {} hook '{}'",
-                            profile.name,
-                            phase.label().to_ascii_lowercase(),
-                            hook_id
-                        );
-                    }
-                }
-            }
-
-            return hooks;
-        }
-
-        profile.hooks.clone().unwrap_or_default()
+        ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }
 }
 
