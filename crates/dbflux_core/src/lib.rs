@@ -156,9 +156,9 @@ pub use connection_manager::{
     ConnectionManager, ConnectionResolutionError, DatabaseConnection, FetchDatabaseSchemaParams,
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
     FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
-    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry,
-    PendingOperation, RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams,
-    SwitchDatabaseResult,
+    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
+    OwnedCacheEntry, PendingOperation, RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey,
+    SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;

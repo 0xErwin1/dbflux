@@ -1,7 +1,7 @@
 use crate::{
-    Connection, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore,
-    ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
+    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
+    HookContext, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
 };
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
@@ -1059,7 +1059,19 @@ pub struct ConnectProfileParams {
     pub ssh_secret: Option<String>,
 }
 
+pub struct HookExecutionContext {
+    pub hooks: ConnectionHooks,
+    pub context: HookContext,
+}
+
 impl ConnectProfileParams {
+    pub fn prepare_hooks(&self, hooks: ConnectionHooks) -> HookExecutionContext {
+        HookExecutionContext {
+            hooks,
+            context: HookContext::from_profile(&self.profile),
+        }
+    }
+
     pub fn execute(self) -> Result<ConnectProfileResult, String> {
         info!("Connecting to {}", self.profile.name);
 

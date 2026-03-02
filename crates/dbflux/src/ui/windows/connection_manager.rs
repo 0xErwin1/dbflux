@@ -1,4 +1,5 @@
 mod form;
+mod hooks_tab;
 mod navigation;
 mod render;
 mod ssh;
