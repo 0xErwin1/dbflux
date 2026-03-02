@@ -99,6 +99,37 @@ pub enum Command {
 }
 
 impl Command {
+    /// Resolve a command enum from a command palette identifier.
+    pub fn from_palette_id(command_id: &str) -> Option<Self> {
+        match command_id {
+            "new_query_tab" => Some(Command::NewQueryTab),
+            "run_query" => Some(Command::RunQuery),
+            "run_query_in_new_tab" => Some(Command::RunQueryInNewTab),
+            "save_query" => Some(Command::SaveQuery),
+            "open_history" => Some(Command::ToggleHistoryDropdown),
+            "cancel_query" => Some(Command::CancelQuery),
+            "close_tab" => Some(Command::CloseCurrentTab),
+            "next_tab" => Some(Command::NextTab),
+            "prev_tab" => Some(Command::PrevTab),
+            "export_results" => Some(Command::ExportResults),
+            "open_connection_manager" => Some(Command::OpenConnectionManager),
+            "disconnect" => Some(Command::Disconnect),
+            "refresh_schema" => Some(Command::RefreshSchema),
+            "focus_sidebar" => Some(Command::FocusSidebar),
+            "focus_editor" => Some(Command::FocusEditor),
+            "focus_results" => Some(Command::FocusResults),
+            "focus_tasks" => Some(Command::FocusBackgroundTasks),
+            "toggle_sidebar" => Some(Command::ToggleSidebar),
+            "toggle_editor" => Some(Command::ToggleEditor),
+            "toggle_results" => Some(Command::ToggleResults),
+            "toggle_tasks" => Some(Command::ToggleTasks),
+            "open_settings" => Some(Command::OpenSettings),
+            "open_script_file" => Some(Command::OpenScriptFile),
+            "save_file_as" => Some(Command::SaveFileAs),
+            _ => None,
+        }
+    }
+
     /// Returns the display name for this command (used in command palette).
     #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {

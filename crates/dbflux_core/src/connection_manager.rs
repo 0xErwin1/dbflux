@@ -1,5 +1,5 @@
 use crate::{
-    Connection, ConnectionProfile, CustomTypeInfo, DbConfig, DbDriver, DbKind, DbSchemaInfo,
+    Connection, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore,
     ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
 };
@@ -188,6 +188,11 @@ pub struct DatabaseConnection {
     pub schema: Option<SchemaSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionResolutionError {
+    PendingDatabaseConnection { database: String },
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -310,6 +315,41 @@ impl ConnectedProfile {
             .get(database)
             .map(|dc| dc.connection.clone())
             .unwrap_or_else(|| self.connection.clone())
+    }
+
+    /// Resolve the effective connection for query execution.
+    ///
+    /// For `ConnectionPerDatabase` strategies, this selects a per-database
+    /// connection when the target differs from the primary database.
+    pub fn resolve_connection_for_execution(
+        &self,
+        target_db: Option<&str>,
+    ) -> Result<Arc<dyn Connection>, ConnectionResolutionError> {
+        let strategy = self.connection.schema_loading_strategy();
+
+        if strategy != SchemaLoadingStrategy::ConnectionPerDatabase {
+            return Ok(self.connection.clone());
+        }
+
+        let Some(target_db) = target_db else {
+            return Ok(self.connection.clone());
+        };
+
+        let is_primary = self
+            .schema
+            .as_ref()
+            .and_then(|s| s.current_database())
+            .is_some_and(|current| current == target_db);
+
+        if is_primary {
+            return Ok(self.connection.clone());
+        }
+
+        self.database_connection(target_db)
+            .map(|db_conn| db_conn.connection.clone())
+            .ok_or_else(|| ConnectionResolutionError::PendingDatabaseConnection {
+                database: target_db.to_string(),
+            })
     }
 
     /// Returns the per-database schema if available, otherwise the primary.
@@ -705,9 +745,12 @@ impl ConnectionManager {
             .get(&profile_id)
             .ok_or_else(|| "Profile not connected".to_string())?;
 
-        if connected.profile.kind() != DbKind::Postgres {
-            return Err("Database switching only supported for PostgreSQL".to_string());
-        }
+        let driver_id = connected.profile.driver_id();
+        let driver = self
+            .drivers
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
 
         if let Some(ref schema) = connected.schema
             && schema.current_database() == Some(database)
@@ -716,20 +759,14 @@ impl ConnectionManager {
         }
 
         let mut new_profile = connected.profile.clone();
-        if let DbConfig::Postgres {
-            database: ref mut db,
-            ..
-        } = new_profile.config
-        {
-            *db = database.to_string();
-        }
-
-        let driver_id = connected.profile.driver_id();
-        let driver = self
-            .drivers
-            .get(&driver_id)
-            .cloned()
-            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
+        new_profile.config = driver
+            .with_database(&new_profile.config, database)
+            .ok_or_else(|| {
+                format!(
+                    "Driver '{}' does not support database switching",
+                    driver.display_name()
+                )
+            })?;
 
         let original_profile = connected.profile.clone();
 
@@ -776,22 +813,21 @@ impl ConnectionManager {
         }
 
         let driver_id = connected.profile.driver_id();
-        let mut new_profile = connected.profile.clone();
-
-        match &mut new_profile.config {
-            DbConfig::Postgres { database: db, .. } => {
-                *db = database.to_string();
-            }
-            _ => {
-                return Err("Unsupported database config for per-database connections".to_string());
-            }
-        }
-
         let driver = self
             .drivers
             .get(&driver_id)
             .cloned()
             .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
+
+        let mut new_profile = connected.profile.clone();
+        new_profile.config = driver
+            .with_database(&new_profile.config, database)
+            .ok_or_else(|| {
+                format!(
+                    "Driver '{}' does not support per-database connections",
+                    driver.display_name()
+                )
+            })?;
 
         let original_profile = connected.profile.clone();
 
@@ -1313,4 +1349,192 @@ pub struct FetchSchemaForeignKeysResult {
     pub database: String,
     pub schema: Option<String>,
     pub foreign_keys: Vec<SchemaForeignKeyInfo>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, QueryLanguage};
+
+    struct TestConnection {
+        kind: DbKind,
+        strategy: SchemaLoadingStrategy,
+        metadata: DriverMetadata,
+    }
+
+    impl TestConnection {
+        fn new(kind: DbKind, strategy: SchemaLoadingStrategy) -> Self {
+            Self {
+                kind,
+                strategy,
+                metadata: DriverMetadata {
+                    id: format!("test-{kind:?}").to_lowercase(),
+                    display_name: format!("{kind:?}"),
+                    description: "test".to_string(),
+                    category: crate::DatabaseCategory::Relational,
+                    query_language: QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "test".to_string(),
+                    icon: crate::Icon::Database,
+                },
+            }
+        }
+    }
+
+    impl Connection for TestConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            self.kind
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.strategy
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+    }
+
+    fn make_connection(kind: DbKind, strategy: SchemaLoadingStrategy) -> Arc<dyn Connection> {
+        Arc::new(TestConnection::new(kind, strategy))
+    }
+
+    fn relational_schema_with_current_database(database: &str) -> SchemaSnapshot {
+        SchemaSnapshot::relational(crate::RelationalSchema {
+            current_database: Some(database.to_string()),
+            ..Default::default()
+        })
+    }
+
+    fn connected_profile(
+        profile: ConnectionProfile,
+        primary: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+        database_connections: HashMap<String, DatabaseConnection>,
+    ) -> ConnectedProfile {
+        ConnectedProfile {
+            profile,
+            connection: primary,
+            schema,
+            database_schemas: HashMap::new(),
+            table_details: HashMap::new(),
+            schema_types: HashMap::new(),
+            schema_indexes: HashMap::new(),
+            schema_foreign_keys: HashMap::new(),
+            active_database: None,
+            redis_key_cache: RedisKeyCache::default(),
+            database_connections,
+        }
+    }
+
+    #[test]
+    fn resolve_returns_primary_when_strategy_is_not_connection_per_database() {
+        let profile = ConnectionProfile::new(
+            "mysql",
+            DbConfig::MySQL {
+                use_uri: false,
+                uri: None,
+                host: "localhost".to_string(),
+                port: 3306,
+                user: "root".to_string(),
+                database: Some("app".to_string()),
+                ssl_mode: crate::SslMode::Disable,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let primary = make_connection(DbKind::MySQL, SchemaLoadingStrategy::LazyPerDatabase);
+        let connected = connected_profile(profile, primary.clone(), None, HashMap::new());
+
+        let resolved = connected
+            .resolve_connection_for_execution(Some("analytics"))
+            .expect("mysql strategy should return primary connection");
+
+        assert!(Arc::ptr_eq(&resolved, &primary));
+    }
+
+    #[test]
+    fn resolve_uses_primary_for_current_database_with_connection_per_database() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let schema = relational_schema_with_current_database("main_db");
+
+        let connected = connected_profile(profile, primary.clone(), Some(schema), HashMap::new());
+
+        let resolved = connected
+            .resolve_connection_for_execution(Some("main_db"))
+            .expect("primary db should resolve to primary connection");
+
+        assert!(Arc::ptr_eq(&resolved, &primary));
+    }
+
+    #[test]
+    fn resolve_uses_database_connection_for_non_primary_database() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let analytics = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+
+        let mut db_connections = HashMap::new();
+        db_connections.insert(
+            "analytics".to_string(),
+            DatabaseConnection {
+                connection: analytics.clone(),
+                schema: Some(relational_schema_with_current_database("analytics")),
+            },
+        );
+
+        let schema = relational_schema_with_current_database("main_db");
+        let connected = connected_profile(profile, primary, Some(schema), db_connections);
+
+        let resolved = connected
+            .resolve_connection_for_execution(Some("analytics"))
+            .expect("database connection should be used when available");
+
+        assert!(Arc::ptr_eq(&resolved, &analytics));
+    }
+
+    #[test]
+    fn resolve_returns_error_when_database_connection_is_missing() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let primary = make_connection(DbKind::Postgres, SchemaLoadingStrategy::ConnectionPerDatabase);
+        let schema = relational_schema_with_current_database("main_db");
+        let connected = connected_profile(profile, primary, Some(schema), HashMap::new());
+
+        let error = match connected.resolve_connection_for_execution(Some("analytics")) {
+            Ok(_) => panic!("expected missing database connection to return an error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            ConnectionResolutionError::PendingDatabaseConnection {
+                database: "analytics".to_string(),
+            }
+        );
+    }
 }

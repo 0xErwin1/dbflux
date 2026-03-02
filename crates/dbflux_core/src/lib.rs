@@ -85,7 +85,8 @@ pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
     RedisLanguageService, SqlLanguageService, TextPosition, TextPositionRange, TextRange,
     ValidationResult, detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis,
-    detect_dangerous_sql, strip_leading_comments,
+    detect_dangerous_sql, language_service_for_query_language,
+    strip_leading_comments,
 };
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
@@ -148,11 +149,12 @@ pub use app_config::{
 };
 pub use connection_manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, DatabaseConnection, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
-    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
-    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry, PendingOperation,
-    RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    ConnectionManager, ConnectionResolutionError, DatabaseConnection, FetchDatabaseSchemaParams,
+    FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
+    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
+    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, OwnedCacheEntry,
+    PendingOperation, RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey, SwitchDatabaseParams,
+    SwitchDatabaseResult,
 };
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;

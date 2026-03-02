@@ -476,11 +476,15 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    Self::resolve_connection_from_state(
-                        app_state.read(cx),
-                        profile_id,
-                        database.as_deref(),
-                    )
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| {
+                            connected
+                                .resolve_connection_for_execution(database.as_deref())
+                                .ok()
+                        })
                 })
                 .ok()
                 .flatten();
@@ -882,11 +886,15 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    Self::resolve_connection_from_state(
-                        app_state.read(cx),
-                        profile_id,
-                        database.as_deref(),
-                    )
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| {
+                            connected
+                                .resolve_connection_for_execution(database.as_deref())
+                                .ok()
+                        })
                 })
                 .ok()
                 .flatten();
@@ -1182,11 +1190,15 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let conn = cx
                 .update(|cx| {
-                    Self::resolve_connection_from_state(
-                        app_state.read(cx),
-                        profile_id,
-                        database.as_deref(),
-                    )
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| {
+                            connected
+                                .resolve_connection_for_execution(database.as_deref())
+                                .ok()
+                        })
                 })
                 .ok()
                 .flatten();

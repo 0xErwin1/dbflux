@@ -1312,66 +1312,6 @@ impl DataGridPanel {
     pub fn source(&self) -> &DataSource {
         &self.source
     }
-
-    pub(super) fn resolve_connection_from_state(
-        app_state: &crate::app::AppState,
-        profile_id: uuid::Uuid,
-        database: Option<&str>,
-    ) -> Option<std::sync::Arc<dyn dbflux_core::Connection>> {
-        let connected = app_state.connections().get(&profile_id)?;
-
-        match database {
-            Some(db) => Some(connected.connection_for_database(db)),
-            None => Some(connected.connection.clone()),
-        }
-    }
-
-    /// Resolves the correct connection for query execution.
-    ///
-    /// For `ConnectionPerDatabase` drivers, checks whether the target database
-    /// matches the primary connection. If not, looks up the per-database
-    /// connection cache.
-    pub(super) fn resolve_connection(
-        &self,
-        profile_id: uuid::Uuid,
-        database: Option<&str>,
-        cx: &App,
-    ) -> Result<std::sync::Arc<dyn dbflux_core::Connection>, String> {
-        let state = self.app_state.read(cx);
-        let connected = state
-            .connections()
-            .get(&profile_id)
-            .ok_or_else(|| "Connection not found".to_string())?;
-
-        let Some(target_db) = database else {
-            return Ok(connected.connection.clone());
-        };
-
-        let strategy = connected.connection.schema_loading_strategy();
-        if strategy != dbflux_core::SchemaLoadingStrategy::ConnectionPerDatabase {
-            return Ok(connected.connection.clone());
-        }
-
-        let is_primary = connected
-            .schema
-            .as_ref()
-            .and_then(|s| s.current_database())
-            .is_some_and(|current| current == target_db);
-
-        if is_primary {
-            return Ok(connected.connection.clone());
-        }
-
-        connected
-            .database_connection(target_db)
-            .map(|dc| dc.connection.clone())
-            .ok_or_else(|| {
-                format!(
-                    "No connection to database '{}'. Please expand it in the sidebar first.",
-                    target_db
-                )
-            })
-    }
 }
 
 impl EventEmitter<DataGridEvent> for DataGridPanel {}

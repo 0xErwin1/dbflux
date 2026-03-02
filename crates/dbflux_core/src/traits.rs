@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService, NoOpCodeGenerator,
-    QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest, SqlLanguageService,
-    TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
     app_config::DriverKey,
     key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -228,6 +228,14 @@ pub trait DbDriver: Send + Sync {
     /// Parse a connection URI into individual form field values.
     /// Returns `None` for drivers without URI support or if the URI is malformed.
     fn parse_uri(&self, _uri: &str) -> Option<FormValues> {
+        None
+    }
+
+    /// Build a config targeting a specific database, when supported.
+    ///
+    /// Drivers that use per-database connections can override this to return
+    /// an updated config. Drivers without this concept should return `None`.
+    fn with_database(&self, _config: &DbConfig, _database: &str) -> Option<DbConfig> {
         None
     }
 

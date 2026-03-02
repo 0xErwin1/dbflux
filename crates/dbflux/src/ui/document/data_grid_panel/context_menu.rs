@@ -367,10 +367,6 @@ impl DataGridPanel {
             || type_name.contains("set")
     }
 
-    fn should_cast_postgres_text_type(type_name: &str) -> bool {
-        type_name == "uuid" || type_name == "tsvector" || type_name == "tsquery"
-    }
-
     fn sql_operator_symbol(operator: FilterOperator) -> &'static str {
         match operator {
             FilterOperator::Eq => "=",
@@ -2895,7 +2891,6 @@ impl DataGridPanel {
 
         let Some(conn) = conn else { return };
         let dialect = conn.dialect();
-        let is_postgres = conn.metadata().id == "postgres";
 
         let (col_name, col_type_name) = match self.result.columns.get(col) {
             Some(c) => (
@@ -2914,12 +2909,7 @@ impl DataGridPanel {
 
         let op_str = Self::sql_operator_symbol(operator);
 
-        let needs_text_cast = is_postgres && Self::should_cast_postgres_text_type(&col_type_name);
-        let comparable_column = if needs_text_cast {
-            format!("({})::text", col_name)
-        } else {
-            col_name.clone()
-        };
+        let comparable_column = dialect.comparison_column_expr(&col_name, &col_type_name);
 
         let expr = if operator == FilterOperator::Like {
             let raw = match &cell_value {
@@ -2947,11 +2937,8 @@ impl DataGridPanel {
             } else {
                 format!("{} LIKE {}", comparable_column, pattern_literal)
             }
-        } else if is_postgres
-            && matches!(cell_value, Value::Json(_))
-            && col_type_name.contains("json")
-        {
-            format!("({})::jsonb {} ({})", col_name, op_str, literal)
+        } else if matches!(cell_value, Value::Json(_)) {
+            dialect.json_filter_expr(&col_name, op_str, &literal, &col_type_name)
         } else {
             format!("{} {} {}", comparable_column, op_str, literal)
         };

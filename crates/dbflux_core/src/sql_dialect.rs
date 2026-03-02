@@ -38,6 +38,22 @@ pub trait SqlDialect: Send + Sync {
     fn supports_returning(&self) -> bool {
         false
     }
+
+    /// Build the column expression used for value comparisons.
+    ///
+    /// Most dialects can compare directly on the quoted column name.
+    /// PostgreSQL overrides this for selected text-like types.
+    fn comparison_column_expr(&self, col_name: &str, _col_type: &str) -> String {
+        col_name.to_string()
+    }
+
+    /// Build a JSON comparison expression.
+    ///
+    /// Default implementation compares with the regular operator and literal.
+    /// Dialects can override this when explicit casting is required.
+    fn json_filter_expr(&self, col_name: &str, op: &str, literal: &str, _col_type: &str) -> String {
+        format!("{} {} {}", col_name, op, literal)
+    }
 }
 
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).

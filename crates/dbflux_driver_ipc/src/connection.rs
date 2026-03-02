@@ -318,10 +318,7 @@ impl Connection for IpcConnection {
         // Language service runs client-side based on the query language from metadata.
         // This is correct because dangerous-query detection and validation are
         // syntactic operations that don't need a server round-trip.
-        match self.metadata.query_language {
-            dbflux_core::QueryLanguage::Sql => &dbflux_core::SqlLanguageService,
-            _ => &dbflux_core::SqlLanguageService,
-        }
+        dbflux_core::language_service_for_query_language(&self.metadata.query_language)
     }
 
     fn code_gen_capabilities(&self) -> CodeGenCapabilities {

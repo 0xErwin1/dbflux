@@ -107,6 +107,66 @@ impl Sidebar {
         }
     }
 
+    fn spawn_fetch_with_result<R, F, G>(
+        &mut self,
+        pending_action: PendingAction,
+        task: Task<Result<R, String>>,
+        error_log_prefix: &'static str,
+        error_toast_prefix: &'static str,
+        on_success: F,
+        on_finalize: G,
+        cx: &mut Context<Self>,
+    ) -> bool
+    where
+        R: Send + 'static,
+        F: Fn(&Entity<crate::app::AppState>, R, &mut App) + Send + 'static,
+        G: Fn(&Entity<crate::app::AppState>, &mut App) + Send + 'static,
+    {
+        let item_id = pending_action.item_id().to_string();
+        self.pending_actions.insert(item_id.clone(), pending_action);
+        self.loading_items.insert(item_id.clone());
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                match result {
+                    Ok(res) => {
+                        on_success(&app_state, res, cx);
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.loading_items.remove(&item_id);
+                            sidebar.complete_pending_action(&item_id, cx);
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("{}: {}", error_log_prefix, e);
+
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.loading_items.remove(&item_id);
+                            sidebar.pending_actions.remove(&item_id);
+                            sidebar.expansion_overrides.remove(&item_id);
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: format!("{}: {}", error_toast_prefix, e),
+                                is_error: true,
+                            });
+                            sidebar.rebuild_tree_with_overrides(cx);
+                        });
+                    }
+                }
+
+                on_finalize(&app_state, cx);
+            })
+            .ok();
+        })
+        .detach();
+
+        true
+    }
+
     /// Returns `true` if the fetch was started, `false` if preparation failed.
     fn spawn_fetch_table_details(
         &mut self,
@@ -136,72 +196,32 @@ impl Sidebar {
             }
         };
 
-        let item_id = pending_action.item_id().to_string();
-        self.pending_actions.insert(item_id.clone(), pending_action);
-        self.loading_items.insert(item_id.clone());
-
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
         let profile_id = parts.profile_id;
         let db_name = cache_db.clone();
-        let table_name = parts.object_name.clone();
 
         let task = cx
             .background_executor()
             .spawn(async move { params.execute() });
 
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            cx.update(|cx| {
-                match result {
-                    Ok(res) => {
-                        app_state.update(cx, |state, cx| {
-                            state.set_table_details(
-                                res.profile_id,
-                                res.database,
-                                res.table,
-                                res.details,
-                            );
-                            cx.emit(AppStateChanged);
-                        });
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.loading_items.remove(&item_id);
-                            sidebar.complete_pending_action(&item_id, cx);
-                        });
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to fetch table details for {}.{}: {}",
-                            db_name,
-                            table_name,
-                            e
-                        );
-
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.loading_items.remove(&item_id);
-                            sidebar.pending_actions.remove(&item_id);
-                            sidebar.expansion_overrides.remove(&item_id);
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: format!("Failed to load table schema: {}", e),
-                                is_error: true,
-                            });
-                            sidebar.rebuild_tree_with_overrides(cx);
-                        });
-                    }
-                }
-
+        self.spawn_fetch_with_result(
+            pending_action,
+            task,
+            "Failed to fetch table details",
+            "Failed to load table schema",
+            |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
-                    state.finish_pending_operation(profile_id, Some(&db_name));
+                    state.set_table_details(res.profile_id, res.database, res.table, res.details);
                     cx.emit(AppStateChanged);
                 });
-            })
-            .ok();
-        })
-        .detach();
-
-        true
+            },
+            move |app_state, cx| {
+                app_state.update(cx, |state, state_cx| {
+                    state.finish_pending_operation(profile_id, Some(&db_name));
+                    state_cx.emit(AppStateChanged);
+                });
+            },
+            cx,
+        )
     }
 
     /// Returns `true` if the fetch was started, `false` if preparation failed.
@@ -227,59 +247,24 @@ impl Sidebar {
             }
         };
 
-        let item_id = pending_action.item_id().to_string();
-        self.pending_actions.insert(item_id.clone(), pending_action);
-        self.loading_items.insert(item_id.clone());
-
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
-        let db_name = database.to_string();
-        let schema_name = schema.map(String::from);
-
         let task = cx
             .background_executor()
             .spawn(async move { params.execute() });
 
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            cx.update(|cx| match result {
-                Ok(res) => {
-                    app_state.update(cx, |state, cx| {
-                        state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.complete_pending_action(&item_id, cx);
-                    });
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to fetch schema types for {}.{:?}: {}",
-                        db_name,
-                        schema_name,
-                        e
-                    );
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.pending_actions.remove(&item_id);
-                        sidebar.expansion_overrides.remove(&item_id);
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: format!("Failed to load data types: {}", e),
-                            is_error: true,
-                        });
-                        sidebar.rebuild_tree_with_overrides(cx);
-                    });
-                }
-            })
-            .ok();
-        })
-        .detach();
-
-        true
+        self.spawn_fetch_with_result(
+            pending_action,
+            task,
+            "Failed to fetch schema types",
+            "Failed to load data types",
+            |app_state, res, cx| {
+                app_state.update(cx, |state, cx| {
+                    state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
+                    cx.emit(AppStateChanged);
+                });
+            },
+            |_app_state, _cx| {},
+            cx,
+        )
     }
 
     /// Returns `true` if the fetch was started, `false` if preparation failed.
@@ -305,56 +290,24 @@ impl Sidebar {
             }
         };
 
-        let item_id = pending_action.item_id().to_string();
-        self.pending_actions.insert(item_id.clone(), pending_action);
-        self.loading_items.insert(item_id.clone());
-
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
-
         let task = cx
             .background_executor()
             .spawn(async move { params.execute() });
 
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            cx.update(|cx| match result {
-                Ok(res) => {
-                    app_state.update(cx, |state, cx| {
-                        state.set_schema_indexes(
-                            res.profile_id,
-                            res.database,
-                            res.schema,
-                            res.indexes,
-                        );
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.complete_pending_action(&item_id, cx);
-                    });
-                }
-                Err(e) => {
-                    log::error!("Failed to fetch schema indexes: {}", e);
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.pending_actions.remove(&item_id);
-                        sidebar.expansion_overrides.remove(&item_id);
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: format!("Failed to load indexes: {}", e),
-                            is_error: true,
-                        });
-                        sidebar.rebuild_tree_with_overrides(cx);
-                    });
-                }
-            })
-            .ok();
-        })
-        .detach();
-
-        true
+        self.spawn_fetch_with_result(
+            pending_action,
+            task,
+            "Failed to fetch schema indexes",
+            "Failed to load indexes",
+            |app_state, res, cx| {
+                app_state.update(cx, |state, cx| {
+                    state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
+                    cx.emit(AppStateChanged);
+                });
+            },
+            |_app_state, _cx| {},
+            cx,
+        )
     }
 
     /// Returns `true` if the fetch was started, `false` if preparation failed.
@@ -380,56 +333,29 @@ impl Sidebar {
             }
         };
 
-        let item_id = pending_action.item_id().to_string();
-        self.pending_actions.insert(item_id.clone(), pending_action);
-        self.loading_items.insert(item_id.clone());
-
-        let app_state = self.app_state.clone();
-        let sidebar = cx.entity().clone();
-
         let task = cx
             .background_executor()
             .spawn(async move { params.execute() });
 
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            cx.update(|cx| match result {
-                Ok(res) => {
-                    app_state.update(cx, |state, cx| {
-                        state.set_schema_foreign_keys(
-                            res.profile_id,
-                            res.database,
-                            res.schema,
-                            res.foreign_keys,
-                        );
-                        cx.emit(AppStateChanged);
-                    });
-
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.complete_pending_action(&item_id, cx);
-                    });
-                }
-                Err(e) => {
-                    log::error!("Failed to fetch schema foreign keys: {}", e);
-                    sidebar.update(cx, |sidebar, cx| {
-                        sidebar.loading_items.remove(&item_id);
-                        sidebar.pending_actions.remove(&item_id);
-                        sidebar.expansion_overrides.remove(&item_id);
-                        sidebar.pending_toast = Some(PendingToast {
-                            message: format!("Failed to load foreign keys: {}", e),
-                            is_error: true,
-                        });
-                        sidebar.rebuild_tree_with_overrides(cx);
-                    });
-                }
-            })
-            .ok();
-        })
-        .detach();
-
-        true
+        self.spawn_fetch_with_result(
+            pending_action,
+            task,
+            "Failed to fetch schema foreign keys",
+            "Failed to load foreign keys",
+            |app_state, res, cx| {
+                app_state.update(cx, |state, cx| {
+                    state.set_schema_foreign_keys(
+                        res.profile_id,
+                        res.database,
+                        res.schema,
+                        res.foreign_keys,
+                    );
+                    cx.emit(AppStateChanged);
+                });
+            },
+            |_app_state, _cx| {},
+            cx,
+        )
     }
 
     /// Execute the stored action for a completed fetch.

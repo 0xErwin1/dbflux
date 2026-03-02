@@ -96,11 +96,27 @@ impl DataGridPanel {
             request = request.with_filter(f.clone());
         }
 
-        let conn = match self.resolve_connection(profile_id, database.as_deref(), cx) {
-            Ok(c) => c,
-            Err(msg) => {
-                cx.toast_error(msg, window);
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                cx.toast_error("Connection not found", window);
                 return;
+            };
+
+            match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(connection) => connection,
+                Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                    database,
+                }) => {
+                    cx.toast_error(
+                        format!(
+                            "No connection to database '{}'. Please expand it in the sidebar first.",
+                            database
+                        ),
+                        window,
+                    );
+                    return;
+                }
             }
         };
 
@@ -427,9 +443,16 @@ impl DataGridPanel {
         filter: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let conn = match self.resolve_connection(profile_id, database.as_deref(), cx) {
-            Ok(c) => c,
-            Err(_) => return,
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+
+            match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(connection) => connection,
+                Err(_) => return,
+            }
         };
 
         let mut count_request = TableCountRequest::new(table.clone());

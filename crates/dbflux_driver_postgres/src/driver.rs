@@ -82,6 +82,22 @@ impl SqlDialect for PostgresDialect {
     fn supports_returning(&self) -> bool {
         true
     }
+
+    fn comparison_column_expr(&self, col_name: &str, col_type: &str) -> String {
+        if needs_postgres_text_comparison_cast(col_type) {
+            format!("({})::text", col_name)
+        } else {
+            col_name.to_string()
+        }
+    }
+
+    fn json_filter_expr(&self, col_name: &str, op: &str, literal: &str, col_type: &str) -> String {
+        if col_type.contains("json") {
+            format!("({})::jsonb {} ({})", col_name, op, literal)
+        } else {
+            format!("{} {} {}", col_name, op, literal)
+        }
+    }
 }
 
 static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
@@ -411,6 +427,33 @@ impl DbDriver for PostgresDriver {
             "postgresql://{}{}:{}/{}",
             credentials, host, port, database
         ))
+    }
+
+    fn with_database(&self, config: &DbConfig, database: &str) -> Option<DbConfig> {
+        match config {
+            DbConfig::Postgres {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Some(DbConfig::Postgres {
+                use_uri: *use_uri,
+                uri: uri.clone(),
+                host: host.clone(),
+                port: *port,
+                user: user.clone(),
+                database: database.to_string(),
+                ssl_mode: *ssl_mode,
+                ssh_tunnel: ssh_tunnel.clone(),
+                ssh_tunnel_profile_id: *ssh_tunnel_profile_id,
+            }),
+            _ => None,
+        }
     }
 
     fn parse_uri(&self, uri: &str) -> Option<FormValues> {
@@ -1902,6 +1945,11 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
             })
         })
         .collect())
+}
+
+fn needs_postgres_text_comparison_cast(type_name: &str) -> bool {
+    let normalized = type_name.to_ascii_lowercase();
+    normalized == "uuid" || normalized == "tsvector" || normalized == "tsquery"
 }
 
 /// Convert a Value to a safe PostgreSQL literal string.
