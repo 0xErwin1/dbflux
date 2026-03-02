@@ -1,12 +1,20 @@
 use super::*;
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookFailureMode, HookPhase, HookResult,
+    CancelToken, ConnectionHook, HookContext, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
 };
 
 enum HookPhaseState {
     Continue { warnings: Vec<String> },
     Aborted { error: String },
     Cancelled,
+}
+
+fn single_hook_result(executions: Vec<dbflux_core::HookExecution>) -> Result<HookResult, String> {
+    executions
+        .into_iter()
+        .last()
+        .map(|execution| execution.result)
+        .unwrap_or_else(|| Err("Hook execution produced no result".to_string()))
 }
 
 fn hook_task_details(
@@ -100,10 +108,12 @@ async fn run_hook_phase(
         let hook_context = context.clone();
         let hook_cancel_for_execution = hook_cancel_token.clone();
 
-        let hook_result = cx
+        let hook_outcome = cx
             .background_executor()
             .spawn(async move {
-                hook_for_execution.execute(
+                HookRunner::run_phase(
+                    phase,
+                    &[hook_for_execution],
                     &hook_context,
                     &hook_cancel_for_execution,
                     parent_cancel_for_hook.as_ref(),
@@ -111,11 +121,33 @@ async fn run_hook_phase(
             })
             .await;
 
+        let (hook_result, warn_messages, abort_error) = match hook_outcome {
+            HookPhaseOutcome::Success { executions } => {
+                (single_hook_result(executions), Vec::new(), None)
+            }
+            HookPhaseOutcome::CompletedWithWarnings {
+                executions,
+                warnings,
+            } => (single_hook_result(executions), warnings, None),
+            HookPhaseOutcome::Aborted { executions, error } => {
+                (single_hook_result(executions), Vec::new(), Some(error))
+            }
+        };
+
         let succeeded = hook_result
             .as_ref()
             .is_ok_and(|output: &HookResult| output.is_success());
 
-        let failure_message = (!succeeded).then(|| hook.failure_message(phase, &hook_result));
+        let failure_message = if succeeded {
+            None
+        } else {
+            Some(
+                abort_error
+                    .clone()
+                    .or_else(|| warn_messages.first().cloned())
+                    .unwrap_or_else(|| hook.failure_message(phase, &hook_result)),
+            )
+        };
         let details = hook_task_details(phase, &command_display, &hook_result);
 
         cx.update(|cx| {
@@ -143,19 +175,11 @@ async fn run_hook_phase(
             return HookPhaseState::Cancelled;
         }
 
-        let message = failure_message.unwrap_or_else(|| hook.failure_message(phase, &hook_result));
-
-        match hook.on_failure {
-            HookFailureMode::Disconnect => {
-                return HookPhaseState::Aborted { error: message };
-            }
-            HookFailureMode::Warn => {
-                warnings.push(message);
-            }
-            HookFailureMode::Ignore => {
-                log::warn!("{}", message);
-            }
+        if let Some(error) = abort_error {
+            return HookPhaseState::Aborted { error };
         }
+
+        warnings.extend(warn_messages);
     }
 
     HookPhaseState::Continue { warnings }
@@ -816,10 +840,15 @@ impl Sidebar {
 
                 result.map(|p| {
                     let name = p.profile.name.clone();
-                    let hooks = state.resolve_profile_hooks(&p.profile);
-                    let hook_context = state.build_hook_context(&p.profile);
+                    let hook_execution = p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
 
-                    (p, name, hooks.pre_connect, hooks.post_connect, hook_context)
+                    (
+                        p,
+                        name,
+                        hook_execution.hooks.pre_connect,
+                        hook_execution.hooks.post_connect,
+                        hook_execution.context,
+                    )
                 })
             }) {
                 Ok(p) => p,

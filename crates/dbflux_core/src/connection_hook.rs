@@ -421,6 +421,7 @@ impl HookRunner {
         hooks: &[ConnectionHook],
         context: &HookContext,
         cancel_token: &CancelToken,
+        parent_cancel_token: Option<&CancelToken>,
     ) -> HookPhaseOutcome {
         let mut warnings = Vec::new();
         let mut executions = Vec::new();
@@ -430,7 +431,7 @@ impl HookRunner {
                 continue;
             }
 
-            let result = hook.execute(context, cancel_token, None);
+            let result = hook.execute(context, cancel_token, parent_cancel_token);
             let succeeded = result.as_ref().is_ok_and(HookResult::is_success);
 
             executions.push(HookExecution {
