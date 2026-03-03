@@ -1,17 +1,17 @@
-use crate::ui::components::tree_nav::{FlatRow, TreeNavAction};
+use crate::ui::components::tree_nav::{self, FlatRow, TreeNavAction};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::{ServiceConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
@@ -21,88 +21,6 @@ use super::{
 };
 
 const INDENT_PX: f32 = 16.0;
-const LINE_WEIGHT: f32 = 1.0;
-
-fn tree_line_color(theme: &gpui_component::Theme) -> Hsla {
-    let mut color = theme.muted_foreground;
-    color.a = 0.35;
-    color
-}
-
-fn render_gutter(row: &FlatRow, row_height: Pixels, line_color: Hsla) -> AnyElement {
-    let depth = row.depth;
-
-    if depth == 0 {
-        return div().w(px(0.0)).flex_shrink_0().into_any_element();
-    }
-
-    let gutter_width = depth as f32 * INDENT_PX;
-    let half_row = f32::from(row_height) / 2.0;
-
-    let mut lines: Vec<AnyElement> = Vec::new();
-
-    // Skip level 0 — root headers have no gutter, so ancestor lines there are artifacts.
-    for (level, continues) in row.ancestors_continue.iter().enumerate() {
-        if *continues && level > 0 {
-            lines.push(
-                div()
-                    .absolute()
-                    .left(px(level as f32 * INDENT_PX + INDENT_PX / 2.0))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(LINE_WEIGHT))
-                    .bg(line_color)
-                    .into_any_element(),
-            );
-        }
-    }
-
-    let connector_level = depth - 1;
-    let connector_x = connector_level as f32 * INDENT_PX + INDENT_PX / 2.0;
-
-    if row.is_last {
-        lines.push(
-            div()
-                .absolute()
-                .left(px(connector_x))
-                .top_0()
-                .h(px(half_row + 0.5))
-                .w(px(LINE_WEIGHT))
-                .bg(line_color)
-                .into_any_element(),
-        );
-    } else {
-        lines.push(
-            div()
-                .absolute()
-                .left(px(connector_x))
-                .top_0()
-                .bottom_0()
-                .w(px(LINE_WEIGHT))
-                .bg(line_color)
-                .into_any_element(),
-        );
-    }
-
-    lines.push(
-        div()
-            .absolute()
-            .left(px(connector_x))
-            .top(px(half_row))
-            .w(px(INDENT_PX / 2.0))
-            .h(px(LINE_WEIGHT))
-            .bg(line_color)
-            .into_any_element(),
-    );
-
-    div()
-        .w(px(gutter_width))
-        .h(row_height)
-        .relative()
-        .flex_shrink_0()
-        .children(lines)
-        .into_any_element()
-}
 
 impl SettingsWindow {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -111,7 +29,7 @@ impl SettingsWindow {
         let theme = cx.theme().clone();
         let focused = self.focus_area == SettingsFocus::Sidebar;
         let row_height = Heights::ROW;
-        let line_color = tree_line_color(&theme);
+        let line_color = tree_nav::tree_line_color(&theme);
 
         let rows = self.sidebar_tree.rows();
         let cursor_pos = self.sidebar_tree.cursor();
@@ -120,7 +38,15 @@ impl SettingsWindow {
 
         for (idx, row) in rows.iter().enumerate() {
             let is_cursor = focused && idx == cursor_pos;
-            let gutter = render_gutter(row, row_height, line_color);
+            let gutter = tree_nav::render_gutter(
+                row.depth,
+                row.is_last,
+                &row.ancestors_continue,
+                INDENT_PX,
+                row_height,
+                line_color,
+                true,
+            );
             let is_group = row.has_children && !row.selectable;
 
             let content: AnyElement = if is_group {
@@ -188,7 +114,7 @@ impl SettingsWindow {
         inner_children.push(
             svg()
                 .path(chevron_icon.path())
-                .size(px(10.0))
+                .size(px(12.0))
                 .text_color(theme.muted_foreground)
                 .into_any_element(),
         );
@@ -197,7 +123,7 @@ impl SettingsWindow {
             inner_children.push(
                 svg()
                     .path(icon.path())
-                    .size(px(12.0))
+                    .size(px(14.0))
                     .text_color(theme.muted_foreground)
                     .into_any_element(),
             );
@@ -205,7 +131,7 @@ impl SettingsWindow {
 
         inner_children.push(
             div()
-                .text_xs()
+                .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.muted_foreground)
                 .child(row.label.clone())

@@ -13,6 +13,7 @@ mod table_loading;
 mod tree_builder;
 
 use crate::app::{AppState, AppStateChanged, ConnectedProfile};
+use crate::ui::components::tree_nav::{self, GutterInfo};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
@@ -385,6 +386,49 @@ enum TableDetailsStatus {
     NotFound,
 }
 
+/// Compute gutter metadata for every visible node in a `TreeItem` tree.
+///
+/// Walks expanded children recursively, producing a map from item ID to
+/// `GutterInfo` so the render callback can look up connector-line geometry.
+fn compute_gutter_map(items: &[TreeItem]) -> HashMap<String, GutterInfo> {
+    fn walk(
+        items: &[TreeItem],
+        depth: usize,
+        parent_ancestors: &[bool],
+        out: &mut HashMap<String, GutterInfo>,
+    ) {
+        let count = items.len();
+
+        for (i, item) in items.iter().enumerate() {
+            let is_last = i == count - 1;
+
+            let mut ancestors_continue = Vec::with_capacity(depth);
+            if depth > 0 {
+                ancestors_continue.extend_from_slice(parent_ancestors);
+            }
+
+            out.insert(
+                item.id.to_string(),
+                GutterInfo {
+                    depth,
+                    is_last,
+                    ancestors_continue: ancestors_continue.clone(),
+                },
+            );
+
+            if item.is_expanded() && !item.children.is_empty() {
+                let mut child_ancestors = ancestors_continue;
+                child_ancestors.push(!is_last);
+                walk(&item.children, depth + 1, &child_ancestors, out);
+            }
+        }
+    }
+
+    let mut map = HashMap::new();
+    walk(items, 0, &[], &mut map);
+    map
+}
+
 pub struct Sidebar {
     app_state: Entity<AppState>,
     tree_state: Entity<TreeState>,
@@ -431,6 +475,8 @@ pub struct Sidebar {
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
     scripts_drop_target: Option<String>,
+    gutter_metadata: HashMap<String, GutterInfo>,
+    scripts_gutter_metadata: HashMap<String, GutterInfo>,
 }
 
 use crate::ui::toast::PendingToast;
@@ -447,9 +493,11 @@ impl Sidebar {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
         let visible_entry_count = Self::count_visible_entries(&items);
+        let gutter_metadata = compute_gutter_map(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
 
         let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
+        let scripts_gutter_metadata = compute_gutter_map(&scripts_items);
         let scripts_tree_state = cx.new(|cx| TreeState::new(cx).items(scripts_items));
         let scripts_search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter scripts..."));
@@ -552,6 +600,8 @@ impl Sidebar {
             delete_confirm_modal: None,
             add_menu_open: false,
             scripts_drop_target: None,
+            gutter_metadata,
+            scripts_gutter_metadata,
         }
     }
 
@@ -596,6 +646,7 @@ impl Sidebar {
         };
 
         let items = Self::build_scripts_tree_items(&entries);
+        self.scripts_gutter_metadata = compute_gutter_map(&items);
         self.scripts_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
         });
@@ -643,6 +694,7 @@ impl Sidebar {
                 if is_connected {
                     self.app_state.update(cx, |state, cx| {
                         state.set_active_connection(profile_id);
+                        cx.emit(AppStateChanged);
                         cx.notify();
                     });
                 } else {
@@ -715,7 +767,11 @@ impl Sidebar {
         let node_kind = parse_node_kind(item_id);
 
         if click_count == 2 {
-            let is_key_value_db = matches!(parse_node_id(item_id), Some(SchemaNodeId::Database { profile_id, .. }) if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue));
+            let is_key_value_db = matches!(
+                parse_node_id(item_id),
+                Some(SchemaNodeId::Database { profile_id, .. })
+                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
+            );
 
             if is_key_value_db {
                 self.toggle_item_expansion(item_id, cx);
@@ -728,6 +784,23 @@ impl Sidebar {
         }
 
         cx.notify();
+    }
+
+    fn handle_chevron_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
+            let is_connected = self
+                .app_state
+                .read(cx)
+                .connections()
+                .contains_key(&profile_id);
+
+            if !is_connected {
+                self.connect_to_profile(profile_id, cx);
+                return;
+            }
+        }
+
+        self.toggle_item_expansion(item_id, cx);
     }
 
     fn browse_table(&mut self, item_id: &str, cx: &mut Context<Self>) {

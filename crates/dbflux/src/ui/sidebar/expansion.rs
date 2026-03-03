@@ -177,6 +177,7 @@ impl Sidebar {
 
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
+        self.gutter_metadata = compute_gutter_map(&items);
 
         self.syncing_expansion = true;
         self.tree_state.update(cx, |state, cx| {
@@ -198,6 +199,7 @@ impl Sidebar {
 
         let items = self.build_tree_items_with_overrides(cx);
         self.visible_entry_count = Self::count_visible_entries(&items);
+        self.gutter_metadata = compute_gutter_map(&items);
 
         if let Some(ref menu) = self.context_menu
             && Self::find_item_index_in_tree(&items, &menu.item_id, &mut 0).is_none()
