@@ -1,3 +1,8 @@
+#[path = "tree_nav/gutter.rs"]
+mod gutter;
+
+pub use gutter::{render_gutter, tree_line_color, GutterInfo};
+
 use crate::ui::icons::AppIcon;
 use gpui::SharedString;
 use std::collections::HashSet;

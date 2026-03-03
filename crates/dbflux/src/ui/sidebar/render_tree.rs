@@ -13,6 +13,8 @@ pub(super) struct TreeRenderParams {
     pub editing_id: Option<Uuid>,
     pub editing_script_path: Option<std::path::PathBuf>,
     pub rename_input: Entity<InputState>,
+    pub gutter_metadata: HashMap<String, GutterInfo>,
+    pub line_color: Hsla,
     pub color_teal: Hsla,
     pub color_yellow: Hsla,
     pub color_blue: Hsla,
@@ -59,11 +61,14 @@ pub(super) fn render_tree_item(
     );
 
     let theme = cx.theme();
-    let indent_per_level = 12.0_f32;
+    let indent_per_level = 14.0_f32;
     let is_folder = entry.is_folder();
     let is_expanded = entry.is_expanded();
 
-    let needs_chevron = is_folder
+    let needs_chevron = matches!(
+        node_kind,
+        SchemaNodeKind::Profile | SchemaNodeKind::Database
+    ) || (is_folder
         && matches!(
             node_kind,
             SchemaNodeKind::ConnectionFolder
@@ -80,15 +85,13 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::SchemaIndexesFolder
                 | SchemaNodeKind::SchemaForeignKeysFolder
                 | SchemaNodeKind::CustomType
-                | SchemaNodeKind::Database
-                | SchemaNodeKind::Profile
                 | SchemaNodeKind::ScriptsFolder
                 | SchemaNodeKind::Collection
                 | SchemaNodeKind::CollectionsFolder
                 | SchemaNodeKind::DatabaseIndexesFolder
                 | SchemaNodeKind::CollectionFieldsFolder
                 | SchemaNodeKind::CollectionIndexesFolder
-        );
+        ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
         Some(if is_expanded {
@@ -143,16 +146,22 @@ pub(super) fn render_tree_item(
     let sidebar_for_chevron = sidebar_entity.clone();
     let item_id_for_chevron = item_id.clone();
 
-    let guide_lines: Vec<_> = (0..depth)
-        .map(|_| {
-            div()
-                .w(px(indent_per_level))
-                .h_full()
-                .flex()
-                .justify_center()
-                .child(div().w(px(1.0)).h_full().bg(theme.border))
-        })
-        .collect();
+    let gutter: AnyElement = if let Some(info) = params.gutter_metadata.get(item_id.as_ref()) {
+        tree_nav::render_gutter(
+            info.depth,
+            info.is_last,
+            &info.ancestors_continue,
+            indent_per_level,
+            Heights::ROW,
+            params.line_color,
+            true,
+        )
+    } else {
+        div()
+            .w(px(depth as f32 * indent_per_level))
+            .flex_shrink_0()
+            .into_any_element()
+    };
 
     let is_multi_selected = params.multi_selection.contains(item_id.as_ref());
     let multi_select_bg = theme.list_active;
@@ -168,7 +177,7 @@ pub(super) fn render_tree_item(
 
     let mut list_item = ListItem::new(ix)
         .selected(selected)
-        .py(Spacing::XS)
+        .h(Heights::ROW)
         .when(is_pending_delete, |el| el.bg(pending_delete_bg))
         .when(is_multi_selected && !selected && !is_pending_delete, |el| {
             el.bg(multi_select_bg)
@@ -179,8 +188,8 @@ pub(super) fn render_tree_item(
                 .w_full()
                 .flex()
                 .items_center()
-                .gap(Spacing::XS)
-                .children(guide_lines)
+                .gap_0()
+                .child(gutter)
                 .when(is_table_or_view, |el| {
                     let sidebar_md = sidebar_for_mousedown.clone();
                     let id_md = item_id_for_mousedown.clone();
@@ -232,7 +241,8 @@ pub(super) fn render_tree_item(
                 .child(
                     div()
                         .id(SharedString::from(format!("chevron-{}", item_id)))
-                        .w(px(12.0))
+                        .w(px(14.0))
+                        .mr(Spacing::XS)
                         .flex()
                         .justify_center()
                         .when_some(chevron_icon, |el, icon| {
@@ -243,13 +253,13 @@ pub(super) fn render_tree_item(
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     sidebar_for_chevron.update(cx, |this, cx| {
-                                        this.toggle_item_expansion(&item_id_for_chevron, cx);
+                                        this.handle_chevron_click(&item_id_for_chevron, cx);
                                     });
                                 })
                                 .child(
                                     svg()
                                         .path(icon.path())
-                                        .size_3()
+                                        .size_3p5()
                                         .text_color(theme.muted_foreground),
                                 )
                         }),
@@ -257,10 +267,11 @@ pub(super) fn render_tree_item(
                 .child(
                     div()
                         .w(Heights::ICON_SM)
+                        .mr(Spacing::XS)
                         .flex()
                         .justify_center()
                         .when_some(node_icon, |el, icon| {
-                            el.child(svg().path(icon.path()).size_3p5().text_color(icon_color))
+                            el.child(svg().path(icon.path()).size_4().text_color(icon_color))
                         })
                         .when(node_icon.is_none() && !unicode_icon.is_empty(), |el| {
                             el.text_size(FontSizes::SM)
@@ -290,7 +301,7 @@ pub(super) fn render_tree_item(
                             .flex_1()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_size(FontSizes::SM)
+                            .text_size(FontSizes::BASE)
                             .text_color(label_color)
                             .when(node_kind == SchemaNodeKind::Profile && is_active, |d| {
                                 d.font_weight(FontWeight::SEMIBOLD)
@@ -677,7 +688,11 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
+                if is_connected {
+                    "\u{25CF}"
+                } else {
+                    "\u{25CB}"
+                }
             } else {
                 ""
             };
