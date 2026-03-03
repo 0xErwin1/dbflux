@@ -61,6 +61,7 @@ fn hook_task_details(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_hook_phase(
     app_state: Entity<AppState>,
     profile_id: Uuid,

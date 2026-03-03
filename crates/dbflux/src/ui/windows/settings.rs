@@ -9,11 +9,13 @@ mod ssh_tunnels;
 use crate::app::AppState;
 use crate::keymap::{ContextId, KeyChord, Modifiers};
 use crate::ui::components::form_renderer::FormRendererState;
+use crate::ui::components::tree_nav::{TreeNav, TreeNavAction, TreeNavNode};
 use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::icons::AppIcon;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{
     AppConfigStore, ConnectionHook, DriverFormDef, DriverKey, DriverMetadata, FormValues,
-    GeneralSettings, GlobalOverrides, ServiceConfig,
+    GeneralSettings, GlobalOverrides, ServiceConfig, UiState, UiStateStore,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -167,6 +169,8 @@ pub struct SettingsWindow {
     active_section: SettingsSection,
     focus_area: SettingsFocus,
     focus_handle: FocusHandle,
+
+    sidebar_tree: TreeNav,
 
     // Keybindings section state
     keybindings_filter: Entity<InputState>,
@@ -580,6 +584,8 @@ impl SettingsWindow {
             focus_area: SettingsFocus::Sidebar,
             focus_handle,
 
+            sidebar_tree: Self::build_sidebar_tree(),
+
             keybindings_filter,
             keybindings_expanded,
             keybindings_selection: KeybindingsSelection::Context(0),
@@ -714,33 +720,106 @@ impl SettingsWindow {
         }
     }
 
-    fn sidebar_index_for_section(&self, section: SettingsSection) -> usize {
+    fn build_sidebar_tree() -> TreeNav {
+        let nodes = vec![
+            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
+            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::group(
+                "network",
+                "Network",
+                Some(AppIcon::Server),
+                vec![TreeNavNode::leaf(
+                    "ssh-tunnels",
+                    "SSH Tunnels",
+                    Some(AppIcon::FingerprintPattern),
+                )],
+            ),
+            TreeNavNode::group(
+                "connection",
+                "Connection",
+                Some(AppIcon::Link2),
+                vec![
+                    TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
+                    TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                ],
+            ),
+            TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
+        ];
+
+        let ui_state = UiStateStore::new()
+            .and_then(|s| s.load())
+            .unwrap_or_default();
+
+        let mut expanded = HashSet::new();
+        if !ui_state.settings_collapsed_network {
+            expanded.insert(SharedString::from("network"));
+        }
+        if !ui_state.settings_collapsed_connection {
+            expanded.insert(SharedString::from("connection"));
+        }
+
+        TreeNav::new(nodes, expanded)
+    }
+
+    fn section_for_tree_id(id: &str) -> Option<SettingsSection> {
+        match id {
+            "general" => Some(SettingsSection::General),
+            "keybindings" => Some(SettingsSection::Keybindings),
+            "ssh-tunnels" => Some(SettingsSection::SshTunnels),
+            "services" => Some(SettingsSection::Services),
+            "hooks" => Some(SettingsSection::Hooks),
+            "drivers" => Some(SettingsSection::Drivers),
+            "about" => Some(SettingsSection::About),
+            _ => None,
+        }
+    }
+
+    fn tree_id_for_section(section: SettingsSection) -> &'static str {
         match section {
-            SettingsSection::General => 0,
-            SettingsSection::Keybindings => 1,
-            SettingsSection::SshTunnels => 2,
-            SettingsSection::Services => 3,
-            SettingsSection::Hooks => 4,
-            SettingsSection::Drivers => 5,
-            SettingsSection::About => 6,
+            SettingsSection::General => "general",
+            SettingsSection::Keybindings => "keybindings",
+            SettingsSection::SshTunnels => "ssh-tunnels",
+            SettingsSection::Services => "services",
+            SettingsSection::Hooks => "hooks",
+            SettingsSection::Drivers => "drivers",
+            SettingsSection::About => "about",
         }
     }
 
-    fn section_for_sidebar_index(&self, idx: usize) -> SettingsSection {
-        match idx {
-            0 => SettingsSection::General,
-            1 => SettingsSection::Keybindings,
-            2 => SettingsSection::SshTunnels,
-            3 => SettingsSection::Services,
-            4 => SettingsSection::Hooks,
-            5 => SettingsSection::Drivers,
-            6 => SettingsSection::About,
-            _ => SettingsSection::General,
+    fn focus_sidebar(&mut self) {
+        self.focus_area = SettingsFocus::Sidebar;
+        let id = Self::tree_id_for_section(self.active_section);
+        self.sidebar_tree.select_by_id(id);
+    }
+
+    fn sync_active_section_from_cursor(&mut self) {
+        if let Some(row) = self.sidebar_tree.cursor_item()
+            && let Some(section) = Self::section_for_tree_id(row.id.as_ref())
+        {
+            self.active_section = section;
         }
     }
 
-    fn sidebar_section_count(&self) -> usize {
-        7
+    fn persist_collapse_state(&self) {
+        let expanded = self.sidebar_tree.expanded();
+
+        let state = UiState {
+            settings_collapsed_network: !expanded.contains("network"),
+            settings_collapsed_connection: !expanded.contains("connection"),
+        };
+
+        let store = match UiStateStore::new() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to open UI state store: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = store.save(&state) {
+            log::error!("Failed to persist collapse state: {}", e);
+        }
     }
 
     // -- Unsaved-changes detection --
@@ -1033,12 +1112,12 @@ impl SettingsWindow {
                     return;
                 }
                 ("h", m) | ("left", m) if m == Modifiers::none() => {
-                    self.focus_area = SettingsFocus::Sidebar;
+                    self.focus_sidebar();
                     cx.notify();
                     return;
                 }
                 ("escape", m) if m == Modifiers::none() => {
-                    self.focus_area = SettingsFocus::Sidebar;
+                    self.focus_sidebar();
                     cx.notify();
                     return;
                 }
@@ -1139,12 +1218,12 @@ impl SettingsWindow {
                         return;
                     }
                     ("h", m) | ("left", m) if m == Modifiers::none() => {
-                        self.focus_area = SettingsFocus::Sidebar;
+                        self.focus_sidebar();
                         cx.notify();
                         return;
                     }
                     ("escape", m) if m == Modifiers::none() => {
-                        self.focus_area = SettingsFocus::Sidebar;
+                        self.focus_sidebar();
                         cx.notify();
                         return;
                     }
@@ -1227,12 +1306,12 @@ impl SettingsWindow {
                     return;
                 }
                 ("h", m) | ("left", m) if m == Modifiers::none() => {
-                    self.focus_area = SettingsFocus::Sidebar;
+                    self.focus_sidebar();
                     cx.notify();
                     return;
                 }
                 ("escape", m) if m == Modifiers::none() => {
-                    self.focus_area = SettingsFocus::Sidebar;
+                    self.focus_sidebar();
                     cx.notify();
                     return;
                 }
@@ -1326,12 +1405,12 @@ impl SettingsWindow {
                         return;
                     }
                     ("h", m) | ("left", m) if m == Modifiers::none() => {
-                        self.focus_area = SettingsFocus::Sidebar;
+                        self.focus_sidebar();
                         cx.notify();
                         return;
                     }
                     ("escape", m) if m == Modifiers::none() => {
-                        self.focus_area = SettingsFocus::Sidebar;
+                        self.focus_sidebar();
                         cx.notify();
                         return;
                     }
@@ -1395,19 +1474,31 @@ impl SettingsWindow {
 
         match (chord.key.as_str(), chord.modifiers) {
             ("h", m) | ("left", m) if m == Modifiers::none() => {
-                self.focus_area = SettingsFocus::Sidebar;
+                self.focus_sidebar();
                 cx.notify();
             }
             ("l", m) | ("right", m) if m == Modifiers::none() => {
-                self.focus_area = SettingsFocus::Content;
+                if self.focus_area == SettingsFocus::Sidebar {
+                    if let Some(row) = self.sidebar_tree.cursor_item() {
+                        if row.has_children && !row.expanded {
+                            let action = self.sidebar_tree.activate();
+                            if let TreeNavAction::Toggled { .. } = action {
+                                self.persist_collapse_state();
+                            }
+                        } else if row.selectable {
+                            self.focus_area = SettingsFocus::Content;
+                        }
+                    }
+                } else {
+                    self.focus_area = SettingsFocus::Content;
+                }
                 cx.notify();
             }
             ("j", m) | ("down", m) if m == Modifiers::none() => {
                 match self.focus_area {
                     SettingsFocus::Sidebar => {
-                        let current_idx = self.sidebar_index_for_section(self.active_section);
-                        let next_idx = (current_idx + 1) % self.sidebar_section_count();
-                        self.active_section = self.section_for_sidebar_index(next_idx);
+                        self.sidebar_tree.move_next();
+                        self.sync_active_section_from_cursor();
                     }
                     SettingsFocus::Content => {
                         if self.active_section == SettingsSection::Keybindings {
@@ -1421,13 +1512,8 @@ impl SettingsWindow {
             ("k", m) | ("up", m) if m == Modifiers::none() => {
                 match self.focus_area {
                     SettingsFocus::Sidebar => {
-                        let current_idx = self.sidebar_index_for_section(self.active_section);
-                        let prev_idx = if current_idx == 0 {
-                            self.sidebar_section_count() - 1
-                        } else {
-                            current_idx - 1
-                        };
-                        self.active_section = self.section_for_sidebar_index(prev_idx);
+                        self.sidebar_tree.move_prev();
+                        self.sync_active_section_from_cursor();
                     }
                     SettingsFocus::Content => {
                         if self.active_section == SettingsSection::Keybindings {
@@ -1466,7 +1552,20 @@ impl SettingsWindow {
             }
             ("enter", m) | ("space", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Sidebar {
-                    self.focus_area = SettingsFocus::Content;
+                    let action = self.sidebar_tree.activate();
+
+                    match action {
+                        TreeNavAction::Selected(id) => {
+                            if let Some(section) = Self::section_for_tree_id(id.as_ref()) {
+                                self.active_section = section;
+                                self.focus_area = SettingsFocus::Content;
+                            }
+                        }
+                        TreeNavAction::Toggled { .. } => {
+                            self.persist_collapse_state();
+                        }
+                        TreeNavAction::None => {}
+                    }
                 } else if self.active_section == SettingsSection::Keybindings
                     && let KeybindingsSelection::Context(ctx_idx) = self.keybindings_selection
                     && let Some(context) = ContextId::all_variants().get(ctx_idx)
@@ -1490,7 +1589,7 @@ impl SettingsWindow {
             }
             ("escape", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Content {
-                    self.focus_area = SettingsFocus::Sidebar;
+                    self.focus_sidebar();
                     cx.notify();
                 }
             }

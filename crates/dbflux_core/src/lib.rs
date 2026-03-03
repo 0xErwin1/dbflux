@@ -36,6 +36,7 @@ mod store;
 mod table_browser;
 mod task;
 mod traits;
+mod ui_state;
 mod value;
 
 pub mod connection_manager;
@@ -131,6 +132,7 @@ pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
     QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,
 };
+pub use ui_state::{UiState, UiStateStore};
 pub use value::Value;
 
 pub use chrono;

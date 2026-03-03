@@ -514,8 +514,8 @@ impl HookRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{ConnectionProfile, DbConfig};
     use crate::AppConfig;
+    use crate::profile::{ConnectionProfile, DbConfig};
 
     // =========================================================================
     // Helpers

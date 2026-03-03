@@ -107,6 +107,7 @@ impl Sidebar {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_fetch_with_result<R, F, G>(
         &mut self,
         pending_action: PendingAction,

@@ -1,3 +1,4 @@
+use crate::ui::components::tree_nav::{FlatRow, TreeNavAction};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
@@ -19,89 +20,143 @@ use super::{
     SshFormField, SshTestStatus,
 };
 
+const INDENT_PX: f32 = 16.0;
+const LINE_WEIGHT: f32 = 1.0;
+
+fn tree_line_color(theme: &gpui_component::Theme) -> Hsla {
+    let mut color = theme.muted_foreground;
+    color.a = 0.35;
+    color
+}
+
+fn render_gutter(row: &FlatRow, row_height: Pixels, line_color: Hsla) -> AnyElement {
+    let depth = row.depth;
+
+    if depth == 0 {
+        return div().w(px(0.0)).flex_shrink_0().into_any_element();
+    }
+
+    let gutter_width = depth as f32 * INDENT_PX;
+    let half_row = f32::from(row_height) / 2.0;
+
+    let mut lines: Vec<AnyElement> = Vec::new();
+
+    // Skip level 0 — root headers have no gutter, so ancestor lines there are artifacts.
+    for (level, continues) in row.ancestors_continue.iter().enumerate() {
+        if *continues && level > 0 {
+            lines.push(
+                div()
+                    .absolute()
+                    .left(px(level as f32 * INDENT_PX + INDENT_PX / 2.0))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(LINE_WEIGHT))
+                    .bg(line_color)
+                    .into_any_element(),
+            );
+        }
+    }
+
+    let connector_level = depth - 1;
+    let connector_x = connector_level as f32 * INDENT_PX + INDENT_PX / 2.0;
+
+    if row.is_last {
+        lines.push(
+            div()
+                .absolute()
+                .left(px(connector_x))
+                .top_0()
+                .h(px(half_row + 0.5))
+                .w(px(LINE_WEIGHT))
+                .bg(line_color)
+                .into_any_element(),
+        );
+    } else {
+        lines.push(
+            div()
+                .absolute()
+                .left(px(connector_x))
+                .top_0()
+                .bottom_0()
+                .w(px(LINE_WEIGHT))
+                .bg(line_color)
+                .into_any_element(),
+        );
+    }
+
+    lines.push(
+        div()
+            .absolute()
+            .left(px(connector_x))
+            .top(px(half_row))
+            .w(px(INDENT_PX / 2.0))
+            .h(px(LINE_WEIGHT))
+            .bg(line_color)
+            .into_any_element(),
+    );
+
+    div()
+        .w(px(gutter_width))
+        .h(row_height)
+        .relative()
+        .flex_shrink_0()
+        .children(lines)
+        .into_any_element()
+}
+
 impl SettingsWindow {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let active = self.active_section;
+        let border_color = cx.theme().border;
+        let sidebar_bg = cx.theme().sidebar;
+        let theme = cx.theme().clone();
         let focused = self.focus_area == SettingsFocus::Sidebar;
-        let sidebar_border = theme.border;
+        let row_height = Heights::ROW;
+        let line_color = tree_line_color(&theme);
+
+        let rows = self.sidebar_tree.rows();
+        let cursor_pos = self.sidebar_tree.cursor();
+
+        let mut row_elements: Vec<AnyElement> = Vec::with_capacity(rows.len());
+
+        for (idx, row) in rows.iter().enumerate() {
+            let is_cursor = focused && idx == cursor_pos;
+            let gutter = render_gutter(row, row_height, line_color);
+            let is_group = row.has_children && !row.selectable;
+
+            let content: AnyElement = if is_group {
+                self.render_group_row(row, is_cursor, &theme, cx)
+            } else {
+                self.render_item_row(row, is_cursor, focused, &theme, cx)
+            };
+
+            let mut outer = div()
+                .flex()
+                .items_center()
+                .h(row_height)
+                .child(gutter)
+                .child(content);
+
+            if is_group {
+                outer = outer.mt_2();
+            }
+
+            row_elements.push(outer.into_any_element());
+        }
 
         div()
             .w(px(180.0))
             .h_full()
             .border_r_1()
-            .border_color(theme.border)
-            .bg(theme.sidebar)
+            .border_color(border_color)
+            .bg(sidebar_bg)
             .flex()
             .flex_col()
             .p_2()
-            .gap_1()
-            .child(self.render_sidebar_item(
-                "section-general",
-                "General",
-                AppIcon::Settings,
-                SettingsSection::General,
-                active,
-                focused && self.sidebar_index_for_section(active) == 0,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-keybindings",
-                "Keybindings",
-                AppIcon::Keyboard,
-                SettingsSection::Keybindings,
-                active,
-                focused && self.sidebar_index_for_section(active) == 1,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-ssh-tunnels",
-                "SSH Tunnels",
-                AppIcon::FingerprintPattern,
-                SettingsSection::SshTunnels,
-                active,
-                focused && self.sidebar_index_for_section(active) == 2,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-services",
-                "Services",
-                AppIcon::Plug,
-                SettingsSection::Services,
-                active,
-                focused && self.sidebar_index_for_section(active) == 3,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-hooks",
-                "Hooks",
-                AppIcon::SquareTerminal,
-                SettingsSection::Hooks,
-                active,
-                focused && self.sidebar_index_for_section(active) == 4,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-drivers",
-                "Drivers",
-                AppIcon::Database,
-                SettingsSection::Drivers,
-                active,
-                focused && self.sidebar_index_for_section(active) == 5,
-                cx,
-            ))
-            .child(self.render_sidebar_item(
-                "section-about",
-                "About",
-                AppIcon::Info,
-                SettingsSection::About,
-                active,
-                focused && self.sidebar_index_for_section(active) == 6,
-                cx,
-            ))
+            .gap_0()
+            .children(row_elements)
             .child(div().flex_1())
             .child({
-                div().p_1().border_t_1().border_color(sidebar_border).child(
+                div().p_1().border_t_1().border_color(border_color).child(
                     Button::new("close-settings")
                         .label("Close")
                         .ghost()
@@ -113,55 +168,151 @@ impl SettingsWindow {
             })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_sidebar_item(
+    fn render_group_row(
         &self,
-        id: &'static str,
-        label: &'static str,
-        icon: AppIcon,
-        section: SettingsSection,
-        active: SettingsSection,
-        is_focused: bool,
+        row: &FlatRow,
+        is_cursor: bool,
+        theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let is_active = active == section;
+    ) -> AnyElement {
+        let chevron_icon = if row.expanded {
+            AppIcon::ChevronDown
+        } else {
+            AppIcon::ChevronRight
+        };
+
+        let row_id = row.id.clone();
+
+        let mut inner_children: Vec<AnyElement> = Vec::new();
+
+        inner_children.push(
+            svg()
+                .path(chevron_icon.path())
+                .size(px(10.0))
+                .text_color(theme.muted_foreground)
+                .into_any_element(),
+        );
+
+        if let Some(icon) = row.icon {
+            inner_children.push(
+                svg()
+                    .path(icon.path())
+                    .size(px(12.0))
+                    .text_color(theme.muted_foreground)
+                    .into_any_element(),
+            );
+        }
+
+        inner_children.push(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.muted_foreground)
+                .child(row.label.clone())
+                .into_any_element(),
+        );
+
+        let inner = div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .children(inner_children)
+            .into_any_element();
 
         div()
-            .id(id)
-            .px_3()
-            .py_2()
+            .id(SharedString::from(format!("cat-{}", row.id)))
+            .flex_1()
+            .h_full()
+            .px_2()
+            .flex()
+            .items_center()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .border_1()
+            .border_color(if is_cursor {
+                theme.primary
+            } else {
+                transparent_black()
+            })
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.sidebar_tree.select_by_id(row_id.as_ref());
+                let action = this.sidebar_tree.activate();
+                if let TreeNavAction::Toggled { .. } = action {
+                    this.persist_collapse_state();
+                }
+                cx.notify();
+            }))
+            .child(inner)
+            .into_any_element()
+    }
+
+    fn render_item_row(
+        &self,
+        row: &FlatRow,
+        is_cursor: bool,
+        sidebar_focused: bool,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let row_id = row.id.clone();
+        let is_active = Self::section_for_tree_id(row.id.as_ref()) == Some(self.active_section);
+        let show_active = is_active && !sidebar_focused;
+
+        let mut row_children: Vec<AnyElement> = Vec::new();
+
+        if let Some(icon) = row.icon {
+            row_children.push(
+                svg()
+                    .path(icon.path())
+                    .size_4()
+                    .text_color(theme.muted_foreground)
+                    .into_any_element(),
+            );
+        }
+
+        row_children.push(div().child(row.label.clone()).into_any_element());
+
+        let content_inner = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .children(row_children)
+            .into_any_element();
+
+        div()
+            .id(row.id.clone())
+            .flex_1()
+            .h_full()
+            .px_2()
+            .flex()
+            .items_center()
             .rounded(px(4.0))
             .text_sm()
             .cursor_pointer()
             .border_1()
-            .border_color(if is_focused && !is_active {
+            .border_color(if is_cursor {
                 theme.primary
             } else {
-                gpui::transparent_black()
+                transparent_black()
             })
-            .when(is_active, |d| {
-                d.bg(theme.secondary).font_weight(FontWeight::MEDIUM)
+            .when(show_active, |d| {
+                d.bg(theme.secondary)
+                    .font_weight(FontWeight::MEDIUM)
+                    .border_l_2()
+                    .border_color(theme.primary)
             })
-            .hover(|d| d.bg(theme.secondary))
+            .when(!is_active, |d| d.hover(|h| h.bg(theme.secondary)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.active_section = section;
-                this.focus_area = SettingsFocus::Content;
-                cx.notify();
+                if let Some(section) = Self::section_for_tree_id(row_id.as_ref()) {
+                    this.active_section = section;
+                    this.sidebar_tree.select_by_id(row_id.as_ref());
+                    this.focus_area = SettingsFocus::Content;
+                    cx.notify();
+                }
             }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        svg()
-                            .path(icon.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child(label),
-            )
+            .child(content_inner)
+            .into_any_element()
     }
 
     fn render_ssh_tunnels_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
