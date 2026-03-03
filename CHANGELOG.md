@@ -2,6 +2,34 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.3] – 2026-03-03
+
+### Added
+
+* Connection hooks system: define reusable command hooks in Settings and bind them to connection profiles for execution during connect/disconnect phases (PreConnect, PostConnect, PreDisconnect, PostDisconnect)
+* Each hook runs as an external process with command/args, optional cwd, custom env vars, timeout, and cancellation support
+* Per-hook failure policy: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
+* Hooks section in Settings with full CRUD for global hook definitions
+* Hooks tab in Connection Manager with dropdown binding and extra IDs per phase
+* Each hook executes as its own background task with stdout/stderr details visible in the Tasks panel (expandable with chevron toggle, 40-line truncation)
+* Reusable `TreeNav` component for tree-based navigation with cursor movement, expand/collapse, select-by-id, and dedicated unit coverage
+* New persisted UI state store (`UiStateStore`) in `~/.local/share/dbflux/state.json` to keep Settings category collapse state out of `config.json`
+* 56 tests covering hook types, serde, execution, runner orchestration, binding resolution, and end-to-end integration
+
+### Changed
+
+* Driver resolution and command routing centralized behind shared core contracts, removing driver-specific conditionals from UI code
+* Hook binding resolution moved from app layer to `dbflux_core` (`ConnectionHooks::resolve_from_bindings`) for testability
+* Disconnect flow changed from synchronous to async to support pre/post-disconnect hooks
+* Settings sidebar moved from a flat list to a tree with collapsible Network/Connection groups, persistent collapse state, and gutter connector lines
+* Tree gutter rendering is now shared between Settings and Sidebar for consistent connector visuals and row sizing
+
+### Fixed
+
+* Sidebar profile/database chevron interactions now behave correctly: connected profiles expand/collapse, disconnected profiles connect on first click, and active profile changes stay in sync with tree state
+
+---
+
 ## [0.4.0-dev.2] – 2026-03-01
 
 ### Added

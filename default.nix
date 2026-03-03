@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> {}
 , craneLib ? null
-, version ? "0.4.0-dev.2"
+, version ? "0.4.0-dev.3"
 }:
 
 let
