@@ -272,6 +272,79 @@ impl DbConfig {
             DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
         }
     }
+
+    /// Whether this config has any SSH tunnel configured (inline or via profile reference).
+    pub fn has_ssh_tunnel(&self) -> bool {
+        match self {
+            DbConfig::Postgres {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MySQL {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => false,
+        }
+    }
+
+    /// Target host and port for tunnel forwarding. `None` for SQLite/external.
+    pub fn host_port(&self) -> Option<(&str, u16)> {
+        match self {
+            DbConfig::Postgres { host, port, .. }
+            | DbConfig::MySQL { host, port, .. }
+            | DbConfig::MongoDB { host, port, .. }
+            | DbConfig::Redis { host, port, .. } => Some((host, *port)),
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Rewrites host/port to a local tunnel endpoint and disables `use_uri`.
+    pub fn redirect_to_tunnel(&mut self, tunnel_port: u16) {
+        match self {
+            DbConfig::Postgres {
+                host,
+                port,
+                use_uri,
+                ..
+            }
+            | DbConfig::MySQL {
+                host,
+                port,
+                use_uri,
+                ..
+            }
+            | DbConfig::MongoDB {
+                host,
+                port,
+                use_uri,
+                ..
+            }
+            | DbConfig::Redis {
+                host,
+                port,
+                use_uri,
+                ..
+            } => {
+                *host = "127.0.0.1".to_string();
+                *port = tunnel_port;
+                *use_uri = false;
+            }
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
+        }
+    }
 }
 
 /// Saved connection profile.
@@ -332,6 +405,10 @@ pub struct ConnectionProfile {
     /// Optional references to globally defined hooks from config.json.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_bindings: Option<ConnectionHookBindings>,
+
+    /// Optional reference to a saved proxy profile for this connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_profile_id: Option<Uuid>,
 }
 
 impl ConnectionProfile {
@@ -348,6 +425,7 @@ impl ConnectionProfile {
             connection_settings: None,
             hooks: None,
             hook_bindings: None,
+            proxy_profile_id: None,
         }
     }
 
@@ -367,6 +445,7 @@ impl ConnectionProfile {
             connection_settings: None,
             hooks: None,
             hook_bindings: None,
+            proxy_profile_id: None,
         }
     }
 
@@ -388,6 +467,7 @@ impl ConnectionProfile {
             connection_settings: None,
             hooks: None,
             hook_bindings: None,
+            proxy_profile_id: None,
         }
     }
 
@@ -448,9 +528,9 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RefreshPolicySetting;
     use crate::app_config::GlobalOverrides;
     use crate::driver_form::FormValues;
+    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())

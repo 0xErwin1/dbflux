@@ -1,5 +1,5 @@
 [package]
-name = "dbflux_ssh"
+name = "dbflux_proxy"
 version = "0.1.0"
 publish = false
 edition.workspace = true
@@ -15,9 +15,11 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
-dirs = "6"
 log = "0.4"
-ssh2 = "0.9"
+socks = "0.3"
 
-[features]
-vendored-openssl = ["ssh2/vendored-openssl"]
+[dev-dependencies]
+testcontainers = "0.15"
+postgres = "0.19"
+uuid.workspace = true
+env_logger.workspace = true

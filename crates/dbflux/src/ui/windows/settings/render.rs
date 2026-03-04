@@ -2,22 +2,22 @@ use crate::ui::components::tree_nav::{self, FlatRow, TreeNavAction};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
-use dbflux_core::{ServiceConfig, SshTunnelProfile};
+use dbflux_core::{ProxyKind, ProxyProfile, ServiceConfig, SshTunnelProfile};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 use uuid::Uuid;
 
 use super::{
-    ServiceFocus, ServiceFormRow, SettingsFocus, SettingsSection, SettingsWindow, SshFocus,
-    SshFormField, SshTestStatus,
+    ProxyAuthSelection, ProxyFocus, ProxyFormField, ServiceFocus, ServiceFormRow, SettingsFocus,
+    SettingsSection, SettingsWindow, SshFocus, SshFormField, SshTestStatus,
 };
 
 const INDENT_PX: f32 = 16.0;
@@ -240,6 +240,667 @@ impl SettingsWindow {
             .child(content_inner)
             .into_any_element()
     }
+
+    // --- Proxies section ---
+
+    fn render_proxies_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (proxies, keyring_available) = {
+            let state = self.app_state.read(cx);
+            (state.proxies().to_vec(), state.secret_store_available())
+        };
+        let editing_id = self.editing_proxy_id;
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Proxy Profiles"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Manage proxy configurations for database connections"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .overflow_hidden()
+                    .child(self.render_proxy_list(&proxies, editing_id, cx))
+                    .child(self.render_proxy_form(editing_id, keyring_available, cx)),
+            )
+    }
+
+    fn render_proxy_list(
+        &self,
+        proxies: &[ProxyProfile],
+        editing_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let is_list_focused = self.focus_area == SettingsFocus::Content
+            && self.proxy_focus == ProxyFocus::ProfileList;
+        let is_new_button_focused = is_list_focused && self.proxy_selected_idx.is_none();
+
+        div()
+            .w(px(250.0))
+            .h_full()
+            .border_r_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .child(
+                div().p_2().border_b_1().border_color(theme.border).child(
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_new_button_focused {
+                            theme.primary
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(
+                            Button::new("new-proxy")
+                                .icon(Icon::new(IconName::Plus))
+                                .label("New Proxy")
+                                .small()
+                                .w_full()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.proxy_selected_idx = None;
+                                    this.clear_proxy_form(window, cx);
+                                })),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(proxies.is_empty(), |d: Div| {
+                        d.child(
+                            div()
+                                .p_4()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("No saved proxies"),
+                        )
+                    })
+                    .children(proxies.iter().enumerate().map(|(idx, proxy)| {
+                        let proxy_id = proxy.id;
+                        let is_selected = editing_id == Some(proxy_id);
+                        let is_focused = is_list_focused && self.proxy_selected_idx == Some(idx);
+                        let proxy_clone = proxy.clone();
+                        let subtitle =
+                            format!("{}://{}:{}", proxy.kind.scheme(), proxy.host, proxy.port);
+
+                        div()
+                            .id(SharedString::from(format!("proxy-item-{}", proxy_id)))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_focused && !is_selected {
+                                theme.primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(is_selected, |d| d.bg(theme.secondary))
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.proxy_selected_idx = Some(idx);
+                                this.edit_proxy(&proxy_clone, window, cx);
+                            }))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .mt(px(2.0))
+                                            .child(
+                                                Icon::new(IconName::Globe)
+                                                    .size(px(14.0))
+                                                    .text_color(theme.muted_foreground),
+                                            )
+                                            .when(!proxy.enabled, |d| {
+                                                d.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("off"),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(proxy.name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(subtitle),
+                                            ),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
+    fn render_proxy_form(
+        &self,
+        editing_id: Option<Uuid>,
+        keyring_available: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+        let muted_fg = theme.muted_foreground;
+
+        let is_form_focused =
+            self.focus_area == SettingsFocus::Content && self.proxy_focus == ProxyFocus::Form;
+        let field = self.proxy_form_field;
+
+        let title = if editing_id.is_some() {
+            "Edit Proxy"
+        } else {
+            "New Proxy"
+        };
+
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div().p_4().border_b_1().border_color(border).child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    // Name
+                    .child(self.render_proxy_field(
+                        "Name",
+                        &self.input_proxy_name,
+                        is_form_focused && field == ProxyFormField::Name,
+                        primary,
+                        ProxyFormField::Name,
+                        cx,
+                    ))
+                    // Kind radio group
+                    .child(self.render_proxy_kind_selector(is_form_focused, field, cx))
+                    // Host + Port
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .child(div().flex_1().child(self.render_proxy_field(
+                                "Host",
+                                &self.input_proxy_host,
+                                is_form_focused && field == ProxyFormField::Host,
+                                primary,
+                                ProxyFormField::Host,
+                                cx,
+                            )))
+                            .child(div().w(px(80.0)).child(self.render_proxy_field(
+                                "Port",
+                                &self.input_proxy_port,
+                                is_form_focused && field == ProxyFormField::Port,
+                                primary,
+                                ProxyFormField::Port,
+                                cx,
+                            ))),
+                    )
+                    // Auth selector
+                    .child(self.render_proxy_auth_selector(is_form_focused, field, cx))
+                    // Auth fields (conditional on Basic)
+                    .when(
+                        self.proxy_auth_selection == ProxyAuthSelection::Basic,
+                        |d: Div| {
+                            d.child(self.render_proxy_auth_fields(
+                                keyring_available,
+                                is_form_focused,
+                                field,
+                                cx,
+                            ))
+                        },
+                    )
+                    // No Proxy
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(self.render_proxy_field(
+                                "No Proxy",
+                                &self.input_proxy_no_proxy,
+                                is_form_focused && field == ProxyFormField::NoProxy,
+                                primary,
+                                ProxyFormField::NoProxy,
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("Comma-separated hosts/CIDRs to bypass the proxy"),
+                            ),
+                    )
+                    // Enabled checkbox
+                    .child({
+                        let is_enabled_focused =
+                            is_form_focused && field == ProxyFormField::Enabled;
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if is_enabled_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .child(
+                                Checkbox::new("proxy-enabled")
+                                    .checked(self.proxy_enabled)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.proxy_enabled = *checked;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(div().text_sm().child("Enabled"))
+                    }),
+            )
+            // Bottom action bar
+            .child(
+                div()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(border)
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .when(editing_id.is_some(), |d| {
+                        let proxy_id = editing_id.unwrap();
+                        let is_delete_focused =
+                            is_form_focused && field == ProxyFormField::DeleteButton;
+
+                        d.child(
+                            div()
+                                .rounded(px(4.0))
+                                .border_1()
+                                .border_color(if is_delete_focused {
+                                    primary
+                                } else {
+                                    gpui::transparent_black()
+                                })
+                                .child(
+                                    Button::new("delete-proxy")
+                                        .label("Delete")
+                                        .small()
+                                        .danger()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.request_delete_proxy(proxy_id, cx);
+                                        })),
+                                ),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .child({
+                        let is_save_focused =
+                            is_form_focused && field == ProxyFormField::SaveButton;
+
+                        div()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if is_save_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .child(
+                                Button::new("save-proxy")
+                                    .label(if editing_id.is_some() {
+                                        "Update"
+                                    } else {
+                                        "Create"
+                                    })
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_proxy(window, cx);
+                                    })),
+                            )
+                    }),
+            )
+    }
+
+    fn render_proxy_field(
+        &self,
+        label: &str,
+        input: &Entity<InputState>,
+        is_focused: bool,
+        primary: Hsla,
+        field: ProxyFormField,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_focused {
+                        primary
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.proxy_focus = ProxyFocus::Form;
+                            this.proxy_form_field = field;
+                            this.proxy_focus_current_field(window, cx);
+                            cx.notify();
+                        }),
+                    )
+                    .child(Input::new(input).small()),
+            )
+    }
+
+    fn render_proxy_kind_selector(
+        &self,
+        is_form_focused: bool,
+        current_field: ProxyFormField,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+        let current_kind = self.proxy_kind;
+
+        let kinds = [
+            (ProxyFormField::KindHttp, ProxyKind::Http, "HTTP"),
+            (ProxyFormField::KindHttps, ProxyKind::Https, "HTTPS"),
+            (ProxyFormField::KindSocks5, ProxyKind::Socks5, "SOCKS5"),
+        ];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Protocol"),
+            )
+            .child(div().flex().gap_4().children(kinds.into_iter().map(
+                |(form_field, kind, label)| {
+                    let is_focused = is_form_focused && current_field == form_field;
+
+                    div()
+                        .id(SharedString::from(format!("proxy-kind-{}", label)))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .border_1()
+                        .border_color(if is_focused {
+                            primary
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.proxy_kind = kind;
+                            this.input_proxy_port.update(cx, |s, cx| {
+                                s.set_value(kind.default_port().to_string(), window, cx);
+                            });
+                            this.validate_proxy_form_field();
+                            cx.notify();
+                        }))
+                        .child(ssh_shared::render_radio_button(
+                            current_kind == kind,
+                            primary,
+                            border,
+                        ))
+                        .child(div().text_sm().child(label))
+                },
+            )))
+    }
+
+    fn render_proxy_auth_selector(
+        &self,
+        is_form_focused: bool,
+        current_field: ProxyFormField,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+        let current_auth = self.proxy_auth_selection;
+
+        let is_none_focused = is_form_focused && current_field == ProxyFormField::AuthNone;
+        let is_basic_focused = is_form_focused && current_field == ProxyFormField::AuthBasic;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Authentication"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .child(
+                        div()
+                            .id("proxy-auth-none")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_none_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.proxy_auth_selection = ProxyAuthSelection::None;
+                                this.validate_proxy_form_field();
+                                cx.notify();
+                            }))
+                            .child(ssh_shared::render_radio_button(
+                                current_auth == ProxyAuthSelection::None,
+                                primary,
+                                border,
+                            ))
+                            .child(div().text_sm().child("None")),
+                    )
+                    .child(
+                        div()
+                            .id("proxy-auth-basic")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_basic_focused {
+                                primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.proxy_auth_selection = ProxyAuthSelection::Basic;
+                                this.validate_proxy_form_field();
+                                cx.notify();
+                            }))
+                            .child(ssh_shared::render_radio_button(
+                                current_auth == ProxyAuthSelection::Basic,
+                                primary,
+                                border,
+                            ))
+                            .child(div().text_sm().child("Basic")),
+                    ),
+            )
+    }
+
+    fn render_proxy_auth_fields(
+        &self,
+        keyring_available: bool,
+        is_form_focused: bool,
+        current_field: ProxyFormField,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let primary = theme.primary;
+
+        let is_save_secret_focused = is_form_focused && current_field == ProxyFormField::SaveSecret;
+
+        let save_checkbox = if keyring_available {
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pb(px(2.0))
+                    .px_2()
+                    .py_1()
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_save_secret_focused {
+                        primary
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .child(
+                        Checkbox::new("proxy-save-secret")
+                            .checked(self.proxy_save_secret)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.proxy_save_secret = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().text_sm().child("Save")),
+            )
+        } else {
+            None
+        };
+
+        let is_password_focused = is_form_focused && current_field == ProxyFormField::Password;
+
+        let password_toggle =
+            Self::render_password_toggle(self.show_proxy_password, "toggle-proxy-password", &theme)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.show_proxy_password = !this.show_proxy_password;
+                    cx.notify();
+                }));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.render_proxy_field(
+                "Username",
+                &self.input_proxy_username,
+                is_form_focused && current_field == ProxyFormField::Username,
+                primary,
+                ProxyFormField::Username,
+                cx,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_end()
+                            .gap_1()
+                            .child(div().flex_1().child(self.render_proxy_field(
+                                "Password",
+                                &self.input_proxy_password,
+                                is_password_focused,
+                                primary,
+                                ProxyFormField::Password,
+                                cx,
+                            )))
+                            .child(password_toggle),
+                    )
+                    .when_some(save_checkbox, |d, checkbox| d.child(checkbox)),
+            )
+    }
+
+    // --- SSH Tunnels section ---
 
     fn render_ssh_tunnels_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -1838,6 +2499,11 @@ impl Render for SettingsWindow {
             state.set_masked(!show_ssh_password, window, cx);
         });
 
+        let show_proxy_password = self.show_proxy_password;
+        self.input_proxy_password.update(cx, |state, cx| {
+            state.set_masked(!show_proxy_password, window, cx);
+        });
+
         let theme = cx.theme();
         let dialog_backdrop_bg = theme.background.opacity(0.6);
         let dialog_card_bg = theme.background;
@@ -1845,10 +2511,27 @@ impl Render for SettingsWindow {
         let dialog_fg = theme.foreground;
         let dialog_muted_fg = theme.muted_foreground;
 
+        let show_proxy_delete = self.pending_delete_proxy_id.is_some();
         let show_ssh_delete = self.pending_delete_tunnel_id.is_some();
         let show_svc_delete = self.pending_delete_svc_idx.is_some();
         let show_hook_delete = self.pending_delete_hook_id.is_some();
         let show_close_confirm = self.pending_close_confirm;
+
+        let (proxy_delete_name, proxy_affected_count) = self
+            .pending_delete_proxy_id
+            .map(|id| {
+                let name = self
+                    .app_state
+                    .read(cx)
+                    .proxies()
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                let count = self.profiles_using_proxy(id, cx);
+                (name, count)
+            })
+            .unwrap_or_default();
 
         let tunnel_name = self
             .pending_delete_tunnel_id
@@ -1884,6 +2567,7 @@ impl Render for SettingsWindow {
                 SettingsSection::Keybindings => {
                     self.render_keybindings_section(cx).into_any_element()
                 }
+                SettingsSection::Proxies => self.render_proxies_section(cx).into_any_element(),
                 SettingsSection::SshTunnels => {
                     self.render_ssh_tunnels_section(cx).into_any_element()
                 }
@@ -1891,6 +2575,43 @@ impl Render for SettingsWindow {
                 SettingsSection::Hooks => self.render_hooks_section(cx).into_any_element(),
                 SettingsSection::Drivers => self.render_drivers_section(cx).into_any_element(),
                 SettingsSection::About => self.render_about_section(cx).into_any_element(),
+            })
+            .when(show_proxy_delete, |el| {
+                let this = cx.entity().clone();
+                let this_cancel = this.clone();
+
+                let body = if proxy_affected_count > 0 {
+                    format!(
+                        "Are you sure you want to delete \"{}\"? {} connection{} using this proxy will be updated.",
+                        proxy_delete_name,
+                        proxy_affected_count,
+                        if proxy_affected_count == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!(
+                        "Are you sure you want to delete \"{}\"?",
+                        proxy_delete_name
+                    )
+                };
+
+                el.child(
+                    Dialog::new(window, cx)
+                        .title("Delete Proxy")
+                        .confirm()
+                        .on_ok(move |_, _, cx| {
+                            this.update(cx, |settings, cx| {
+                                settings.confirm_delete_proxy(cx);
+                            });
+                            true
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            this_cancel.update(cx, |settings, cx| {
+                                settings.cancel_delete_proxy(cx);
+                            });
+                            true
+                        })
+                        .child(div().text_sm().child(body)),
+                )
             })
             .when(show_ssh_delete, |el| {
                 let this = cx.entity().clone();

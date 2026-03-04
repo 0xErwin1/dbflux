@@ -4,7 +4,133 @@ use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use gpui::*;
 use uuid::Uuid;
 
+use super::form_nav::FormGridNav;
 use super::{SettingsWindow, SshFocus, SshFormField, SshTestStatus};
+
+/// SSH form navigation. Wraps `FormGridNav` with auth/editing context
+/// to compute which rows are visible.
+#[derive(Clone)]
+pub(super) struct SshFormNav {
+    pub(super) auth_method: SshAuthSelection,
+    pub(super) editing_id: Option<Uuid>,
+    nav: FormGridNav<SshFormField>,
+}
+
+impl SshFormNav {
+    pub(super) fn new(
+        auth_method: SshAuthSelection,
+        editing_id: Option<Uuid>,
+        field: SshFormField,
+    ) -> Self {
+        Self {
+            auth_method,
+            editing_id,
+            nav: FormGridNav::new(field),
+        }
+    }
+
+    pub(super) fn field(&self) -> SshFormField {
+        self.nav.focused
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_field(&mut self, field: SshFormField) {
+        self.nav.focused = field;
+    }
+
+    pub(super) fn form_rows(&self) -> Vec<Vec<SshFormField>> {
+        let mut rows = vec![
+            vec![SshFormField::Name],
+            vec![SshFormField::Host, SshFormField::Port],
+            vec![SshFormField::User],
+            vec![SshFormField::AuthPrivateKey, SshFormField::AuthPassword],
+        ];
+
+        match self.auth_method {
+            SshAuthSelection::PrivateKey => {
+                rows.push(vec![SshFormField::KeyPath, SshFormField::KeyBrowse]);
+                rows.push(vec![SshFormField::Passphrase, SshFormField::SaveSecret]);
+            }
+            SshAuthSelection::Password => {
+                rows.push(vec![SshFormField::Password, SshFormField::SaveSecret]);
+            }
+        }
+
+        if self.editing_id.is_some() {
+            rows.push(vec![
+                SshFormField::DeleteButton,
+                SshFormField::TestButton,
+                SshFormField::SaveButton,
+            ]);
+        } else {
+            rows.push(vec![SshFormField::TestButton, SshFormField::SaveButton]);
+        }
+
+        rows
+    }
+
+    pub(super) fn move_down(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_down(&rows);
+    }
+
+    pub(super) fn move_up(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_up(&rows);
+    }
+
+    pub(super) fn move_right(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_right(&rows);
+    }
+
+    pub(super) fn move_left(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_left(&rows);
+    }
+
+    pub(super) fn move_first(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_first(&rows);
+    }
+
+    pub(super) fn move_last(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_last(&rows);
+    }
+
+    pub(super) fn tab_next(&mut self) {
+        let rows = self.form_rows();
+        self.nav.tab_next(&rows);
+    }
+
+    pub(super) fn tab_prev(&mut self) {
+        let rows = self.form_rows();
+        self.nav.tab_prev(&rows);
+    }
+
+    pub(super) fn validate_field(&mut self) {
+        let fallback = match self.auth_method {
+            SshAuthSelection::PrivateKey => SshFormField::KeyPath,
+            SshAuthSelection::Password => SshFormField::Password,
+        };
+        let rows = self.form_rows();
+        self.nav.validate(&rows, fallback);
+    }
+
+    pub(super) fn is_input_field(field: SshFormField) -> bool {
+        matches!(
+            field,
+            SshFormField::Name
+                | SshFormField::Host
+                | SshFormField::Port
+                | SshFormField::User
+                | SshFormField::KeyPath
+                | SshFormField::Passphrase
+                | SshFormField::Password
+        )
+    }
+}
 
 impl SettingsWindow {
     pub(super) fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -270,6 +396,8 @@ impl SettingsWindow {
         self.app_state.read(cx).ssh_tunnels().len()
     }
 
+    // --- Navigation ---
+
     pub(super) fn ssh_move_next_profile(&mut self, cx: &Context<Self>) {
         let count = self.ssh_tunnel_count(cx);
         if count == 0 {
@@ -342,133 +470,64 @@ impl SettingsWindow {
         self.focus_handle.focus(window);
     }
 
-    /// Returns form rows. Each row contains fields navigable with h/l.
-    fn ssh_form_rows(&self) -> Vec<Vec<SshFormField>> {
-        let mut rows = vec![
-            vec![SshFormField::Name],
-            vec![SshFormField::Host, SshFormField::Port],
-            vec![SshFormField::User],
-            vec![SshFormField::AuthPrivateKey, SshFormField::AuthPassword],
-        ];
-
-        match self.ssh_auth_method {
-            SshAuthSelection::PrivateKey => {
-                rows.push(vec![SshFormField::KeyPath, SshFormField::KeyBrowse]);
-                rows.push(vec![SshFormField::Passphrase, SshFormField::SaveSecret]);
-            }
-            SshAuthSelection::Password => {
-                rows.push(vec![SshFormField::Password, SshFormField::SaveSecret]);
-            }
-        }
-
-        if self.editing_tunnel_id.is_some() {
-            rows.push(vec![
-                SshFormField::DeleteButton,
-                SshFormField::TestButton,
-                SshFormField::SaveButton,
-            ]);
-        } else {
-            rows.push(vec![SshFormField::TestButton, SshFormField::SaveButton]);
-        }
-
-        rows
+    fn ssh_nav(&self) -> SshFormNav {
+        SshFormNav::new(
+            self.ssh_auth_method,
+            self.editing_tunnel_id,
+            self.ssh_form_field,
+        )
     }
 
-    /// Find current row and column index for the current field.
-    fn ssh_field_position(&self) -> Option<(usize, usize)> {
-        let rows = self.ssh_form_rows();
-        for (row_idx, row) in rows.iter().enumerate() {
-            if let Some(col_idx) = row.iter().position(|&f| f == self.ssh_form_field) {
-                return Some((row_idx, col_idx));
-            }
-        }
-        None
+    fn apply_ssh_nav(&mut self, nav: SshFormNav) {
+        self.ssh_form_field = nav.field();
     }
 
     pub(super) fn ssh_move_down(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position()
-            && row_idx + 1 < rows.len()
-        {
-            let next_row = &rows[row_idx + 1];
-            if next_row.is_empty() {
-                return;
-            }
-            let new_col = col_idx.min(next_row.len() - 1);
-            self.ssh_form_field = next_row[new_col];
-        }
+        let mut nav = self.ssh_nav();
+        nav.move_down();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_move_up(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position()
-            && row_idx > 0
-        {
-            let prev_row = &rows[row_idx - 1];
-            if prev_row.is_empty() {
-                return;
-            }
-            let new_col = col_idx.min(prev_row.len() - 1);
-            self.ssh_form_field = prev_row[new_col];
-        }
+        let mut nav = self.ssh_nav();
+        nav.move_up();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_move_right(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
-            let row = &rows[row_idx];
-            if col_idx + 1 < row.len() {
-                self.ssh_form_field = row[col_idx + 1];
-            }
-        }
+        let mut nav = self.ssh_nav();
+        nav.move_right();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_move_left(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position()
-            && col_idx > 0
-        {
-            self.ssh_form_field = rows[row_idx][col_idx - 1];
-        }
+        let mut nav = self.ssh_nav();
+        nav.move_left();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_move_first(&mut self) {
-        self.ssh_form_field = SshFormField::Name;
+        let mut nav = self.ssh_nav();
+        nav.move_first();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_move_last(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some(last_row) = rows.last()
-            && let Some(last_field) = last_row.last()
-        {
-            self.ssh_form_field = *last_field;
-        }
+        let mut nav = self.ssh_nav();
+        nav.move_last();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_tab_next(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
-            let row = &rows[row_idx];
-            if col_idx + 1 < row.len() {
-                self.ssh_form_field = row[col_idx + 1];
-            } else if row_idx + 1 < rows.len() && !rows[row_idx + 1].is_empty() {
-                self.ssh_form_field = rows[row_idx + 1][0];
-            }
-        }
+        let mut nav = self.ssh_nav();
+        nav.tab_next();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_tab_prev(&mut self) {
-        let rows = self.ssh_form_rows();
-        if let Some((row_idx, col_idx)) = self.ssh_field_position() {
-            if col_idx > 0 {
-                self.ssh_form_field = rows[row_idx][col_idx - 1];
-            } else if row_idx > 0 {
-                let prev_row = &rows[row_idx - 1];
-                if let Some(last_field) = prev_row.last() {
-                    self.ssh_form_field = *last_field;
-                }
-            }
-        }
+        let mut nav = self.ssh_nav();
+        nav.tab_prev();
+        self.apply_ssh_nav(nav);
     }
 
     pub(super) fn ssh_focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -514,10 +573,12 @@ impl SettingsWindow {
         match self.ssh_form_field {
             SshFormField::AuthPrivateKey => {
                 self.ssh_auth_method = SshAuthSelection::PrivateKey;
+                self.validate_ssh_form_field();
                 cx.notify();
             }
             SshFormField::AuthPassword => {
                 self.ssh_auth_method = SshAuthSelection::Password;
+                self.validate_ssh_form_field();
                 cx.notify();
             }
             SshFormField::KeyBrowse => {
@@ -538,34 +599,166 @@ impl SettingsWindow {
                     self.request_delete_tunnel(id, cx);
                 }
             }
-            field if self.is_input_field(field) => {
+            field if SshFormNav::is_input_field(field) => {
                 self.ssh_focus_current_field(window, cx);
             }
             _ => {}
         }
     }
 
-    fn is_input_field(&self, field: SshFormField) -> bool {
-        matches!(
-            field,
-            SshFormField::Name
-                | SshFormField::Host
-                | SshFormField::Port
-                | SshFormField::User
-                | SshFormField::KeyPath
-                | SshFormField::Passphrase
-                | SshFormField::Password
+    pub(super) fn validate_ssh_form_field(&mut self) {
+        let mut nav = self.ssh_nav();
+        nav.validate_field();
+        self.apply_ssh_nav(nav);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SshFormNav;
+    use crate::ui::windows::settings::SshFormField;
+    use crate::ui::windows::ssh_shared::SshAuthSelection;
+    use uuid::Uuid;
+
+    fn nav_private_key_new() -> SshFormNav {
+        SshFormNav::new(SshAuthSelection::PrivateKey, None, SshFormField::Name)
+    }
+
+    fn nav_password_new() -> SshFormNav {
+        SshFormNav::new(SshAuthSelection::Password, None, SshFormField::Name)
+    }
+
+    fn nav_private_key_editing() -> SshFormNav {
+        SshFormNav::new(
+            SshAuthSelection::PrivateKey,
+            Some(Uuid::new_v4()),
+            SshFormField::Name,
         )
     }
 
-    pub(super) fn validate_ssh_form_field(&mut self) {
-        let rows = self.ssh_form_rows();
-        let is_valid = rows.iter().any(|row| row.contains(&self.ssh_form_field));
-        if !is_valid {
-            self.ssh_form_field = match self.ssh_auth_method {
-                SshAuthSelection::PrivateKey => SshFormField::KeyPath,
-                SshAuthSelection::Password => SshFormField::Password,
-            };
-        }
+    #[test]
+    fn form_rows_private_key_includes_key_fields() {
+        let nav = nav_private_key_new();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(all_fields.contains(&&SshFormField::KeyPath));
+        assert!(all_fields.contains(&&SshFormField::KeyBrowse));
+        assert!(all_fields.contains(&&SshFormField::Passphrase));
+        assert!(!all_fields.contains(&&SshFormField::Password));
+    }
+
+    #[test]
+    fn form_rows_password_includes_password_field() {
+        let nav = nav_password_new();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(all_fields.contains(&&SshFormField::Password));
+        assert!(!all_fields.contains(&&SshFormField::KeyPath));
+        assert!(!all_fields.contains(&&SshFormField::Passphrase));
+    }
+
+    #[test]
+    fn form_rows_new_tunnel_no_delete_button() {
+        let nav = nav_private_key_new();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(!all_fields.contains(&&SshFormField::DeleteButton));
+        assert!(all_fields.contains(&&SshFormField::TestButton));
+        assert!(all_fields.contains(&&SshFormField::SaveButton));
+    }
+
+    #[test]
+    fn form_rows_editing_has_delete_button() {
+        let nav = nav_private_key_editing();
+        let rows = nav.form_rows();
+        let all_fields: Vec<_> = rows.iter().flatten().collect();
+        assert!(all_fields.contains(&&SshFormField::DeleteButton));
+        assert!(all_fields.contains(&&SshFormField::TestButton));
+        assert!(all_fields.contains(&&SshFormField::SaveButton));
+    }
+
+    #[test]
+    fn move_down_from_name_to_host() {
+        let mut nav = nav_private_key_new();
+        nav.set_field(SshFormField::Name);
+        nav.move_down();
+        assert_eq!(nav.field(), SshFormField::Host);
+    }
+
+    #[test]
+    fn move_right_in_host_row() {
+        let mut nav = nav_private_key_new();
+        nav.set_field(SshFormField::Host);
+        nav.move_right();
+        assert_eq!(nav.field(), SshFormField::Port);
+        nav.move_right();
+        assert_eq!(nav.field(), SshFormField::Port);
+    }
+
+    #[test]
+    fn tab_next_crosses_row_boundary() {
+        let mut nav = nav_private_key_new();
+        nav.set_field(SshFormField::User);
+        nav.tab_next();
+        assert_eq!(nav.field(), SshFormField::AuthPrivateKey);
+    }
+
+    #[test]
+    fn validate_resets_orphaned_private_key() {
+        let mut nav = SshFormNav::new(
+            SshAuthSelection::PrivateKey,
+            None,
+            SshFormField::Password,
+        );
+        nav.validate_field();
+        assert_eq!(nav.field(), SshFormField::KeyPath);
+    }
+
+    #[test]
+    fn validate_resets_orphaned_password() {
+        let mut nav = SshFormNav::new(
+            SshAuthSelection::Password,
+            None,
+            SshFormField::KeyPath,
+        );
+        nav.validate_field();
+        assert_eq!(nav.field(), SshFormField::Password);
+    }
+
+    #[test]
+    fn validate_keeps_valid_field() {
+        let mut nav = nav_private_key_new();
+        nav.set_field(SshFormField::Host);
+        nav.validate_field();
+        assert_eq!(nav.field(), SshFormField::Host);
+    }
+
+    #[test]
+    fn move_first_and_last() {
+        let mut nav = nav_private_key_new();
+        nav.set_field(SshFormField::User);
+        nav.move_first();
+        assert_eq!(nav.field(), SshFormField::Name);
+        nav.move_last();
+        assert_eq!(nav.field(), SshFormField::SaveButton);
+    }
+
+    #[test]
+    fn is_ssh_input_field_correctness() {
+        assert!(SshFormNav::is_input_field(SshFormField::Name));
+        assert!(SshFormNav::is_input_field(SshFormField::Host));
+        assert!(SshFormNav::is_input_field(SshFormField::Port));
+        assert!(SshFormNav::is_input_field(SshFormField::User));
+        assert!(SshFormNav::is_input_field(SshFormField::KeyPath));
+        assert!(SshFormNav::is_input_field(SshFormField::Passphrase));
+        assert!(SshFormNav::is_input_field(SshFormField::Password));
+
+        assert!(!SshFormNav::is_input_field(SshFormField::AuthPrivateKey));
+        assert!(!SshFormNav::is_input_field(SshFormField::AuthPassword));
+        assert!(!SshFormNav::is_input_field(SshFormField::KeyBrowse));
+        assert!(!SshFormNav::is_input_field(SshFormField::SaveSecret));
+        assert!(!SshFormNav::is_input_field(SshFormField::TestButton));
+        assert!(!SshFormNav::is_input_field(SshFormField::SaveButton));
+        assert!(!SshFormNav::is_input_field(SshFormField::DeleteButton));
     }
 }

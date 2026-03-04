@@ -1,6 +1,7 @@
 mod form;
 mod hooks_tab;
 mod navigation;
+mod proxy;
 mod render;
 mod ssh;
 
@@ -53,6 +54,7 @@ enum FormFocus {
     SshEnabled,
     SshTunnelSelector,
     SshTunnelClear,
+    SshEditInSettings,
     SshHost,
     SshPort,
     SshUser,
@@ -65,6 +67,10 @@ enum FormFocus {
     SshPassword,
     TestSsh,
     SaveAsTunnel,
+    // Proxy tab fields
+    ProxySelector,
+    ProxyClear,
+    ProxyEditInSettings,
     // Settings tab fields
     SettingsRefreshPolicy,
     SettingsRefreshInterval,
@@ -90,8 +96,9 @@ enum View {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ActiveTab {
     Main,
-    Ssh,
     Settings,
+    Ssh,
+    Proxy,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -126,6 +133,11 @@ pub struct ConnectionManagerWindow {
     driver_inputs: HashMap<String, Entity<InputState>>,
     /// Password is separate due to visibility toggle and save checkbox UI.
     input_password: Entity<InputState>,
+
+    selected_proxy_id: Option<Uuid>,
+    proxy_dropdown: Entity<Dropdown>,
+    proxy_uuids: Vec<Uuid>,
+    pending_proxy_selection: Option<Uuid>,
 
     ssh_enabled: bool,
     ssh_auth_method: SshAuthSelection,
@@ -236,6 +248,8 @@ impl ConnectionManagerWindow {
 
         let ssh_tunnel_dropdown =
             cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
+        let proxy_dropdown =
+            cx.new(|_cx| Dropdown::new("proxy-dropdown").placeholder("Select Proxy"));
 
         let conn_refresh_policy_dropdown =
             cx.new(|_cx| Dropdown::new("conn-refresh-policy").placeholder("Use Driver Default"));
@@ -271,6 +285,13 @@ impl ConnectionManagerWindow {
             &ssh_tunnel_dropdown,
             |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                 this.handle_ssh_tunnel_dropdown_selection(event, cx);
+            },
+        );
+
+        let proxy_dropdown_subscription = cx.subscribe(
+            &proxy_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_proxy_dropdown_selection(event, cx);
             },
         );
 
@@ -316,6 +337,7 @@ impl ConnectionManagerWindow {
 
         let subscriptions = vec![
             dropdown_subscription,
+            proxy_dropdown_subscription,
             subscribe_input(cx, window, &input_name),
             password_change_sub,
             subscribe_input(cx, window, &input_ssh_host),
@@ -342,6 +364,11 @@ impl ConnectionManagerWindow {
             input_name,
             driver_inputs: HashMap::new(),
             input_password,
+            selected_proxy_id: None,
+            proxy_dropdown,
+            proxy_uuids: Vec::new(),
+            pending_proxy_selection: None,
+
             ssh_enabled: false,
             ssh_auth_method: SshAuthSelection::PrivateKey,
             checkbox_states: HashMap::new(),
@@ -445,6 +472,8 @@ impl ConnectionManagerWindow {
             window,
             cx,
         );
+
+        instance.selected_proxy_id = profile.proxy_profile_id;
 
         if let Some(ssh) = profile.config.ssh_tunnel() {
             instance.ssh_enabled = true;
@@ -668,6 +697,10 @@ impl ConnectionManagerWindow {
             return false;
         };
         driver.form_definition().supports_ssh()
+    }
+
+    fn supports_proxy(&self) -> bool {
+        !self.uses_file_form()
     }
 
     fn input_state_for_field(&self, field_id: &str) -> Option<&Entity<InputState>> {

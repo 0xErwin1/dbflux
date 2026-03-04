@@ -2,12 +2,13 @@ use crate::connection_manager::ConnectionManager;
 use crate::connection_tree_manager::ConnectionTreeManager;
 use crate::history_manager::HistoryManager;
 use crate::profile_manager::ProfileManager;
+use crate::proxy_manager::ProxyManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::secret_manager::SecretManager;
 use crate::ssh_tunnel_manager::SshTunnelManager;
 use crate::{
-    ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
-    TaskManager, create_secret_store,
+    create_secret_store, ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator,
+    ShutdownPhase, TaskManager,
 };
 use log::info;
 use std::collections::HashMap;
@@ -82,6 +83,7 @@ pub struct SessionFacade {
     pub profiles: ProfileManager,
     pub secrets: SecretManager,
     pub ssh_tunnels: SshTunnelManager,
+    pub proxies: ProxyManager,
     pub history: HistoryManager,
     pub saved_queries: SavedQueryManager,
     pub tree: ConnectionTreeManager,
@@ -97,7 +99,8 @@ impl SessionFacade {
 
         let secrets = SecretManager::new(secret_store);
         let profiles = ProfileManager::new();
-        let ssh_tunnels = SshTunnelManager::new();
+        let ssh_tunnels = SshTunnelManager::default();
+        let proxies = ProxyManager::default();
         let history = HistoryManager::new();
         let saved_queries = SavedQueryManager::new();
         let mut tree = ConnectionTreeManager::new();
@@ -109,6 +112,7 @@ impl SessionFacade {
             profiles,
             secrets,
             ssh_tunnels,
+            proxies,
             history,
             saved_queries,
             tree,
@@ -146,6 +150,13 @@ impl SessionFacade {
     pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<crate::SshTunnelProfile> {
         let removed = self.ssh_tunnels.remove(idx)?;
         self.secrets.delete_ssh_tunnel_secret(&removed);
+        Some(removed)
+    }
+
+    /// Removes a proxy profile by index, cleaning up its secret.
+    pub fn remove_proxy(&mut self, idx: usize) -> Option<crate::ProxyProfile> {
+        let removed = self.proxies.remove(idx)?;
+        self.secrets.delete_proxy_secret(&removed);
         Some(removed)
     }
 

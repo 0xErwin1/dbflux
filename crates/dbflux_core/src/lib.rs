@@ -11,11 +11,13 @@ mod driver_capabilities;
 mod driver_form;
 mod error;
 mod error_formatter;
+mod item_manager;
 mod execution_context;
 mod history;
 mod key_value;
 mod language_service;
 mod profile;
+mod proxy;
 mod query;
 mod query_generator;
 mod query_safety;
@@ -43,6 +45,7 @@ pub mod connection_manager;
 pub mod connection_tree_manager;
 pub mod history_manager;
 pub mod profile_manager;
+pub mod proxy_manager;
 pub mod saved_query_manager;
 pub mod secret_manager;
 pub mod session_facade;
@@ -96,6 +99,7 @@ pub use language_service::{
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
+pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile};
 pub use query::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
 pub use query_generator::{GeneratedQuery, MutationCategory, QueryGenerator, SqlMutationGenerator};
 pub use query_safety::is_safe_read_query;
@@ -117,11 +121,11 @@ pub use schema_node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use scripts_directory::{ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries};
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, connection_secret_ref, create_secret_store,
-    ssh_tunnel_secret_ref,
+    proxy_secret_ref, ssh_tunnel_secret_ref,
 };
 pub use session_store::{SessionManifest, SessionStore, SessionTab, SessionTabKind};
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
-pub use store::{ProfileStore, SshTunnelStore};
+pub use store::{JsonStore, ProfileStore, ProxyStore, SshTunnelStore};
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DescribeRequest,
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
@@ -159,14 +163,16 @@ pub use connection_manager::{
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
     FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
-    OwnedCacheEntry, PendingOperation, RedisKeyCache, RedisKeyCacheEntry, SchemaCacheKey,
-    SwitchDatabaseParams, SwitchDatabaseResult,
+    OwnedCacheEntry, PendingOperation, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
+    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use connection_tree_manager::ConnectionTreeManager;
 pub use history_manager::HistoryManager;
+pub use item_manager::{Identifiable, ItemManager};
 pub use profile_manager::ProfileManager;
+pub use proxy_manager::ProxyManager;
 pub use saved_query_manager::SavedQueryManager;
-pub use secret_manager::SecretManager;
+pub use secret_manager::{HasSecretRef, SecretManager};
 pub use session_facade::{DangerousQuerySuppressions, SessionFacade};
 pub use ssh_tunnel_manager::SshTunnelManager;
 

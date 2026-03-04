@@ -118,11 +118,29 @@ pub fn ssh_tunnel_secret_ref(tunnel_id: &uuid::Uuid) -> String {
     format!("dbflux:ssh_tunnel:{}", tunnel_id)
 }
 
+pub fn proxy_secret_ref(proxy_id: &uuid::Uuid) -> String {
+    format!("dbflux:proxy:{}", proxy_id)
+}
+
 pub fn create_secret_store() -> Box<dyn SecretStore> {
     let keyring_store = KeyringSecretStore::new();
     if keyring_store.is_available() {
         Box::new(keyring_store)
     } else {
         Box::new(NoopSecretStore)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_secret_ref_format() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            proxy_secret_ref(&id),
+            "dbflux:proxy:550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 }

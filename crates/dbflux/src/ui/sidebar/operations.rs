@@ -957,7 +957,7 @@ impl Sidebar {
 
             let result = cx
                 .background_executor()
-                .spawn(async move { params.execute() })
+                .spawn(async move { params.execute(Some(crate::proxy::create_proxy_tunnel)) })
                 .await;
 
             if cancel_token.is_cancelled() {
@@ -1083,6 +1083,7 @@ impl Sidebar {
                         connected.profile,
                         connected.connection,
                         connected.schema,
+                        connected.proxy_tunnel,
                     );
                     cx.emit(AppStateChanged);
                     cx.notify();

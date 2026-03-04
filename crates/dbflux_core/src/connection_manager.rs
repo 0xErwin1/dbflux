@@ -1,9 +1,10 @@
 use crate::{
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
+    HookContext, ProxyProfile, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
 };
 use log::{error, info};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -208,6 +209,9 @@ pub struct ConnectedProfile {
     pub redis_key_cache: RedisKeyCache,
     /// Per-database connections keyed by database name (`ConnectionPerDatabase` drivers).
     pub database_connections: HashMap<String, DatabaseConnection>,
+    /// Type-erased proxy tunnel handle kept alive for RAII drop semantics.
+    #[allow(dead_code)]
+    pub proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl ConnectedProfile {
@@ -425,6 +429,7 @@ impl ConnectionManager {
         profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
+        proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
     ) {
         let id = profile.id;
         self.connections.insert(
@@ -441,6 +446,7 @@ impl ConnectionManager {
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: HashMap::new(),
+                proxy_tunnel,
             },
         );
         self.active_connection_id = Some(id);
@@ -683,13 +689,16 @@ impl ConnectionManager {
 
     // --- Prepare methods ---
 
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_connect_profile(
         &self,
         profile_id: Uuid,
         profiles: &[ConnectionProfile],
         ssh_tunnels: &[SshTunnelProfile],
+        proxies: &[ProxyProfile],
         secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
         get_ssh_secret: impl FnOnce(&ConnectionProfile, &[SshTunnelProfile]) -> Option<String>,
+        proxy_secret: Option<String>,
     ) -> Result<ConnectProfileParams, String> {
         let profile = profiles
             .iter()
@@ -717,11 +726,45 @@ impl ConnectionManager {
 
         let ssh_secret = get_ssh_secret(&profile, ssh_tunnels);
 
+        let resolved_proxy = Self::resolve_proxy(&profile, proxies, proxy_secret.as_deref());
+
         Ok(ConnectProfileParams {
             profile,
             driver,
             secret_store: secret_store_param,
             ssh_secret,
+            proxy: resolved_proxy,
+        })
+    }
+
+    /// Returns `None` when no proxy is configured, the proxy is disabled,
+    /// or the referenced profile no longer exists.
+    fn resolve_proxy(
+        profile: &ConnectionProfile,
+        proxies: &[ProxyProfile],
+        proxy_secret: Option<&str>,
+    ) -> Option<ResolvedProxy> {
+        let proxy_id = profile.proxy_profile_id?;
+
+        let proxy = match proxies.iter().find(|p| p.id == proxy_id) {
+            Some(p) => p,
+            None => {
+                log::warn!(
+                    "Proxy profile '{}' referenced by connection '{}' not found, ignoring",
+                    proxy_id,
+                    profile.name
+                );
+                return None;
+            }
+        };
+
+        if !proxy.enabled {
+            return None;
+        }
+
+        Some(ResolvedProxy {
+            profile: proxy.clone(),
+            secret: proxy_secret.map(|s| s.to_string()),
         })
     }
 
@@ -730,8 +773,9 @@ impl ConnectionManager {
         profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
+        proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
     ) {
-        self.add_connection(profile, connection, schema);
+        self.add_connection(profile, connection, schema, proxy_tunnel);
     }
 
     pub fn prepare_switch_database(
@@ -848,12 +892,16 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
-        // Preserve per-database connections from the old profile so that
-        // query tabs targeting other databases keep working.
-        let prev_db_connections = self
+        // Keep per-database connections and proxy tunnel from the old entry.
+        let (prev_db_connections, prev_proxy_tunnel) = self
             .connections
             .get_mut(&profile_id)
-            .map(|old| std::mem::take(&mut old.database_connections))
+            .map(|old| {
+                (
+                    std::mem::take(&mut old.database_connections),
+                    old.proxy_tunnel.take(),
+                )
+            })
             .unwrap_or_default();
 
         self.connections.insert(
@@ -870,6 +918,7 @@ impl ConnectionManager {
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: prev_db_connections,
+                proxy_tunnel: prev_proxy_tunnel,
             },
         );
     }
@@ -1052,11 +1101,20 @@ impl ConnectionManager {
 
 // --- Params/Result structs ---
 
+pub struct ResolvedProxy {
+    pub profile: ProxyProfile,
+    pub secret: Option<String>,
+}
+
+pub type CreateTunnelFn =
+    fn(&ResolvedProxy, &str, u16) -> Result<(Box<dyn Any + Send + Sync>, u16), String>;
+
 pub struct ConnectProfileParams {
     pub profile: ConnectionProfile,
     pub driver: Arc<dyn DbDriver>,
     pub secret_store: Option<Arc<RwLock<Box<dyn SecretStore>>>>,
     pub ssh_secret: Option<String>,
+    pub proxy: Option<ResolvedProxy>,
 }
 
 pub struct HookExecutionContext {
@@ -1072,18 +1130,47 @@ impl ConnectProfileParams {
         }
     }
 
-    pub fn execute(self) -> Result<ConnectProfileResult, String> {
+    /// Execute the connection, optionally through a proxy tunnel.
+    pub fn execute(
+        self,
+        create_tunnel: Option<CreateTunnelFn>,
+    ) -> Result<ConnectProfileResult, String> {
         info!("Connecting to {}", self.profile.name);
+
+        if self.proxy.is_some() && self.profile.config.has_ssh_tunnel() {
+            return Err(
+                "Cannot use proxy and SSH tunnel simultaneously on the same connection".into(),
+            );
+        }
 
         let password = self.get_password();
 
+        let mut profile = self.profile;
+        let mut proxy_tunnel: Option<Box<dyn Any + Send + Sync>> = None;
+
+        if let (Some(resolved), Some(tunnel_fn)) = (&self.proxy, create_tunnel)
+            && let Some((host, port)) = profile.config.host_port()
+        {
+            let should_bypass = resolved
+                .profile
+                .no_proxy
+                .as_deref()
+                .is_some_and(|patterns| crate::proxy::host_matches_no_proxy(host, patterns));
+
+            if should_bypass {
+                info!("Bypassing proxy for '{}' (no_proxy match)", profile.name);
+            } else {
+                info!("Using proxy for connection '{}'", profile.name);
+
+                let (tunnel, local_port) = tunnel_fn(resolved, host, port)?;
+                profile.config.redirect_to_tunnel(local_port);
+                proxy_tunnel = Some(tunnel);
+            }
+        }
+
         let connection = self
             .driver
-            .connect_with_secrets(
-                &self.profile,
-                password.as_deref(),
-                self.ssh_secret.as_deref(),
-            )
+            .connect_with_secrets(&profile, password.as_deref(), self.ssh_secret.as_deref())
             .map_err(|e| e.to_string())?;
 
         let schema = match connection.schema() {
@@ -1102,9 +1189,10 @@ impl ConnectProfileParams {
         };
 
         Ok(ConnectProfileResult {
-            profile: self.profile,
+            profile,
             connection: connection.into(),
             schema,
+            proxy_tunnel,
         })
     }
 
@@ -1136,6 +1224,8 @@ pub struct ConnectProfileResult {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+    /// Type-erased proxy tunnel handle kept alive for RAII drop semantics.
+    pub proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
 }
 
 pub struct SwitchDatabaseParams {
@@ -1461,6 +1551,7 @@ mod tests {
             active_database: None,
             redis_key_cache: RedisKeyCache::default(),
             database_connections,
+            proxy_tunnel: None,
         }
     }
 
@@ -1559,6 +1650,358 @@ mod tests {
             ConnectionResolutionError::PendingDatabaseConnection {
                 database: "analytics".to_string(),
             }
+        );
+    }
+
+    // --- resolve_proxy tests ---
+
+    use crate::{ProxyAuth, ProxyKind, ProxyProfile};
+
+    fn make_proxy(name: &str, enabled: bool) -> ProxyProfile {
+        ProxyProfile {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            kind: ProxyKind::Http,
+            host: "proxy.local".to_string(),
+            port: 8080,
+            auth: ProxyAuth::None,
+            no_proxy: None,
+            enabled,
+            save_secret: false,
+        }
+    }
+
+    fn make_profile_with_proxy(proxy_id: Option<Uuid>) -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("test", DbConfig::default_postgres());
+        profile.proxy_profile_id = proxy_id;
+        profile
+    }
+
+    #[test]
+    fn resolve_proxy_none_when_no_proxy_id() {
+        let profile = make_profile_with_proxy(None);
+        let resolved = ConnectionManager::resolve_proxy(&profile, &[], None);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_proxy_none_when_orphan_reference() {
+        let profile = make_profile_with_proxy(Some(Uuid::new_v4()));
+        let proxies = vec![make_proxy("unrelated", true)];
+        let resolved = ConnectionManager::resolve_proxy(&profile, &proxies, None);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_proxy_none_when_disabled() {
+        let proxy = make_proxy("disabled", false);
+        let profile = make_profile_with_proxy(Some(proxy.id));
+        let resolved = ConnectionManager::resolve_proxy(&profile, &[proxy], None);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_proxy_returns_profile_for_valid_proxy() {
+        let proxy = make_proxy("corp", true);
+        let proxy_id = proxy.id;
+        let profile = make_profile_with_proxy(Some(proxy_id));
+        let resolved = ConnectionManager::resolve_proxy(&profile, &[proxy], None);
+
+        let resolved = resolved.expect("should resolve");
+        assert_eq!(resolved.profile.id, proxy_id);
+        assert_eq!(resolved.profile.host, "proxy.local");
+        assert_eq!(resolved.profile.port, 8080);
+        assert!(resolved.secret.is_none());
+    }
+
+    #[test]
+    fn resolve_proxy_with_auth_and_secret() {
+        let proxy = ProxyProfile {
+            auth: ProxyAuth::Basic {
+                username: "admin".to_string(),
+            },
+            ..make_proxy("auth-proxy", true)
+        };
+        let proxy_id = proxy.id;
+        let profile = make_profile_with_proxy(Some(proxy_id));
+
+        let resolved = ConnectionManager::resolve_proxy(&profile, &[proxy], Some("s3cret"));
+
+        let resolved = resolved.expect("should resolve");
+        assert_eq!(resolved.profile.id, proxy_id);
+        assert_eq!(resolved.secret.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn resolve_proxy_passes_no_proxy_through() {
+        let proxy = ProxyProfile {
+            no_proxy: Some("localhost,10.0.0.0/8".to_string()),
+            ..make_proxy("with-bypass", true)
+        };
+        let profile = make_profile_with_proxy(Some(proxy.id));
+
+        let resolved = ConnectionManager::resolve_proxy(&profile, &[proxy], None);
+
+        let resolved = resolved.expect("should resolve");
+        assert_eq!(
+            resolved.profile.no_proxy.as_deref(),
+            Some("localhost,10.0.0.0/8")
+        );
+    }
+
+    // --- ConnectProfileParams::execute tests ---
+
+    use crate::{
+        DatabaseCategory, DriverFormDef, FormValues, Icon, POSTGRES_FORM,
+        SshTunnelConfig, SshAuthMethod,
+    };
+    use std::sync::LazyLock;
+
+    struct TestDriver {
+        metadata: DriverMetadata,
+        form: &'static DriverFormDef,
+    }
+
+    impl TestDriver {
+        fn postgres() -> Arc<Self> {
+            Arc::new(Self {
+                metadata: DriverMetadata {
+                    id: "test-pg".to_string(),
+                    display_name: "TestPG".to_string(),
+                    description: "test".to_string(),
+                    category: DatabaseCategory::Relational,
+                    query_language: QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: Some(5432),
+                    uri_scheme: "postgres".to_string(),
+                    icon: Icon::Database,
+                },
+                form: &POSTGRES_FORM,
+            })
+        }
+    }
+
+    impl DbDriver for TestDriver {
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &DriverFormDef {
+            self.form
+        }
+
+        fn driver_key(&self) -> crate::DriverKey {
+            "builtin:test-pg".to_string()
+        }
+
+        fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
+            Ok(DbConfig::default_postgres())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> FormValues {
+            FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            _profile: &ConnectionProfile,
+            _password: Option<&str>,
+            _ssh_secret: Option<&str>,
+        ) -> Result<Box<dyn Connection>, DbError> {
+            Ok(Box::new(TestConnection::new(
+                DbKind::Postgres,
+                SchemaLoadingStrategy::LazyPerDatabase,
+            )))
+        }
+
+        fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn execute_rejects_proxy_and_ssh_tunnel_together() {
+        let profile = ConnectionProfile::new("dual", DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "db.prod".to_string(),
+            port: 5432,
+            user: "root".to_string(),
+            database: "app".to_string(),
+            ssl_mode: crate::SslMode::Disable,
+            ssh_tunnel: Some(SshTunnelConfig {
+                host: "bastion.local".to_string(),
+                port: 22,
+                user: "jump".to_string(),
+                auth_method: SshAuthMethod::Password,
+            }),
+            ssh_tunnel_profile_id: None,
+        });
+
+        let proxy = make_proxy("corp", true);
+        let resolved = ResolvedProxy {
+            profile: proxy,
+            secret: None,
+        };
+
+        let params = ConnectProfileParams {
+            profile,
+            driver: TestDriver::postgres(),
+            secret_store: None,
+            ssh_secret: None,
+            proxy: Some(resolved),
+        };
+
+        let result = params.execute(None);
+        match result {
+            Err(msg) => assert!(
+                msg.contains("Cannot use proxy and SSH tunnel simultaneously"),
+                "unexpected error: {msg}"
+            ),
+            Ok(_) => panic!("expected an error for proxy + SSH tunnel conflict"),
+        }
+    }
+
+    #[test]
+    fn execute_skips_proxy_when_no_proxy_matches_host() {
+        let profile = ConnectionProfile::new("pg", DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "db.local".to_string(),
+            port: 5432,
+            user: "root".to_string(),
+            database: "app".to_string(),
+            ssl_mode: crate::SslMode::Disable,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        });
+
+        let proxy = ProxyProfile {
+            no_proxy: Some("db.local".to_string()),
+            ..make_proxy("corp", true)
+        };
+        let resolved = ResolvedProxy {
+            profile: proxy,
+            secret: None,
+        };
+
+        fn noop_tunnel(
+            _resolved: &ResolvedProxy,
+            _host: &str,
+            _port: u16,
+        ) -> Result<(Box<dyn std::any::Any + Send + Sync>, u16), String> {
+            panic!("tunnel should not be created when no_proxy matches");
+        }
+
+        let params = ConnectProfileParams {
+            profile,
+            driver: TestDriver::postgres(),
+            secret_store: None,
+            ssh_secret: None,
+            proxy: Some(resolved),
+        };
+
+        let result = params.execute(Some(noop_tunnel));
+        assert!(result.is_ok(), "execute should succeed with no_proxy bypass");
+    }
+
+    #[test]
+    fn execute_skips_proxy_when_host_port_is_none() {
+        let profile = ConnectionProfile::new("lite", DbConfig::SQLite {
+            path: std::path::PathBuf::from("/tmp/test.db"),
+        });
+
+        let proxy = make_proxy("corp", true);
+        let resolved = ResolvedProxy {
+            profile: proxy,
+            secret: None,
+        };
+
+        fn noop_tunnel(
+            _resolved: &ResolvedProxy,
+            _host: &str,
+            _port: u16,
+        ) -> Result<(Box<dyn std::any::Any + Send + Sync>, u16), String> {
+            panic!("tunnel should not be created for SQLite");
+        }
+
+        // SQLite driver that accepts the config
+        struct SqliteTestDriver;
+        impl DbDriver for SqliteTestDriver {
+            fn kind(&self) -> DbKind {
+                DbKind::SQLite
+            }
+
+            fn metadata(&self) -> &DriverMetadata {
+                static META: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+                    id: "test-sqlite".to_string(),
+                    display_name: "TestSQLite".to_string(),
+                    description: "test".to_string(),
+                    category: DatabaseCategory::Relational,
+                    query_language: QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "sqlite".to_string(),
+                    icon: Icon::Database,
+                });
+                &META
+            }
+
+            fn form_definition(&self) -> &DriverFormDef {
+                static FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+                    tabs: vec![],
+                });
+                &FORM
+            }
+
+            fn driver_key(&self) -> crate::DriverKey {
+                "builtin:test-sqlite".to_string()
+            }
+
+            fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
+                Ok(DbConfig::SQLite {
+                    path: std::path::PathBuf::from("/tmp/test.db"),
+                })
+            }
+
+            fn extract_values(&self, _config: &DbConfig) -> FormValues {
+                FormValues::new()
+            }
+
+            fn connect_with_secrets(
+                &self,
+                _profile: &ConnectionProfile,
+                _password: Option<&str>,
+                _ssh_secret: Option<&str>,
+            ) -> Result<Box<dyn Connection>, DbError> {
+                Ok(Box::new(TestConnection::new(
+                    DbKind::SQLite,
+                    SchemaLoadingStrategy::LazyPerDatabase,
+                )))
+            }
+
+            fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
+                Ok(())
+            }
+        }
+
+        let params = ConnectProfileParams {
+            profile,
+            driver: Arc::new(SqliteTestDriver),
+            secret_store: None,
+            ssh_secret: None,
+            proxy: Some(resolved),
+        };
+
+        let result = params.execute(Some(noop_tunnel));
+        assert!(
+            result.is_ok(),
+            "execute should succeed for SQLite (no host_port), got: {:?}",
+            result.err()
         );
     }
 }

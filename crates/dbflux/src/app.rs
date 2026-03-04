@@ -5,7 +5,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -480,12 +480,28 @@ impl AppState {
         profile_id: Uuid,
     ) -> Result<ConnectProfileParams, String> {
         let secrets = &self.facade.secrets;
+
+        let proxy_secret = {
+            let profile = self
+                .facade
+                .profiles
+                .profiles
+                .iter()
+                .find(|p| p.id == profile_id);
+            match profile {
+                Some(p) => secrets.get_proxy_secret_for_profile(p, &self.facade.proxies.items),
+                None => None,
+            }
+        };
+
         self.facade.connections.prepare_connect_profile(
             profile_id,
             &self.facade.profiles.profiles,
-            &self.facade.ssh_tunnels.tunnels,
+            &self.facade.ssh_tunnels.items,
+            &self.facade.proxies.items,
             &secrets.secret_store_arc(),
             |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
+            proxy_secret,
         )
     }
 
@@ -494,10 +510,11 @@ impl AppState {
         profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
+        proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
     ) {
         self.facade
             .connections
-            .apply_connect_profile(profile, connection, schema);
+            .apply_connect_profile(profile, connection, schema, proxy_tunnel);
     }
 
     pub fn prepare_database_connection(
@@ -684,6 +701,32 @@ impl AppState {
     #[allow(dead_code)]
     pub fn update_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
         self.facade.ssh_tunnels.update(tunnel);
+    }
+
+    // --- ProxyManager ---
+
+    pub fn add_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
+        self.facade.proxies.add(proxy);
+    }
+
+    pub fn remove_proxy(&mut self, idx: usize) -> Option<dbflux_core::ProxyProfile> {
+        self.facade.remove_proxy(idx)
+    }
+
+    pub fn update_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
+        self.facade.proxies.update(proxy);
+    }
+
+    pub fn get_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile) -> Option<String> {
+        self.facade.secrets.get_proxy_secret(proxy)
+    }
+
+    pub fn save_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile, secret: &str) {
+        self.facade.secrets.save_proxy_secret(proxy, secret);
+    }
+
+    pub fn delete_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile) {
+        self.facade.secrets.delete_proxy_secret(proxy);
     }
 
     // --- ConnectionTreeManager ---
@@ -969,7 +1012,11 @@ impl AppState {
     }
 
     pub fn ssh_tunnels(&self) -> &[SshTunnelProfile] {
-        &self.facade.ssh_tunnels.tunnels
+        &self.facade.ssh_tunnels.items
+    }
+
+    pub fn proxies(&self) -> &[dbflux_core::ProxyProfile] {
+        &self.facade.proxies.items
     }
 
     pub fn connections(&self) -> &HashMap<Uuid, ConnectedProfile> {
@@ -1289,6 +1336,7 @@ mod tests {
                 active_database: None,
                 redis_key_cache: Default::default(),
                 database_connections: HashMap::new(),
+                proxy_tunnel: None,
             },
         );
     }

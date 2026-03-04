@@ -5,6 +5,7 @@ mod assets;
 mod cli;
 mod ipc_server;
 mod keymap;
+mod proxy;
 mod ui;
 
 use app::AppState;

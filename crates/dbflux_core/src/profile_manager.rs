@@ -9,7 +9,7 @@ pub struct ProfileManager {
 
 impl ProfileManager {
     pub fn new() -> Self {
-        let (store, profiles) = match ProfileStore::new() {
+        let (store, profiles) = match ProfileStore::profiles() {
             Ok(store) => {
                 let profiles = store.load().unwrap_or_else(|e| {
                     error!("Failed to load profiles: {:?}", e);

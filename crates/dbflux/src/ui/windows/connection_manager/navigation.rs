@@ -8,7 +8,6 @@ use super::{
     ActiveTab, ConnectionManagerWindow, DismissEvent, DriverFocus, EditState, FormFocus, View,
 };
 
-/// State needed for SSH tab navigation
 #[derive(Clone, Copy)]
 pub(super) struct SshNavState {
     pub(super) enabled: bool,
@@ -36,7 +35,21 @@ impl SshNavState {
     }
 }
 
-/// State needed for Main tab navigation (depends on database type)
+#[derive(Clone, Copy)]
+pub(super) struct ProxyNavState {
+    pub(super) has_proxies: bool,
+    pub(super) has_selected_proxy: bool,
+}
+
+impl ProxyNavState {
+    pub(super) fn new(has_proxies: bool, has_selected_proxy: bool) -> Self {
+        Self {
+            has_proxies,
+            has_selected_proxy,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct MainNavState {
     /// True for file-based databases (SQLite), false for server-based (PostgreSQL, MySQL, MariaDB)
@@ -202,6 +215,24 @@ impl FormFocus {
                 Save => Name,
                 _ => Name,
             }
+        } else if state.has_selected_tunnel {
+            // Read-only mode: tunnel selected, skip editable fields
+            match self {
+                Name => SshEnabled,
+                SshEnabled => {
+                    if state.has_tunnels {
+                        SshTunnelSelector
+                    } else {
+                        SshEditInSettings
+                    }
+                }
+                SshTunnelSelector | SshTunnelClear => SshEditInSettings,
+                SshEditInSettings => TestSsh,
+                TestSsh => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
         } else {
             match self {
                 Name => SshEnabled,
@@ -255,6 +286,24 @@ impl FormFocus {
                 Save => TestConnection,
                 _ => Name,
             }
+        } else if state.has_selected_tunnel {
+            // Read-only mode: tunnel selected, skip editable fields
+            match self {
+                Name => Save,
+                SshEnabled => Name,
+                SshTunnelSelector | SshTunnelClear => SshEnabled,
+                SshEditInSettings => {
+                    if state.has_tunnels {
+                        SshTunnelSelector
+                    } else {
+                        SshEnabled
+                    }
+                }
+                TestSsh => SshEditInSettings,
+                TestConnection => TestSsh,
+                Save => TestConnection,
+                _ => Save,
+            }
         } else {
             match self {
                 Name => Save,
@@ -305,6 +354,12 @@ impl FormFocus {
                 Save => TestConnection,
                 other => other,
             }
+        } else if state.has_selected_tunnel {
+            match self {
+                SshTunnelClear => SshTunnelSelector,
+                Save => TestConnection,
+                other => other,
+            }
         } else {
             match self {
                 SshTunnelClear => SshTunnelSelector,
@@ -332,6 +387,12 @@ impl FormFocus {
                 TestConnection => Save,
                 other => other,
             }
+        } else if state.has_selected_tunnel {
+            match self {
+                SshTunnelSelector if state.has_selected_tunnel => SshTunnelClear,
+                TestConnection => Save,
+                other => other,
+            }
         } else {
             match self {
                 SshTunnelSelector if state.has_selected_tunnel => SshTunnelClear,
@@ -344,6 +405,86 @@ impl FormFocus {
                 TestConnection => Save,
                 other => other,
             }
+        }
+    }
+
+    // === Proxy Tab: Vertical Navigation (j/k) ===
+
+    pub(super) fn down_proxy(self, state: ProxyNavState) -> Self {
+        use FormFocus::*;
+        if !state.has_proxies {
+            match self {
+                Name => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
+        } else if state.has_selected_proxy {
+            match self {
+                Name => ProxySelector,
+                ProxySelector | ProxyClear => ProxyEditInSettings,
+                ProxyEditInSettings => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
+        } else {
+            match self {
+                Name => ProxySelector,
+                ProxySelector | ProxyClear => TestConnection,
+                TestConnection => Save,
+                Save => Name,
+                _ => Name,
+            }
+        }
+    }
+
+    pub(super) fn up_proxy(self, state: ProxyNavState) -> Self {
+        use FormFocus::*;
+        if !state.has_proxies {
+            match self {
+                Name => Save,
+                TestConnection => Name,
+                Save => TestConnection,
+                _ => Save,
+            }
+        } else if state.has_selected_proxy {
+            match self {
+                Name => Save,
+                ProxySelector | ProxyClear => Name,
+                ProxyEditInSettings => ProxySelector,
+                TestConnection => ProxyEditInSettings,
+                Save => TestConnection,
+                _ => Save,
+            }
+        } else {
+            match self {
+                Name => Save,
+                ProxySelector | ProxyClear => Name,
+                TestConnection => ProxySelector,
+                Save => TestConnection,
+                _ => Save,
+            }
+        }
+    }
+
+    // === Proxy Tab: Horizontal Navigation (h/l) ===
+
+    pub(super) fn left_proxy(self, state: ProxyNavState) -> Self {
+        use FormFocus::*;
+        match self {
+            ProxyClear if state.has_selected_proxy => ProxySelector,
+            Save => TestConnection,
+            other => other,
+        }
+    }
+
+    pub(super) fn right_proxy(self, state: ProxyNavState) -> Self {
+        use FormFocus::*;
+        match self {
+            ProxySelector if state.has_selected_proxy => ProxyClear,
+            TestConnection => Save,
+            other => other,
         }
     }
 
@@ -525,6 +666,11 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.proxy_dropdown.read(cx).is_open() && self.handle_proxy_dropdown_command(command, cx)
+        {
+            return true;
+        }
+
         if self.ssh_tunnel_dropdown.read(cx).is_open() && self.handle_dropdown_command(command, cx)
         {
             return true;
@@ -559,6 +705,36 @@ impl ConnectionManagerWindow {
             }
             Command::Cancel => {
                 self.ssh_tunnel_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.close(cx);
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_proxy_dropdown_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
+        match command {
+            Command::SelectNext => {
+                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.select_next_item(cx);
+                });
+                true
+            }
+            Command::SelectPrev => {
+                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.select_prev_item(cx);
+                });
+                true
+            }
+            Command::Execute => {
+                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.accept_selection(cx);
+                });
+                true
+            }
+            Command::Cancel => {
+                self.proxy_dropdown.update(cx, |dropdown, cx| {
                     dropdown.close(cx);
                 });
                 true
@@ -653,7 +829,8 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn ssh_nav_state(&self, cx: &Context<Self>) -> SshNavState {
-        let has_tunnels = !self.app_state.read(cx).ssh_tunnels().is_empty();
+        let state = self.app_state.read(cx);
+        let has_tunnels = !state.ssh_tunnels().is_empty();
         let has_selected_tunnel = self.selected_ssh_tunnel_id.is_some();
         let can_save_tunnel = self.selected_ssh_tunnel_id.is_none();
         SshNavState::new(
@@ -663,6 +840,13 @@ impl ConnectionManagerWindow {
             self.ssh_auth_method,
             can_save_tunnel,
         )
+    }
+
+    pub(super) fn proxy_nav_state(&self, cx: &Context<Self>) -> ProxyNavState {
+        let state = self.app_state.read(cx);
+        let has_proxies = !state.proxies().is_empty();
+        let has_selected_proxy = self.selected_proxy_id.is_some();
+        ProxyNavState::new(has_proxies, has_selected_proxy)
     }
 
     pub(super) fn main_nav_state(&self) -> MainNavState {
@@ -694,26 +878,32 @@ impl ConnectionManagerWindow {
                 User | Password | PasswordSave => 1,
                 _ => 0,
             },
-            ActiveTab::Ssh => {
-                let has_tunnels = self.ssh_enabled && !self.ssh_tunnel_uuids.is_empty();
-                let offset = if has_tunnels { 1 } else { 0 };
-
-                match self.form_focus {
-                    SshEnabled => 0,
-                    SshTunnelSelector | SshTunnelClear => 1,
-                    SshHost | SshPort | SshUser => 1 + offset,
-                    SshAuthPrivateKey | SshAuthPassword => 2 + offset,
-                    SshKeyPath | SshKeyBrowse | SshPassphrase | SshSaveSecret | SshPassword => {
-                        3 + offset
-                    }
-                    TestSsh | SaveAsTunnel => 4 + offset,
-                    _ => 0,
-                }
-            }
             ActiveTab::Settings => match self.form_focus {
                 SettingsRefreshPolicy | SettingsRefreshInterval => 0,
                 SettingsConfirmDangerous | SettingsRequiresWhere | SettingsRequiresPreview => 1,
                 SettingsDriverField(idx) => 2 + idx as usize,
+                _ => 0,
+            },
+            ActiveTab::Ssh => {
+                let has_tunnels = self.ssh_enabled && !self.ssh_tunnel_uuids.is_empty();
+                let tunnel_offset = if has_tunnels { 1 } else { 0 };
+
+                match self.form_focus {
+                    SshEnabled => 0,
+                    SshTunnelSelector | SshTunnelClear => 1,
+                    SshEditInSettings => 1 + tunnel_offset,
+                    SshHost | SshPort | SshUser => 1 + tunnel_offset,
+                    SshAuthPrivateKey | SshAuthPassword => 2 + tunnel_offset,
+                    SshKeyPath | SshKeyBrowse | SshPassphrase | SshSaveSecret | SshPassword => {
+                        3 + tunnel_offset
+                    }
+                    TestSsh | SaveAsTunnel => 4 + tunnel_offset,
+                    _ => 0,
+                }
+            }
+            ActiveTab::Proxy => match self.form_focus {
+                ProxySelector | ProxyClear => 0,
+                ProxyEditInSettings => 1,
                 _ => 0,
             },
         }
@@ -727,10 +917,11 @@ impl ConnectionManagerWindow {
     pub(super) fn focus_down(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.down_main(self.main_nav_state()),
-            ActiveTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
             ActiveTab::Settings => self
                 .form_focus
                 .down_settings(self.settings_driver_field_count()),
+            ActiveTab::Ssh => self.form_focus.down_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Proxy => self.form_focus.down_proxy(self.proxy_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -739,10 +930,11 @@ impl ConnectionManagerWindow {
     fn focus_up(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.up_main(self.main_nav_state()),
-            ActiveTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
             ActiveTab::Settings => self
                 .form_focus
                 .up_settings(self.settings_driver_field_count()),
+            ActiveTab::Ssh => self.form_focus.up_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Proxy => self.form_focus.up_proxy(self.proxy_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -751,8 +943,9 @@ impl ConnectionManagerWindow {
     fn focus_left(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state()),
-            ActiveTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
             ActiveTab::Settings => self.form_focus.left_settings(),
+            ActiveTab::Ssh => self.form_focus.left_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Proxy => self.form_focus.left_proxy(self.proxy_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -761,8 +954,9 @@ impl ConnectionManagerWindow {
     fn focus_right(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.right_main(self.main_nav_state()),
-            ActiveTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
             ActiveTab::Settings => self.form_focus.right_settings(),
+            ActiveTab::Ssh => self.form_focus.right_ssh(self.ssh_nav_state(cx)),
+            ActiveTab::Proxy => self.form_focus.right_proxy(self.proxy_nav_state(cx)),
         };
         self.scroll_to_focused();
         cx.notify();
@@ -770,19 +964,20 @@ impl ConnectionManagerWindow {
 
     fn next_tab(&mut self, cx: &mut Context<Self>) {
         let supports_ssh = self.supports_ssh();
+        let supports_proxy = self.supports_proxy();
 
-        self.active_tab = match (self.active_tab, supports_ssh) {
-            (ActiveTab::Main, true) => ActiveTab::Ssh,
-            (ActiveTab::Main, false) => ActiveTab::Settings,
-            (ActiveTab::Ssh, _) => ActiveTab::Settings,
-            (ActiveTab::Settings, _) => ActiveTab::Main,
+        // Tab order: Main → Settings → Ssh → Proxy → Main
+        self.active_tab = match self.active_tab {
+            ActiveTab::Main => ActiveTab::Settings,
+            ActiveTab::Settings if supports_ssh => ActiveTab::Ssh,
+            ActiveTab::Settings if supports_proxy => ActiveTab::Proxy,
+            ActiveTab::Settings => ActiveTab::Main,
+            ActiveTab::Ssh if supports_proxy => ActiveTab::Proxy,
+            ActiveTab::Ssh => ActiveTab::Main,
+            ActiveTab::Proxy => ActiveTab::Main,
         };
 
-        self.form_focus = match self.active_tab {
-            ActiveTab::Main => FormFocus::Name,
-            ActiveTab::Ssh => FormFocus::SshEnabled,
-            ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
-        };
+        self.form_focus = self.initial_focus_for_tab(cx);
 
         self.scroll_to_focused();
         cx.notify();
@@ -790,22 +985,38 @@ impl ConnectionManagerWindow {
 
     fn prev_tab(&mut self, cx: &mut Context<Self>) {
         let supports_ssh = self.supports_ssh();
+        let supports_proxy = self.supports_proxy();
 
-        self.active_tab = match (self.active_tab, supports_ssh) {
-            (ActiveTab::Main, _) => ActiveTab::Settings,
-            (ActiveTab::Ssh, _) => ActiveTab::Main,
-            (ActiveTab::Settings, true) => ActiveTab::Ssh,
-            (ActiveTab::Settings, false) => ActiveTab::Main,
+        // Reverse: Main → Proxy → Ssh → Settings → Main
+        self.active_tab = match self.active_tab {
+            ActiveTab::Main if supports_proxy => ActiveTab::Proxy,
+            ActiveTab::Main if supports_ssh => ActiveTab::Ssh,
+            ActiveTab::Main => ActiveTab::Settings,
+            ActiveTab::Settings => ActiveTab::Main,
+            ActiveTab::Ssh => ActiveTab::Settings,
+            ActiveTab::Proxy if supports_ssh => ActiveTab::Ssh,
+            ActiveTab::Proxy => ActiveTab::Settings,
         };
 
-        self.form_focus = match self.active_tab {
-            ActiveTab::Main => FormFocus::Name,
-            ActiveTab::Ssh => FormFocus::SshEnabled,
-            ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
-        };
+        self.form_focus = self.initial_focus_for_tab(cx);
 
         self.scroll_to_focused();
         cx.notify();
+    }
+
+    fn initial_focus_for_tab(&self, cx: &Context<Self>) -> FormFocus {
+        match self.active_tab {
+            ActiveTab::Main => FormFocus::Name,
+            ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
+            ActiveTab::Ssh => FormFocus::SshEnabled,
+            ActiveTab::Proxy => {
+                if !self.app_state.read(cx).proxies().is_empty() {
+                    FormFocus::ProxySelector
+                } else {
+                    FormFocus::TestConnection
+                }
+            }
+        }
     }
 
     pub(super) fn activate_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -893,6 +1104,31 @@ impl ConnectionManagerWindow {
             FormFocus::PasswordSave => {
                 self.form_save_password = !self.form_save_password;
             }
+            FormFocus::ProxySelector => {
+                let proxies = self.app_state.read(cx).proxies().to_vec();
+                let proxy_items: Vec<DropdownItem> = proxies
+                    .iter()
+                    .map(|p| {
+                        let label = if p.enabled {
+                            p.name.clone()
+                        } else {
+                            format!("{} (disabled)", p.name)
+                        };
+                        DropdownItem::with_value(&label, p.id.to_string())
+                    })
+                    .collect();
+                self.proxy_uuids = proxies.iter().map(|p| p.id).collect();
+
+                self.proxy_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.set_items(proxy_items, cx);
+                    dropdown.open(cx);
+                });
+            }
+
+            FormFocus::ProxyClear => {
+                self.clear_proxy_selection(cx);
+            }
+
             FormFocus::SshEnabled => {
                 self.ssh_enabled = !self.ssh_enabled;
             }
@@ -923,6 +1159,10 @@ impl ConnectionManagerWindow {
             }
             FormFocus::SshAuthPassword => {
                 self.ssh_auth_method = SshAuthSelection::Password;
+            }
+
+            FormFocus::SshEditInSettings | FormFocus::ProxyEditInSettings => {
+                // TODO: open Settings window to the selected tunnel/proxy
             }
 
             FormFocus::TestSsh => {
@@ -987,5 +1227,197 @@ impl ConnectionManagerWindow {
             }
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FormFocus, ProxyNavState, SshNavState};
+    use crate::ui::windows::ssh_shared::SshAuthSelection;
+
+    fn ssh_disabled() -> SshNavState {
+        SshNavState::new(false, false, false, SshAuthSelection::PrivateKey, false)
+    }
+
+    fn ssh_enabled_no_tunnels() -> SshNavState {
+        SshNavState::new(true, false, false, SshAuthSelection::PrivateKey, true)
+    }
+
+    fn ssh_enabled_with_tunnel_selected() -> SshNavState {
+        SshNavState::new(true, true, true, SshAuthSelection::PrivateKey, false)
+    }
+
+    fn proxy_state(has_proxies: bool, has_selected: bool) -> ProxyNavState {
+        ProxyNavState::new(has_proxies, has_selected)
+    }
+
+    // --- SSH tab: disabled ---
+
+    #[test]
+    fn ssh_disabled_full_traversal() {
+        let state = ssh_disabled();
+
+        let mut focus = FormFocus::Name;
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::SshEnabled);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::Save);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::Name);
+    }
+
+    #[test]
+    fn ssh_disabled_up_from_enabled() {
+        let state = ssh_disabled();
+        assert_eq!(FormFocus::SshEnabled.up_ssh(state), FormFocus::Name);
+    }
+
+    // --- SSH tab: enabled, no tunnels ---
+
+    #[test]
+    fn ssh_enabled_name_to_ssh_enabled() {
+        let state = ssh_enabled_no_tunnels();
+        assert_eq!(FormFocus::Name.down_ssh(state), FormFocus::SshEnabled);
+    }
+
+    #[test]
+    fn ssh_enabled_skips_tunnel_selector_when_no_tunnels() {
+        let state = ssh_enabled_no_tunnels();
+        assert_eq!(FormFocus::SshEnabled.down_ssh(state), FormFocus::SshHost);
+    }
+
+    // --- SSH tab: read-only mode (tunnel selected) ---
+
+    #[test]
+    fn ssh_readonly_skips_to_edit_button() {
+        let state = ssh_enabled_with_tunnel_selected();
+
+        let mut focus = FormFocus::Name;
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::SshEnabled);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::SshTunnelSelector);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::SshEditInSettings);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::TestSsh);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::Save);
+
+        focus = focus.down_ssh(state);
+        assert_eq!(focus, FormFocus::Name);
+    }
+
+    #[test]
+    fn ssh_readonly_up_from_edit_button() {
+        let state = ssh_enabled_with_tunnel_selected();
+        assert_eq!(
+            FormFocus::SshEditInSettings.up_ssh(state),
+            FormFocus::SshTunnelSelector
+        );
+    }
+
+    // --- Proxy tab ---
+
+    #[test]
+    fn proxy_no_proxies_traversal() {
+        let state = proxy_state(false, false);
+
+        let mut focus = FormFocus::Name;
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Save);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Name);
+    }
+
+    #[test]
+    fn proxy_with_proxies_no_selection() {
+        let state = proxy_state(true, false);
+
+        let mut focus = FormFocus::Name;
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::ProxySelector);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Save);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Name);
+    }
+
+    #[test]
+    fn proxy_with_selection_shows_edit_button() {
+        let state = proxy_state(true, true);
+
+        let mut focus = FormFocus::Name;
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::ProxySelector);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::ProxyEditInSettings);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::TestConnection);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Save);
+
+        focus = focus.down_proxy(state);
+        assert_eq!(focus, FormFocus::Name);
+    }
+
+    #[test]
+    fn proxy_right_selector_to_clear_when_selected() {
+        let state = proxy_state(true, true);
+        assert_eq!(
+            FormFocus::ProxySelector.right_proxy(state),
+            FormFocus::ProxyClear
+        );
+    }
+
+    #[test]
+    fn proxy_right_selector_stays_when_no_selection() {
+        let state = proxy_state(true, false);
+        assert_eq!(
+            FormFocus::ProxySelector.right_proxy(state),
+            FormFocus::ProxySelector
+        );
+    }
+
+    #[test]
+    fn proxy_left_clear_to_selector() {
+        let state = proxy_state(true, true);
+        assert_eq!(
+            FormFocus::ProxyClear.left_proxy(state),
+            FormFocus::ProxySelector
+        );
+    }
+
+    #[test]
+    fn proxy_up_from_edit_button() {
+        let state = proxy_state(true, true);
+        assert_eq!(
+            FormFocus::ProxyEditInSettings.up_proxy(state),
+            FormFocus::ProxySelector
+        );
     }
 }

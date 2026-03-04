@@ -203,6 +203,7 @@ impl ConnectionManagerWindow {
         };
 
         profile.save_password = self.form_save_password;
+        profile.proxy_profile_id = self.selected_proxy_id;
         profile.settings_overrides = self.collect_connection_overrides(cx);
         profile.connection_settings = self.collect_connection_settings(cx);
         profile.hook_bindings = self.collect_hook_bindings(cx);

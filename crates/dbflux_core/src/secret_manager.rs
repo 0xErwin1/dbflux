@@ -1,7 +1,24 @@
-use crate::{ConnectionProfile, DbConfig, SecretStore, SshTunnelProfile};
+use crate::{ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile};
 use log::error;
 use std::sync::Arc;
 use std::sync::RwLock;
+
+/// Unifies types that have a keyring secret reference (`secret_ref()`).
+pub trait HasSecretRef {
+    fn secret_ref(&self) -> String;
+}
+
+impl HasSecretRef for SshTunnelProfile {
+    fn secret_ref(&self) -> String {
+        self.secret_ref()
+    }
+}
+
+impl HasSecretRef for ProxyProfile {
+    fn secret_ref(&self) -> String {
+        self.secret_ref()
+    }
+}
 
 pub struct SecretManager {
     secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
@@ -14,7 +31,6 @@ impl SecretManager {
         }
     }
 
-    /// Get read lock on secret store, recovering from poison errors.
     fn store_read(&self) -> std::sync::RwLockReadGuard<'_, Box<dyn SecretStore>> {
         match self.secret_store.read() {
             Ok(guard) => guard,
@@ -31,6 +47,40 @@ impl SecretManager {
 
     pub fn secret_store_arc(&self) -> Arc<RwLock<Box<dyn SecretStore>>> {
         self.secret_store.clone()
+    }
+
+    pub fn get_secret<T: HasSecretRef>(&self, item: &T, label: &str) -> Option<String> {
+        match self.store_read().get(&item.secret_ref()) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("Failed to get {} secret: {:?}", label, e);
+                None
+            }
+        }
+    }
+
+    pub fn save_secret<T: HasSecretRef>(&self, item: &T, secret: &str, label: &str) {
+        let store = self.store_read();
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.set(&item.secret_ref(), secret) {
+            error!("Failed to save {} secret: {:?}", label, e);
+        }
+    }
+
+    pub fn delete_secret<T: HasSecretRef>(&self, item: &T, label: &str) {
+        let store = self.store_read();
+
+        if !store.is_available() {
+            return;
+        }
+
+        if let Err(e) = store.delete(&item.secret_ref()) {
+            log::warn!("Failed to delete {} secret: {:?}", label, e);
+        }
     }
 
     pub fn save_password(&self, profile: &ConnectionProfile, password: &str) {
@@ -118,40 +168,48 @@ impl SecretManager {
     }
 
     pub fn get_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) -> Option<String> {
-        match self.store_read().get(&tunnel.secret_ref()) {
-            Ok(secret) => secret,
-            Err(e) => {
-                error!("Failed to get SSH tunnel secret: {:?}", e);
-                None
-            }
-        }
+        self.get_secret(tunnel, "SSH tunnel")
     }
 
     pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &str) {
-        let store = self.store_read();
-
-        if !store.is_available() {
-            return;
-        }
-
-        if let Err(e) = store.set(&tunnel.secret_ref(), secret) {
-            error!("Failed to save SSH tunnel secret: {:?}", e);
-        }
+        self.save_secret(tunnel, secret, "SSH tunnel");
     }
 
     pub fn delete_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile) {
-        let store = self.store_read();
-
-        if !store.is_available() {
-            return;
-        }
-
-        if let Err(e) = store.delete(&tunnel.secret_ref()) {
-            log::warn!("Failed to delete SSH tunnel secret: {:?}", e);
-        }
+        self.delete_secret(tunnel, "SSH tunnel");
     }
 
-    /// Resolves the SSH secret for a profile, checking both inline and saved tunnel profiles.
+    pub fn get_proxy_secret(&self, proxy: &ProxyProfile) -> Option<String> {
+        self.get_secret(proxy, "proxy")
+    }
+
+    pub fn save_proxy_secret(&self, proxy: &ProxyProfile, secret: &str) {
+        self.save_secret(proxy, secret, "proxy");
+    }
+
+    pub fn delete_proxy_secret(&self, proxy: &ProxyProfile) {
+        self.delete_secret(proxy, "proxy");
+    }
+
+    pub fn get_proxy_secret_for_profile(
+        &self,
+        profile: &ConnectionProfile,
+        proxies: &[ProxyProfile],
+    ) -> Option<String> {
+        let proxy_id = profile.proxy_profile_id?;
+        let proxy = proxies.iter().find(|p| p.id == proxy_id)?;
+
+        if !proxy.enabled {
+            return None;
+        }
+
+        if !proxy.save_secret {
+            return None;
+        }
+
+        self.get_proxy_secret(proxy)
+    }
+
     pub fn get_ssh_secret_for_profile(
         &self,
         profile: &ConnectionProfile,
@@ -181,7 +239,6 @@ impl SecretManager {
             DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
         };
 
-        // If using a saved tunnel profile, get secret from there
         if let Some(tunnel_profile_id) = ssh_tunnel_profile_id {
             let tunnel = ssh_tunnels.iter().find(|t| t.id == tunnel_profile_id)?;
 
@@ -192,7 +249,6 @@ impl SecretManager {
             return self.get_ssh_tunnel_secret(tunnel);
         }
 
-        // If using inline SSH config, get secret from profile's SSH secret store
         if ssh_tunnel.is_some() {
             return self.get_ssh_password(profile);
         }

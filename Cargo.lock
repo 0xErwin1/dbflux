@@ -1671,6 +1671,7 @@ dependencies = [
  "dbflux_driver_sqlite",
  "dbflux_export",
  "dbflux_ipc",
+ "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_test_support",
  "dirs 5.0.1",
@@ -1703,6 +1704,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tree-sitter",
  "tree-sitter-sequel",
+ "urlencoding",
  "uuid",
 ]
 
@@ -1841,10 +1843,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_proxy"
+version = "0.1.0"
+dependencies = [
+ "dbflux_core",
+ "dbflux_tunnel_core",
+ "env_logger",
+ "log",
+ "postgres",
+ "socks",
+ "testcontainers",
+ "uuid",
+]
+
+[[package]]
 name = "dbflux_ssh"
 version = "0.1.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_tunnel_core",
  "dirs 6.0.0",
  "log",
  "ssh2",
@@ -1857,6 +1874,14 @@ dependencies = [
  "dbflux_core",
  "serde_json",
  "testcontainers",
+]
+
+[[package]]
+name = "dbflux_tunnel_core"
+version = "0.1.0"
+dependencies = [
+ "dbflux_core",
+ "log",
 ]
 
 [[package]]
@@ -6949,6 +6974,17 @@ checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "socks"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c3dbbd9ae980613c6dd8e28a9407b50509d3803b57624d5dfe8315218cd58b"
+dependencies = [
+ "byteorder",
+ "libc",
+ "winapi",
 ]
 
 [[package]]

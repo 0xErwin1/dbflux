@@ -1,5 +1,5 @@
 [package]
-name = "dbflux_ssh"
+name = "dbflux_tunnel_core"
 version = "0.1.0"
 publish = false
 edition.workspace = true
@@ -14,10 +14,4 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
-dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
-dirs = "6"
 log = "0.4"
-ssh2 = "0.9"
-
-[features]
-vendored-openssl = ["ssh2/vendored-openssl"]

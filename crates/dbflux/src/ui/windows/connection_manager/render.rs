@@ -126,6 +126,7 @@ impl ConnectionManagerWindow {
     pub(super) fn render_tab_bar(
         &self,
         supports_ssh: bool,
+        supports_proxy: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -136,6 +137,7 @@ impl ConnectionManagerWindow {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
+            // Main tab
             .child(
                 div()
                     .id("tab-main")
@@ -170,6 +172,42 @@ impl ConnectionManagerWindow {
                             .child(div().text_sm().child("Main")),
                     ),
             )
+            // Settings tab
+            .child(
+                div()
+                    .id("tab-settings")
+                    .px_4()
+                    .py_2()
+                    .cursor_pointer()
+                    .border_b_2()
+                    .when(active_tab == ActiveTab::Settings, |d| {
+                        d.border_color(theme.primary).text_color(theme.foreground)
+                    })
+                    .when(active_tab != ActiveTab::Settings, |d| {
+                        d.border_color(gpui::transparent_black())
+                            .text_color(theme.muted_foreground)
+                    })
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active_tab = ActiveTab::Settings;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(svg().path(AppIcon::Settings.path()).size_4().text_color(
+                                if active_tab == ActiveTab::Settings {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(div().text_sm().child("Settings")),
+                    ),
+            )
+            // SSH tab
             .when(supports_ssh, |d| {
                 d.child(
                     div()
@@ -218,40 +256,52 @@ impl ConnectionManagerWindow {
                         ),
                 )
             })
-            .child(
-                div()
-                    .id("tab-settings")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Settings, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Settings, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Settings;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(svg().path(AppIcon::Settings.path()).size_4().text_color(
-                                if active_tab == ActiveTab::Settings {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("Settings")),
-                    ),
-            )
+            // Proxy tab
+            .when(supports_proxy, |d| {
+                d.child(
+                    div()
+                        .id("tab-proxy")
+                        .px_4()
+                        .py_2()
+                        .cursor_pointer()
+                        .border_b_2()
+                        .when(active_tab == ActiveTab::Proxy, |dd| {
+                            dd.border_color(theme.primary).text_color(theme.foreground)
+                        })
+                        .when(active_tab != ActiveTab::Proxy, |dd| {
+                            dd.border_color(gpui::transparent_black())
+                                .text_color(theme.muted_foreground)
+                        })
+                        .hover(|dd| dd.bg(theme.secondary))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.active_tab = ActiveTab::Proxy;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(svg().path(AppIcon::Server.path()).size_4().text_color(
+                                    if active_tab == ActiveTab::Proxy {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    },
+                                ))
+                                .child(div().text_sm().child("Proxy"))
+                                .when(self.selected_proxy_id.is_some(), |dd| {
+                                    dd.child(
+                                        div()
+                                            .w(px(6.0))
+                                            .h(px(6.0))
+                                            .rounded_full()
+                                            .bg(gpui::rgb(0x22C55E)),
+                                    )
+                                }),
+                        ),
+                )
+            })
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -809,6 +859,7 @@ impl ConnectionManagerWindow {
         let save_ssh_secret = self.form_save_ssh_secret;
         let ssh_tunnels = self.app_state.read(cx).ssh_tunnels().to_vec();
         let selected_tunnel_id = self.selected_ssh_tunnel_id;
+        let has_selected_tunnel = selected_tunnel_id.is_some();
 
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Ssh;
@@ -917,9 +968,69 @@ impl ConnectionManagerWindow {
             None
         };
 
-        let auth_private_key_focused = show_focus && focus == FormFocus::SshAuthPrivateKey;
-        let auth_password_focused = show_focus && focus == FormFocus::SshAuthPassword;
-        let (auth_selector, auth_inputs) = if ssh_enabled {
+        let theme = cx.theme().clone();
+        let muted_fg = theme.muted_foreground;
+
+        // When a saved tunnel is selected, show read-only summary + Edit in Settings button
+        let (auth_selector, auth_inputs, ssh_server_section) = if ssh_enabled && has_selected_tunnel
+        {
+            let selected_tunnel = selected_tunnel_id
+                .and_then(|id| ssh_tunnels.iter().find(|t| t.id == id))
+                .cloned();
+
+            let readonly_section: Option<AnyElement> = selected_tunnel.map(|tunnel| {
+                let auth_label = match &tunnel.config.auth_method {
+                    dbflux_core::SshAuthMethod::PrivateKey { key_path } => {
+                        let path_str = key_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "SSH Agent / default".to_string());
+                        format!("Private Key ({})", path_str)
+                    }
+                    dbflux_core::SshAuthMethod::Password => "Password".to_string(),
+                };
+
+                let edit_focused = show_focus && focus == FormFocus::SshEditInSettings;
+
+                self.render_section(
+                    "SSH Server (saved tunnel)",
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.render_readonly_row("Host", &tunnel.config.host, &theme))
+                        .child(self.render_readonly_row(
+                            "Port",
+                            &tunnel.config.port.to_string(),
+                            &theme,
+                        ))
+                        .child(self.render_readonly_row("Username", &tunnel.config.user, &theme))
+                        .child(self.render_readonly_row("Auth", &auth_label, &theme))
+                        .child(
+                            div()
+                                .mt_1()
+                                .rounded(px(4.0))
+                                .border_2()
+                                .when(edit_focused, |d| d.border_color(ring_color))
+                                .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
+                                .child(
+                                    Button::new("ssh-edit-in-settings")
+                                        .label("Edit in Settings")
+                                        .small()
+                                        .ghost()
+                                        .icon(Icon::new(IconName::ExternalLink)),
+                                ),
+                        ),
+                    &theme,
+                )
+                .into_any_element()
+            });
+
+            (None, None, readonly_section)
+        } else if ssh_enabled {
+            let auth_private_key_focused = show_focus && focus == FormFocus::SshAuthPrivateKey;
+            let auth_password_focused = show_focus && focus == FormFocus::SshAuthPassword;
+
             let selector = self
                 .render_ssh_auth_selector(
                     ssh_auth_method,
@@ -929,6 +1040,7 @@ impl ConnectionManagerWindow {
                     cx,
                 )
                 .into_any_element();
+
             let inputs = self
                 .render_ssh_auth_inputs(
                     ssh_auth_method,
@@ -940,17 +1052,9 @@ impl ConnectionManagerWindow {
                     cx,
                 )
                 .into_any_element();
-            (Some(selector), Some(inputs))
-        } else {
-            (None, None)
-        };
 
-        let theme = cx.theme().clone();
-        let muted_fg = theme.muted_foreground;
-
-        let ssh_server_section: Option<AnyElement> = if ssh_enabled {
-            Some(
-                self.render_section(
+            let server_section = self
+                .render_section(
                     "SSH Server",
                     div()
                         .flex()
@@ -991,10 +1095,11 @@ impl ConnectionManagerWindow {
                         ))),
                     &theme,
                 )
-                .into_any_element(),
-            )
+                .into_any_element();
+
+            (Some(selector), Some(inputs), Some(server_section))
         } else {
-            None
+            (None, None, None)
         };
 
         let ssh_test_section: Option<AnyElement> = if ssh_enabled {
@@ -1048,7 +1153,7 @@ impl ConnectionManagerWindow {
                 ),
             };
 
-            let show_save_tunnel = self.selected_ssh_tunnel_id.is_none();
+            let show_save_tunnel = !has_selected_tunnel;
             let save_tunnel_button: Option<AnyElement> = if show_save_tunnel {
                 let save_tunnel_focused = show_focus && focus == FormFocus::SaveAsTunnel;
                 Some(
@@ -1139,6 +1244,198 @@ impl ConnectionManagerWindow {
         }
 
         sections
+    }
+
+    pub(super) fn render_proxy_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let proxies = self.app_state.read(cx).proxies().to_vec();
+        let selected_proxy_id = self.selected_proxy_id;
+
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Proxy;
+        let focus = self.form_focus;
+
+        let ring_color = cx.theme().ring;
+        let theme = cx.theme().clone();
+        let muted_fg = theme.muted_foreground;
+
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        if proxies.is_empty() {
+            sections.push(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(muted_fg)
+                                    .child("No proxy profiles configured"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("Add proxies in Settings > Proxies"),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+            return sections;
+        }
+
+        // Proxy selector dropdown
+        let proxy_items: Vec<DropdownItem> = proxies
+            .iter()
+            .map(|p| {
+                let label = if p.enabled {
+                    p.name.clone()
+                } else {
+                    format!("{} (disabled)", p.name)
+                };
+                DropdownItem::with_value(&label, p.id.to_string())
+            })
+            .collect();
+        self.proxy_uuids = proxies.iter().map(|p| p.id).collect();
+
+        let selected_proxy_index =
+            selected_proxy_id.and_then(|id| proxies.iter().position(|p| p.id == id));
+
+        let proxy_selector_focused = show_focus && focus == FormFocus::ProxySelector;
+        let proxy_clear_focused = show_focus && focus == FormFocus::ProxyClear;
+        self.proxy_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(proxy_items, cx);
+            dropdown.set_selected_index(selected_proxy_index, cx);
+            let focus_color = if proxy_selector_focused {
+                Some(ring_color)
+            } else {
+                None
+            };
+            dropdown.set_focus_ring(focus_color, cx);
+        });
+
+        let has_selection = selected_proxy_id.is_some();
+
+        let selector_row = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted_fg)
+                    .child("Select Proxy"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().child(self.proxy_dropdown.clone()))
+                    .when(has_selection, |d| {
+                        d.child(
+                            div()
+                                .rounded(px(4.0))
+                                .border_2()
+                                .when(proxy_clear_focused, |dd| dd.border_color(ring_color))
+                                .when(!proxy_clear_focused, |dd| {
+                                    dd.border_color(gpui::transparent_black())
+                                })
+                                .child(
+                                    Button::new("clear-proxy")
+                                        .label("Clear")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.clear_proxy_selection(cx);
+                                        })),
+                                ),
+                        )
+                    }),
+            );
+
+        sections.push(selector_row.into_any_element());
+
+        // Read-only proxy details when a proxy is selected
+        if let Some(proxy) = selected_proxy_id
+            .and_then(|id| proxies.iter().find(|p| p.id == id))
+            .cloned()
+        {
+            let kind_label = format!("{:?}", proxy.kind);
+            let host_port = format!("{}:{}", proxy.host, proxy.port);
+            let auth_label = format!("{:?}", proxy.auth);
+            let enabled_label = if proxy.enabled { "Yes" } else { "No" };
+            let no_proxy_label = proxy.no_proxy.as_deref().unwrap_or("(none)").to_string();
+
+            let edit_focused = show_focus && focus == FormFocus::ProxyEditInSettings;
+
+            let details = self.render_section(
+                "Proxy Details",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.render_readonly_row("Type", &kind_label, &theme))
+                    .child(self.render_readonly_row("Host", &host_port, &theme))
+                    .child(self.render_readonly_row("Auth", &auth_label, &theme))
+                    .child(self.render_readonly_row("Enabled", enabled_label, &theme))
+                    .child(self.render_readonly_row("No Proxy", &no_proxy_label, &theme))
+                    .child(
+                        div()
+                            .mt_1()
+                            .rounded(px(4.0))
+                            .border_2()
+                            .when(edit_focused, |d| d.border_color(ring_color))
+                            .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
+                            .child(
+                                Button::new("proxy-edit-in-settings")
+                                    .label("Edit in Settings")
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(IconName::ExternalLink)),
+                            ),
+                    ),
+                &theme,
+            );
+
+            sections.push(details.into_any_element());
+        }
+
+        sections
+    }
+
+    fn render_readonly_row(
+        &self,
+        label: &str,
+        value: &str,
+        theme: &gpui_component::Theme,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .w(px(100.0))
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.muted_foreground)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(value.to_string()),
+            )
     }
 
     fn render_ssh_auth_selector(
@@ -1545,13 +1842,18 @@ impl ConnectionManagerWindow {
         let test_focused = show_focus && focus == FormFocus::TestConnection;
         let save_focused = show_focus && focus == FormFocus::Save;
 
-        let tab_bar = self.render_tab_bar(supports_ssh, cx).into_any_element();
+        let supports_proxy = self.supports_proxy();
+        let tab_bar = self
+            .render_tab_bar(supports_ssh, supports_proxy, cx)
+            .into_any_element();
 
         let tab_content: Vec<AnyElement> = match self.active_tab {
             ActiveTab::Main => self.render_main_tab(cx),
+            ActiveTab::Settings => self.render_settings_tab(cx),
             ActiveTab::Ssh if supports_ssh => self.render_ssh_tab(cx),
             ActiveTab::Ssh => self.render_main_tab(cx),
-            ActiveTab::Settings => self.render_settings_tab(cx),
+            ActiveTab::Proxy if supports_proxy => self.render_proxy_tab(cx),
+            ActiveTab::Proxy => self.render_main_tab(cx),
         };
 
         let theme = cx.theme();
@@ -2083,6 +2385,19 @@ impl Render for ConnectionManagerWindow {
             self.input_ssh_key_path.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
+        }
+
+        if let Some(proxy_id) = self.pending_proxy_selection.take() {
+            let proxy = self
+                .app_state
+                .read(cx)
+                .proxies()
+                .iter()
+                .find(|p| p.id == proxy_id)
+                .cloned();
+            if let Some(proxy) = proxy {
+                self.apply_proxy(&proxy, cx);
+            }
         }
 
         if let Some(tunnel_id) = self.pending_ssh_tunnel_selection.take() {

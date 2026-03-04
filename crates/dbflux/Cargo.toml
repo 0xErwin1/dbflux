@@ -18,6 +18,7 @@ gpui-component.workspace = true
 dbflux_core.workspace = true
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true
+dbflux_proxy.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 uuid.workspace = true

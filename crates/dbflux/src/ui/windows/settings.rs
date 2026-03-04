@@ -1,7 +1,9 @@
 mod drivers;
+mod form_nav;
 mod general;
 mod hooks;
 mod keybindings;
+mod proxies;
 mod render;
 mod rpc_services;
 mod ssh_tunnels;
@@ -28,6 +30,7 @@ use uuid::Uuid;
 enum SettingsSection {
     General,
     Keybindings,
+    Proxies,
     SshTunnels,
     Services,
     Hooks,
@@ -114,6 +117,37 @@ enum SshTestStatus {
     Testing,
     Success,
     Failed,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ProxyAuthSelection {
+    None,
+    Basic,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ProxyFocus {
+    ProfileList,
+    Form,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ProxyFormField {
+    Name,
+    KindHttp,
+    KindHttps,
+    KindSocks5,
+    Host,
+    Port,
+    AuthNone,
+    AuthBasic,
+    Username,
+    Password,
+    NoProxy,
+    Enabled,
+    SaveSecret,
+    SaveButton,
+    DeleteButton,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -206,6 +240,26 @@ pub struct SettingsWindow {
 
     pending_ssh_key_path: Option<String>,
     pending_delete_tunnel_id: Option<Uuid>,
+
+    // Proxy section state
+    editing_proxy_id: Option<Uuid>,
+    input_proxy_name: Entity<InputState>,
+    input_proxy_host: Entity<InputState>,
+    input_proxy_port: Entity<InputState>,
+    input_proxy_username: Entity<InputState>,
+    input_proxy_password: Entity<InputState>,
+    input_proxy_no_proxy: Entity<InputState>,
+    proxy_kind: dbflux_core::ProxyKind,
+    proxy_auth_selection: ProxyAuthSelection,
+    proxy_save_secret: bool,
+    proxy_enabled: bool,
+    show_proxy_password: bool,
+
+    proxy_focus: ProxyFocus,
+    proxy_selected_idx: Option<usize>,
+    proxy_form_field: ProxyFormField,
+    proxy_editing_field: bool,
+    pending_delete_proxy_id: Option<Uuid>,
 
     // Services section state
     svc_services: Vec<ServiceConfig>,
@@ -312,8 +366,27 @@ impl SettingsWindow {
                 .masked(true)
         });
 
+        // Proxy inputs
+        let input_proxy_name = cx.new(|cx| InputState::new(window, cx).placeholder("Proxy name"));
+        let input_proxy_host =
+            cx.new(|cx| InputState::new(window, cx).placeholder("proxy.example.com"));
+        let input_proxy_port = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("8080")
+                .default_value("8080")
+        });
+        let input_proxy_username = cx.new(|cx| InputState::new(window, cx).placeholder("username"));
+        let input_proxy_password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("password")
+                .masked(true)
+        });
+        let input_proxy_no_proxy =
+            cx.new(|cx| InputState::new(window, cx).placeholder("localhost, 127.0.0.1, .internal"));
+
         let subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
             this.editing_tunnel_id = None;
+            this.editing_proxy_id = None;
             cx.notify();
         });
 
@@ -617,6 +690,25 @@ impl SettingsWindow {
             pending_ssh_key_path: None,
             pending_delete_tunnel_id: None,
 
+            editing_proxy_id: None,
+            input_proxy_name,
+            input_proxy_host,
+            input_proxy_port,
+            input_proxy_username,
+            input_proxy_password,
+            input_proxy_no_proxy,
+            proxy_kind: dbflux_core::ProxyKind::Http,
+            proxy_auth_selection: ProxyAuthSelection::None,
+            proxy_save_secret: false,
+            proxy_enabled: true,
+            show_proxy_password: false,
+
+            proxy_focus: ProxyFocus::ProfileList,
+            proxy_selected_idx: None,
+            proxy_form_field: ProxyFormField::Name,
+            proxy_editing_field: false,
+            pending_delete_proxy_id: None,
+
             svc_services: Vec::new(),
             svc_config_store: None,
             svc_focus: ServiceFocus::List,
@@ -728,11 +820,14 @@ impl SettingsWindow {
                 "network",
                 "Network",
                 Some(AppIcon::Server),
-                vec![TreeNavNode::leaf(
-                    "ssh-tunnels",
-                    "SSH Tunnels",
-                    Some(AppIcon::FingerprintPattern),
-                )],
+                vec![
+                    TreeNavNode::leaf("proxies", "Proxy", Some(AppIcon::Server)),
+                    TreeNavNode::leaf(
+                        "ssh-tunnels",
+                        "SSH Tunnels",
+                        Some(AppIcon::FingerprintPattern),
+                    ),
+                ],
             ),
             TreeNavNode::group(
                 "connection",
@@ -766,6 +861,7 @@ impl SettingsWindow {
         match id {
             "general" => Some(SettingsSection::General),
             "keybindings" => Some(SettingsSection::Keybindings),
+            "proxies" => Some(SettingsSection::Proxies),
             "ssh-tunnels" => Some(SettingsSection::SshTunnels),
             "services" => Some(SettingsSection::Services),
             "hooks" => Some(SettingsSection::Hooks),
@@ -779,6 +875,7 @@ impl SettingsWindow {
         match section {
             SettingsSection::General => "general",
             SettingsSection::Keybindings => "keybindings",
+            SettingsSection::Proxies => "proxies",
             SettingsSection::SshTunnels => "ssh-tunnels",
             SettingsSection::Services => "services",
             SettingsSection::Hooks => "hooks",
@@ -1053,6 +1150,7 @@ impl SettingsWindow {
         }
 
         if self.pending_delete_tunnel_id.is_some()
+            || self.pending_delete_proxy_id.is_some()
             || self.pending_delete_svc_idx.is_some()
             || self.pending_delete_hook_id.is_some()
             || self.pending_close_confirm
@@ -1316,6 +1414,157 @@ impl SettingsWindow {
                     return;
                 }
                 _ => {}
+            }
+        }
+
+        // Proxy: editing input mode
+        if self.active_section == SettingsSection::Proxies
+            && self.proxy_focus == ProxyFocus::Form
+            && self.proxy_editing_field
+        {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("escape", m) if m == Modifiers::none() => {
+                    self.proxy_editing_field = false;
+                    self.focus_handle.focus(window);
+                    cx.notify();
+                }
+                ("enter", m) if m == Modifiers::none() => {
+                    self.proxy_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.proxy_move_down();
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::none() => {
+                    self.proxy_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.proxy_tab_next();
+                    self.proxy_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                ("tab", m) if m == Modifiers::shift() => {
+                    self.proxy_editing_field = false;
+                    self.focus_handle.focus(window);
+                    self.proxy_tab_prev();
+                    self.proxy_focus_current_field(window, cx);
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Proxy: list and form navigation
+        if self.active_section == SettingsSection::Proxies
+            && self.focus_area == SettingsFocus::Content
+        {
+            match self.proxy_focus {
+                ProxyFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.proxy_move_next_profile(cx);
+                        self.proxy_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.proxy_move_prev_profile(cx);
+                        self.proxy_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("l", m) | ("right", m) | ("enter", m) if m == Modifiers::none() => {
+                        self.proxy_enter_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("d", m) if m == Modifiers::none() => {
+                        if let Some(idx) = self.proxy_selected_idx {
+                            let proxies = self.app_state.read(cx).proxies().to_vec();
+                            if let Some(proxy) = proxies.get(idx) {
+                                self.request_delete_proxy(proxy.id, cx);
+                            }
+                        }
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.proxy_selected_idx = None;
+                        self.proxy_load_selected_profile(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        let count = self.proxy_count(cx);
+                        if count > 0 {
+                            self.proxy_selected_idx = Some(count - 1);
+                            self.proxy_load_selected_profile(window, cx);
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.focus_sidebar();
+                        cx.notify();
+                        return;
+                    }
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.focus_sidebar();
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
+                ProxyFocus::Form => match (chord.key.as_str(), chord.modifiers) {
+                    ("escape", m) if m == Modifiers::none() => {
+                        self.proxy_exit_form(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("j", m) | ("down", m) if m == Modifiers::none() => {
+                        self.proxy_move_down();
+                        cx.notify();
+                        return;
+                    }
+                    ("k", m) | ("up", m) if m == Modifiers::none() => {
+                        self.proxy_move_up();
+                        cx.notify();
+                        return;
+                    }
+                    ("h", m) | ("left", m) if m == Modifiers::none() => {
+                        self.proxy_move_left();
+                        cx.notify();
+                        return;
+                    }
+                    ("l", m) | ("right", m) if m == Modifiers::none() => {
+                        self.proxy_move_right();
+                        cx.notify();
+                        return;
+                    }
+                    ("enter", m) | ("space", m) if m == Modifiers::none() => {
+                        self.proxy_activate_current_field(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::none() => {
+                        self.proxy_tab_next();
+                        cx.notify();
+                        return;
+                    }
+                    ("tab", m) if m == Modifiers::shift() => {
+                        self.proxy_tab_prev();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::none() => {
+                        self.proxy_move_first();
+                        cx.notify();
+                        return;
+                    }
+                    ("g", m) if m == Modifiers::shift() => {
+                        self.proxy_move_last();
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                },
             }
         }
 
