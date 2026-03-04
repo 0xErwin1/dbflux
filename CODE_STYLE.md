@@ -15,7 +15,7 @@
 - Workspace crates live under `crates/`, with UI in `crates/dbflux/` and shared domain logic in `crates/dbflux_core/` (Cargo.toml).
 - Each module is a dedicated file (no `mod.rs`); submodules are declared in the parent file (AGENTS.md, crates/dbflux/src/ui/mod.rs).
 - UI is organized by pane, window, and component in `crates/dbflux/src/ui/` (workspace, sidebar, editor, dock, document, windows, components).
-- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`).
+- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`, `crates/dbflux_tunnel_core/`, `crates/dbflux_proxy/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`, `crates/dbflux_test_support/`).
 
 ## Import Style
 
@@ -32,6 +32,10 @@
 - RPC protocol schemas and DTO conversions stay in `dbflux_ipc`; transport/client logic stays in `dbflux_driver_ipc` (crates/dbflux_ipc/src/driver_protocol.rs, crates/dbflux_driver_ipc/src/transport.rs).
 - Default constructors and helpers use `new`/`default_*` naming (crates/dbflux_core/src/profile.rs, crates/dbflux_core/src/query.rs).
 - Results and metadata are plain structs/enums with small helper methods (crates/dbflux_core/src/query.rs, crates/dbflux_core/src/schema.rs).
+- Generic store/manager: `JsonStore<T>` provides file persistence; type aliases (`ProfileStore`, `ProxyStore`) use named constructors (`.profiles()`, `.proxies()`). `ItemManager<T>` adds CRUD + auto-save; concrete managers are type aliases with `DefaultFilename` for `Default` impl (crates/dbflux_core/src/store.rs, crates/dbflux_core/src/item_manager.rs).
+- Trait-based deduplication: `HasSecretRef` unifies keyring operations, `Identifiable` unifies ID access. Prefer a shared trait + generic method over per-type copy-paste (crates/dbflux_core/src/secret_manager.rs, crates/dbflux_core/src/item_manager.rs).
+- Callback injection for cross-crate boundaries: `CreateTunnelFn` avoids circular dependency by defining a function signature in `dbflux_core` and supplying the real implementation from the app crate (crates/dbflux_core/src/connection_manager.rs, crates/dbflux/src/proxy.rs).
+- Reusable navigation components: `TreeNav` (plain struct, not Entity) for tree navigation; `FormGridNav<F>` for 2D grid form navigation. Both take dynamic state as input rather than storing it (crates/dbflux/src/ui/components/tree_nav.rs, crates/dbflux/src/ui/windows/settings/form_nav.rs).
 
 ## Error Handling
 
@@ -49,6 +53,8 @@
 
 - Unit tests live beside implementation in `#[cfg(test)] mod tests` blocks (crates/dbflux/src/keymap/chord.rs).
 - Tests use `#[test]` and `assert_eq!`/`assert!` with snake_case names.
+- Integration tests for drivers use Docker containers managed by `dbflux_test_support` and are `#[ignore]` by default (require Docker daemon).
+- Test-only constructors (e.g., `ItemManager::with_store`) are gated behind `#[cfg(test)]`.
 
 ## Do's and Don'ts
 
@@ -63,3 +69,6 @@
 - Don't add driver-specific logic in UI code (e.g., `if driver == "mongodb"`). Use capability flags and metadata from `DriverMetadata` instead.
 - Don't import driver crates directly in UI code. All driver interaction goes through `dbflux_core` traits.
 - Don't use `config.json` to define driver metadata/forms for external services; it is runtime launch/socket config only.
+- Do use type-erased handles (`Box<dyn Any + Send + Sync>`) when storing cross-crate RAII objects to avoid circular dependencies.
+- Do use the `TunnelConnector` trait for new tunnel protocols instead of duplicating RAII/lifecycle logic.
+- Don't combine proxy and SSH tunnel on the same connection (mutually exclusive, enforced in `ConnectProfileParams::execute()`).

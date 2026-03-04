@@ -65,6 +65,20 @@ crates/
       tree.rs               # Tree rendering with keyboard navigation
       node.rs               # Node types (document, field, array item)
       events.rs             # Document tree events (selection, context menu)
+    src/ui/components/tree_nav.rs  # Reusable tree navigation component
+    src/ui/components/form_renderer.rs # Generic form field rendering
+    src/ui/windows/settings/      # Settings window sections
+      general.rs            # General settings (theme, safety toggles)
+      proxies.rs            # Proxy CRUD form with FormGridNav
+      ssh_tunnels.rs        # SSH tunnel CRUD form with FormGridNav
+      hooks.rs              # Hook definitions CRUD
+      drivers.rs            # Per-driver settings overrides
+      rpc_services.rs       # External RPC service management
+      form_nav.rs           # FormGridNav<F> generic 2D grid navigation
+    src/ui/windows/connection_manager/
+      hooks_tab.rs          # Per-profile hook bindings
+      proxy.rs              # Proxy tab (selector, details, clear)
+    src/proxy.rs            # create_proxy_tunnel callback for CreateTunnelFn
     src/ui/history_modal.rs # Recent/saved queries modal
     src/ui/icons/           # SVG icon system (AppIcon enum)
     src/keymap/             # Keyboard system
@@ -79,7 +93,7 @@ crates/
     src/profile.rs          # Connection/SSH profiles
     src/connection_tree.rs  # Folder/connection tree model
     src/connection_tree_store.rs  # Tree persistence (JSON)
-    src/store.rs            # Profile and tunnel stores (JSON)
+    src/store.rs            # JsonStore<T> generic with type aliases (profiles, tunnels, proxies)
     src/history.rs          # History persistence
     src/saved_query.rs      # Saved queries persistence
     src/task.rs             # Background task tracking
@@ -92,6 +106,11 @@ crates/
     src/session_store.rs    # Session persistence (scratch/shadow files, manifest)
     src/scripts_directory.rs # Scripts folder tree (file/folder CRUD)
     src/execution_context.rs # Per-tab execution context (connection/database/schema)
+    src/proxy.rs            # ProxyProfile, ProxyKind, ProxyAuth, no_proxy matching
+    src/proxy_manager.rs    # ProxyManager (type alias for ItemManager<ProxyProfile>)
+    src/item_manager.rs     # Generic ItemManager<T>, Identifiable, DefaultFilename traits
+    src/connection_hook.rs  # Hook definitions, HookRunner, phase orchestration
+    src/ui_state.rs         # UiStateStore for persisted UI state (sidebar collapse)
     src/session_facade.rs   # Session facade for connection management
     src/sql_dialect.rs      # SqlDialect trait for SQL flavor differences
     src/sql_generation.rs   # SQL INSERT/UPDATE/DELETE generation
@@ -124,8 +143,16 @@ crates/
   dbflux_driver_redis/      # Redis driver implementation
     src/driver.rs           # Connection, key-value API, schema discovery
     src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
+  dbflux_tunnel_core/       # Shared RAII tunnel infrastructure
+    src/lib.rs              # Tunnel, TunnelConnector, ForwardingConnection<R>
+  dbflux_proxy/             # SOCKS5/HTTP CONNECT proxy tunnel
+    src/lib.rs              # ProxyTunnelConfig, SOCKS5/HTTP handshake, tunnel loop
   dbflux_ssh/               # SSH tunnel support
   dbflux_export/            # Export (CSV, JSON, Text, Binary)
+  dbflux_test_support/      # Docker containers and fixtures for integration tests
+    src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis)
+    src/fixtures.rs         # Test fixture helpers
+    src/fake_driver.rs      # FakeDriver for unit tests
 ```
 
 ## Core Components
@@ -174,6 +201,34 @@ crates/
 - Driver forms: `crates/dbflux_core/src/driver_form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
 
+### Tunnel Infrastructure
+
+- `crates/dbflux_tunnel_core/` provides a shared RAII `Tunnel` struct that binds a local port, verifies connectivity, and spawns a background forwarding thread that shuts down on drop.
+- `TunnelConnector` trait: implementations provide `test_connection()` and `run_tunnel_loop()` for protocol-specific forwarding (SOCKS5, HTTP CONNECT, SSH).
+- `ForwardingConnection<R>`: bidirectional forwarding between a local `TcpStream` and a generic remote `R` (`TcpStream` for proxy, `ssh2::Channel` for SSH). Write strategies are injected via function pointers.
+- `adaptive_sleep()`: 50ms when idle, 1ms when connections exist, skip when data was transferred.
+- `crates/dbflux_proxy/`: SOCKS5 and HTTP CONNECT proxy tunnel via `TunnelConnector` impl.
+- `crates/dbflux_ssh/`: SSH tunnel via `TunnelConnector` impl. All SSH operations serialized to a single thread for libssh2 safety.
+- Proxy+SSH are mutually exclusive per connection (enforced in `ConnectProfileParams::execute()`).
+- `CreateTunnelFn` callback in `dbflux_core` avoids circular dependency: the app crate supplies the real proxy implementation.
+
+### Connection Hooks
+
+- `crates/dbflux_core/src/connection_hook.rs` defines reusable hook commands (name, command, args, cwd, env, timeout, failure policy).
+- Profile phase bindings: `PreConnect`, `PostConnect`, `PreDisconnect`, `PostDisconnect`.
+- `HookRunner` orchestrates execution with `HookPhaseOutcome` (success/warning/abort).
+- Each hook runs as an external process with stdout/stderr visible in the Tasks panel.
+- Failure policies: `Disconnect` (abort flow), `Warn` (continue with warning), `Ignore` (log only).
+- Settings UI: `settings/hooks.rs` for global definitions; Connection Manager `hooks_tab.rs` for per-profile phase bindings.
+
+### Settings Window
+
+- Settings is organized into 7 sections: General, Keybindings, Proxies, SSH Tunnels, Services, Hooks, Drivers.
+- Sidebar uses `TreeNav` component with collapsible Network/Connection categories.
+- `UiStateStore` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
+- Proxy and SSH tunnel forms use `FormGridNav<F>` for keyboard-driven 2D grid navigation.
+- Drivers section shows per-driver settings overrides filtered by `DatabaseCategory`.
+
 ### IPC/RPC Integration
 
 - `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, and cross-platform socket naming.
@@ -200,9 +255,12 @@ crates/
 
 ### Storage & Configuration
 
-- Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH profiles and keyring integration.
-- Storage: `crates/dbflux_core/src/store.rs`, `crates/dbflux_core/src/history.rs`, and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
+- Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH/proxy profiles and keyring integration.
+- Generic stores: `crates/dbflux_core/src/store.rs` provides `JsonStore<T>` with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). `ItemManager<T>` in `item_manager.rs` adds CRUD + auto-save; `ProxyManager` and `SshTunnelManager` are type aliases.
+- Secret management: `SecretManager` uses `HasSecretRef` trait for generic keyring operations across SSH tunnels and proxy profiles.
+- Storage: `crates/dbflux_core/src/history.rs` and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
 - Session persistence: `crates/dbflux_core/src/session_store.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
+- UI state: `crates/dbflux_core/src/ui_state.rs` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
 - Scripts directory: `crates/dbflux_core/src/scripts_directory.rs` manages a user scripts folder with file/folder CRUD, import, and move operations.
 - Execution context: `crates/dbflux_core/src/execution_context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
 - History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
@@ -229,15 +287,18 @@ crates/
 ### Supporting Components
 
 - Toast system: `crates/dbflux/src/ui/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts.
-- SSH tunneling: `crates/dbflux_ssh/src/lib.rs` establishes SSH sessions and runs a local port forwarder.
+- Tunnel infrastructure: `crates/dbflux_tunnel_core/` provides RAII `Tunnel` with `TunnelConnector` trait and `ForwardingConnection<R>` bidirectional forwarder.
+- Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
+- SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
 - Export: `crates/dbflux_export/src/lib.rs` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver.
+- Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers.
 - Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets.
 
 ## Data Flow
 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/workspace.rs).
 - External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
-- Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which connects and fetches schema (crates/dbflux/src/app.rs). Supports both form-based configuration and direct URI input.
+- Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which optionally creates a proxy tunnel, then connects and fetches schema (crates/dbflux/src/app.rs). Supports form-based configuration, direct URI input, optional proxy tunneling, and SSH tunneling (mutually exclusive). Connection hooks run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
 - View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
 - Query preview: `SqlPreviewModal` operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
@@ -263,8 +324,9 @@ crates/
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, and shell query generation (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and external driver communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`).
-- SSH: `ssh2` sessions with local TCP forwarding (crates/dbflux_ssh/src/lib.rs).
-- OS keyring: optional secret storage for passwords and SSH passphrases (crates/dbflux_core/src/secrets.rs).
+- Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
+- SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
+- OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/secrets.rs).
 - Export: shape-based multi-format export — CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64) via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 
 ## Configuration
@@ -273,14 +335,15 @@ crates/
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
 - Runtime data (config dir via `dirs::config_dir`):
   - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/app_config.rs).
-  - `profiles.json` and `ssh_tunnels.json` (crates/dbflux_core/src/store.rs).
+  - `profiles.json`, `ssh_tunnels.json`, and `proxies.json` (crates/dbflux_core/src/store.rs).
   - `history.json` for query history (crates/dbflux_core/src/history.rs).
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/saved_query.rs).
 - Session data (data dir via `dirs::data_dir`):
   - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/session_store.rs).
   - `sessions/*.sql` scratch and shadow files for auto-save (crates/dbflux_core/src/session_store.rs).
   - `scripts/` user scripts folder (crates/dbflux_core/src/scripts_directory.rs).
-- Secrets: passwords stored in OS keyring; references derived from profile IDs (crates/dbflux_core/src/secrets.rs).
+  - `state.json` persisted UI state — sidebar collapse, etc. (crates/dbflux_core/src/ui_state.rs).
+- Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/secrets.rs, crates/dbflux_core/src/secret_manager.rs).
 
 ## Build & Deploy
 

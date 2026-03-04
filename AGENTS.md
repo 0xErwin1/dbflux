@@ -20,8 +20,11 @@ crates/
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
 ├── dbflux_driver_mongodb/     # MongoDB driver
 ├── dbflux_driver_redis/       # Redis driver
+├── dbflux_tunnel_core/        # Shared RAII tunnel infrastructure (proxy + SSH)
+├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
 ├── dbflux_ssh/                # SSH tunnel support
-└── dbflux_export/             # Export (CSV, JSON, Text, Binary)
+├── dbflux_export/             # Export (CSV, JSON, Text, Binary)
+└── dbflux_test_support/       # Docker containers and fixtures for integration tests
 ```
 
 ## Build & Run Commands
@@ -255,7 +258,20 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
 - `dbflux_driver_host`: Standalone RPC host binary that serves drivers over local sockets
 - `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
+- `dbflux_tunnel_core`: RAII `Tunnel`, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, adaptive sleep
+- `dbflux_proxy`: SOCKS5/HTTP CONNECT proxy via `TunnelConnector` impl
+- `dbflux_ssh`: SSH tunnel via `TunnelConnector` impl (all SSH ops serialized to one thread for libssh2 safety)
 - `dbflux`: UI only, drivers via feature flags
+
+### Proxy and SSH Tunnels
+
+- Proxy and SSH tunnels share the RAII lifecycle from `dbflux_tunnel_core::Tunnel`
+- `TunnelConnector` trait: `test_connection()` + `run_tunnel_loop()` — each protocol implements its own
+- `ForwardingConnection<R>` handles bidirectional client↔remote forwarding; `R` is `TcpStream` for proxy, `ssh2::Channel` for SSH
+- Proxy+SSH are mutually exclusive per connection (guard in `ConnectProfileParams::execute()`)
+- `CreateTunnelFn` callback avoids circular dependency: `dbflux_core` defines the function signature, `dbflux` (app crate) supplies the real `dbflux_proxy` implementation
+- Proxy tunnel handle is type-erased (`Box<dyn Any + Send + Sync>`) and stored in `ConnectedProfile` for RAII lifetime
+- `host_matches_no_proxy()` follows curl/wget `NO_PROXY` semantics (wildcard, exact, suffix with/without leading dot)
 
 ### External RPC Drivers
 
@@ -300,6 +316,28 @@ Key abstractions for UI adaptation:
 - `DatabaseCategory`: Determines view mode (table vs document tree), terminology (rows vs documents)
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
+
+### Generic Deduplication Patterns
+
+**`JsonStore<T>`**: Single generic JSON-file store with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). Named constructors (`.profiles()`, `.ssh_tunnels()`, `.proxies()`) set the filename.
+
+**`ItemManager<T>`**: CRUD manager with auto-save, backed by `JsonStore<T>`. Uses `Identifiable` trait for ID access and `DefaultFilename` trait for `Default` on type aliases. `ProxyManager` and `SshTunnelManager` are type aliases. `ProfileManager` stays separate (has extra methods like `find_by_id`, `profile_ids`).
+
+**`HasSecretRef`**: Unifies secret operations for types with keyring references (`SshTunnelProfile`, `ProxyProfile`). `SecretManager` generic methods (`get_secret`, `save_secret`, `delete_secret`) delegate through this trait.
+
+**`FormGridNav<F>`**: 2D grid navigation for settings forms. Takes `&[Vec<F>]` rows as input to each method (not stored), so callers compute dynamic grids from their own state. Used by proxy and SSH tunnel settings forms.
+
+**`TreeNav`**: Reusable tree navigation component (plain struct, not a GPUI Entity). Supports cursor movement, expand/collapse, select-by-id. Used by Settings sidebar and connections sidebar.
+
+### Connection Hooks
+
+- Hooks are reusable command definitions (name, command, args, cwd, env, timeout, failure policy)
+- Profile phase bindings: PreConnect, PostConnect, PreDisconnect, PostDisconnect
+- `HookRunner` orchestrates execution with `HookPhaseOutcome` (success/warning/abort)
+- Each hook runs as its own background task with stdout/stderr visible in Tasks panel
+- Failure policies: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
+- Hooks section in Settings for global definitions; Hooks tab in Connection Manager for per-profile bindings
+- Types and logic in `dbflux_core/src/connection_hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
 
 ### Adding a New Driver
 
@@ -356,6 +394,13 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/cell_editor_modal.rs`              | Modal editor for JSON/long text                     |
 | `crates/dbflux/src/ui/components/data_table/table.rs`    | Virtualized data table with column resize           |
 | `crates/dbflux/src/ui/components/document_tree/state.rs` | Document tree state (cursor, search, expansion)     |
+| `crates/dbflux/src/ui/components/tree_nav.rs`            | Reusable tree navigation (cursor, expand, select)   |
+| `crates/dbflux/src/ui/windows/settings/form_nav.rs`     | Generic 2D grid navigation for settings forms       |
+| `crates/dbflux/src/ui/windows/settings/proxies.rs`      | Proxy CRUD form in Settings                         |
+| `crates/dbflux/src/ui/windows/settings/hooks.rs`        | Hook definitions CRUD in Settings                   |
+| `crates/dbflux/src/ui/windows/settings/drivers.rs`      | Per-driver settings overrides UI                    |
+| `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs` | Per-profile hook bindings                     |
+| `crates/dbflux/src/proxy.rs`                             | `create_proxy_tunnel` callback for `CreateTunnelFn` |
 | `crates/dbflux/src/keymap/defaults.rs`                   | Key bindings per context                            |
 | `crates/dbflux/src/keymap/command.rs`                    | Command enum and dispatch                           |
 | `crates/dbflux/src/keymap/focus.rs`                      | FocusTarget (Document/Sidebar/BackgroundTasks)      |
@@ -364,6 +409,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_core/src/app_config.rs`                   | External RPC service runtime config (`config.json`) |
 | `crates/dbflux_core/src/error_formatter.rs`              | ErrorFormatter trait for driver errors              |
 | `crates/dbflux_core/src/query_generator.rs`              | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/connection_hook.rs`              | Hook types, HookRunner, phase orchestration         |
 | `crates/dbflux_core/src/language_service.rs`             | Dangerous query detection (SQL, MongoDB, Redis)     |
 | `crates/dbflux_core/src/schema.rs`                       | Schema types with lazy loading support              |
 | `crates/dbflux_core/src/crud.rs`                         | CRUD mutation types for all database paradigms      |
@@ -380,4 +426,6 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_ipc/src/driver_protocol.rs`               | Driver RPC protocol schema and DTOs                 |
 | `crates/dbflux_driver_ipc/src/driver.rs`                 | IpcDriver and managed host lifecycle                |
 | `crates/dbflux_driver_ipc/src/transport.rs`              | Driver RPC client transport and handshake           |
+| `crates/dbflux_tunnel_core/src/lib.rs`                   | Tunnel, TunnelConnector, ForwardingConnection       |
+| `crates/dbflux_proxy/src/lib.rs`                         | SOCKS5/HTTP CONNECT proxy tunnel                    |
 | `crates/dbflux_driver_host/src/main.rs`                  | External RPC host server entrypoint                 |

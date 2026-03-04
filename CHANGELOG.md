@@ -2,6 +2,35 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.4] – 2026-03-04
+
+### Added
+
+* Proxy tunnel support: SOCKS5 and HTTP CONNECT proxy profiles with full CRUD in Settings, per-connection proxy selection in Connection Manager, and automatic tunnel lifecycle (RAII)
+* New `dbflux_tunnel_core` crate extracting shared RAII tunnel lifecycle, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, and adaptive sleep strategy
+* Proxy profiles stored in `~/.config/dbflux/proxies.json` with keyring-backed secret storage for Basic auth passwords
+* `no_proxy` pattern matching (curl/wget `NO_PROXY` semantics: wildcard, exact, suffix with/without leading dot)
+* Proxy tab in Connection Manager with dropdown selector, read-only details, and "Edit in Settings" button
+* Proxies section in Settings with full form CRUD, auth selection (None/Basic), enable/disable toggle, and keyboard navigation
+* Guard preventing simultaneous proxy and SSH tunnel on the same connection
+
+### Changed
+
+* `JsonStore<T>` generic replaces three near-identical store structs (profiles, SSH tunnels, proxies)
+* `ItemManager<T>` with `Identifiable` trait replaces duplicated `ProxyManager` and `SshTunnelManager` implementations
+* `HasSecretRef` trait unifies secret operations across SSH tunnel and proxy profiles
+* `FormGridNav<F>` generic extracts shared 2D grid navigation from proxy and SSH tunnel settings forms
+* SSH tunnel forwarding loop now uses `ForwardingConnection<ssh2::Channel>` from `dbflux_tunnel_core` and gains adaptive sleep (50ms idle / 1ms active)
+* SSH tunnel read-only mode in Connection Manager now shows saved tunnel details with "Edit in Settings" button
+* Connection Manager tab order changed to Main → Settings → SSH → Proxy
+
+### Fixed
+
+* HTTP CONNECT proxy `BufReader` could silently consume post-handshake bytes; replaced with byte-by-byte `read_http_line()`
+* Proxy tunnel handle is now preserved across database switches so the tunnel stays alive for the connection lifetime
+
+---
+
 ## [0.4.0-dev.3] – 2026-03-03
 
 ### Added
