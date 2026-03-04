@@ -1,6 +1,7 @@
-{ pkgs ? import <nixpkgs> {}
-, craneLib ? null
-, version ? "0.4.0-dev.3"
+{
+  pkgs ? import <nixpkgs> { },
+  craneLib ? null,
+  version ? "0.4.0-dev.4",
 }:
 
 let
@@ -56,15 +57,16 @@ let
   # Full source including resources
   fullSrc = pkgs.lib.cleanSourceWith {
     src = ./.;
-    filter = path: type:
-      (builtins.match ".*\\.git$" path) == null &&
-      (builtins.match ".*flake\\.nix$" path) == null &&
-      (builtins.match ".*flake\\.lock$" path) == null &&
-      (builtins.match ".*shell\\.nix$" path) == null &&
-      (builtins.match ".*default\\.nix$" path) == null &&
-      (builtins.match ".*\\.envrc$" path) == null &&
-      (builtins.match ".*\\.direnv$" path) == null &&
-      (builtins.match ".*target$" path) == null;
+    filter =
+      path: type:
+      (builtins.match ".*\\.git$" path) == null
+      && (builtins.match ".*flake\\.nix$" path) == null
+      && (builtins.match ".*flake\\.lock$" path) == null
+      && (builtins.match ".*shell\\.nix$" path) == null
+      && (builtins.match ".*default\\.nix$" path) == null
+      && (builtins.match ".*\\.envrc$" path) == null
+      && (builtins.match ".*\\.direnv$" path) == null
+      && (builtins.match ".*target$" path) == null;
   };
 
   # Post-install script to copy resources
@@ -102,7 +104,8 @@ let
   '';
 
   # Build with crane (for flake usage)
-  buildWithCrane = craneLib:
+  buildWithCrane =
+    craneLib:
     let
       cargoSrc = craneLib.cleanCargoSource fullSrc;
 
@@ -113,17 +116,23 @@ let
         ZSTD_SYS_USE_PKG_CONFIG = "1";
       };
 
-      cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-        pname = "dbflux-deps";
-        inherit version;
-      });
+      cargoArtifacts = craneLib.buildDepsOnly (
+        commonArgs
+        // {
+          pname = "dbflux-deps";
+          inherit version;
+        }
+      );
     in
-    craneLib.buildPackage (commonArgs // {
-      pname = "dbflux";
-      inherit version cargoArtifacts;
-      cargoExtraArgs = "-p dbflux --features sqlite,postgres,mysql,mongodb,redis";
-      postInstall = postInstallScript;
-    });
+    craneLib.buildPackage (
+      commonArgs
+      // {
+        pname = "dbflux";
+        inherit version cargoArtifacts;
+        cargoExtraArgs = "-p dbflux --features sqlite,postgres,mysql,mongodb,redis";
+        postInstall = postInstallScript;
+      }
+    );
 
   # Build with rustPlatform (for non-flake usage)
   buildWithRustPlatform = pkgs.rustPlatform.buildRustPackage {
@@ -140,9 +149,21 @@ let
 
     ZSTD_SYS_USE_PKG_CONFIG = "1";
 
-    buildFeatures = [ "sqlite" "postgres" "mysql" "mongodb" "redis" ];
-    cargoBuildFlags = [ "-p" "dbflux" ];
-    cargoTestFlags = [ "-p" "dbflux" ];
+    buildFeatures = [
+      "sqlite"
+      "postgres"
+      "mysql"
+      "mongodb"
+      "redis"
+    ];
+    cargoBuildFlags = [
+      "-p"
+      "dbflux"
+    ];
+    cargoTestFlags = [
+      "-p"
+      "dbflux"
+    ];
 
     postInstall = postInstallScript;
 
@@ -155,8 +176,11 @@ let
     meta = with pkgs.lib; {
       description = "A fast, keyboard-first database client";
       homepage = "https://github.com/0xErwin1/dbflux";
-      license = with licenses; [ mit asl20 ];
-      maintainers = [];
+      license = with licenses; [
+        mit
+        asl20
+      ];
+      maintainers = [ ];
       platforms = platforms.linux;
       mainProgram = "dbflux";
     };
@@ -164,7 +188,12 @@ let
 
 in
 {
-  inherit buildInputs nativeBuildInputs runtimeLibraryPath fullSrc;
+  inherit
+    buildInputs
+    nativeBuildInputs
+    runtimeLibraryPath
+    fullSrc
+    ;
   inherit buildWithCrane buildWithRustPlatform;
 
   # Default package (non-flake)
@@ -172,10 +201,12 @@ in
 
   # Development shell
   shell = pkgs.mkShell {
-    nativeBuildInputs = nativeBuildInputs ++ (with pkgs; [
-      rustup
-      rust-analyzer
-    ]);
+    nativeBuildInputs =
+      nativeBuildInputs
+      ++ (with pkgs; [
+        rustup
+        rust-analyzer
+      ]);
 
     inherit buildInputs;
 
