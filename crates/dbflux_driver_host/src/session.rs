@@ -44,6 +44,7 @@ impl SessionManager {
 ///
 /// `Hello` and `OpenSession` are handled by the caller (main loop) since they
 /// don't operate on an existing session. This function handles everything else.
+#[allow(clippy::result_large_err)]
 pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverResponseBody {
     match body {
         DriverRequestBody::Ping => match conn.ping() {

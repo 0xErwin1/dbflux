@@ -111,6 +111,7 @@ impl AppState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn build_default_drivers() -> BuiltDrivers {
         let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
 

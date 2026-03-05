@@ -6,6 +6,7 @@ use gpui::SharedString;
 use std::collections::HashSet;
 
 impl SettingsWindow {
+    #[allow(clippy::result_large_err)]
     pub(super) fn build_sidebar_tree() -> TreeNav {
         let nodes = vec![
             TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),

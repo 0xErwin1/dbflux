@@ -652,19 +652,17 @@ impl super::KeyValueDocument {
                                 keyspace,
                             })?;
                         }
-                        KeyType::Set => {
-                            if new_value != old_member.display {
-                                api.set_remove(&SetRemoveRequest {
-                                    key: key.clone(),
-                                    members: vec![old_member.display],
-                                    keyspace,
-                                })?;
-                                api.set_add(&SetAddRequest {
-                                    key,
-                                    members: vec![new_value],
-                                    keyspace,
-                                })?;
-                            }
+                        KeyType::Set if new_value != old_member.display => {
+                            api.set_remove(&SetRemoveRequest {
+                                key: key.clone(),
+                                members: vec![old_member.display],
+                                keyspace,
+                            })?;
+                            api.set_add(&SetAddRequest {
+                                key,
+                                members: vec![new_value],
+                                keyspace,
+                            })?;
                         }
                         KeyType::SortedSet => {
                             let score = new_score.unwrap_or(old_member.score.unwrap_or(0.0));

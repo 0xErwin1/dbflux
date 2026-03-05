@@ -453,15 +453,11 @@ impl SettingsWindow {
     pub(super) fn svc_move_right(&mut self) {
         if let Some(row) = self.current_form_row() {
             match row {
-                ServiceFormRow::EnvKey(_) => {
-                    if self.svc_env_col < 2 {
-                        self.svc_env_col += 1;
-                    }
+                ServiceFormRow::EnvKey(_) if self.svc_env_col < 2 => {
+                    self.svc_env_col += 1;
                 }
-                ServiceFormRow::Arg(_) => {
-                    if self.svc_env_col < 1 {
-                        self.svc_env_col += 1;
-                    }
+                ServiceFormRow::Arg(_) if self.svc_env_col < 1 => {
+                    self.svc_env_col += 1;
                 }
                 _ => {}
             }

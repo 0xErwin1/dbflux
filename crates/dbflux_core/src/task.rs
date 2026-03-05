@@ -300,7 +300,7 @@ impl TaskManager {
 
     pub fn recent_tasks(&self, limit: usize) -> Vec<TaskSnapshot> {
         let mut tasks: Vec<_> = self.tasks.values().collect();
-        tasks.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        tasks.sort_by_key(|t| std::cmp::Reverse(t.started_at));
         tasks
             .into_iter()
             .take(limit)

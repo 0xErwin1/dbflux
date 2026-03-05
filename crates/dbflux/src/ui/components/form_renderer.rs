@@ -167,21 +167,19 @@ pub fn validate_values(schema: &DriverFormDef, values: &FormValues) -> Vec<Strin
                 }
 
                 match &field.kind {
-                    FormFieldKind::Number => {
-                        if raw.parse::<f64>().is_err() {
-                            warnings.push(format!(
-                                "{}: \"{}\" is not a valid number (will use default: {})",
-                                field.label, raw, field.default_value
-                            ));
-                        }
+                    FormFieldKind::Number if raw.parse::<f64>().is_err() => {
+                        warnings.push(format!(
+                            "{}: \"{}\" is not a valid number (will use default: {})",
+                            field.label, raw, field.default_value
+                        ));
                     }
-                    FormFieldKind::Select { options } => {
-                        if !options.iter().any(|opt| opt.value == *raw) {
-                            warnings.push(format!(
-                                "{}: \"{}\" is not a recognized option (will use default: {})",
-                                field.label, raw, field.default_value
-                            ));
-                        }
+                    FormFieldKind::Select { options }
+                        if !options.iter().any(|opt| opt.value == *raw) =>
+                    {
+                        warnings.push(format!(
+                            "{}: \"{}\" is not a recognized option (will use default: {})",
+                            field.label, raw, field.default_value
+                        ));
                     }
                     _ => {}
                 }
