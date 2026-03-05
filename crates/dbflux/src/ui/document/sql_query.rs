@@ -707,14 +707,11 @@ impl SqlQueryDocument {
                 self.run_query_in_new_tab(window, cx);
                 true
             }
-            Command::Cancel | Command::CancelQuery => {
-                if self.runner.is_primary_active() {
-                    self.cancel_query(cx);
-                    true
-                } else {
-                    false
-                }
+            Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
+                self.cancel_query(cx);
+                true
             }
+            Command::Cancel | Command::CancelQuery => false,
 
             Command::FocusUp => {
                 if self.focus_mode == SqlQueryFocus::Editor {
@@ -725,15 +722,14 @@ impl SqlQueryDocument {
             }
 
             // Focus navigation from editor to results
-            Command::FocusDown => {
-                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() {
-                    self.focus_mode = SqlQueryFocus::Results;
-                    cx.notify();
-                    true
-                } else {
-                    false
-                }
+            Command::FocusDown
+                if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() =>
+            {
+                self.focus_mode = SqlQueryFocus::Results;
+                cx.notify();
+                true
             }
+            Command::FocusDown => false,
 
             // Layout toggles
             Command::ToggleEditor => {

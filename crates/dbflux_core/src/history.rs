@@ -128,7 +128,8 @@ impl HistoryStore {
 
             self.entries = favorites;
             self.entries.extend(non_favorites);
-            self.entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            self.entries
+                .sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
         }
     }
 

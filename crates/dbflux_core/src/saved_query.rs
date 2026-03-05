@@ -217,6 +217,6 @@ impl SavedQueryStore {
 
     fn sort_entries(&mut self) {
         self.entries
-            .sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
+            .sort_by_key(|entry| std::cmp::Reverse(entry.last_used_at));
     }
 }

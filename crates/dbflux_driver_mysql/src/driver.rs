@@ -1958,6 +1958,8 @@ fn fetch_views(conn: &mut Conn, database: &str) -> Result<Vec<ViewInfo>, DbError
 }
 
 fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<ColumnInfo>, DbError> {
+    type ColumnMetadataRow = (String, String, String, Option<String>, Option<String>);
+
     let query = r"
         SELECT
             column_name,
@@ -1971,7 +1973,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
         ORDER BY ordinal_position
     ";
 
-    let rows: Vec<(String, String, String, Option<String>, Option<String>)> = conn
+    let rows: Vec<ColumnMetadataRow> = conn
         .exec(query, (database, table))
         .map_err(|e| format_mysql_query_error(&e))?;
 

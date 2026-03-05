@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
-use testcontainers::GenericImage;
 use testcontainers::clients::Cli;
 use testcontainers::core::WaitFor;
+use testcontainers::GenericImage;
 
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
@@ -74,12 +74,9 @@ where
     run(url)
 }
 
-pub fn retry_db_operation<T, F>(
-    timeout: Duration,
-    mut operation: F,
-) -> Result<T, dbflux_core::DbError>
+pub fn retry_db_operation<T, E, F>(timeout: Duration, mut operation: F) -> Result<T, E>
 where
-    F: FnMut() -> Result<T, dbflux_core::DbError>,
+    F: FnMut() -> Result<T, E>,
 {
     let deadline = Instant::now() + timeout;
 
