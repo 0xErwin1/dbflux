@@ -100,7 +100,7 @@ impl Workspace {
     }
 
     pub(super) fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::toast::ToastExt;
+        use crate::ui::components::toast::ToastExt;
 
         let profile_id = self.app_state.read(cx).active_connection_id();
 
@@ -123,7 +123,7 @@ impl Workspace {
     }
 
     pub(super) fn refresh_schema(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::toast::ToastExt;
+        use crate::ui::components::toast::ToastExt;
 
         let active = self.app_state.read(cx).active_connection();
 
@@ -170,7 +170,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::toast::ToastExt;
+        use crate::ui::components::toast::ToastExt;
 
         let has_connection = self
             .app_state
@@ -235,7 +235,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::toast::ToastExt;
+        use crate::ui::components::toast::ToastExt;
 
         let has_connection = self
             .app_state
@@ -303,7 +303,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::toast::ToastExt;
+        use crate::ui::components::toast::ToastExt;
 
         let has_connection = self
             .app_state
@@ -1005,5 +1005,59 @@ mod tests {
     fn decide_open_document_opens_new_when_connected_and_no_existing_tab() {
         let decision = decide_open_document(true, None);
         assert_eq!(decision, OpenDocumentDecision::OpenNew);
+    }
+
+    // --- strip_annotation_header ---
+
+    use crate::ui::views::workspace::Workspace;
+
+    #[test]
+    fn strip_annotation_header_removes_sql_annotations() {
+        let content = "-- @connection: my-db\n-- @database: main\nSELECT 1;";
+        let result = Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::Sql);
+        assert_eq!(result, "SELECT 1;");
+    }
+
+    #[test]
+    fn strip_annotation_header_preserves_non_annotation_comments() {
+        let content = "-- This is a regular comment\nSELECT 1;";
+        let result = Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::Sql);
+        assert_eq!(result, "-- This is a regular comment\nSELECT 1;");
+    }
+
+    #[test]
+    fn strip_annotation_header_skips_blank_lines_before_annotations() {
+        let content = "\n\n-- @connection: db\nSELECT 1;";
+        let result = Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::Sql);
+        assert_eq!(result, "SELECT 1;");
+    }
+
+    #[test]
+    fn strip_annotation_header_all_annotations_returns_empty() {
+        let content = "-- @connection: db\n-- @database: main\n";
+        let result = Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::Sql);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn strip_annotation_header_empty_content() {
+        let result = Workspace::strip_annotation_header("", &dbflux_core::QueryLanguage::Sql);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn strip_annotation_header_mongo_comment_prefix() {
+        let content = "// @connection: my-db\ndb.collection.find()";
+        let result =
+            Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::MongoQuery);
+        assert_eq!(result, "db.collection.find()");
+    }
+
+    #[test]
+    fn strip_annotation_header_redis_comment_prefix() {
+        let content = "# @connection: my-db\nGET key";
+        let result =
+            Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::RedisCommands);
+        assert_eq!(result, "GET key");
     }
 }

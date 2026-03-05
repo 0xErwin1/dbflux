@@ -6,8 +6,8 @@ use super::{
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
+use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, QueryRequest,
@@ -3155,7 +3155,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         use crate::ui::components::data_table::model::VisualRowSource;
-        use crate::ui::sql_preview_modal::SqlGenerationType;
+        use crate::ui::overlays::sql_preview_modal::SqlGenerationType;
 
         let (profile_id, table_ref) = match &self.source {
             DataSource::Table {

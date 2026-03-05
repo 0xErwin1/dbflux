@@ -1,4 +1,3 @@
-#[path = "tree_nav/gutter.rs"]
 mod gutter;
 
 pub use gutter::{GutterInfo, render_gutter, tree_line_color};

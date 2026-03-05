@@ -1,9 +1,9 @@
 use crate::keymap::{Command, ContextId};
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::form_navigation::{
     FormEditState, FormField, FormNavigation, focus_ring, subscribe_form_input,
 };
 use crate::ui::components::modal_frame::ModalFrame;
-use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;

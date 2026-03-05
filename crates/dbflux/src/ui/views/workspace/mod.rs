@@ -6,21 +6,21 @@ use crate::app::{AppState, AppStateChanged};
 use crate::keymap::{
     self, Command, CommandDispatcher, ContextId, FocusTarget, KeyChord, KeymapStack, default_keymap,
 };
-use crate::ui::command_palette::{
-    CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
-};
+use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
     DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
-use crate::ui::shutdown_overlay::ShutdownOverlay;
-use crate::ui::sidebar::{Sidebar, SidebarEvent, SidebarTab};
-use crate::ui::sql_preview_modal::SqlPreviewModal;
-use crate::ui::status_bar::{StatusBar, ToggleTasksPanel};
-use crate::ui::tasks_panel::TasksPanel;
-use crate::ui::toast::{ToastGlobal, ToastHost};
+use crate::ui::overlays::command_palette::{
+    CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
+};
+use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
+use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
+use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
+use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -169,7 +169,7 @@ impl Workspace {
                     table_info,
                     generation_type,
                 } => {
-                    use crate::ui::sql_preview_modal::SqlPreviewContext;
+                    use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
                     let context = SqlPreviewContext::SidebarTable {
                         profile_id: *profile_id,
                         table_info: table_info.clone(),
@@ -316,7 +316,7 @@ impl Workspace {
                         pk_indices,
                         generation_type,
                     } => {
-                        use crate::ui::sql_preview_modal::SqlPreviewContext;
+                        use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
                         let context = SqlPreviewContext::DataTableRow {
                             profile_id: *profile_id,
                             schema_name: schema_name.clone(),

@@ -33,7 +33,7 @@ pub enum DataDocumentEvent {
         column_names: Vec<String>,
         row_values: Vec<Value>,
         pk_indices: Vec<usize>,
-        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+        generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }
 

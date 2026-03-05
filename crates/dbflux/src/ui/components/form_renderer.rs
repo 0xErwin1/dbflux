@@ -1,4 +1,4 @@
-use crate::ui::dropdown::{Dropdown, DropdownItem};
+use crate::ui::components::dropdown::{Dropdown, DropdownItem};
 use dbflux_core::{DriverFormDef, FormFieldDef, FormFieldKind, FormValues};
 use gpui::*;
 use gpui_component::input::InputState;

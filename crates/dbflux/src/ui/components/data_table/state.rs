@@ -11,7 +11,9 @@ use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, SCROLLBAR_WIDTH};
-use crate::ui::dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+use crate::ui::components::dropdown::{
+    Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged,
+};
 
 /// Main state for the DataTable component.
 pub struct DataTableState {

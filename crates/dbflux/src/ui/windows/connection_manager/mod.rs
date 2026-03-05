@@ -3,12 +3,16 @@ mod hooks_tab;
 mod navigation;
 mod proxy;
 mod render;
+mod render_driver_select;
+mod render_proxy;
+mod render_ssh;
+mod render_tabs;
 mod ssh;
 
 use crate::app::AppState;
 use crate::keymap::KeymapStack;
+use crate::ui::components::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::{self, FormRendererState};
-use crate::ui::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{
     ConnectionHookBindings, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
@@ -144,7 +148,7 @@ pub struct ConnectionManagerWindow {
     /// Checkbox states keyed by field ID (e.g., "use_uri" -> true).
     checkbox_states: HashMap<String, bool>,
     selected_ssh_tunnel_id: Option<Uuid>,
-    ssh_tunnel_dropdown: Entity<crate::ui::dropdown::Dropdown>,
+    ssh_tunnel_dropdown: Entity<crate::ui::components::dropdown::Dropdown>,
     input_ssh_host: Entity<InputState>,
     input_ssh_port: Entity<InputState>,
     input_ssh_user: Entity<InputState>,
@@ -827,8 +831,8 @@ impl ConnectionManagerWindow {
         let effective = self.resolve_driver_effective_settings(cx);
 
         let policy_items = vec![
-            crate::ui::dropdown::DropdownItem::with_value("Manual", "manual"),
-            crate::ui::dropdown::DropdownItem::with_value("Interval", "interval"),
+            crate::ui::components::dropdown::DropdownItem::with_value("Manual", "manual"),
+            crate::ui::components::dropdown::DropdownItem::with_value("Interval", "interval"),
         ];
         let policy_index = match overrides.refresh_policy.unwrap_or(effective.refresh_policy) {
             dbflux_core::RefreshPolicySetting::Manual => 0,
@@ -848,9 +852,12 @@ impl ConnectionManagerWindow {
         });
 
         let boolean_items = vec![
-            crate::ui::dropdown::DropdownItem::with_value("Use Driver Default", "default"),
-            crate::ui::dropdown::DropdownItem::with_value("On", "on"),
-            crate::ui::dropdown::DropdownItem::with_value("Off", "off"),
+            crate::ui::components::dropdown::DropdownItem::with_value(
+                "Use Driver Default",
+                "default",
+            ),
+            crate::ui::components::dropdown::DropdownItem::with_value("On", "on"),
+            crate::ui::components::dropdown::DropdownItem::with_value("Off", "off"),
         ];
 
         let bool_index = |opt: Option<bool>| -> usize {
@@ -877,7 +884,9 @@ impl ConnectionManagerWindow {
                 dropdown.set_selected_index(Some(bool_index(overrides.requires_preview)), cx);
             });
 
-        let mut hook_items = vec![crate::ui::dropdown::DropdownItem::with_value("No hook", "")];
+        let mut hook_items = vec![crate::ui::components::dropdown::DropdownItem::with_value(
+            "No hook", "",
+        )];
 
         let mut hook_ids: Vec<String> = self
             .app_state
@@ -887,11 +896,9 @@ impl ConnectionManagerWindow {
             .cloned()
             .collect();
         hook_ids.sort();
-        hook_items.extend(
-            hook_ids
-                .iter()
-                .map(|hook_id| crate::ui::dropdown::DropdownItem::with_value(hook_id, hook_id)),
-        );
+        hook_items.extend(hook_ids.iter().map(|hook_id| {
+            crate::ui::components::dropdown::DropdownItem::with_value(hook_id, hook_id)
+        }));
 
         let (pre_selected, pre_extra) = hook_bindings
             .map(|bindings| Self::split_primary_and_extra(&bindings.pre_connect))
@@ -1306,3 +1313,87 @@ impl ConnectionManagerWindow {
 pub struct DismissEvent;
 
 impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionManagerWindow;
+
+    // --- parse_hook_ids ---
+
+    #[test]
+    fn parse_hook_ids_comma_separated() {
+        let ids = ConnectionManagerWindow::parse_hook_ids("pre-check, lint, deploy");
+        assert_eq!(ids, vec!["pre-check", "lint", "deploy"]);
+    }
+
+    #[test]
+    fn parse_hook_ids_trims_whitespace() {
+        let ids = ConnectionManagerWindow::parse_hook_ids("  a ,  b  , c ");
+        assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_hook_ids_skips_empty() {
+        let ids = ConnectionManagerWindow::parse_hook_ids(",, a ,, b ,,");
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn parse_hook_ids_empty_string() {
+        let ids = ConnectionManagerWindow::parse_hook_ids("");
+        assert!(ids.is_empty());
+    }
+
+    // --- merge_hook_ids ---
+
+    #[test]
+    fn merge_hook_ids_primary_plus_extras() {
+        let result =
+            ConnectionManagerWindow::merge_hook_ids(Some("main".into()), "extra1, extra2".into());
+        assert_eq!(result, vec!["main", "extra1", "extra2"]);
+    }
+
+    #[test]
+    fn merge_hook_ids_deduplicates() {
+        let result = ConnectionManagerWindow::merge_hook_ids(Some("a".into()), "b, a, c".into());
+        assert_eq!(result, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn merge_hook_ids_no_primary() {
+        let result = ConnectionManagerWindow::merge_hook_ids(None, "x, y".into());
+        assert_eq!(result, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn merge_hook_ids_empty_primary_is_skipped() {
+        let result = ConnectionManagerWindow::merge_hook_ids(Some("  ".into()), "a".into());
+        assert_eq!(result, vec!["a"]);
+    }
+
+    // --- split_primary_and_extra ---
+
+    #[test]
+    fn split_primary_and_extra_multiple() {
+        let hooks = vec!["first".into(), "second".into(), "third".into()];
+        let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
+        assert_eq!(primary, "first");
+        assert_eq!(extra, "second, third");
+    }
+
+    #[test]
+    fn split_primary_and_extra_single() {
+        let hooks = vec!["only".into()];
+        let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
+        assert_eq!(primary, "only");
+        assert_eq!(extra, "");
+    }
+
+    #[test]
+    fn split_primary_and_extra_empty() {
+        let hooks: Vec<String> = vec![];
+        let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
+        assert_eq!(primary, "");
+        assert_eq!(extra, "");
+    }
+}

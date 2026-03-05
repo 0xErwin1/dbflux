@@ -1,4 +1,4 @@
-use crate::ui::workspace::Workspace;
+use crate::ui::views::workspace::Workspace;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},

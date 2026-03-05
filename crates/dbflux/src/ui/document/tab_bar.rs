@@ -441,9 +441,9 @@ pub enum TabBarEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        next_actionable_index, prev_actionable_index, TAB_MENU_CLOSE, TAB_MENU_CLOSE_ALL,
-        TAB_MENU_CLOSE_LEFT, TAB_MENU_CLOSE_OTHERS, TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR,
-        TabBar,
+        TAB_MENU_CLOSE, TAB_MENU_CLOSE_ALL, TAB_MENU_CLOSE_LEFT, TAB_MENU_CLOSE_OTHERS,
+        TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, next_actionable_index,
+        prev_actionable_index,
     };
 
     #[test]

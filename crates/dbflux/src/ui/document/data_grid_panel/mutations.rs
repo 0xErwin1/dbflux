@@ -1,7 +1,7 @@
 use super::utils::value_to_json;
 use super::{DataGridPanel, DataSource, PendingDeleteConfirm, PendingToast};
 use crate::ui::components::document_tree::NodeId;
-use crate::ui::toast::ToastExt;
+use crate::ui::components::toast::ToastExt;
 use dbflux_core::{
     CollectionRef, DocumentFilter, DocumentUpdate, Pagination, RowDelete, RowIdentity, RowInsert,
     RowPatch, RowState, TableRef, TaskKind, Value,

@@ -259,10 +259,7 @@ impl Sidebar {
 
         self.refresh_tree(cx);
 
-        let item_id = SchemaNodeId::ConnectionFolder {
-            node_id: folder_id,
-        }
-        .to_string();
+        let item_id = SchemaNodeId::ConnectionFolder { node_id: folder_id }.to_string();
 
         self.select_and_rename_item(&item_id, cx);
     }
@@ -285,10 +282,7 @@ impl Sidebar {
 
         self.refresh_tree(cx);
 
-        let new_item_id = SchemaNodeId::ConnectionFolder {
-            node_id: folder_id,
-        }
-        .to_string();
+        let new_item_id = SchemaNodeId::ConnectionFolder { node_id: folder_id }.to_string();
 
         self.select_and_rename_item(&new_item_id, cx);
     }
@@ -314,7 +308,11 @@ impl Sidebar {
         };
 
         let Some(new_id) = self.app_state.update(cx, |state, cx| {
-            let original = state.profiles().iter().find(|p| p.id == profile_id)?.clone();
+            let original = state
+                .profiles()
+                .iter()
+                .find(|p| p.id == profile_id)?
+                .clone();
 
             let folder_id = state
                 .connection_tree()
@@ -346,10 +344,7 @@ impl Sidebar {
 
         self.refresh_tree(cx);
 
-        let new_item_id = SchemaNodeId::Profile {
-            profile_id: new_id,
-        }
-        .to_string();
+        let new_item_id = SchemaNodeId::Profile { profile_id: new_id }.to_string();
 
         self.select_and_rename_item(&new_item_id, cx);
     }

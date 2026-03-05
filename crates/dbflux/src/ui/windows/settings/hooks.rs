@@ -1,5 +1,5 @@
+use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore, ConnectionHook, HookFailureMode};
 use gpui::prelude::FluentBuilder;
 use gpui::*;

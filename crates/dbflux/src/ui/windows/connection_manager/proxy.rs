@@ -1,4 +1,4 @@
-use crate::ui::dropdown::DropdownSelectionChanged;
+use crate::ui::components::dropdown::DropdownSelectionChanged;
 use dbflux_core::ProxyProfile;
 use gpui::*;
 

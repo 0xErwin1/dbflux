@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::sql_preview_modal::SqlGenerationType;
+use crate::ui::overlays::sql_preview_modal::SqlGenerationType;
 
 impl Sidebar {
     pub(super) fn get_code_generators_for_item(

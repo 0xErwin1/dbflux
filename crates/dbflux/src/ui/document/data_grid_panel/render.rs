@@ -1,9 +1,9 @@
 use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
 use crate::ui::components::data_table::SortState as TableSortState;
+use crate::ui::components::toast::ToastExt;
 use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
-use crate::ui::toast::ToastExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{Pagination, SortDirection, Value};
 use gpui::prelude::FluentBuilder;
@@ -18,7 +18,7 @@ impl Render for DataGridPanel {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
 
-        crate::ui::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
+        crate::ui::components::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
 
         if let Some(requery) = self.pending_requery.take() {
             self.run_table_query(

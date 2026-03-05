@@ -378,13 +378,13 @@ pub enum TabManagerEvent {
         column_names: Vec<String>,
         row_values: Vec<Value>,
         pk_indices: Vec<usize>,
-        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+        generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ids_to_close_left, ids_to_close_others, ids_to_close_right, DocumentId};
+    use super::{DocumentId, ids_to_close_left, ids_to_close_others, ids_to_close_right};
     use uuid::Uuid;
 
     fn make_ids(n: usize) -> Vec<DocumentId> {

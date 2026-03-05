@@ -567,7 +567,7 @@ impl Render for Workspace {
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
                 use crate::ui::components::context_menu as ctx;
-                use crate::ui::sidebar::ContextMenuItem;
+                use crate::ui::views::sidebar::ContextMenuItem;
 
                 let sidebar_entity = self.sidebar.clone();
 

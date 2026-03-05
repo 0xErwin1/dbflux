@@ -329,7 +329,7 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        crate::ui::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
+        crate::ui::components::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
 
         if let Some(item_id) = self.pending_rename_item.take() {
             self.start_rename(&item_id, window, cx);

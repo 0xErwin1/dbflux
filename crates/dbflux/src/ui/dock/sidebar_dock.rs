@@ -1,6 +1,6 @@
 use crate::ui::icons::AppIcon;
-use crate::ui::sidebar::Sidebar;
 use crate::ui::tokens::{Radii, Spacing};
+use crate::ui::views::sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;

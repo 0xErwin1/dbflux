@@ -1,5 +1,5 @@
-use crate::ui::dropdown::Dropdown;
-use crate::ui::toast::ToastExt;
+use crate::ui::components::dropdown::Dropdown;
+use crate::ui::components::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore};
 use gpui::*;
 use gpui_component::ActiveTheme;

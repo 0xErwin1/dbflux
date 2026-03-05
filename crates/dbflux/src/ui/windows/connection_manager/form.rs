@@ -1,5 +1,5 @@
 use crate::ui::components::form_renderer;
-use crate::ui::toast::ToastExt;
+use crate::ui::components::toast::ToastExt;
 use crate::ui::windows::ssh_shared;
 use dbflux_core::{ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig};
 use gpui::*;

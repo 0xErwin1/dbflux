@@ -28,8 +28,8 @@ use ipc_server::IpcServer;
 use log::info;
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
-use ui::command_palette::command_palette_keybindings;
-use ui::workspace::Workspace;
+use ui::overlays::command_palette::command_palette_keybindings;
+use ui::views::workspace::Workspace;
 
 const TASK_CANCEL_TIMEOUT: Duration = Duration::from_millis(2000);
 const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(3000);

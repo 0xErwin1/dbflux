@@ -802,7 +802,7 @@ fn render_rows(
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
-    enum_dropdown: Option<&Entity<crate::ui::dropdown::Dropdown>>,
+    enum_dropdown: Option<&Entity<crate::ui::components::dropdown::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
     total_width: f32,
     theme: &gpui_component::theme::Theme,

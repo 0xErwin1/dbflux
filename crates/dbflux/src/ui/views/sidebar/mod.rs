@@ -64,7 +64,7 @@ pub enum SidebarEvent {
     RequestSqlPreview {
         profile_id: Uuid,
         table_info: TableInfo,
-        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+        generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
     RequestQueryPreview {
         language: QueryLanguage,
@@ -504,7 +504,7 @@ pub struct Sidebar {
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
 }
 
-use crate::ui::toast::PendingToast;
+use crate::ui::components::toast::PendingToast;
 
 struct DeleteConfirmState {
     item_id: String,

@@ -1,4 +1,4 @@
-use crate::ui::toast::ToastExt;
+use crate::ui::components::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore, ServiceConfig};
 use gpui::*;
 use gpui_component::input::InputState;

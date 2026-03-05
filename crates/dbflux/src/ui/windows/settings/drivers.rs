@@ -1,7 +1,7 @@
 use super::{DriverSettingsEntry, SettingsFocus, SettingsWindow};
 use crate::ui::components::form_renderer;
+use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::toast::ToastExt;
 use dbflux_core::{
     AppConfig, AppConfigStore, DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides,
     RefreshPolicySetting,
@@ -350,7 +350,11 @@ impl SettingsWindow {
                 subscriptions.push(cx.subscribe_in(
                     dropdown,
                     window,
-                    |this, _, _: &crate::ui::dropdown::DropdownSelectionChanged, _window, cx| {
+                    |this,
+                     _,
+                     _: &crate::ui::components::dropdown::DropdownSelectionChanged,
+                     _window,
+                     cx| {
                         if this.drv_loading_selected_editor {
                             return;
                         }

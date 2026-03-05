@@ -8,18 +8,20 @@ mod utils;
 use super::result_view::ResultViewMode;
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppState;
-use crate::ui::cell_editor_modal::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
     TableModel,
 };
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
-use crate::ui::document_preview_modal::{
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::components::toast::PendingToast;
+use crate::ui::components::toast::ToastExt;
+use crate::ui::overlays::cell_editor_modal::{
+    CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
+};
+use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
-use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use crate::ui::toast::PendingToast;
-use crate::ui::toast::ToastExt;
 use dbflux_core::{
     CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
     Value,
@@ -131,7 +133,7 @@ pub enum DataGridEvent {
         column_names: Vec<String>,
         row_values: Vec<Value>,
         pk_indices: Vec<usize>,
-        generation_type: crate::ui::sql_preview_modal::SqlGenerationType,
+        generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }
 

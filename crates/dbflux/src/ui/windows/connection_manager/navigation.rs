@@ -1,5 +1,5 @@
 use crate::keymap::{Command, ContextId};
-use crate::ui::dropdown::DropdownItem;
+use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::FormFieldKind;
 use gpui::*;

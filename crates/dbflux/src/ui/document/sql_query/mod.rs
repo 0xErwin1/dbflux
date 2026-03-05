@@ -4,10 +4,10 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::{AppState, AppStateChanged};
 use crate::keymap::{Command, ContextId};
-use crate::ui::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use crate::ui::history_modal::{HistoryModal, HistoryQuerySelected};
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::toast::ToastExt;
+use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,

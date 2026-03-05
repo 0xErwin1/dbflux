@@ -69,7 +69,7 @@ nix run                              # Run directly
 
 ### File Organization
 
-- Never create `mod.rs` files; use `src/some_module.rs` instead
+- Use `mod.rs` for module directories (e.g., `views/mod.rs`, not a sibling `views.rs`)
 - When creating crates, specify library root in `Cargo.toml` with `[lib] path = "..."`
 
 ### Async Patterns

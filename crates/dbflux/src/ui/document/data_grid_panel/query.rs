@@ -1,6 +1,6 @@
 use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
 use crate::ui::components::data_table::SortState as TableSortState;
-use crate::ui::toast::ToastExt;
+use crate::ui::components::toast::ToastExt;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
     QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind,
