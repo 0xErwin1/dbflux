@@ -104,7 +104,7 @@ fn get_tables(&self) -> Vec<TableInfo> // Names only
 fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 ```
 
-**Driver error formatting**: Drivers implement the `ErrorFormatter` trait from `dbflux_core/src/error_formatter.rs` to extract detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. MongoDB extracts error codes and labels. Use structured error formatting instead of raw `format!("{:?}", e)`.
+**Driver error formatting**: Drivers implement the `ErrorFormatter` trait from `dbflux_core/src/core/error_formatter.rs` to extract detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. MongoDB extracts error codes and labels. Use structured error formatting instead of raw `format!("{:?}", e)`.
 
 ## GPUI Guidelines
 
@@ -337,7 +337,7 @@ Key abstractions for UI adaptation:
 - Each hook runs as its own background task with stdout/stderr visible in Tasks panel
 - Failure policies: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
 - Hooks section in Settings for global definitions; Hooks tab in Connection Manager for per-profile bindings
-- Types and logic in `dbflux_core/src/connection_hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
+- Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
 
 ### Adding a New Driver
 
@@ -404,20 +404,20 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/keymap/defaults.rs`                   | Key bindings per context                            |
 | `crates/dbflux/src/keymap/command.rs`                    | Command enum and dispatch                           |
 | `crates/dbflux/src/keymap/focus.rs`                      | FocusTarget (Document/Sidebar/BackgroundTasks)      |
-| `crates/dbflux_core/src/traits.rs`                       | `DbDriver`, `Connection` traits                     |
-| `crates/dbflux_core/src/driver_capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
-| `crates/dbflux_core/src/app_config.rs`                   | External RPC service runtime config (`config.json`) |
-| `crates/dbflux_core/src/error_formatter.rs`              | ErrorFormatter trait for driver errors              |
-| `crates/dbflux_core/src/query_generator.rs`              | QueryGenerator trait, MutationRequest routing       |
-| `crates/dbflux_core/src/connection_hook.rs`              | Hook types, HookRunner, phase orchestration         |
-| `crates/dbflux_core/src/language_service.rs`             | Dangerous query detection (SQL, MongoDB, Redis)     |
-| `crates/dbflux_core/src/schema.rs`                       | Schema types with lazy loading support              |
-| `crates/dbflux_core/src/crud.rs`                         | CRUD mutation types for all database paradigms      |
-| `crates/dbflux_core/src/key_value.rs`                    | Key-value operation types (Hash, Set, List, ZSet)   |
-| `crates/dbflux_core/src/sql_dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
-| `crates/dbflux_core/src/session_store.rs`                | Session persistence (scratch/shadow files, manifest)|
-| `crates/dbflux_core/src/scripts_directory.rs`            | Scripts folder tree (file/folder CRUD)              |
-| `crates/dbflux_core/src/execution_context.rs`            | Per-tab execution context (connection/database)     |
+| `crates/dbflux_core/src/core/traits.rs`                  | `DbDriver`, `Connection` traits                     |
+| `crates/dbflux_core/src/driver/capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
+| `crates/dbflux_core/src/config/app.rs`                   | External RPC service runtime config (`config.json`) |
+| `crates/dbflux_core/src/core/error_formatter.rs`         | ErrorFormatter trait for driver errors              |
+| `crates/dbflux_core/src/query/generator.rs`              | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/connection/hook.rs`              | Hook types, HookRunner, phase orchestration         |
+| `crates/dbflux_core/src/query/language_service.rs`       | Dangerous query detection (SQL, MongoDB, Redis)     |
+| `crates/dbflux_core/src/schema/types.rs`                 | Schema types with lazy loading support              |
+| `crates/dbflux_core/src/data/crud.rs`                    | CRUD mutation types for all database paradigms      |
+| `crates/dbflux_core/src/data/key_value.rs`               | Key-value operation types (Hash, Set, List, ZSet)   |
+| `crates/dbflux_core/src/sql/dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
+| `crates/dbflux_core/src/storage/session.rs`              | Session persistence (scratch/shadow files, manifest)|
+| `crates/dbflux_core/src/config/scripts_directory.rs`     | Scripts folder tree (file/folder CRUD)              |
+| `crates/dbflux_core/src/connection/context.rs`           | Per-tab execution context (connection/database)     |
 | `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
 | `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |
 | `crates/dbflux_driver_mongodb/src/query_generator.rs`    | MongoDB shell query generator                       |

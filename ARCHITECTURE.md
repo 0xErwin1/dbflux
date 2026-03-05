@@ -86,40 +86,65 @@ crates/
       defaults.rs           # Context-aware key bindings
       focus.rs              # FocusTarget enum for panel routing
   dbflux_core/              # Traits, core types, storage, errors
-    src/traits.rs           # DbDriver + Connection traits
-    src/driver_capabilities.rs  # DatabaseCategory, QueryLanguage, DriverCapabilities, DriverMetadata
-    src/driver_form.rs      # Dynamic form definitions per driver
-    src/error_formatter.rs  # ErrorFormatter trait for driver-specific error messages
-    src/profile.rs          # Connection/SSH profiles
-    src/connection_tree.rs  # Folder/connection tree model
-    src/connection_tree_store.rs  # Tree persistence (JSON)
-    src/store.rs            # JsonStore<T> generic with type aliases (profiles, tunnels, proxies)
-    src/history.rs          # History persistence
-    src/saved_query.rs      # Saved queries persistence
-    src/task.rs             # Background task tracking
-    src/schema.rs           # Schema types (tables, collections, indexes, FKs)
-    src/schema_builder.rs   # Builder helpers for schema construction
-    src/crud.rs             # CRUD mutation types for all database paradigms
-    src/key_value.rs        # Key-value operation types (Hash, Set, List, ZSet, Stream)
-    src/query_generator.rs  # QueryGenerator trait and MutationRequest routing
-    src/language_service.rs # Dangerous query detection (SQL, MongoDB, Redis)
-    src/session_store.rs    # Session persistence (scratch/shadow files, manifest)
-    src/scripts_directory.rs # Scripts folder tree (file/folder CRUD)
-    src/execution_context.rs # Per-tab execution context (connection/database/schema)
-    src/proxy.rs            # ProxyProfile, ProxyKind, ProxyAuth, no_proxy matching
-    src/proxy_manager.rs    # ProxyManager (type alias for ItemManager<ProxyProfile>)
-    src/item_manager.rs     # Generic ItemManager<T>, Identifiable, DefaultFilename traits
-    src/connection_hook.rs  # Hook definitions, HookRunner, phase orchestration
-    src/ui_state.rs         # UiStateStore for persisted UI state (sidebar collapse)
-    src/session_facade.rs   # Session facade for connection management
-    src/sql_dialect.rs      # SqlDialect trait for SQL flavor differences
-    src/sql_generation.rs   # SQL INSERT/UPDATE/DELETE generation
-    src/sql_query_builder.rs  # SqlQueryBuilder for safe query construction
-    src/code_generation.rs  # Code generation utilities
-    src/table_browser.rs    # Table browsing state and pagination
-    src/value.rs            # Generic Value type for cross-database data
-    src/data_view.rs        # DataViewMode (Table/Document) abstraction
-    src/app_config.rs       # Runtime config for external RPC services (`config.json`)
+    src/core/               # Fundamental types and traits
+      traits.rs             # DbDriver + Connection traits
+      error.rs              # DbError type
+      error_formatter.rs    # ErrorFormatter trait for driver-specific error messages
+      value.rs              # Generic Value type for cross-database data
+      shutdown.rs           # ShutdownCoordinator
+      task.rs               # Background task tracking
+    src/driver/             # Driver metadata and form definitions
+      capabilities.rs       # DatabaseCategory, QueryLanguage, DriverCapabilities, DriverMetadata
+      form.rs               # Dynamic form definitions per driver
+    src/schema/             # Database schema types
+      types.rs              # Schema types (tables, collections, indexes, FKs)
+      builder.rs            # Builder helpers for schema construction
+      node_id.rs            # SchemaNodeId for tree identification
+    src/sql/                # SQL generation and dialects
+      dialect.rs            # SqlDialect trait for SQL flavor differences
+      generation.rs         # SQL INSERT/UPDATE/DELETE generation
+      query_builder.rs      # SqlQueryBuilder for safe query construction
+      code_generation.rs    # DDL code generation (indexes, types, FKs)
+    src/query/              # Query types and language services
+      types.rs              # QueryRequest, QueryResult, Row, ColumnMeta
+      generator.rs          # QueryGenerator trait and MutationRequest routing
+      language_service.rs   # Dangerous query detection (SQL, MongoDB, Redis)
+      safety.rs             # Safe read query detection
+      table_browser.rs      # Table browsing state and pagination
+    src/connection/         # Connection management and profiles
+      profile.rs            # Connection/SSH profiles
+      profile_manager.rs    # ProfileManager
+      manager.rs            # ConnectionManager, schema caching, connect flow
+      hook.rs               # Hook definitions, HookRunner, phase orchestration
+      tree.rs               # Folder/connection tree model
+      tree_store.rs         # Tree persistence (JSON)
+      tree_manager.rs       # ConnectionTreeManager
+      context.rs            # Per-tab execution context (connection/database/schema)
+      proxy.rs              # ProxyProfile, ProxyKind, ProxyAuth, no_proxy matching
+      proxy_manager.rs      # ProxyManager (type alias for ItemManager<ProxyProfile>)
+      ssh_tunnel_manager.rs # SshTunnelManager
+      item_manager.rs       # Generic ItemManager<T>, Identifiable, DefaultFilename traits
+    src/storage/            # Persistence and state
+      json_store.rs         # JsonStore<T> generic with type aliases (profiles, tunnels, proxies)
+      session.rs            # Session persistence (scratch/shadow files, manifest)
+      history.rs            # History persistence
+      history_manager.rs    # HistoryManager
+      saved_query.rs        # Saved queries persistence
+      saved_query_manager.rs # SavedQueryManager
+      recent_files.rs       # Recent files tracking
+      secrets.rs            # Keyring secret storage
+      secret_manager.rs     # SecretManager with HasSecretRef trait
+      ui_state.rs           # UiStateStore for persisted UI state (sidebar collapse)
+    src/data/               # Data types and operations
+      crud.rs               # CRUD mutation types for all database paradigms
+      key_value.rs          # Key-value operation types (Hash, Set, List, ZSet, Stream)
+      view.rs               # DataViewMode (Table/Document) abstraction
+    src/config/             # Application configuration
+      app.rs                # Runtime config for external RPC services (`config.json`)
+      refresh_policy.rs     # Schema refresh policy
+      scripts_directory.rs  # Scripts folder tree (file/folder CRUD)
+    src/facade/             # Session facade
+      session.rs            # Session facade for connection management
   dbflux_ipc/               # Versioned IPC contracts and framing
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
@@ -186,19 +211,19 @@ crates/
 
 - Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
 - Sidebar dock: `crates/dbflux/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
-- Connection tree: `crates/dbflux_core/src/connection_tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
+- Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
 ### Driver System
 
-- **Driver capabilities**: `crates/dbflux_core/src/driver_capabilities.rs` defines:
+- **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
   - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
   - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, InfluxQuery, CQL (with editor mode, placeholder, comment prefix)
   - `DriverCapabilities`: bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
-- **Error formatting**: `crates/dbflux_core/src/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
-- Core domain API: `crates/dbflux_core/src/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
-- **Query generation**: `crates/dbflux_core/src/query_generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`). The UI accesses generators through `Connection::query_generator()`.
-- Driver forms: `crates/dbflux_core/src/driver_form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
+- **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
+- Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
+- **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`). The UI accesses generators through `Connection::query_generator()`.
+- Driver forms: `crates/dbflux_core/src/driver/form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
 
 ### Tunnel Infrastructure
@@ -214,7 +239,7 @@ crates/
 
 ### Connection Hooks
 
-- `crates/dbflux_core/src/connection_hook.rs` defines reusable hook commands (name, command, args, cwd, env, timeout, failure policy).
+- `crates/dbflux_core/src/connection/hook.rs` defines reusable hook commands (name, command, args, cwd, env, timeout, failure policy).
 - Profile phase bindings: `PreConnect`, `PostConnect`, `PreDisconnect`, `PostDisconnect`.
 - `HookRunner` orchestrates execution with `HookPhaseOutcome` (success/warning/abort).
 - Each hook runs as an external process with stdout/stderr visible in the Tasks panel.
@@ -233,36 +258,36 @@ crates/
 
 - `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, and cross-platform socket naming.
 - `crates/dbflux/src/main.rs` uses app-control IPC for single-instance behavior (`Focus`, `OpenScript`) with protocol-version compatibility checks.
-- `crates/dbflux_core/src/app_config.rs` loads `~/.config/dbflux/config.json` and exposes `rpc_services` runtime configuration.
+- `crates/dbflux_core/src/config/app.rs` loads `~/.config/dbflux/config.json` and exposes `rpc_services` runtime configuration.
 - `crates/dbflux/src/app.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
 - `crates/dbflux_driver_ipc/src/driver.rs` implements `DbDriver` as an RPC proxy and only shuts down managed hosts that DBFlux spawned itself.
 - External connection profiles use `DbConfig::External { kind, values }`, where form values come from the remote `form_definition` returned during `Hello`.
 
 ### SQL Generation
 
-- **SQL dialect**: `crates/dbflux_core/src/sql_dialect.rs` defines `SqlDialect` trait for database-specific SQL syntax (quoting, LIMIT/OFFSET, type mapping).
-- **SQL generation**: `crates/dbflux_core/src/sql_generation.rs` provides INSERT/UPDATE/DELETE statement generation.
-- **Query builder**: `crates/dbflux_core/src/sql_query_builder.rs` offers `SqlQueryBuilder` for safe, parameterized query construction.
+- **SQL dialect**: `crates/dbflux_core/src/sql/dialect.rs` defines `SqlDialect` trait for database-specific SQL syntax (quoting, LIMIT/OFFSET, type mapping).
+- **SQL generation**: `crates/dbflux_core/src/sql/generation.rs` provides INSERT/UPDATE/DELETE statement generation.
+- **Query builder**: `crates/dbflux_core/src/sql/query_builder.rs` offers `SqlQueryBuilder` for safe, parameterized query construction.
 
 ### CRUD Operations
 
-- **Mutation types**: `crates/dbflux_core/src/crud.rs` defines `MutationRequest` enum covering all database paradigms:
+- **Mutation types**: `crates/dbflux_core/src/data/crud.rs` defines `MutationRequest` enum covering all database paradigms:
   - SQL: INSERT/UPDATE/DELETE with WHERE clauses
   - Document: insertOne/updateOne/deleteOne/deleteMany
   - Key-Value: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD and their remove counterparts, plus STREAM_ADD
-- **Key-value types**: `crates/dbflux_core/src/key_value.rs` defines Vec-based request structs for variadic Redis commands (e.g., `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
-- **Query safety**: `crates/dbflux_core/src/language_service.rs` detects dangerous queries across all languages (SQL DELETE/DROP/TRUNCATE, MongoDB deleteMany/drop, Redis FLUSHALL/FLUSHDB/KEYS) and prompts for confirmation before execution.
+- **Key-value types**: `crates/dbflux_core/src/data/key_value.rs` defines Vec-based request structs for variadic Redis commands (e.g., `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
+- **Query safety**: `crates/dbflux_core/src/query/language_service.rs` detects dangerous queries across all languages (SQL DELETE/DROP/TRUNCATE, MongoDB deleteMany/drop, Redis FLUSHALL/FLUSHDB/KEYS) and prompts for confirmation before execution.
 
 ### Storage & Configuration
 
-- Profiles + secrets: `crates/dbflux_core/src/profile.rs` and `crates/dbflux_core/src/secrets.rs` define connection/SSH/proxy profiles and keyring integration.
-- Generic stores: `crates/dbflux_core/src/store.rs` provides `JsonStore<T>` with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). `ItemManager<T>` in `item_manager.rs` adds CRUD + auto-save; `ProxyManager` and `SshTunnelManager` are type aliases.
+- Profiles + secrets: `crates/dbflux_core/src/connection/profile.rs` and `crates/dbflux_core/src/storage/secrets.rs` define connection/SSH/proxy profiles and keyring integration.
+- Generic stores: `crates/dbflux_core/src/storage/json_store.rs` provides `JsonStore<T>` with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). `ItemManager<T>` in `connection/item_manager.rs` adds CRUD + auto-save; `ProxyManager` and `SshTunnelManager` are type aliases.
 - Secret management: `SecretManager` uses `HasSecretRef` trait for generic keyring operations across SSH tunnels and proxy profiles.
-- Storage: `crates/dbflux_core/src/history.rs` and `crates/dbflux_core/src/saved_query.rs` persist JSON data in the config dir.
-- Session persistence: `crates/dbflux_core/src/session_store.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
-- UI state: `crates/dbflux_core/src/ui_state.rs` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
-- Scripts directory: `crates/dbflux_core/src/scripts_directory.rs` manages a user scripts folder with file/folder CRUD, import, and move operations.
-- Execution context: `crates/dbflux_core/src/execution_context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
+- Storage: `crates/dbflux_core/src/storage/history.rs` and `crates/dbflux_core/src/storage/saved_query.rs` persist JSON data in the config dir.
+- Session persistence: `crates/dbflux_core/src/storage/session.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
+- UI state: `crates/dbflux_core/src/storage/ui_state.rs` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
+- Scripts directory: `crates/dbflux_core/src/config/scripts_directory.rs` manages a user scripts folder with file/folder CRUD, import, and move operations.
+- Execution context: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
 - History modal: `crates/dbflux/src/ui/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 
 ### Driver Implementations
@@ -304,8 +329,8 @@ crates/
 - Query preview: `SqlPreviewModal` operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/workspace.rs).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
-- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/history.rs).
-- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (crates/dbflux_core/src/saved_query.rs).
+- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/storage/history.rs).
+- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (crates/dbflux_core/src/storage/saved_query.rs).
 
 ## Keyboard & Focus Architecture
 
@@ -326,7 +351,7 @@ crates/
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and external driver communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`).
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
 - SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
-- OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/secrets.rs).
+- OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/storage/secrets.rs).
 - Export: shape-based multi-format export — CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64) via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 
 ## Configuration
@@ -334,16 +359,16 @@ crates/
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
 - Runtime data (config dir via `dirs::config_dir`):
-  - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/app_config.rs).
-  - `profiles.json`, `ssh_tunnels.json`, and `proxies.json` (crates/dbflux_core/src/store.rs).
-  - `history.json` for query history (crates/dbflux_core/src/history.rs).
-  - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/saved_query.rs).
+  - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/config/app.rs).
+  - `profiles.json`, `ssh_tunnels.json`, and `proxies.json` (crates/dbflux_core/src/storage/json_store.rs).
+  - `history.json` for query history (crates/dbflux_core/src/storage/history.rs).
+  - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/storage/saved_query.rs).
 - Session data (data dir via `dirs::data_dir`):
-  - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/session_store.rs).
-  - `sessions/*.sql` scratch and shadow files for auto-save (crates/dbflux_core/src/session_store.rs).
-  - `scripts/` user scripts folder (crates/dbflux_core/src/scripts_directory.rs).
-  - `state.json` persisted UI state — sidebar collapse, etc. (crates/dbflux_core/src/ui_state.rs).
-- Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/secrets.rs, crates/dbflux_core/src/secret_manager.rs).
+  - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/storage/session.rs).
+  - `sessions/*.sql` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
+  - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
+  - `state.json` persisted UI state — sidebar collapse, etc. (crates/dbflux_core/src/storage/ui_state.rs).
+- Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build & Deploy
 
