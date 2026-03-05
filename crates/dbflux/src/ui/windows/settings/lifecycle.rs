@@ -1157,31 +1157,31 @@ impl SettingsWindow {
                 }
                 cx.notify();
             }
-            ("g", m) if m == Modifiers::none() => {
-                if self.focus_area == SettingsFocus::Content
-                    && self.active_section == SettingsSection::Keybindings
-                {
-                    let first = self.first_visible_context(cx);
-                    self.keybindings_selection = KeybindingsSelection::Context(first);
-                    self.keybindings_pending_scroll = Some(0);
-                    cx.notify();
-                }
+            ("g", m)
+                if m == Modifiers::none()
+                    && self.focus_area == SettingsFocus::Content
+                    && self.active_section == SettingsSection::Keybindings =>
+            {
+                let first = self.first_visible_context(cx);
+                self.keybindings_selection = KeybindingsSelection::Context(first);
+                self.keybindings_pending_scroll = Some(0);
+                cx.notify();
             }
-            ("g", m) if m == Modifiers::shift() => {
-                if self.focus_area == SettingsFocus::Content
-                    && self.active_section == SettingsSection::Keybindings
-                {
-                    let last = self.last_visible_context(cx);
-                    let binding_count = self.get_visible_binding_count(last, cx);
-                    if binding_count > 0 {
-                        self.keybindings_selection =
-                            KeybindingsSelection::Binding(last, binding_count - 1);
-                    } else {
-                        self.keybindings_selection = KeybindingsSelection::Context(last);
-                    }
-                    self.keybindings_pending_scroll = Some(self.keybindings_flat_index(cx));
-                    cx.notify();
+            ("g", m)
+                if m == Modifiers::shift()
+                    && self.focus_area == SettingsFocus::Content
+                    && self.active_section == SettingsSection::Keybindings =>
+            {
+                let last = self.last_visible_context(cx);
+                let binding_count = self.get_visible_binding_count(last, cx);
+                if binding_count > 0 {
+                    self.keybindings_selection =
+                        KeybindingsSelection::Binding(last, binding_count - 1);
+                } else {
+                    self.keybindings_selection = KeybindingsSelection::Context(last);
                 }
+                self.keybindings_pending_scroll = Some(self.keybindings_flat_index(cx));
+                cx.notify();
             }
             ("enter", m) | ("space", m) if m == Modifiers::none() => {
                 if self.focus_area == SettingsFocus::Sidebar {
@@ -1211,20 +1211,21 @@ impl SettingsWindow {
                 }
                 cx.notify();
             }
-            ("/", m) | ("f", m) if m == Modifiers::none() => {
-                if self.active_section == SettingsSection::Keybindings {
-                    self.keybindings_editing_filter = true;
-                    self.keybindings_filter.update(cx, |state, cx| {
-                        state.focus(window, cx);
-                    });
-                    cx.notify();
-                }
+            ("/", m) | ("f", m)
+                if m == Modifiers::none()
+                    && self.active_section == SettingsSection::Keybindings =>
+            {
+                self.keybindings_editing_filter = true;
+                self.keybindings_filter.update(cx, |state, cx| {
+                    state.focus(window, cx);
+                });
+                cx.notify();
             }
-            ("escape", m) if m == Modifiers::none() => {
-                if self.focus_area == SettingsFocus::Content {
-                    self.focus_sidebar();
-                    cx.notify();
-                }
+            ("escape", m)
+                if m == Modifiers::none() && self.focus_area == SettingsFocus::Content =>
+            {
+                self.focus_sidebar();
+                cx.notify();
             }
 
             _ => {}
