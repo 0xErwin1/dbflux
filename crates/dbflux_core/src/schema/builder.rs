@@ -1,4 +1,4 @@
-use crate::schema::{ForeignKeyInfo, IndexInfo, SchemaForeignKeyInfo, SchemaIndexInfo};
+use crate::schema::types::{ForeignKeyInfo, IndexInfo, SchemaForeignKeyInfo, SchemaIndexInfo};
 use std::collections::HashMap;
 
 /// Builder for grouping FK rows by constraint name into ForeignKeyInfo structs.

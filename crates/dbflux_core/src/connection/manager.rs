@@ -1155,7 +1155,9 @@ impl ConnectProfileParams {
                 .profile
                 .no_proxy
                 .as_deref()
-                .is_some_and(|patterns| crate::proxy::host_matches_no_proxy(host, patterns));
+                .is_some_and(|patterns| {
+                    crate::connection::proxy::host_matches_no_proxy(host, patterns)
+                });
 
             if should_bypass {
                 info!("Bypassing proxy for '{}' (no_proxy match)", profile.name);

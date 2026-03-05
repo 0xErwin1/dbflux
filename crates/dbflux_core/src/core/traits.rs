@@ -9,15 +9,15 @@ use crate::{
     NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
     SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
-    app_config::DriverKey,
-    key_value::{
+    config::DriverKey,
+    data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
         KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest,
         KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest,
         ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
-    query_generator::QueryGenerator,
+    query::generator::QueryGenerator,
 };
 
 bitflags! {

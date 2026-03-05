@@ -1,6 +1,6 @@
 use crate::Value;
-use crate::crud::{RecordIdentity, RowDelete, RowInsert, RowPatch};
-use crate::sql_dialect::SqlDialect;
+use crate::data::crud::{RecordIdentity, RowDelete, RowInsert, RowPatch};
+use crate::sql::dialect::SqlDialect;
 
 /// Builds CRUD SQL statements using a specific dialect.
 pub struct SqlQueryBuilder<'a> {
@@ -189,7 +189,7 @@ impl<'a> SqlQueryBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql_dialect::DefaultSqlDialect;
+    use crate::sql::dialect::DefaultSqlDialect;
 
     #[test]
     fn test_build_where_clause() {

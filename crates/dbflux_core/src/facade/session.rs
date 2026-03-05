@@ -1,11 +1,11 @@
-use crate::connection_manager::ConnectionManager;
-use crate::connection_tree_manager::ConnectionTreeManager;
-use crate::history_manager::HistoryManager;
-use crate::profile_manager::ProfileManager;
-use crate::proxy_manager::ProxyManager;
-use crate::saved_query_manager::SavedQueryManager;
-use crate::secret_manager::SecretManager;
-use crate::ssh_tunnel_manager::SshTunnelManager;
+use crate::connection::manager::ConnectionManager;
+use crate::connection::profile_manager::ProfileManager;
+use crate::connection::proxy_manager::ProxyManager;
+use crate::connection::ssh_tunnel_manager::SshTunnelManager;
+use crate::connection::tree_manager::ConnectionTreeManager;
+use crate::storage::history_manager::HistoryManager;
+use crate::storage::saved_query_manager::SavedQueryManager;
+use crate::storage::secret_manager::SecretManager;
 use crate::{
     ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
     TaskManager, create_secret_store,

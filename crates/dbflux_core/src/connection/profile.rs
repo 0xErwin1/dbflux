@@ -1,6 +1,6 @@
-use crate::app_config::GlobalOverrides;
-use crate::connection_hook::{ConnectionHookBindings, ConnectionHooks};
-use crate::driver_form::FormValues;
+use crate::config::app::GlobalOverrides;
+use crate::connection::hook::{ConnectionHookBindings, ConnectionHooks};
+use crate::driver::form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -102,7 +102,7 @@ impl SshTunnelProfile {
     }
 
     pub fn secret_ref(&self) -> String {
-        crate::secrets::ssh_tunnel_secret_ref(&self.id)
+        crate::storage::secrets::ssh_tunnel_secret_ref(&self.id)
     }
 }
 
@@ -517,11 +517,11 @@ impl ConnectionProfile {
     }
 
     pub fn secret_ref(&self) -> String {
-        crate::secrets::connection_secret_ref(&self.id)
+        crate::storage::secrets::connection_secret_ref(&self.id)
     }
 
     pub fn ssh_secret_ref(&self) -> String {
-        crate::secrets::ssh_secret_ref(&self.id)
+        crate::storage::secrets::ssh_secret_ref(&self.id)
     }
 }
 
@@ -529,8 +529,8 @@ impl ConnectionProfile {
 mod tests {
     use super::*;
     use crate::RefreshPolicySetting;
-    use crate::app_config::GlobalOverrides;
-    use crate::driver_form::FormValues;
+    use crate::config::app::GlobalOverrides;
+    use crate::driver::form::FormValues;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())

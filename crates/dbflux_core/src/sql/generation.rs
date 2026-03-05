@@ -1,6 +1,6 @@
 use crate::Value;
-use crate::schema::{ColumnInfo, TableInfo};
-use crate::sql_dialect::{PlaceholderStyle, SqlDialect};
+use crate::schema::types::{ColumnInfo, TableInfo};
+use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
 
 /// Type of SQL statement to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

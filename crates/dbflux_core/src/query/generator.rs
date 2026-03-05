@@ -1,7 +1,7 @@
-use crate::crud::MutationRequest;
-use crate::driver_capabilities::QueryLanguage;
-use crate::sql_dialect::SqlDialect;
-use crate::sql_query_builder::SqlQueryBuilder;
+use crate::data::crud::MutationRequest;
+use crate::driver::capabilities::QueryLanguage;
+use crate::sql::dialect::SqlDialect;
+use crate::sql::query_builder::SqlQueryBuilder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MutationCategory {

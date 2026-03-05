@@ -1,4 +1,4 @@
-use crate::key_value::KeyType;
+use crate::data::key_value::KeyType;
 use serde::{Deserialize, Serialize};
 
 /// Information about a database on the server.

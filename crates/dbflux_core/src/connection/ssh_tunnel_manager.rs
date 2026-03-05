@@ -1,5 +1,5 @@
 use crate::SshTunnelProfile;
-use crate::item_manager::{DefaultFilename, ItemManager};
+use crate::connection::item_manager::{DefaultFilename, ItemManager};
 
 pub type SshTunnelManager = ItemManager<SshTunnelProfile>;
 

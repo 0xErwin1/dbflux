@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Row, Value,
-    key_value::{
+    data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeySetRequest, ListPushRequest,
         ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
         StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,

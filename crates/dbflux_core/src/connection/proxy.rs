@@ -86,7 +86,7 @@ impl ProxyProfile {
     }
 
     pub fn secret_ref(&self) -> String {
-        crate::secrets::proxy_secret_ref(&self.id)
+        crate::storage::secrets::proxy_secret_ref(&self.id)
     }
 
     /// Full proxy URL with credentials. Do not log — may contain a password.

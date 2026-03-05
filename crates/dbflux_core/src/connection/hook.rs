@@ -1,5 +1,5 @@
-use crate::profile::{ConnectionProfile, DbConfig};
-use crate::task::CancelToken;
+use crate::connection::profile::{ConnectionProfile, DbConfig};
+use crate::core::task::CancelToken;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -515,7 +515,7 @@ impl HookRunner {
 mod tests {
     use super::*;
     use crate::AppConfig;
-    use crate::profile::{ConnectionProfile, DbConfig};
+    use crate::connection::profile::{ConnectionProfile, DbConfig};
 
     // =========================================================================
     // Helpers
