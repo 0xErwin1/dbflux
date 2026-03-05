@@ -4,7 +4,7 @@
 
 | Element                   | Convention           | Examples                                    | References                                                      |
 | ------------------------- | -------------------- | ------------------------------------------- | --------------------------------------------------------------- |
-| Types (struct/enum/trait) | PascalCase           | `ConnectionProfile`, `DbKind`               | crates/dbflux_core/src/profile.rs                               |
+| Types (struct/enum/trait) | PascalCase           | `ConnectionProfile`, `DbKind`               | crates/dbflux_core/src/connection/profile.rs                               |
 | Functions/methods         | snake_case           | `prepare_connect_profile`, `refresh_schema` | crates/dbflux/src/app.rs, crates/dbflux/src/ui/workspace.rs     |
 | Fields/locals             | snake_case           | `active_connection_id`, `pending_command`   | crates/dbflux/src/app.rs, crates/dbflux/src/ui/workspace.rs     |
 | Constants                 | UPPER_SNAKE_CASE     | `MAX_VISIBLE`, `ROW_COMPACT`                | crates/dbflux/src/ui/history.rs, crates/dbflux/src/ui/tokens.rs |
@@ -13,7 +13,7 @@
 ## File Organization
 
 - Workspace crates live under `crates/`, with UI in `crates/dbflux/` and shared domain logic in `crates/dbflux_core/` (Cargo.toml).
-- Each module is a dedicated file (no `mod.rs`); submodules are declared in the parent file (AGENTS.md, crates/dbflux/src/ui/mod.rs).
+- Module directories use `mod.rs` (e.g., `core/mod.rs`). `dbflux_core` is organized into thematic subdirectories: `core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`.
 - UI is organized by pane, window, and component in `crates/dbflux/src/ui/` (workspace, sidebar, editor, dock, document, windows, components).
 - Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`, `crates/dbflux_tunnel_core/`, `crates/dbflux_proxy/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`, `crates/dbflux_test_support/`).
 
@@ -28,21 +28,21 @@
 - GPUI entities: stateful UI pieces are `Entity<T>` values; updates use `entity.update(cx, |state, cx| { ... })` (crates/dbflux/src/ui/workspace.rs).
 - Background work: use `cx.background_executor().spawn(...)` for DB/IO, then `cx.spawn(...).update(...)` to re-enter UI thread (crates/dbflux/src/ui/workspace.rs).
 - Feature gating: drivers are compiled via `#[cfg(feature = "sqlite")]` / `#[cfg(feature = "postgres")]` (crates/dbflux/src/app.rs).
-- External RPC drivers are registered with `rpc:<socket_id>` keys and use `DbConfig::External { kind, values }` for persisted profile config (crates/dbflux/src/app.rs, crates/dbflux_core/src/profile.rs).
+- External RPC drivers are registered with `rpc:<socket_id>` keys and use `DbConfig::External { kind, values }` for persisted profile config (crates/dbflux/src/app.rs, crates/dbflux_core/src/connection/profile.rs).
 - RPC protocol schemas and DTO conversions stay in `dbflux_ipc`; transport/client logic stays in `dbflux_driver_ipc` (crates/dbflux_ipc/src/driver_protocol.rs, crates/dbflux_driver_ipc/src/transport.rs).
-- Default constructors and helpers use `new`/`default_*` naming (crates/dbflux_core/src/profile.rs, crates/dbflux_core/src/query.rs).
-- Results and metadata are plain structs/enums with small helper methods (crates/dbflux_core/src/query.rs, crates/dbflux_core/src/schema.rs).
-- Generic store/manager: `JsonStore<T>` provides file persistence; type aliases (`ProfileStore`, `ProxyStore`) use named constructors (`.profiles()`, `.proxies()`). `ItemManager<T>` adds CRUD + auto-save; concrete managers are type aliases with `DefaultFilename` for `Default` impl (crates/dbflux_core/src/store.rs, crates/dbflux_core/src/item_manager.rs).
-- Trait-based deduplication: `HasSecretRef` unifies keyring operations, `Identifiable` unifies ID access. Prefer a shared trait + generic method over per-type copy-paste (crates/dbflux_core/src/secret_manager.rs, crates/dbflux_core/src/item_manager.rs).
-- Callback injection for cross-crate boundaries: `CreateTunnelFn` avoids circular dependency by defining a function signature in `dbflux_core` and supplying the real implementation from the app crate (crates/dbflux_core/src/connection_manager.rs, crates/dbflux/src/proxy.rs).
+- Default constructors and helpers use `new`/`default_*` naming (crates/dbflux_core/src/connection/profile.rs, crates/dbflux_core/src/query/types.rs).
+- Results and metadata are plain structs/enums with small helper methods (crates/dbflux_core/src/query/types.rs, crates/dbflux_core/src/schema/types.rs).
+- Generic store/manager: `JsonStore<T>` provides file persistence; type aliases (`ProfileStore`, `ProxyStore`) use named constructors (`.profiles()`, `.proxies()`). `ItemManager<T>` adds CRUD + auto-save; concrete managers are type aliases with `DefaultFilename` for `Default` impl (crates/dbflux_core/src/storage/json_store.rs, crates/dbflux_core/src/connection/item_manager.rs).
+- Trait-based deduplication: `HasSecretRef` unifies keyring operations, `Identifiable` unifies ID access. Prefer a shared trait + generic method over per-type copy-paste (crates/dbflux_core/src/storage/secret_manager.rs, crates/dbflux_core/src/connection/item_manager.rs).
+- Callback injection for cross-crate boundaries: `CreateTunnelFn` avoids circular dependency by defining a function signature in `dbflux_core` and supplying the real implementation from the app crate (crates/dbflux_core/src/connection/manager.rs, crates/dbflux/src/proxy.rs).
 - Reusable navigation components: `TreeNav` (plain struct, not Entity) for tree navigation; `FormGridNav<F>` for 2D grid form navigation. Both take dynamic state as input rather than storing it (crates/dbflux/src/ui/components/tree_nav.rs, crates/dbflux/src/ui/windows/settings/form_nav.rs).
 
 ## Error Handling
 
-- Domain errors use `DbError` and `Result<T, DbError>` (crates/dbflux_core/src/error.rs, crates/dbflux_core/src/traits.rs).
+- Domain errors use `DbError` and `Result<T, DbError>` (crates/dbflux_core/src/core/error.rs, crates/dbflux_core/src/core/traits.rs).
 - App-level operations log failures and continue with fallback state (crates/dbflux/src/app.rs).
 - Avoid panics; use `?`, `map_err`, and logged errors. Panics only appear in startup `expect` calls (crates/dbflux/src/main.rs).
-- Cancellation and unsupported features return explicit errors (crates/dbflux_core/src/traits.rs).
+- Cancellation and unsupported features return explicit errors (crates/dbflux_core/src/core/traits.rs).
 
 ## Logging
 
@@ -64,7 +64,7 @@
 - Do refactor and modularize functions that grow beyond ~100 lines; treat this as a design smell.
 - Do use abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt UI behavior instead of driver-specific conditionals.
 - Do treat external service `Hello` metadata/form definition as the source of truth for RPC drivers.
-- Don't create `mod.rs` files; declare modules directly in `src/*.rs` (AGENTS.md).
+- Do use `mod.rs` for module directories (e.g., `core/mod.rs`, not a sibling `core.rs`) (AGENTS.md).
 - Don't use deprecated GPUI types (`Model<T>`, `View<T>`, etc.) (AGENTS.md).
 - Don't add driver-specific logic in UI code (e.g., `if driver == "mongodb"`). Use capability flags and metadata from `DriverMetadata` instead.
 - Don't import driver crates directly in UI code. All driver interaction goes through `dbflux_core` traits.
