@@ -23,8 +23,17 @@ env:
   FEATURES: "sqlite,postgres,mysql,mongodb,redis"
 
 jobs:
+  tests:
+    name: Tests
+    uses: ./.github/workflows/tests.yml
+
+  style:
+    name: Style
+    uses: ./.github/workflows/style.yml
+
   build-linux:
     name: Build Linux ${{ matrix.arch }}
+    needs: [tests, style]
     runs-on: ${{ matrix.runs_on }}
 
     strategy:
@@ -202,6 +211,7 @@ jobs:
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}
+    needs: [tests, style]
     runs-on: ${{ matrix.runs_on }}
 
     strategy:
@@ -328,6 +338,7 @@ jobs:
 
   build-windows:
     name: Build Windows amd64
+    needs: [tests, style]
     runs-on: windows-latest
 
     steps:
