@@ -2106,10 +2106,8 @@ fn fetch_foreign_keys(
             row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> =
-            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
-        let on_update: Option<String> =
-            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
+        let on_delete: Option<String> = row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> = row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             constraint_name,
@@ -2287,10 +2285,8 @@ fn fetch_constraints(
         .filter_map(|row| {
             let name: String = row.get("CONSTRAINT_NAME")?;
             let constraint_type: String = row.get("CONSTRAINT_TYPE")?;
-            let columns_str: Option<String> =
-                row.get_opt("COLUMNS").and_then(|r| r.ok());
-            let check_clause: Option<String> =
-                row.get_opt("CHECK_CLAUSE").and_then(|r| r.ok());
+            let columns_str: Option<String> = row.get_opt("COLUMNS").and_then(|r| r.ok());
+            let check_clause: Option<String> = row.get_opt("CHECK_CLAUSE").and_then(|r| r.ok());
 
             let kind = match constraint_type.as_str() {
                 "UNIQUE" => ConstraintKind::Unique,
@@ -2334,8 +2330,7 @@ fn fetch_schema_indexes(conn: &mut Conn, database: &str) -> Result<Vec<SchemaInd
         .filter_map(|row| {
             let name: String = row.get("INDEX_NAME")?;
             let table_name: String = row.get("TABLE_NAME")?;
-            let columns_str: Option<String> =
-                row.get_opt("COLUMNS").and_then(|r| r.ok());
+            let columns_str: Option<String> = row.get_opt("COLUMNS").and_then(|r| r.ok());
             let non_unique: i32 = row.get("NON_UNIQUE").unwrap_or(1);
 
             let columns: Vec<String> = columns_str?
@@ -2393,10 +2388,8 @@ fn fetch_schema_foreign_keys(
             row.get_opt("REFERENCED_TABLE_SCHEMA").and_then(|r| r.ok());
         let ref_table: String = row.get("REFERENCED_TABLE_NAME").unwrap_or_default();
         let ref_column: String = row.get("REFERENCED_COLUMN_NAME").unwrap_or_default();
-        let on_delete: Option<String> =
-            row.get_opt("DELETE_RULE").and_then(|r| r.ok());
-        let on_update: Option<String> =
-            row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
+        let on_delete: Option<String> = row.get_opt("DELETE_RULE").and_then(|r| r.ok());
+        let on_update: Option<String> = row.get_opt("UPDATE_RULE").and_then(|r| r.ok());
 
         builder.add_column(
             table_name,
