@@ -27,11 +27,12 @@ fn connect_redis(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbErro
         },
     );
 
-    let connection = containers::retry_db_operation(Duration::from_secs(30), || {
-        let connection = driver.connect(&profile)?;
-        connection.ping()?;
-        Ok(connection)
-    })?;
+    let connection =
+        containers::retry_db_operation(Duration::from_secs(30), || -> Result<_, DbError> {
+            let connection = driver.connect(&profile)?;
+            connection.ping()?;
+            Ok(connection)
+        })?;
 
     Ok(connection)
 }
