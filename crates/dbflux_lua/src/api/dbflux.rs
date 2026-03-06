@@ -97,6 +97,22 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     let cwd = read_optional_string(&options, "cwd")?;
     let stream_output = read_optional_bool(&options, "stream")?.unwrap_or(false);
 
+    if state.cancel_token.is_cancelled()
+        || state
+            .parent_cancel_token
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        return Err(mlua::Error::RuntimeError("Lua hook cancelled".to_string()));
+    }
+
+    if state
+        .hook_timeout
+        .is_some_and(|limit| state.hook_started_at.elapsed() >= limit)
+    {
+        return Err(mlua::Error::RuntimeError("Lua hook timed out".to_string()));
+    }
+
     ensure_program_allowed(&program, &allowlist)?;
 
     let mut command = Command::new(&program);
@@ -126,10 +142,9 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         mlua::Error::RuntimeError(format!("Failed to spawn process '{program}': {error}"))
     })?;
 
-    let hook_timeout_remaining = state.hook_timeout.and_then(|limit| {
-        let elapsed = state.hook_started_at.elapsed();
-        (elapsed < limit).then_some(limit - elapsed)
-    });
+    let hook_timeout_remaining = state
+        .hook_timeout
+        .map(|limit| limit.saturating_sub(state.hook_started_at.elapsed()));
 
     let output = stream_output.then_some(()).and(state.output.as_ref());
 
@@ -274,6 +289,111 @@ fn append_log(state: &LuaRuntimeState, stream: OutputStreamKind, message: String
         .push(message.clone());
 
     if let Some(output) = &state.output {
-        let _ = output.send(OutputEvent::new(stream, message));
+        let _ = output.send(OutputEvent::new(stream, format!("{message}\n")));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::hook::LuaHookOutcome;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Instant;
+
+    fn test_state(
+        hook_timeout: Option<Duration>,
+        hook_started_at: Instant,
+        output: Option<dbflux_core::OutputSender>,
+    ) -> LuaRuntimeState {
+        LuaRuntimeState {
+            outcome: Arc::new(Mutex::new(LuaHookOutcome::Ok)),
+            log_buffer: Arc::new(Mutex::new(Vec::new())),
+            output,
+            cancel_token: dbflux_core::CancelToken::new(),
+            parent_cancel_token: None,
+            hook_started_at,
+            hook_timeout,
+        }
+    }
+
+    fn python_program() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "python"
+        } else {
+            "python3"
+        }
+    }
+
+    fn process_options(lua: &Lua, program: &str) -> LuaResult<Table> {
+        let options = lua.create_table()?;
+        options.set("program", program)?;
+        options.set("allowlist", "python_cli")?;
+        Ok(options)
+    }
+
+    #[test]
+    fn run_process_rejects_expired_hook_timeout_before_spawn() {
+        let lua = Lua::new();
+        let options = process_options(&lua, python_program()).unwrap();
+        let state = test_state(
+            Some(Duration::from_millis(1)),
+            Instant::now() - Duration::from_secs(1),
+            None,
+        );
+
+        let error = run_process(&lua, &state, options).unwrap_err().to_string();
+
+        assert!(error.contains("timed out"));
+    }
+
+    #[test]
+    fn append_log_keeps_buffer_plain_but_streams_newline() {
+        let (sender, receiver) = dbflux_core::output_channel();
+        let state = test_state(None, Instant::now(), Some(sender));
+
+        append_log(&state, OutputStreamKind::Log, "hello-log".to_string());
+
+        let buffered = state.log_buffer.lock().unwrap().clone();
+        let event = receiver.try_recv().unwrap();
+
+        assert_eq!(buffered, vec!["hello-log"]);
+        assert_eq!(event.stream, OutputStreamKind::Log);
+        assert_eq!(event.text, "hello-log\n");
+    }
+
+    #[test]
+    fn run_process_cancellation_streams_partial_stdout_and_stderr() {
+        let lua = Lua::new();
+        let (sender, receiver) = dbflux_core::output_channel();
+        let state = test_state(None, Instant::now(), Some(sender));
+        let options = process_options(&lua, python_program()).unwrap();
+        let args = lua.create_table().unwrap();
+
+        args.set(1, "-c").unwrap();
+        args.set(
+            2,
+            "import sys, time; sys.stdout.write('out'); sys.stdout.flush(); sys.stderr.write('err'); sys.stderr.flush(); time.sleep(5)",
+        )
+        .unwrap();
+        options.set("args", args).unwrap();
+        options.set("stream", true).unwrap();
+
+        let cancel_token = state.cancel_token.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            cancel_token.cancel();
+        });
+
+        let error = run_process(&lua, &state, options).unwrap_err().to_string();
+        let events: Vec<_> = receiver.try_iter().collect();
+
+        assert!(error.contains("cancelled"));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stdout && event.text.contains("out")
+        }));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stderr && event.text.contains("err")
+        }));
     }
 }

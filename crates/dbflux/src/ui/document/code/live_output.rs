@@ -1,15 +1,11 @@
 use dbflux_core::{OutputEvent, OutputReceiver, OutputStreamKind};
 use std::sync::mpsc::TryRecvError;
 
-#[derive(Clone)]
-struct OutputLine {
-    stream: OutputStreamKind,
-    text: String,
-}
-
 pub(super) struct LiveOutputState {
     receiver: OutputReceiver,
-    lines: Vec<OutputLine>,
+    rendered_text: String,
+    line_count: usize,
+    has_stderr: bool,
     truncated: bool,
     disconnected: bool,
 }
@@ -21,7 +17,9 @@ impl LiveOutputState {
     pub(super) fn new(receiver: OutputReceiver) -> Self {
         Self {
             receiver,
-            lines: Vec::new(),
+            rendered_text: String::new(),
+            line_count: 0,
+            has_stderr: false,
             truncated: false,
             disconnected: false,
         }
@@ -38,6 +36,10 @@ impl LiveOutputState {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    if !self.disconnected {
+                        changed = true;
+                    }
+
                     self.disconnected = true;
                     break;
                 }
@@ -48,9 +50,7 @@ impl LiveOutputState {
     }
 
     pub(super) fn has_stderr(&self) -> bool {
-        self.lines
-            .iter()
-            .any(|line| matches!(line.stream, OutputStreamKind::Stderr))
+        self.has_stderr
     }
 
     pub(super) fn is_finished(&self) -> bool {
@@ -62,53 +62,67 @@ impl LiveOutputState {
     }
 
     pub(super) fn line_count(&self) -> usize {
-        self.lines.len()
+        self.line_count
     }
 
     pub(super) fn render_text(&self) -> String {
-        if self.lines.is_empty() {
+        if self.rendered_text.is_empty() {
             Self::WAITING_PLACEHOLDER.to_string()
         } else {
-            self.lines.iter().map(|line| line.text.as_str()).collect()
+            self.rendered_text.clone()
         }
     }
 
     fn push_event(&mut self, event: OutputEvent) {
-        if self.truncated {
+        if self.truncated || event.text.is_empty() {
             return;
         }
 
-        let mut start = 0;
-
-        for (index, ch) in event.text.char_indices() {
-            if ch != '\n' {
-                continue;
-            }
-
-            self.push_line(event.stream, &event.text[start..=index]);
-            start = index + 1;
-
-            if self.truncated {
-                return;
-            }
+        if matches!(event.stream, OutputStreamKind::Stderr) {
+            self.has_stderr = true;
         }
 
-        if start < event.text.len() {
-            self.push_line(event.stream, &event.text[start..]);
+        self.rendered_text.push_str(&event.text);
+
+        let (truncated_text, was_truncated) =
+            truncate_to_max_lines(&self.rendered_text, Self::MAX_LINES);
+
+        self.rendered_text = truncated_text;
+        self.truncated = was_truncated;
+        self.line_count = visible_line_count(&self.rendered_text);
+    }
+}
+
+fn visible_line_count(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+
+    text.bytes().filter(|byte| *byte == b'\n').count() + usize::from(!text.ends_with('\n'))
+}
+
+fn truncate_to_max_lines(text: &str, max_lines: usize) -> (String, bool) {
+    if text.is_empty() || max_lines == 0 {
+        return (String::new(), !text.is_empty());
+    }
+
+    let mut visible_lines = 1;
+
+    for (index, ch) in text.char_indices() {
+        if ch != '\n' {
+            continue;
+        }
+
+        if index + 1 < text.len() {
+            visible_lines += 1;
+
+            if visible_lines > max_lines {
+                return (text[..=index].to_string(), true);
+            }
         }
     }
 
-    fn push_line(&mut self, stream: OutputStreamKind, text: &str) {
-        if self.lines.len() >= Self::MAX_LINES {
-            self.truncated = true;
-            return;
-        }
-
-        self.lines.push(OutputLine {
-            stream,
-            text: text.to_string(),
-        });
-    }
+    (text.to_string(), false)
 }
 
 #[cfg(test)]
@@ -129,14 +143,14 @@ mod tests {
             .unwrap();
 
         assert!(state.drain());
-        assert_eq!(state.line_count(), 4);
+        assert_eq!(state.line_count(), 3);
         assert!(state.has_stderr());
         assert_eq!(state.render_text(), "first\nsecond\nerror\n");
         assert!(!state.is_finished());
 
         drop(sender);
 
-        assert!(!state.drain());
+        assert!(state.drain());
         assert!(state.is_finished());
     }
 
@@ -159,6 +173,23 @@ mod tests {
         assert_eq!(state.line_count(), LiveOutputState::MAX_LINES);
         assert!(state.render_text().contains("line-0\n"));
         assert!(!state.render_text().contains("line-5009"));
+    }
+
+    #[test]
+    fn preserves_partial_line_output_between_events() {
+        let (sender, receiver) = output_channel();
+        let mut state = LiveOutputState::new(receiver);
+
+        sender
+            .send(OutputEvent::new(OutputStreamKind::Stdout, "partial"))
+            .unwrap();
+        sender
+            .send(OutputEvent::new(OutputStreamKind::Stdout, " line\nnext"))
+            .unwrap();
+
+        assert!(state.drain());
+        assert_eq!(state.render_text(), "partial line\nnext");
+        assert_eq!(state.line_count(), 2);
     }
 
     #[test]

@@ -21,19 +21,32 @@ pub struct LuaVm {
     pub state: LuaRuntimeState,
 }
 
+pub struct LuaVmConfig<'a> {
+    pub context: &'a HookContext,
+    pub phase: HookPhase,
+    pub capabilities: &'a LuaCapabilities,
+    pub cancel_token: CancelToken,
+    pub parent_cancel_token: Option<CancelToken>,
+    pub output: Option<OutputSender>,
+    pub hook_started_at: Instant,
+    pub hook_timeout: Option<Duration>,
+}
+
 pub struct LuaEngine;
 
 impl LuaEngine {
-    pub fn create_vm(
-        context: &HookContext,
-        phase: HookPhase,
-        capabilities: &LuaCapabilities,
-        cancel_token: CancelToken,
-        parent_cancel_token: Option<CancelToken>,
-        output: Option<OutputSender>,
-        hook_started_at: Instant,
-        hook_timeout: Option<Duration>,
-    ) -> LuaResult<LuaVm> {
+    pub fn create_vm(config: LuaVmConfig<'_>) -> LuaResult<LuaVm> {
+        let LuaVmConfig {
+            context,
+            phase,
+            capabilities,
+            cancel_token,
+            parent_cancel_token,
+            output,
+            hook_started_at,
+            hook_timeout,
+        } = config;
+
         let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
         let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 
@@ -87,18 +100,32 @@ mod tests {
         }
     }
 
+    fn test_vm_config<'a>(
+        context: &'a HookContext,
+        phase: HookPhase,
+        capabilities: &'a LuaCapabilities,
+    ) -> LuaVmConfig<'a> {
+        LuaVmConfig {
+            context,
+            phase,
+            capabilities,
+            cancel_token: CancelToken::new(),
+            parent_cancel_token: None,
+            output: None,
+            hook_started_at: Instant::now(),
+            hook_timeout: None,
+        }
+    }
+
     #[test]
     fn registers_hook_phase_and_connection_metadata() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PostConnect,
-            &LuaCapabilities::default(),
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let phase: String = vm.lua.load("return hook.phase").eval().unwrap();
@@ -116,16 +143,13 @@ mod tests {
 
     #[test]
     fn does_not_load_unsafe_libraries() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PreConnect,
-            &LuaCapabilities::default(),
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let io_is_nil: bool = vm.lua.load("return io == nil").eval().unwrap();
@@ -141,21 +165,18 @@ mod tests {
 
     #[test]
     fn capabilities_hide_optional_apis() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities {
+            logging: false,
+            env_read: false,
+            connection_metadata: false,
+            process_run: false,
+        };
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PreConnect,
-            &LuaCapabilities {
-                logging: false,
-                env_read: false,
-                connection_metadata: false,
-                process_run: false,
-            },
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let connection_is_nil: bool = vm.lua.load("return connection == nil").eval().unwrap();
@@ -177,16 +198,13 @@ mod tests {
 
     #[test]
     fn logging_and_env_api_are_available_when_enabled() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PreConnect,
-            &LuaCapabilities::default(),
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let has_logging: bool = vm
@@ -209,16 +227,13 @@ mod tests {
 
     #[test]
     fn process_api_is_hidden_when_capability_is_disabled() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PreConnect,
-            &LuaCapabilities::default(),
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let has_process: bool = vm
@@ -232,19 +247,16 @@ mod tests {
 
     #[test]
     fn process_api_is_available_when_capability_is_enabled() {
-        let vm = LuaEngine::create_vm(
-            &test_context(),
+        let context = test_context();
+        let capabilities = LuaCapabilities {
+            process_run: true,
+            ..LuaCapabilities::default()
+        };
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
             HookPhase::PreConnect,
-            &LuaCapabilities {
-                process_run: true,
-                ..LuaCapabilities::default()
-            },
-            CancelToken::new(),
-            None,
-            None,
-            Instant::now(),
-            None,
-        )
+            &capabilities,
+        ))
         .unwrap();
 
         let has_process: bool = vm

@@ -1,5 +1,5 @@
 use crate::api::hook::LuaHookOutcome;
-use crate::engine::LuaEngine;
+use crate::engine::{LuaEngine, LuaVmConfig};
 use dbflux_core::{
     CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookPhase, HookResult,
     OutputSender,
@@ -51,16 +51,16 @@ impl HookExecutor for LuaExecutor {
         let phase = context.phase.unwrap_or(HookPhase::PreConnect);
         let start = Instant::now();
         let timeout = hook.timeout_ms.map(Duration::from_millis);
-        let vm = LuaEngine::create_vm(
+        let vm = LuaEngine::create_vm(LuaVmConfig {
             context,
             phase,
             capabilities,
-            cancel_token.clone(),
-            parent_cancel_token.cloned(),
-            output.cloned(),
-            start,
-            timeout,
-        )
+            cancel_token: cancel_token.clone(),
+            parent_cancel_token: parent_cancel_token.cloned(),
+            output: output.cloned(),
+            hook_started_at: start,
+            hook_timeout: timeout,
+        })
         .map_err(|error| format!("Failed to create Lua VM: {error}"))?;
         let cancel = cancel_token.clone();
         let parent = parent_cancel_token.cloned();

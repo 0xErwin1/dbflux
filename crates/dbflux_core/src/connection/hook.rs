@@ -4,7 +4,7 @@ use serde::de::{self, DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -842,7 +842,7 @@ impl ConnectionHook {
                 stderr
             )),
             Err(ProcessExecutionError::TimedOut { stdout, stderr }) => Err(format!(
-                "Hook '{}' cancelled\n{}{}",
+                "Hook '{}' timed out\n{}{}",
                 self.display_command(),
                 stdout,
                 stderr
@@ -1013,7 +1013,7 @@ enum ProcessMonitorOutcome {
 }
 
 fn spawn_output_reader<R>(
-    reader: R,
+    mut reader: R,
     stream: OutputStreamKind,
     sender: mpsc::Sender<OutputEvent>,
 ) -> thread::JoinHandle<()>
@@ -1021,15 +1021,15 @@ where
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
+        let mut buffer = [0_u8; 4096];
 
         loop {
-            let mut line = String::new();
-
-            match reader.read_line(&mut line) {
+            match reader.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(_) => {
-                    if sender.send(OutputEvent::new(stream, line)).is_err() {
+                Ok(bytes_read) => {
+                    let text = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
+
+                    if sender.send(OutputEvent::new(stream, text)).is_err() {
                         break;
                     }
                 }
@@ -2268,6 +2268,73 @@ mod tests {
             }
             other => panic!("expected TimedOut, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn execute_streaming_process_emits_partial_line_output_before_newline() {
+        let python = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+        let mut command = Command::new(python);
+        command.args([
+            "-c",
+            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(0.3); sys.stdout.write(' line\\n'); sys.stdout.flush()",
+        ]);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut child = command.spawn().unwrap();
+        let (sender, receiver) = output_channel();
+
+        let handle = thread::spawn(move || {
+            execute_streaming_process(
+                &mut child,
+                &CancelToken::new(),
+                None,
+                Some(Duration::from_secs(2)),
+                None,
+                Some(&sender),
+            )
+            .unwrap()
+        });
+
+        let first_event = receiver.recv_timeout(Duration::from_millis(200)).unwrap();
+        let result = handle.join().unwrap();
+
+        assert_eq!(first_event.stream, OutputStreamKind::Stdout);
+        assert_eq!(first_event.text, "partial");
+        assert!(result.stdout.contains("partial line"));
+    }
+
+    #[test]
+    fn execute_streaming_process_decodes_invalid_utf8_lossily() {
+        let python = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+        let mut command = Command::new(python);
+        command.args([
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'prefix\\xffsuffix\\n'); sys.stdout.flush()",
+        ]);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut child = command.spawn().unwrap();
+        let result = execute_streaming_process(
+            &mut child,
+            &CancelToken::new(),
+            None,
+            Some(Duration::from_secs(2)),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(result.stdout.contains("prefix"));
+        assert!(result.stdout.contains(char::REPLACEMENT_CHARACTER));
+        assert!(result.stdout.contains("suffix"));
     }
 
     // =========================================================================
