@@ -243,9 +243,6 @@ fn editor_layer() -> KeymapLayer {
         Command::SaveFileAs,
     );
 
-    // Toggle panel collapse
-    layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
-
     layer
 }
 
