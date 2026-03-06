@@ -59,11 +59,11 @@ The key design principle: **a fresh Lua VM is created for every hook execution**
 
 ## Dependencies
 
-| Dependency | Version | Purpose |
-|---|---|---|
-| `mlua` | 0.10 | Lua 5.4 bindings. Features: `lua54`, `send` (makes `Lua: Send`), `vendored` (compiles Lua from source) |
-| `dbflux_core` | workspace | Traits (`HookExecutor`), types (`ConnectionHook`, `HookContext`, etc.) |
-| `log` | 0.4 | Rust-side logging from Lua callbacks |
+| Dependency    | Version   | Purpose                                                                                                |
+| ------------- | --------- | ------------------------------------------------------------------------------------------------------ |
+| `mlua`        | 0.10      | Lua 5.4 bindings. Features: `lua54`, `send` (makes `Lua: Send`), `vendored` (compiles Lua from source) |
+| `dbflux_core` | workspace | Traits (`HookExecutor`), types (`ConnectionHook`, `HookContext`, etc.)                                 |
+| `log`         | 0.4       | Rust-side logging from Lua callbacks                                                                   |
 
 The `vendored` feature is important — it means no system Lua installation is required. The Lua 5.4 interpreter is compiled from C source and statically linked. This removes a deployment dependency but adds ~200KB to the binary.
 
@@ -87,17 +87,17 @@ This gives scripts access to:
 - **math**: `math.floor`, `math.ceil`, `math.random`, `math.sqrt`, `math.abs`, `math.max`, `math.min`, `math.pi`
 - **utf8**: `utf8.char`, `utf8.codepoint`, `utf8.len`
 
-Plus the Lua built-ins that don't require library loading: `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `error()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`. Closures, local variables, metatables, all the control flow — everything that makes Lua *Lua* works fine.
+Plus the Lua built-ins that don't require library loading: `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `error()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`. Closures, local variables, metatables, all the control flow — everything that makes Lua _Lua_ works fine.
 
 ### What's Blocked
 
-| Library | Why it's blocked |
-|---|---|
-| `io` | File read/write. Can't let hooks read arbitrary files or write to disk. |
-| `os` | System calls: `os.execute()` would be a full shell escape, `os.remove()` can delete files. Even `os.getenv()` is replaced with the gated `dbflux.env.get()`. |
-| `debug` | `debug.sethook()` could interfere with the instruction-count interrupt. `debug.getlocal()` and `debug.getinfo()` could inspect internal state. |
-| `package` | `require()`, `dofile()`, `loadfile()` would allow loading arbitrary code from disk. |
-| `coroutine` | Not dangerous per se, but adds complexity to the timeout/cancellation model (coroutines can yield past the instruction hook). |
+| Library     | Why it's blocked                                                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `io`        | File read/write. Can't let hooks read arbitrary files or write to disk.                                                                                      |
+| `os`        | System calls: `os.execute()` would be a full shell escape, `os.remove()` can delete files. Even `os.getenv()` is replaced with the gated `dbflux.env.get()`. |
+| `debug`     | `debug.sethook()` could interfere with the instruction-count interrupt. `debug.getlocal()` and `debug.getinfo()` could inspect internal state.               |
+| `package`   | `require()`, `dofile()`, `loadfile()` would allow loading arbitrary code from disk.                                                                          |
+| `coroutine` | Not dangerous per se, but adds complexity to the timeout/cancellation model (coroutines can yield past the instruction hook).                                |
 
 The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries plus the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM.
 
@@ -123,11 +123,11 @@ The outcome is a simple state machine with three states: `Ok`, `Warn(msg)`, `Fai
 
 The outcome maps to `HookResult` like this:
 
-| Outcome | `exit_code` | `stderr` | `warnings` |
-|---|---|---|---|
-| `Ok` | `0` | empty | `[]` |
-| `Warn(msg)` | `0` | empty | `[msg]` |
-| `Fail(msg)` | `1` | `msg` | `[]` |
+| Outcome     | `exit_code` | `stderr` | `warnings` |
+| ----------- | ----------- | -------- | ---------- |
+| `Ok`        | `0`         | empty    | `[]`       |
+| `Warn(msg)` | `0`         | empty    | `[msg]`    |
+| `Fail(msg)` | `1`         | `msg`    | `[]`       |
 
 ### `connection.*` — Connection Metadata
 
@@ -155,6 +155,7 @@ dbflux.log.error("AWS CLI not found")
 ```
 
 Each call does two things:
+
 1. Appends `[LEVEL] message` to an internal log buffer (which becomes the `stdout` of `HookResult`)
 2. Forwards to Rust's `log` crate at the corresponding level, prefixed with `[lua]`
 
@@ -200,34 +201,34 @@ hook.ok()
 
 **Input options:**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `program` | string | yes | Executable name or path |
-| `allowlist` | string | yes | Must match a known allowlist name |
-| `args` | string[] | no | Command arguments |
-| `timeout_ms` | integer | no | Per-process timeout (ms). Hook-level timeout still applies above this. |
-| `cwd` | string | no | Working directory |
+| Field        | Type     | Required | Description                                                            |
+| ------------ | -------- | -------- | ---------------------------------------------------------------------- |
+| `program`    | string   | yes      | Executable name or path                                                |
+| `allowlist`  | string   | yes      | Must match a known allowlist name                                      |
+| `args`       | string[] | no       | Command arguments                                                      |
+| `timeout_ms` | integer  | no       | Per-process timeout (ms). Hook-level timeout still applies above this. |
+| `cwd`        | string   | no       | Working directory                                                      |
 
 **Return value:**
 
-| Field | Type | Description |
-|---|---|---|
-| `ok` | boolean | `true` if exit code is 0 and not timed out |
-| `exit_code` | integer/nil | Process exit code |
-| `stdout` | string | Captured stdout |
-| `stderr` | string | Captured stderr |
-| `timed_out` | boolean | `true` if per-process timeout fired |
+| Field       | Type        | Description                                |
+| ----------- | ----------- | ------------------------------------------ |
+| `ok`        | boolean     | `true` if exit code is 0 and not timed out |
+| `exit_code` | integer/nil | Process exit code                          |
+| `stdout`    | string      | Captured stdout                            |
+| `stderr`    | string      | Captured stderr                            |
+| `timed_out` | boolean     | `true` if per-process timeout fired        |
 
 **Available allowlists:**
 
-| Allowlist | Allowed programs |
-|---|---|
-| `aws_cli` | `aws`, `aws.exe` |
-| `python_cli` | `python`, `python.exe`, `python3`, `python3.exe` |
-| `ssh_cli` | `ssh`, `ssh.exe` |
-| `cloudflared` | `cloudflared`, `cloudflared.exe` |
-| `gcloud_cli` | `gcloud`, `gcloud.cmd`, `gcloud.exe` |
-| `az_cli` | `az`, `az.cmd`, `az.exe` |
+| Allowlist     | Allowed programs                                 |
+| ------------- | ------------------------------------------------ |
+| `aws_cli`     | `aws`, `aws.exe`                                 |
+| `python_cli`  | `python`, `python.exe`, `python3`, `python3.exe` |
+| `ssh_cli`     | `ssh`, `ssh.exe`                                 |
+| `cloudflared` | `cloudflared`, `cloudflared.exe`                 |
+| `gcloud_cli`  | `gcloud`, `gcloud.cmd`, `gcloud.exe`             |
+| `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
 
 Program matching is case-insensitive, and only the filename is checked (not the full path). So `program = "/usr/local/bin/aws"` matches the `aws_cli` allowlist because the filename is `aws`.
 
@@ -249,6 +250,7 @@ lua.set_hook(
 ```
 
 Every 1,000 Lua instructions, the hook fires and checks:
+
 1. Is the cancel token set? → `RuntimeError("Lua hook cancelled")`
 2. Has the timeout elapsed? → `RuntimeError("Lua hook timed out")`
 
@@ -547,6 +549,7 @@ The code editor's Run button (`execution.rs`) uses `CompositeExecutor` to execut
 All tests are in the crate itself (not in a separate `tests/` directory). Test coverage is comprehensive:
 
 ### executor.rs (12 tests)
+
 - Basic execution (success, warn, fail)
 - File-backed scripts
 - Runtime errors become `exit_code: 1`
@@ -555,6 +558,7 @@ All tests are in the crate itself (not in a separate `tests/` directory). Test c
 - Process execution with allowlists (enabled, disabled, unknown allowlist, rejected program, process timeout)
 
 ### engine.rs (6 tests)
+
 - Hook phase and connection metadata registration
 - Unsafe libraries are blocked (`io`, `os`, `debug`, `package` are nil)
 - Capabilities correctly hide optional APIs
@@ -583,6 +587,7 @@ A better approach might be to use mlua's `Error::external()` with a custom error
 ### The 1,000 Instruction Interval
 
 The instruction hook fires every 1,000 instructions. This means:
+
 - A tight loop doing nothing takes ~1,000 iterations before the cancellation check fires
 - For timeout precision, 1,000 instructions translates to roughly microseconds, so timeout accuracy is excellent
 - Setting it too low (e.g., every instruction) measurably impacts performance for computational scripts

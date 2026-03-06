@@ -12,7 +12,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
+    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
     ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
@@ -43,9 +43,11 @@ mod diagnostics;
 mod execution;
 mod file_ops;
 mod focus;
+mod live_output;
 mod render;
 
 use completion::QueryCompletionProvider;
+use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
 struct ResultTab {
@@ -106,6 +108,8 @@ pub struct CodeDocument {
     execution_history: Vec<ExecutionRecord>,
     active_execution_index: Option<usize>,
     pending_result: Option<PendingQueryResult>,
+    live_output: Option<LiveOutputState>,
+    _live_output_drain: Option<Task<()>>,
 
     // Result tabs
     result_tabs: Vec<ResultTab>,
@@ -219,8 +223,8 @@ impl CodeDocument {
         let supports_connection_context = query_language.supports_connection_context();
 
         input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = supports_connection_context
-                .then_some(completion_provider.clone());
+            state.lsp.completion_provider =
+                supports_connection_context.then_some(completion_provider.clone());
         });
 
         let input_change_sub = cx.subscribe_in(
@@ -362,6 +366,8 @@ impl CodeDocument {
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
+            live_output: None,
+            _live_output_drain: None,
             result_tabs: Vec::new(),
             active_result_index: None,
             result_tab_counter: 0,

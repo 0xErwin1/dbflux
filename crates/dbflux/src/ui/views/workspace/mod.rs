@@ -9,7 +9,7 @@ use crate::keymap::{
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    DataDocument, DocumentHandle, CodeDocument, TabBar, TabBarEvent, TabManager,
+    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
@@ -199,14 +199,8 @@ impl Workspace {
                         this.open_script_from_path(path.clone(), cx);
                     } else {
                         use crate::ui::components::toast::ToastExt;
-                        let name = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("file");
-                        cx.toast_warning(
-                            format!("Unsupported file type: {}", name),
-                            window,
-                        );
+                        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+                        cx.toast_warning(format!("Unsupported file type: {}", name), window);
                     }
                 }
                 SidebarEvent::OpenInlineScript {

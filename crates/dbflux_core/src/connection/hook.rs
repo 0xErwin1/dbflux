@@ -4,9 +4,10 @@ use serde::de::{self, DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
@@ -173,14 +174,16 @@ impl HookKind {
                 language,
                 interpreter,
                 ..
-            } => interpreter
-                .clone()
-                .or_else(|| {
-                    language
-                        .default_interpreter()
-                        .map(std::string::ToString::to_string)
-                })
-                .ok_or_else(|| match language {
+            } => {
+                interpreter
+                    .clone()
+                    .or_else(|| {
+                        language
+                            .default_interpreter()
+                            .map(std::string::ToString::to_string)
+                    })
+                    .ok_or_else(|| {
+                        match language {
                     ScriptLanguage::Bash => {
                         "Bash is not supported on Windows. Set an explicit interpreter override."
                             .to_string()
@@ -189,7 +192,9 @@ impl HookKind {
                     "{} is not supported on this platform. Set an explicit interpreter override.",
                     language.label()
                 ),
-                }),
+                }
+                    })
+            }
             Self::Lua { .. } => {
                 Err("Lua hooks run in-process and do not use an interpreter".into())
             }
@@ -479,10 +484,114 @@ pub struct HookResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OutputStreamKind {
+    Stdout,
+    Stderr,
+    Log,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputEvent {
+    pub stream: OutputStreamKind,
+    pub text: String,
+}
+
+impl OutputEvent {
+    pub fn new(stream: OutputStreamKind, text: impl Into<String>) -> Self {
+        Self {
+            stream,
+            text: text.into(),
+        }
+    }
+}
+
+pub type OutputSender = mpsc::Sender<OutputEvent>;
+pub type OutputReceiver = mpsc::Receiver<OutputEvent>;
+
+pub fn output_channel() -> (OutputSender, OutputReceiver) {
+    mpsc::channel()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessExecutionError {
+    Spawn(String),
+    Wait(String),
+    Cancelled { stdout: String, stderr: String },
+    TimedOut { stdout: String, stderr: String },
+}
+
 struct ResolvedExecution {
     program: String,
     args: Vec<String>,
     _temp_file: Option<NamedTempFile>,
+}
+
+const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+const OUTPUT_TRUNCATED_NOTICE: &str = "\n[output truncated]\n";
+
+#[derive(Default)]
+struct OutputCollector {
+    stdout: String,
+    stderr: String,
+    total_bytes: usize,
+    truncated: bool,
+}
+
+impl OutputCollector {
+    fn push(&mut self, event: OutputEvent, output: Option<&OutputSender>) {
+        if self.truncated {
+            return;
+        }
+
+        let mut text = event.text;
+
+        if text.is_empty() {
+            return;
+        }
+
+        let remaining = MAX_OUTPUT_BYTES.saturating_sub(self.total_bytes);
+
+        if text.len() > remaining {
+            self.truncated = true;
+
+            if remaining == 0 {
+                return;
+            }
+
+            if remaining > OUTPUT_TRUNCATED_NOTICE.len() {
+                let prefix = safe_prefix_by_bytes(&text, remaining - OUTPUT_TRUNCATED_NOTICE.len());
+                text = format!("{prefix}{OUTPUT_TRUNCATED_NOTICE}");
+            } else {
+                text = safe_prefix_by_bytes(OUTPUT_TRUNCATED_NOTICE, remaining);
+            }
+        }
+
+        if text.is_empty() {
+            return;
+        }
+
+        if let Some(sender) = output {
+            let _ = sender.send(OutputEvent::new(event.stream, text.clone()));
+        }
+
+        match event.stream {
+            OutputStreamKind::Stdout | OutputStreamKind::Log => self.stdout.push_str(&text),
+            OutputStreamKind::Stderr => self.stderr.push_str(&text),
+        }
+
+        self.total_bytes += text.len();
+    }
+
+    fn into_hook_result(self, exit_code: Option<i32>, timed_out: bool) -> HookResult {
+        HookResult {
+            exit_code,
+            stdout: self.stdout,
+            stderr: self.stderr,
+            timed_out,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 impl HookResult {
@@ -504,6 +613,7 @@ pub trait HookExecutor: Send + Sync {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
     ) -> Result<HookResult, String>;
 }
 
@@ -517,10 +627,11 @@ impl HookExecutor for ProcessExecutor {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
     ) -> Result<HookResult, String> {
         match &hook.kind {
             HookKind::Command { .. } | HookKind::Script { .. } => {
-                hook.execute_process(context, cancel_token, parent_cancel_token)
+                hook.execute_process(context, cancel_token, parent_cancel_token, output)
             }
             HookKind::Lua { .. } => {
                 Err("Lua hooks require the 'lua' feature to be enabled".to_string())
@@ -659,7 +770,17 @@ impl ConnectionHook {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
     ) -> Result<HookResult, String> {
-        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token)
+        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token, None)
+    }
+
+    pub fn execute_with_output(
+        &self,
+        context: &HookContext,
+        cancel_token: &CancelToken,
+        parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
+    ) -> Result<HookResult, String> {
+        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token, output)
     }
 
     pub(crate) fn execute_process(
@@ -667,6 +788,7 @@ impl ConnectionHook {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
     ) -> Result<HookResult, String> {
         let resolved = self.resolve_execution()?;
 
@@ -694,63 +816,37 @@ impl ConnectionHook {
 
         let _temp_file = resolved._temp_file;
 
-        let start = Instant::now();
-        let timeout = self.timeout_ms.map(Duration::from_millis);
-        let wait_interval = Duration::from_millis(50);
-
-        loop {
-            if cancel_token.is_cancelled()
-                || parent_cancel_token.is_some_and(CancelToken::is_cancelled)
-            {
-                let _ = child.kill();
-                let _ = child.wait();
-                let (stdout, stderr) = collect_output(&mut child);
-
-                return Err(format!(
-                    "Hook '{}' cancelled\n{}{}",
-                    self.display_command(),
-                    stdout,
-                    stderr
-                ));
-            }
-
-            if timeout.is_some_and(|max| start.elapsed() > max) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let (stdout, stderr) = collect_output(&mut child);
-
-                return Ok(HookResult {
-                    exit_code: None,
-                    stdout,
-                    stderr,
-                    timed_out: true,
-                    warnings: Vec::new(),
-                });
-            }
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    let (stdout, stderr) = collect_output(&mut child);
-
-                    return Ok(HookResult {
-                        exit_code: status.code(),
-                        stdout,
-                        stderr,
-                        timed_out: false,
-                        warnings: Vec::new(),
-                    });
-                }
-                Ok(None) => {
-                    thread::sleep(wait_interval);
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "Failed to wait for hook '{}': {}",
-                        self.display_command(),
-                        error
-                    ));
-                }
-            }
+        match execute_streaming_process(
+            &mut child,
+            cancel_token,
+            parent_cancel_token,
+            self.timeout_ms.map(Duration::from_millis),
+            None,
+            output,
+        ) {
+            Ok(result) => Ok(result),
+            Err(ProcessExecutionError::Spawn(error)) => Err(format!(
+                "Failed to execute '{}': {}",
+                self.display_command(),
+                error
+            )),
+            Err(ProcessExecutionError::Wait(error)) => Err(format!(
+                "Failed to wait for hook '{}': {}",
+                self.display_command(),
+                error
+            )),
+            Err(ProcessExecutionError::Cancelled { stdout, stderr }) => Err(format!(
+                "Hook '{}' cancelled\n{}{}",
+                self.display_command(),
+                stdout,
+                stderr
+            )),
+            Err(ProcessExecutionError::TimedOut { stdout, stderr }) => Err(format!(
+                "Hook '{}' cancelled\n{}{}",
+                self.display_command(),
+                stdout,
+                stderr
+            )),
         }
     }
 
@@ -826,28 +922,168 @@ impl ConnectionHook {
     }
 }
 
-fn collect_output(child: &mut Child) -> (String, String) {
+pub fn execute_streaming_process(
+    child: &mut Child,
+    cancel_token: &CancelToken,
+    parent_cancel_token: Option<&CancelToken>,
+    timeout: Option<Duration>,
+    abort_timeout: Option<Duration>,
+    output: Option<&OutputSender>,
+) -> Result<HookResult, ProcessExecutionError> {
     let stdout = child
         .stdout
-        .as_mut()
-        .map(|stream| {
-            let mut buffer = Vec::new();
-            let _ = stream.read_to_end(&mut buffer);
-            String::from_utf8_lossy(&buffer).to_string()
-        })
-        .unwrap_or_default();
-
+        .take()
+        .ok_or_else(|| ProcessExecutionError::Wait("missing stdout pipe".to_string()))?;
     let stderr = child
         .stderr
-        .as_mut()
-        .map(|stream| {
-            let mut buffer = Vec::new();
-            let _ = stream.read_to_end(&mut buffer);
-            String::from_utf8_lossy(&buffer).to_string()
-        })
-        .unwrap_or_default();
+        .take()
+        .ok_or_else(|| ProcessExecutionError::Wait("missing stderr pipe".to_string()))?;
 
-    (stdout, stderr)
+    let (chunk_sender, chunk_receiver) = mpsc::channel();
+    let stdout_reader = spawn_output_reader(stdout, OutputStreamKind::Stdout, chunk_sender.clone());
+    let stderr_reader = spawn_output_reader(stderr, OutputStreamKind::Stderr, chunk_sender.clone());
+    drop(chunk_sender);
+
+    let start = Instant::now();
+    let wait_interval = Duration::from_millis(50);
+    let mut collector = OutputCollector::default();
+
+    let outcome = loop {
+        match chunk_receiver.recv_timeout(wait_interval) {
+            Ok(event) => {
+                collector.push(event, output);
+                drain_output_events(&chunk_receiver, &mut collector, output);
+            }
+            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        if cancel_token.is_cancelled() || parent_cancel_token.is_some_and(CancelToken::is_cancelled)
+        {
+            terminate_child(child)?;
+            break ProcessMonitorOutcome::Cancelled;
+        }
+
+        if abort_timeout.is_some_and(|limit| start.elapsed() > limit) {
+            terminate_child(child)?;
+            break ProcessMonitorOutcome::AbortTimedOut;
+        }
+
+        if timeout.is_some_and(|limit| start.elapsed() > limit) {
+            terminate_child(child)?;
+            break ProcessMonitorOutcome::TimedOut;
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => break ProcessMonitorOutcome::Exited(status.code()),
+            Ok(None) => {}
+            Err(error) => {
+                terminate_child(child)?;
+                break ProcessMonitorOutcome::WaitFailed(error.to_string());
+            }
+        }
+    };
+
+    join_output_reader(stdout_reader);
+    join_output_reader(stderr_reader);
+    drain_output_events(&chunk_receiver, &mut collector, output);
+
+    match outcome {
+        ProcessMonitorOutcome::Exited(exit_code) => {
+            Ok(collector.into_hook_result(exit_code, false))
+        }
+        ProcessMonitorOutcome::TimedOut => Ok(collector.into_hook_result(None, true)),
+        ProcessMonitorOutcome::Cancelled => Err(ProcessExecutionError::Cancelled {
+            stdout: collector.stdout,
+            stderr: collector.stderr,
+        }),
+        ProcessMonitorOutcome::AbortTimedOut => Err(ProcessExecutionError::TimedOut {
+            stdout: collector.stdout,
+            stderr: collector.stderr,
+        }),
+        ProcessMonitorOutcome::WaitFailed(error) => Err(ProcessExecutionError::Wait(error)),
+    }
+}
+
+enum ProcessMonitorOutcome {
+    Exited(Option<i32>),
+    TimedOut,
+    AbortTimedOut,
+    Cancelled,
+    WaitFailed(String),
+}
+
+fn spawn_output_reader<R>(
+    reader: R,
+    stream: OutputStreamKind,
+    sender: mpsc::Sender<OutputEvent>,
+) -> thread::JoinHandle<()>
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+
+        loop {
+            let mut line = String::new();
+
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if sender.send(OutputEvent::new(stream, line)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("Failed to read {:?} output: {}", stream, error);
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn drain_output_events(
+    receiver: &mpsc::Receiver<OutputEvent>,
+    collector: &mut OutputCollector,
+    output: Option<&OutputSender>,
+) {
+    while let Ok(event) = receiver.try_recv() {
+        collector.push(event, output);
+    }
+}
+
+fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
+    let _ = child.kill();
+    child
+        .wait()
+        .map(|_| ())
+        .map_err(|error| ProcessExecutionError::Wait(error.to_string()))
+}
+
+fn join_output_reader(handle: thread::JoinHandle<()>) {
+    if handle.join().is_err() {
+        log::warn!("process output reader thread panicked");
+    }
+}
+
+fn safe_prefix_by_bytes(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    let mut safe_end = 0;
+
+    for (index, ch) in input.char_indices() {
+        let next = index + ch.len_utf8();
+
+        if next > max_bytes {
+            break;
+        }
+
+        safe_end = next;
+    }
+
+    input[..safe_end].to_string()
 }
 
 pub struct HookRunner;
@@ -869,7 +1105,8 @@ impl HookRunner {
                 continue;
             }
 
-            let result = executor.execute_hook(hook, context, cancel_token, parent_cancel_token);
+            let result =
+                executor.execute_hook(hook, context, cancel_token, parent_cancel_token, None);
 
             if let Ok(output) = &result {
                 warnings.extend(output.warnings.iter().cloned());
@@ -918,8 +1155,8 @@ impl HookRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::profile::{ConnectionProfile, DbConfig};
     use crate::AppConfig;
+    use crate::connection::profile::{ConnectionProfile, DbConfig};
 
     // =========================================================================
     // Helpers
@@ -1756,6 +1993,7 @@ mod tests {
                 _context: &HookContext,
                 _cancel_token: &CancelToken,
                 _parent_cancel_token: Option<&CancelToken>,
+                _output: Option<&OutputSender>,
             ) -> Result<HookResult, String> {
                 Ok(HookResult {
                     exit_code: Some(0),
@@ -1912,10 +2150,124 @@ mod tests {
         };
 
         let result =
-            ProcessExecutor.execute_hook(&hook, &test_context(), &CancelToken::new(), None);
+            ProcessExecutor.execute_hook(&hook, &test_context(), &CancelToken::new(), None, None);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("lua"));
+    }
+
+    #[test]
+    fn process_executor_emits_streaming_output_events() {
+        let hook = if cfg!(target_os = "windows") {
+            ConnectionHook {
+                enabled: true,
+                kind: HookKind::Command {
+                    command: "cmd".to_string(),
+                    args: vec![
+                        "/C".to_string(),
+                        "echo stdout-line && echo stderr-line 1>&2".to_string(),
+                    ],
+                },
+                cwd: None,
+                env: HashMap::new(),
+                inherit_env: true,
+                timeout_ms: None,
+                on_failure: HookFailureMode::Disconnect,
+            }
+        } else {
+            ConnectionHook {
+                enabled: true,
+                kind: HookKind::Command {
+                    command: "sh".to_string(),
+                    args: vec![
+                        "-c".to_string(),
+                        "printf 'stdout-line\n'; printf 'stderr-line\n' >&2".to_string(),
+                    ],
+                },
+                cwd: None,
+                env: HashMap::new(),
+                inherit_env: true,
+                timeout_ms: None,
+                on_failure: HookFailureMode::Disconnect,
+            }
+        };
+
+        let (sender, receiver) = output_channel();
+        let result = ProcessExecutor
+            .execute_hook(
+                &hook,
+                &test_context(),
+                &CancelToken::new(),
+                None,
+                Some(&sender),
+            )
+            .unwrap();
+        drop(sender);
+
+        let events: Vec<_> = receiver.try_iter().collect();
+
+        assert!(result.stdout.contains("stdout-line"));
+        assert!(result.stderr.contains("stderr-line"));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stdout && event.text.contains("stdout-line")
+        }));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stderr && event.text.contains("stderr-line")
+        }));
+    }
+
+    #[test]
+    fn output_collector_truncates_large_output() {
+        let mut collector = OutputCollector::default();
+        let oversized = "x".repeat(MAX_OUTPUT_BYTES + 128);
+
+        collector.push(OutputEvent::new(OutputStreamKind::Stdout, oversized), None);
+
+        assert!(collector.truncated);
+        assert!(collector.stdout.len() <= MAX_OUTPUT_BYTES);
+        assert!(collector.stdout.contains("[output truncated]"));
+    }
+
+    #[test]
+    fn safe_prefix_by_bytes_preserves_utf8_boundaries() {
+        assert_eq!(safe_prefix_by_bytes("abc", 2), "ab");
+        assert_eq!(safe_prefix_by_bytes("aé漢", 3), "aé");
+        assert_eq!(safe_prefix_by_bytes("aé漢", 4), "aé");
+        assert_eq!(safe_prefix_by_bytes("aé漢", 6), "aé漢");
+    }
+
+    #[test]
+    fn execute_streaming_process_uses_abort_timeout_for_forced_stop() {
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "echo before-timeout && ping 127.0.0.1 -n 6 >nul"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "printf 'before-timeout\n'; sleep 5"]);
+            command
+        };
+
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut child = command.spawn().unwrap();
+        let result = execute_streaming_process(
+            &mut child,
+            &CancelToken::new(),
+            None,
+            None,
+            Some(Duration::from_millis(100)),
+            None,
+        );
+
+        match result {
+            Err(ProcessExecutionError::TimedOut { stdout, stderr }) => {
+                assert!(stdout.contains("before-timeout"));
+                assert!(stderr.is_empty());
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
     }
 
     // =========================================================================

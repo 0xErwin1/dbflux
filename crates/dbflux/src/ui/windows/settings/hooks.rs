@@ -11,8 +11,8 @@ use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::InputState;
 use gpui_component::input::Input;
+use gpui_component::input::InputState;
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -81,11 +81,7 @@ impl SettingsWindow {
     /// Called when the script source dropdown changes. When switching from
     /// File to Inline, reads the file content from disk and populates the
     /// inline editor so the user sees the existing script body.
-    pub(super) fn on_script_source_changed(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn on_script_source_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self.selected_script_source(cx);
 
         if source == ScriptSourceSelection::Inline {
@@ -161,11 +157,7 @@ impl SettingsWindow {
         }
     }
 
-    fn set_hook_kind_dropdown(
-        &self,
-        kind: HookKindSelection,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_hook_kind_dropdown(&self, kind: HookKindSelection, cx: &mut Context<Self>) {
         let index = match kind {
             HookKindSelection::Command => 0,
             HookKindSelection::Script => 1,
@@ -177,11 +169,7 @@ impl SettingsWindow {
         });
     }
 
-    fn set_script_source_dropdown(
-        &self,
-        source: ScriptSourceSelection,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_script_source_dropdown(&self, source: ScriptSourceSelection, cx: &mut Context<Self>) {
         let index = match source {
             ScriptSourceSelection::File => 0,
             ScriptSourceSelection::Inline => 1,
@@ -210,7 +198,12 @@ impl SettingsWindow {
     }
 
     fn hook_interpreter_override(&self, cx: &App) -> Option<String> {
-        let interpreter = self.input_hook_interpreter.read(cx).value().trim().to_string();
+        let interpreter = self
+            .input_hook_interpreter
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
 
         if interpreter.is_empty() {
             None
@@ -291,7 +284,10 @@ impl SettingsWindow {
     fn hook_form_warnings(&self, cx: &App) -> Vec<String> {
         let hook_kind = self.selected_hook_kind(cx);
 
-        if !matches!(hook_kind, HookKindSelection::Script | HookKindSelection::Lua) {
+        if !matches!(
+            hook_kind,
+            HookKindSelection::Script | HookKindSelection::Lua
+        ) {
             return Vec::new();
         }
 
@@ -350,7 +346,10 @@ impl SettingsWindow {
 
     fn open_inline_script_in_app(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((title, body, language)) = self.inline_script_editor_payload(cx) else {
-            cx.toast_warning("Only inline script hooks can be opened in the app editor", window);
+            cx.toast_warning(
+                "Only inline script hooks can be opened in the app editor",
+                window,
+            );
             return;
         };
 
@@ -429,9 +428,9 @@ impl SettingsWindow {
         };
 
         let path = match self.app_state.update(cx, |state, cx| {
-            let scripts_dir = state.scripts_directory_mut().ok_or_else(|| {
-                "Scripts directory is not available in this session".to_string()
-            })?;
+            let scripts_dir = state
+                .scripts_directory_mut()
+                .ok_or_else(|| "Scripts directory is not available in this session".to_string())?;
 
             let hooks_dir = scripts_dir
                 .hooks_directory()
@@ -850,18 +849,15 @@ impl SettingsWindow {
 
         self.input_hook_command
             .update(cx, |input, cx| input.set_value(command, window, cx));
-        self.input_hook_args.update(cx, |input, cx| {
-            input.set_value(args, window, cx)
-        });
+        self.input_hook_args
+            .update(cx, |input, cx| input.set_value(args, window, cx));
         self.input_hook_script_file_path.update(cx, |input, cx| {
             input.set_value(script_file_path, window, cx)
         });
-        self.input_hook_script_content.update(cx, |input, cx| {
-            input.set_value(script_content, window, cx)
-        });
-        self.input_hook_interpreter.update(cx, |input, cx| {
-            input.set_value(interpreter, window, cx)
-        });
+        self.input_hook_script_content
+            .update(cx, |input, cx| input.set_value(script_content, window, cx));
+        self.input_hook_interpreter
+            .update(cx, |input, cx| input.set_value(interpreter, window, cx));
         self.input_hook_cwd.update(cx, |input, cx| {
             input.set_value(
                 hook.cwd

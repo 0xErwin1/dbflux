@@ -340,17 +340,21 @@ fn resolve_from_bindings_supports_mixed_command_and_script_hooks() {
         HookPhaseOutcome::Success { executions } => {
             assert_eq!(executions.len(), 2);
             assert_eq!(executions[0].hook.display_command(), "echo vpn-up");
-            assert!(executions[1]
-                .hook
-                .display_command()
-                .contains("<inline script>"));
+            assert!(
+                executions[1]
+                    .hook
+                    .display_command()
+                    .contains("<inline script>")
+            );
             assert!(executions[1].hook.display_command().starts_with("python"));
-            assert!(executions[1]
-                .result
-                .as_ref()
-                .unwrap()
-                .stdout
-                .contains("script-ready"));
+            assert!(
+                executions[1]
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .stdout
+                    .contains("script-ready")
+            );
         }
         other => panic!("expected Success, got {:?}", other),
     }

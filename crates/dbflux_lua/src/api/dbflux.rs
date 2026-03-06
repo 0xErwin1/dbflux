@@ -1,30 +1,31 @@
 use crate::engine::LuaRuntimeState;
+use dbflux_core::{
+    OutputEvent, OutputStreamKind, ProcessExecutionError, execute_streaming_process,
+};
 use mlua::{Lua, Result as LuaResult, Table, Value};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-pub fn register_logging_api(lua: &Lua, log_buffer: Arc<Mutex<Vec<String>>>) -> LuaResult<()> {
+pub fn register_logging_api(lua: &Lua, state: LuaRuntimeState) -> LuaResult<()> {
     let dbflux = ensure_dbflux_table(lua)?;
     let logging = lua.create_table()?;
 
     logging.set(
         "info",
-        log_function(lua, log_buffer.clone(), "INFO", |message| {
+        log_function(lua, state.clone(), "INFO", |message| {
             log::info!("[lua] {message}");
         })?,
     )?;
     logging.set(
         "warn",
-        log_function(lua, log_buffer.clone(), "WARN", |message| {
+        log_function(lua, state.clone(), "WARN", |message| {
             log::warn!("[lua] {message}");
         })?,
     )?;
     logging.set(
         "error",
-        log_function(lua, log_buffer, "ERROR", |message| {
+        log_function(lua, state, "ERROR", |message| {
             log::error!("[lua] {message}");
         })?,
     )?;
@@ -70,7 +71,7 @@ fn ensure_dbflux_table(lua: &Lua) -> LuaResult<Table> {
 
 fn log_function<F>(
     lua: &Lua,
-    log_buffer: Arc<Mutex<Vec<String>>>,
+    state: LuaRuntimeState,
     level: &'static str,
     forward: F,
 ) -> LuaResult<mlua::Function>
@@ -78,7 +79,11 @@ where
     F: Fn(&str) + Send + 'static,
 {
     lua.create_function(move |_, message: String| {
-        append_log(&log_buffer, format!("[{level}] {message}"));
+        append_log(
+            &state,
+            OutputStreamKind::Log,
+            format!("[{level}] {message}"),
+        );
         forward(&message);
         Ok(())
     })
@@ -90,6 +95,7 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     let args = read_string_list(&options, "args")?;
     let timeout = read_optional_u64(&options, "timeout_ms")?.map(Duration::from_millis);
     let cwd = read_optional_string(&options, "cwd")?;
+    let stream_output = read_optional_bool(&options, "stream")?.unwrap_or(false);
 
     ensure_program_allowed(&program, &allowlist)?;
 
@@ -103,7 +109,8 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     }
 
     append_log(
-        &state.log_buffer,
+        state,
+        OutputStreamKind::Log,
         format!(
             "[PROCESS/{allowlist}] {}{}",
             program,
@@ -119,54 +126,37 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         mlua::Error::RuntimeError(format!("Failed to spawn process '{program}': {error}"))
     })?;
 
-    let started_at = Instant::now();
+    let hook_timeout_remaining = state.hook_timeout.and_then(|limit| {
+        let elapsed = state.hook_started_at.elapsed();
+        (elapsed < limit).then_some(limit - elapsed)
+    });
 
-    loop {
-        if state.cancel_token.is_cancelled()
-            || state
-                .parent_cancel_token
-                .as_ref()
-                .is_some_and(|token| token.is_cancelled())
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(mlua::Error::RuntimeError("Lua hook cancelled".to_string()));
+    let output = stream_output.then_some(()).and(state.output.as_ref());
+
+    match execute_streaming_process(
+        &mut child,
+        &state.cancel_token,
+        state.parent_cancel_token.as_ref(),
+        timeout,
+        hook_timeout_remaining,
+        output,
+    ) {
+        Ok(result) => process_result_table(
+            lua,
+            result.exit_code,
+            result.stdout,
+            result.stderr,
+            result.timed_out,
+        ),
+        Err(ProcessExecutionError::Cancelled { .. }) => {
+            Err(mlua::Error::RuntimeError("Lua hook cancelled".to_string()))
         }
-
-        if state
-            .hook_timeout
-            .is_some_and(|limit| state.hook_started_at.elapsed() >= limit)
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(mlua::Error::RuntimeError("Lua hook timed out".to_string()));
+        Err(ProcessExecutionError::TimedOut { .. }) => {
+            Err(mlua::Error::RuntimeError("Lua hook timed out".to_string()))
         }
-
-        if timeout.is_some_and(|limit| started_at.elapsed() >= limit) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return process_result_table(lua, None, String::new(), String::new(), true);
-        }
-
-        if let Some(status) = child.try_wait().map_err(|error| {
-            mlua::Error::RuntimeError(format!("Failed to wait for process '{program}': {error}"))
-        })? {
-            let output = child.wait_with_output().map_err(|error| {
-                mlua::Error::RuntimeError(format!(
-                    "Failed to collect process output for '{program}': {error}"
-                ))
-            })?;
-
-            return process_result_table(
-                lua,
-                status.code(),
-                String::from_utf8_lossy(&output.stdout).into_owned(),
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-                false,
-            );
-        }
-
-        thread::sleep(Duration::from_millis(10));
+        Err(ProcessExecutionError::Spawn(error) | ProcessExecutionError::Wait(error)) => Err(
+            mlua::Error::RuntimeError(format!("Failed to run process '{program}': {error}")),
+        ),
     }
 }
 
@@ -254,6 +244,16 @@ fn read_optional_u64(options: &Table, key: &str) -> LuaResult<Option<u64>> {
     }
 }
 
+fn read_optional_bool(options: &Table, key: &str) -> LuaResult<Option<bool>> {
+    match options.get::<Value>(key)? {
+        Value::Boolean(value) => Ok(Some(value)),
+        Value::Nil => Ok(None),
+        _ => Err(mlua::Error::RuntimeError(format!(
+            "dbflux.process.run field '{key}' must be a boolean"
+        ))),
+    }
+}
+
 fn read_string_list(options: &Table, key: &str) -> LuaResult<Vec<String>> {
     match options.get::<Value>(key)? {
         Value::Table(table) => table
@@ -266,9 +266,14 @@ fn read_string_list(options: &Table, key: &str) -> LuaResult<Vec<String>> {
     }
 }
 
-fn append_log(log_buffer: &Arc<Mutex<Vec<String>>>, message: String) {
-    log_buffer
+fn append_log(state: &LuaRuntimeState, stream: OutputStreamKind, message: String) {
+    state
+        .log_buffer
         .lock()
         .expect("lua log buffer poisoned")
-        .push(message);
+        .push(message.clone());
+
+    if let Some(output) = &state.output {
+        let _ = output.send(OutputEvent::new(stream, message));
+    }
 }

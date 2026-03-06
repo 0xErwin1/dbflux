@@ -92,9 +92,10 @@ impl Workspace {
             |window, cx| {
                 let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
 
-                cx.subscribe(&settings, move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
-                    workspace.update(cx, |this, cx| {
-                        match event {
+                cx.subscribe(
+                    &settings,
+                    move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                        workspace.update(cx, |this, cx| match event {
                             crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                                 this.open_script_from_path(path.clone(), cx);
                             }
@@ -110,9 +111,9 @@ impl Workspace {
                                     cx,
                                 );
                             }
-                        }
-                    });
-                })
+                        });
+                    },
+                )
                 .detach();
 
                 cx.new(|cx| Root::new(settings, window, cx))

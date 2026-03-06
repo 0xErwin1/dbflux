@@ -1,5 +1,5 @@
-use crate::connection::hook::ScriptLanguage;
 use crate::DbError;
+use crate::connection::hook::ScriptLanguage;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -629,12 +629,14 @@ mod tests {
         assert!(dir.create_folder(Some(&outside), "bad").is_err());
         assert!(dir.rename(&outside.join("file.sql"), "new.sql").is_err());
         assert!(dir.delete(&outside.join("file.sql")).is_err());
-        assert!(dir
-            .move_entry(&outside.join("file.sql"), tmp.path())
-            .is_err());
-        assert!(dir
-            .move_entry(&tmp.path().join("file.sql"), &outside)
-            .is_err());
+        assert!(
+            dir.move_entry(&outside.join("file.sql"), tmp.path())
+                .is_err()
+        );
+        assert!(
+            dir.move_entry(&tmp.path().join("file.sql"), &outside)
+                .is_err()
+        );
     }
 
     #[test]

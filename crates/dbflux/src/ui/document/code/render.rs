@@ -1,4 +1,5 @@
 use super::*;
+use gpui_component::scroll::ScrollableElement;
 
 impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -261,9 +262,10 @@ impl CodeDocument {
             .and_then(|r| r.error.clone());
 
         let has_error = error.is_some();
+        let has_live_output = self.live_output.is_some() && !has_error;
         let active_grid = self.active_result_grid();
         let has_grid = active_grid.is_some();
-        let has_tabs = !self.result_tabs.is_empty();
+        let has_tabs = !has_live_output && !self.result_tabs.is_empty();
 
         div()
             .size_full()
@@ -279,11 +281,86 @@ impl CodeDocument {
                     .flex_1()
                     .overflow_hidden()
                     .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-                    .when_some(active_grid, |el, grid| el.child(grid))
-                    .when(!has_grid && !has_error, |el| {
+                    .when(has_live_output, |el| el.child(self.render_live_output(cx)))
+                    .when(!has_live_output, |el| {
+                        el.when_some(active_grid, |el, grid| el.child(grid))
+                    })
+                    .when(!has_live_output && !has_grid && !has_error, |el| {
                         el.child(self.render_empty_results(cx))
                     }),
             )
+    }
+
+    fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let live_output = self
+            .live_output
+            .as_ref()
+            .expect("live output state should exist when rendering");
+
+        let status = if self.state == DocumentState::Executing {
+            "Running..."
+        } else if live_output.is_finished() {
+            "Stopped"
+        } else {
+            "Output"
+        };
+
+        let text = SharedString::from(live_output.render_text());
+        let line_count = live_output.line_count();
+
+        div()
+            .id("script-live-output")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.background)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child(status),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} lines", line_count)),
+                    )
+                    .when(live_output.has_stderr(), |el| {
+                        el.child(div().text_xs().text_color(theme.warning).child("stderr"))
+                    }),
+            )
+            .child(
+                div().flex_1().overflow_y_scrollbar().p(Spacing::MD).child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.foreground)
+                        .whitespace_nowrap()
+                        .child(text),
+                ),
+            )
+            .when(live_output.is_truncated(), |el| {
+                el.child(
+                    div()
+                        .px(Spacing::MD)
+                        .pb(Spacing::SM)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("(truncated at 5000 lines)"),
+                )
+            })
     }
 
     fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {

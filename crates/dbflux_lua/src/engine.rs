@@ -1,6 +1,6 @@
 use crate::api;
 use crate::api::hook::LuaHookOutcome;
-use dbflux_core::{CancelToken, HookContext, HookPhase, LuaCapabilities};
+use dbflux_core::{CancelToken, HookContext, HookPhase, LuaCapabilities, OutputSender};
 use mlua::{Lua, LuaOptions, Result as LuaResult, StdLib};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub struct LuaRuntimeState {
     pub outcome: Arc<Mutex<LuaHookOutcome>>,
     pub log_buffer: Arc<Mutex<Vec<String>>>,
+    pub output: Option<OutputSender>,
     pub cancel_token: CancelToken,
     pub parent_cancel_token: Option<CancelToken>,
     pub hook_started_at: Instant,
@@ -29,6 +30,7 @@ impl LuaEngine {
         capabilities: &LuaCapabilities,
         cancel_token: CancelToken,
         parent_cancel_token: Option<CancelToken>,
+        output: Option<OutputSender>,
         hook_started_at: Instant,
         hook_timeout: Option<Duration>,
     ) -> LuaResult<LuaVm> {
@@ -38,6 +40,7 @@ impl LuaEngine {
         let state = LuaRuntimeState {
             outcome: Arc::new(Mutex::new(LuaHookOutcome::Ok)),
             log_buffer: Arc::new(Mutex::new(Vec::new())),
+            output,
             cancel_token,
             parent_cancel_token,
             hook_started_at,
@@ -51,7 +54,7 @@ impl LuaEngine {
         }
 
         if capabilities.logging {
-            api::dbflux::register_logging_api(&lua, state.log_buffer.clone())?;
+            api::dbflux::register_logging_api(&lua, state.clone())?;
         }
 
         if capabilities.env_read {
@@ -92,6 +95,7 @@ mod tests {
             &LuaCapabilities::default(),
             CancelToken::new(),
             None,
+            None,
             Instant::now(),
             None,
         )
@@ -117,6 +121,7 @@ mod tests {
             HookPhase::PreConnect,
             &LuaCapabilities::default(),
             CancelToken::new(),
+            None,
             None,
             Instant::now(),
             None,
@@ -147,6 +152,7 @@ mod tests {
             },
             CancelToken::new(),
             None,
+            None,
             Instant::now(),
             None,
         )
@@ -176,6 +182,7 @@ mod tests {
             HookPhase::PreConnect,
             &LuaCapabilities::default(),
             CancelToken::new(),
+            None,
             None,
             Instant::now(),
             None,
@@ -208,6 +215,7 @@ mod tests {
             &LuaCapabilities::default(),
             CancelToken::new(),
             None,
+            None,
             Instant::now(),
             None,
         )
@@ -232,6 +240,7 @@ mod tests {
                 ..LuaCapabilities::default()
             },
             CancelToken::new(),
+            None,
             None,
             Instant::now(),
             None,

@@ -57,6 +57,48 @@ impl CodeDocument {
             .unwrap_or_else(|| self.input_state.read(cx).value().to_string())
     }
 
+    fn clear_live_output(&mut self) {
+        self.live_output = None;
+        self._live_output_drain = None;
+    }
+
+    fn start_live_output(&mut self, receiver: OutputReceiver, cx: &mut Context<Self>) {
+        self.live_output = Some(LiveOutputState::new(receiver));
+        self._live_output_drain = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(150))
+                    .await;
+
+                let should_continue = cx
+                    .update(|cx| {
+                        let Some(entity) = this.upgrade() else {
+                            return false;
+                        };
+
+                        entity.update(cx, |doc, cx| {
+                            let Some(live_output) = doc.live_output.as_mut() else {
+                                return false;
+                            };
+
+                            let changed = live_output.drain();
+
+                            if changed {
+                                cx.notify();
+                            }
+
+                            !live_output.is_finished()
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+            }
+        }));
+    }
+
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.query_language.supports_connection_context() {
             self.run_script(window, cx);
@@ -195,6 +237,7 @@ impl CodeDocument {
             }
         };
 
+        self.clear_live_output();
         self.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
@@ -339,6 +382,7 @@ impl CodeDocument {
             return;
         };
 
+        self.clear_live_output();
         self.state = DocumentState::Clean;
 
         let Some(record) = self
@@ -490,6 +534,13 @@ impl CodeDocument {
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
+            if let Some(index) = self.active_execution_index
+                && let Some(record) = self.execution_history.get_mut(index)
+                && record.finished_at.is_none()
+            {
+                record.finished_at = Some(Instant::now());
+            }
+
             if let Some(conn_id) = self.connection_id
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
@@ -635,10 +686,8 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!(
-            "Run {} script",
-            self.query_language.display_name()
-        );
+        let description = format!("Run {} script", self.query_language.display_name());
+        let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner
                 .start_primary(dbflux_core::TaskKind::Query, description, cx);
@@ -655,8 +704,13 @@ impl CodeDocument {
         self.execution_history.push(record);
         self.active_execution_index = Some(self.execution_history.len() - 1);
 
+        self.clear_live_output();
+        self.start_live_output(output_receiver, cx);
         self.state = DocumentState::Executing;
         self.run_in_new_tab = false;
+        if self.layout == SqlQueryLayout::EditorOnly {
+            self.layout = SqlQueryLayout::Split;
+        }
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
@@ -664,14 +718,10 @@ impl CodeDocument {
         let bg_cancel = cancel_token.clone();
 
         let task = cx.background_executor().spawn(async move {
-            let result = executor.execute_hook(
-                &hook,
-                &context,
-                &bg_cancel,
-                None,
-            );
+            let started_at = Instant::now();
+            let result =
+                executor.execute_hook(&hook, &context, &bg_cancel, None, Some(&output_sender));
 
-            let start = Instant::now();
             match result {
                 Ok(hook_result) => {
                     let mut output = String::new();
@@ -709,7 +759,7 @@ impl CodeDocument {
                         output = "(no output)".to_string();
                     }
 
-                    let elapsed = start.elapsed();
+                    let elapsed = started_at.elapsed();
                     Ok(QueryResult {
                         shape: dbflux_core::QueryResultShape::Text,
                         columns: Vec::new(),

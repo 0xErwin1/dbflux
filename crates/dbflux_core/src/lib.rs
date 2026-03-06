@@ -27,12 +27,13 @@ pub use connection::{
     FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
     FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
     FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
-    HookExecutionContext, HookExecutor, HookFailureMode, HookKind, HookPhase,
-    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
-    OwnedCacheEntry, PendingOperation, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind,
-    ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig,
-    SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams, SwitchDatabaseResult,
+    HookExecutionContext, HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome,
+    HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities, OutputEvent,
+    OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
+    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
+    SwitchDatabaseParams, SwitchDatabaseResult, execute_streaming_process, output_channel,
 };
 
 pub use core::{

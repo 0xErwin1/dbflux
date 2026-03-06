@@ -319,7 +319,9 @@ impl SettingsWindow {
                 DropdownItem::with_value("Script", "script"),
             ];
 
-            Dropdown::new("hook-kind").items(items).selected_index(Some(0))
+            Dropdown::new("hook-kind")
+                .items(items)
+                .selected_index(Some(0))
         });
         let input_hook_command = cx.new(|cx| InputState::new(window, cx).placeholder("command"));
         let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 ..."));
@@ -352,8 +354,7 @@ impl SettingsWindow {
                 .soft_wrap(true)
                 .placeholder("Enter script content...")
         });
-        let input_hook_interpreter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
+        let input_hook_interpreter = cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
         let input_hook_cwd =
             cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/working-dir"));
         let input_hook_env =
@@ -404,8 +405,7 @@ impl SettingsWindow {
         let hook_id_sub = notify_on_input_change(&input_hook_id, window, cx);
         let hook_command_sub = notify_on_input_change(&input_hook_command, window, cx);
         let hook_args_sub = notify_on_input_change(&input_hook_args, window, cx);
-        let hook_script_file_sub =
-            notify_on_input_change(&input_hook_script_file_path, window, cx);
+        let hook_script_file_sub = notify_on_input_change(&input_hook_script_file_path, window, cx);
         let hook_interpreter_sub = notify_on_input_change(&input_hook_interpreter, window, cx);
         let hook_cwd_sub = notify_on_input_change(&input_hook_cwd, window, cx);
         let hook_env_sub = notify_on_input_change(&input_hook_env, window, cx);

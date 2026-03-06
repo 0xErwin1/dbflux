@@ -1,5 +1,6 @@
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookResult, ProcessExecutor,
+    CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookResult, OutputSender,
+    ProcessExecutor,
 };
 
 #[derive(Clone)]
@@ -32,16 +33,17 @@ impl HookExecutor for CompositeExecutor {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
     ) -> Result<HookResult, String> {
         match &hook.kind {
             HookKind::Command { .. } | HookKind::Script { .. } => {
                 self.process
-                    .execute_hook(hook, context, cancel_token, parent_cancel_token)
+                    .execute_hook(hook, context, cancel_token, parent_cancel_token, output)
             }
             #[cfg(feature = "lua")]
             HookKind::Lua { .. } => {
                 self.lua
-                    .execute_hook(hook, context, cancel_token, parent_cancel_token)
+                    .execute_hook(hook, context, cancel_token, parent_cancel_token, output)
             }
             #[cfg(not(feature = "lua"))]
             HookKind::Lua { .. } => {
@@ -131,14 +133,18 @@ mod tests {
             HookPhaseOutcome::Success { executions }
             | HookPhaseOutcome::CompletedWithWarnings { executions, .. } => {
                 assert_eq!(executions.len(), 2);
-                assert!(executions[0]
-                    .result
-                    .as_ref()
-                    .is_ok_and(|result| result.stdout.contains("command-ok")));
-                assert!(executions[1]
-                    .result
-                    .as_ref()
-                    .is_ok_and(|result| result.stdout.contains("lua-ok")));
+                assert!(
+                    executions[0]
+                        .result
+                        .as_ref()
+                        .is_ok_and(|result| result.stdout.contains("command-ok"))
+                );
+                assert!(
+                    executions[1]
+                        .result
+                        .as_ref()
+                        .is_ok_and(|result| result.stdout.contains("lua-ok"))
+                );
             }
             HookPhaseOutcome::Aborted { error, .. } => panic!("unexpected abort: {error}"),
         }

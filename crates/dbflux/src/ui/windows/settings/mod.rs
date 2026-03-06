@@ -357,7 +357,9 @@ impl EventEmitter<DismissEvent> for SettingsWindow {}
 
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
-    OpenScript { path: std::path::PathBuf },
+    OpenScript {
+        path: std::path::PathBuf,
+    },
     OpenInlineScript {
         title: String,
         body: String,

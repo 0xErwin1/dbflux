@@ -2,6 +2,7 @@ use crate::api::hook::LuaHookOutcome;
 use crate::engine::LuaEngine;
 use dbflux_core::{
     CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookPhase, HookResult,
+    OutputSender,
 };
 use mlua::{Error as LuaError, HookTriggers, VmState};
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ impl HookExecutor for LuaExecutor {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        output: Option<&OutputSender>,
     ) -> Result<HookResult, String> {
         let HookKind::Lua {
             source,
@@ -55,6 +57,7 @@ impl HookExecutor for LuaExecutor {
             capabilities,
             cancel_token.clone(),
             parent_cancel_token.cloned(),
+            output.cloned(),
             start,
             timeout,
         )
@@ -160,7 +163,9 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{HookFailureMode, LuaCapabilities, ScriptSource};
+    use dbflux_core::{
+        HookFailureMode, LuaCapabilities, OutputStreamKind, ScriptSource, output_channel,
+    };
     use std::collections::HashMap;
     use std::io::Write;
     use uuid::Uuid;
@@ -226,6 +231,7 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
@@ -240,6 +246,7 @@ mod tests {
                 &lua_hook("hook.warn('watch out')"),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
             )
             .unwrap();
@@ -256,6 +263,7 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
@@ -270,6 +278,7 @@ mod tests {
                 &file_lua_hook("dbflux.log.info('from-file')"),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
             )
             .unwrap();
@@ -286,6 +295,7 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
@@ -299,7 +309,7 @@ mod tests {
         hook.timeout_ms = Some(10);
 
         let result = LuaExecutor::new()
-            .execute_hook(&hook, &test_context(), &CancelToken::new(), None)
+            .execute_hook(&hook, &test_context(), &CancelToken::new(), None, None)
             .unwrap();
 
         assert!(result.timed_out);
@@ -315,6 +325,7 @@ mod tests {
             &lua_hook("while true do end"),
             &test_context(),
             &token,
+            None,
             None,
         );
 
@@ -344,6 +355,7 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
@@ -360,6 +372,7 @@ mod tests {
                 ),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
             )
             .unwrap();
@@ -382,6 +395,7 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
@@ -402,6 +416,7 @@ mod tests {
                 ),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
             )
             .unwrap();
@@ -432,9 +447,95 @@ mod tests {
                 &test_context(),
                 &CancelToken::new(),
                 None,
+                None,
             )
             .unwrap();
 
         assert_eq!(result.exit_code, Some(0));
+    }
+
+    #[test]
+    fn lua_executor_streams_logs_and_process_output() {
+        let python = if cfg!(target_os = "windows") {
+            "python"
+        } else {
+            "python3"
+        };
+
+        let hook = lua_hook_with_capabilities(
+            &format!(
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', stream = true, args = {{'-c', 'print(\"hello-stream\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+            ),
+            LuaCapabilities {
+                process_run: true,
+                ..LuaCapabilities::default()
+            },
+        );
+
+        let (sender, receiver) = output_channel();
+        let result = LuaExecutor::new()
+            .execute_hook(
+                &hook,
+                &test_context(),
+                &CancelToken::new(),
+                None,
+                Some(&sender),
+            )
+            .unwrap();
+        drop(sender);
+
+        let events: Vec<_> = receiver.try_iter().collect();
+
+        assert!(result.stdout.contains("hello-log"));
+        assert!(result.stdout.contains("[PROCESS/python_cli]"));
+        assert!(result.stdout.contains("hello-stream"));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Log && event.text.contains("hello-log")
+        }));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stdout && event.text.contains("hello-stream")
+        }));
+    }
+
+    #[test]
+    fn lua_executor_only_streams_process_output_when_requested() {
+        let python = if cfg!(target_os = "windows") {
+            "python"
+        } else {
+            "python3"
+        };
+
+        let hook = lua_hook_with_capabilities(
+            &format!(
+                "dbflux.log.info('hello-log')\nlocal result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', args = {{'-c', 'print(\"hello-buffered\")'}} }})\nif not result.ok then hook.fail(result.stderr) end"
+            ),
+            LuaCapabilities {
+                process_run: true,
+                ..LuaCapabilities::default()
+            },
+        );
+
+        let (sender, receiver) = output_channel();
+        let result = LuaExecutor::new()
+            .execute_hook(
+                &hook,
+                &test_context(),
+                &CancelToken::new(),
+                None,
+                Some(&sender),
+            )
+            .unwrap();
+        drop(sender);
+
+        let events: Vec<_> = receiver.try_iter().collect();
+
+        assert!(result.stdout.contains("hello-log"));
+        assert!(result.stdout.contains("hello-buffered"));
+        assert!(events.iter().any(|event| {
+            event.stream == OutputStreamKind::Log && event.text.contains("hello-log")
+        }));
+        assert!(!events.iter().any(|event| {
+            event.stream == OutputStreamKind::Stdout && event.text.contains("hello-buffered")
+        }));
     }
 }
