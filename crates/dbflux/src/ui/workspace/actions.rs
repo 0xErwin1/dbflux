@@ -708,7 +708,7 @@ impl Workspace {
                 cx,
             )
             .with_path(pending.path)
-            .with_exec_ctx(pending.exec_ctx);
+            .with_exec_ctx(pending.exec_ctx, cx);
 
             doc.set_content(&pending.body, window, cx);
             doc
@@ -993,7 +993,7 @@ impl Workspace {
                     doc = doc.with_path(p);
                 }
 
-                doc = doc.with_title(title).with_exec_ctx(exec_ctx);
+                doc = doc.with_title(title).with_exec_ctx(exec_ctx, cx);
                 doc.set_content(body, window, cx);
 
                 // If there was a shadow, the tab had unsaved changes — mark dirty

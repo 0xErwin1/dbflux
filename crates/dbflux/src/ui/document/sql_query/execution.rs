@@ -30,6 +30,28 @@ fn resolve_connection_for_execution(
         .ok_or_else(|| format!("Connecting to database '{}', please wait...", target_db))
 }
 
+fn task_target_for_execution(
+    profile_id: Uuid,
+    connected: &dbflux_core::ConnectedProfile,
+    target_db: Option<&str>,
+) -> TaskTarget {
+    let database = target_db.and_then(|database| {
+        (connected.connection.schema_loading_strategy()
+            == SchemaLoadingStrategy::ConnectionPerDatabase
+            && connected
+                .schema
+                .as_ref()
+                .and_then(|schema| schema.current_database())
+                .is_none_or(|current| current != database))
+        .then(|| database.to_string())
+    });
+
+    TaskTarget {
+        profile_id,
+        database,
+    }
+}
+
 impl SqlQueryDocument {
     /// Returns selected text when a non-empty selection exists.
     fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
@@ -138,15 +160,25 @@ impl SqlQueryDocument {
             return;
         };
 
-        let connection = {
+        let (connection, active_database, task_target) = {
             let connections = self.app_state.read(cx).connections();
             let Some(connected) = connections.get(&conn_id) else {
                 cx.toast_error("Connection not found", window);
                 return;
             };
 
-            match resolve_connection_for_execution(connected, self.exec_ctx.database.as_deref()) {
-                Ok(connection) => connection,
+            let active_database = self
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+
+            match resolve_connection_for_execution(connected, active_database.as_deref()) {
+                Ok(connection) => (
+                    connection,
+                    active_database.clone(),
+                    task_target_for_execution(conn_id, connected, active_database.as_deref()),
+                ),
                 Err(message) => {
                     cx.toast_error(message, window);
                     return;
@@ -157,9 +189,12 @@ impl SqlQueryDocument {
         self.run_in_new_tab = in_new_tab;
 
         let description = dbflux_core::truncate_string_safe(query.trim(), 80);
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary(dbflux_core::TaskKind::Query, description, cx);
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
+            dbflux_core::TaskKind::Query,
+            description,
+            Some(task_target.clone()),
+            cx,
+        );
 
         let exec_id = Uuid::new_v4();
         let record = ExecutionRecord {
@@ -172,18 +207,14 @@ impl SqlQueryDocument {
         };
         self.execution_history.push(record);
         self.active_execution_index = Some(self.execution_history.len() - 1);
+        self.active_query_task = Some(ActiveQueryTask {
+            task_id,
+            target: task_target.clone(),
+        });
 
         self.state = DocumentState::Executing;
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
-
-        let active_database = self.exec_ctx.database.clone().or_else(|| {
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&conn_id)
-                .and_then(|c| c.active_database.clone())
-        });
 
         let request = QueryRequest::new(query.clone()).with_database(active_database);
 
@@ -197,6 +228,19 @@ impl SqlQueryDocument {
 
             if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
+
+                if let Err(error) = connection.cleanup_after_cancel() {
+                    log::warn!("Cleanup after cancel failed: {}", error);
+                }
+
+                cx.update(|cx| {
+                    this.update(cx, |doc, cx| {
+                        doc.complete_cancelled_query(task_id, exec_id, &task_target, cx);
+                    })
+                    .ok();
+                })
+                .ok();
+
                 return;
             }
 
@@ -236,6 +280,47 @@ impl SqlQueryDocument {
         }
 
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
+    }
+
+    fn complete_cancelled_query(
+        &mut self,
+        task_id: dbflux_core::TaskId,
+        exec_id: Uuid,
+        target: &TaskTarget,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(record) = self
+            .execution_history
+            .iter_mut()
+            .find(|record| record.id == exec_id)
+        {
+            record.finished_at = Some(Instant::now());
+        }
+
+        let is_active_task = self
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id);
+
+        if is_active_task {
+            self.runner.clear_primary(task_id);
+            self.active_query_task = None;
+            self.state = DocumentState::Clean;
+        }
+
+        if let Some(database) = target.database.as_deref() {
+            self.app_state.update(cx, |state, cx| {
+                if state.remove_database_connection(target.profile_id, database) {
+                    cx.emit(AppStateChanged);
+                }
+            });
+        }
+
+        if is_active_task {
+            cx.emit(DocumentEvent::ExecutionFinished);
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
     }
 
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
@@ -358,6 +443,14 @@ impl SqlQueryDocument {
             }
         }
 
+        if self
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == pending.task_id)
+        {
+            self.active_query_task = None;
+        }
+
         cx.emit(DocumentEvent::ExecutionFinished);
         cx.emit(DocumentEvent::MetaChanged);
     }
@@ -449,27 +542,10 @@ impl SqlQueryDocument {
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(conn_id) = self.connection_id
-                && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
-            {
-                let conn = self
-                    .exec_ctx
-                    .database
-                    .as_deref()
-                    .filter(|_| {
-                        connected.connection.schema_loading_strategy()
-                            == SchemaLoadingStrategy::ConnectionPerDatabase
-                    })
-                    .map(|db| connected.connection_for_database(db))
-                    .unwrap_or_else(|| connected.connection.clone());
-
-                let cancel_handle = conn.cancel_handle();
-                if let Err(e) = cancel_handle.cancel() {
-                    log::warn!("Failed to send cancel via handle: {}", e);
-                }
-                if let Err(e) = conn.cancel_active() {
-                    log::warn!("Failed to send cancel to database: {}", e);
-                }
+            if let Some(task) = self.active_query_task.as_ref() {
+                self.app_state
+                    .read(cx)
+                    .cancel_query_for_target(&task.target);
             }
 
             self.state = DocumentState::Clean;

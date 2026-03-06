@@ -3,7 +3,7 @@ use crate::ui::components::data_table::SortState as TableSortState;
 use crate::ui::toast::ToastExt;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
-    QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind,
+    QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind, TaskTarget,
 };
 use gpui::*;
 use log::info;
@@ -124,9 +124,15 @@ impl DataGridPanel {
             browse_request.table.qualified_name()
         );
 
-        let (task_id, cancel_token) = self.runner.start_primary(
+        let task_target = TaskTarget {
+            profile_id,
+            database: database.clone(),
+        };
+
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
             format!("SELECT * FROM {}", table.qualified_name()),
+            Some(task_target),
             cx,
         );
 
@@ -270,9 +276,15 @@ impl DataGridPanel {
             collection.database, collection.name
         );
 
-        let (task_id, cancel_token) = self.runner.start_primary(
+        let task_target = TaskTarget {
+            profile_id,
+            database: Some(collection.database.clone()),
+        };
+
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
             format!("find {}.{}", collection.database, collection.name),
+            Some(task_target),
             cx,
         );
 
