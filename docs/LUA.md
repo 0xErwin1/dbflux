@@ -8,7 +8,7 @@ Personal working notes on the `dbflux_lua` crate: DBFlux's sandboxed Lua 5.4 run
 
 `dbflux_lua` lets users write Lua scripts that run during connection lifecycle events (pre-connect, post-connect, pre-disconnect, post-disconnect). Think of it like database migration hooks but more general — you can use them for SSO login flows, environment setup, audit logging, or triggering external tools before/after a connection opens.
 
-The crate exposes exactly one public type: `LuaExecutor`. Everything else — the VM factory, the API modules, the shared state — is crate-internal. From the outside, you just call `executor.execute_hook(hook, context, cancel_token, parent_cancel_token)` and get back a `HookResult`.
+The crate exposes exactly one public type: `LuaExecutor`. Everything else — the VM factory, the API modules, the shared state — is crate-internal. From the outside, you call `executor.execute_hook(hook, context, cancel_token, parent_cancel_token, output)` and get back a `HookResult`.
 
 ---
 
@@ -111,7 +111,7 @@ This is the core control flow API. Every Lua hook script communicates its result
 
 ```lua
 -- Read the current phase
-print(hook.phase)  -- "pre_connect", "post_connect", "pre_disconnect", "post_disconnect"
+local phase = hook.phase  -- "pre_connect", "post_connect", ...
 
 -- Signal outcomes
 hook.ok()           -- success (this is the default if nothing is called)
@@ -159,7 +159,7 @@ Each call does two things:
 1. Appends `[LEVEL] message` to an internal log buffer (which becomes the `stdout` of `HookResult`)
 2. Forwards to Rust's `log` crate at the corresponding level, prefixed with `[lua]`
 
-The log buffer is the primary way hooks communicate output to the user. Whatever the hook logs is what appears in the result panel when running from the code editor.
+When the caller provides an output channel, the same log line is also streamed immediately to the UI. The log buffer is still the primary durable output for the final `HookResult`.
 
 ### `dbflux.env.*` — Environment Variables
 
@@ -189,6 +189,7 @@ local result = dbflux.process.run({
     args = { "sso", "login", "--profile", "prod" },
     timeout_ms = 120000,
     cwd = "/home/user",
+    stream = true,
 })
 
 if not result.ok then
@@ -208,6 +209,7 @@ hook.ok()
 | `args`       | string[] | no       | Command arguments                                                      |
 | `timeout_ms` | integer  | no       | Per-process timeout (ms). Hook-level timeout still applies above this. |
 | `cwd`        | string   | no       | Working directory                                                      |
+| `stream`     | boolean  | no       | Stream stdout/stderr to the caller while the process is still running  |
 
 **Return value:**
 
@@ -258,24 +260,21 @@ This catches infinite loops, runaway computations, and long-running pure-Lua cod
 
 **Limitation**: This hook only fires for Lua bytecode instructions. If the script calls a blocking Rust function (like `dbflux.process.run`), the instruction hook won't fire until that function returns. That's why...
 
-### Layer 2: Process Polling Loop
+### Layer 2: Shared Process Executor
 
-Inside `dbflux.process.run`, a separate polling loop runs every 10ms:
+Inside `dbflux.process.run`, process execution is delegated to the shared `dbflux_core::execute_streaming_process()` helper. That helper:
 
-```
-loop:
-  - Is cancel token set? → kill child, return Err("Lua hook cancelled")
-  - Has hook-level timeout elapsed? → kill child, return Err("Lua hook timed out")
-  - Has per-process timeout elapsed? → kill child, return { timed_out = true }
-  - Did child exit? → collect output, return result
-  - sleep(10ms)
-```
+- spawns reader threads for stdout and stderr
+- pushes output chunks through a channel
+- checks cancel tokens and timeouts on a short interval
+- kills the child on cancellation or timeout
+- returns a normal result table for per-process timeout, or a Lua runtime error for hook-level cancellation/timeout
 
-This ensures that even when the script is blocked waiting for a child process, cancellation and timeout still work.
+This keeps Lua hooks and non-Lua script hooks aligned. The same low-level process execution path is used for Bash, Python, and Lua-triggered subprocesses.
 
 ### Layer 3: Parent Cancel Token
 
-The connection flow passes a parent cancel token that cancels all hooks when the overall connect/disconnect operation is aborted. Both the instruction hook and the process polling loop check this token alongside the hook-specific one.
+The connection flow passes a parent cancel token that cancels all hooks when the overall connect/disconnect operation is aborted. Both the instruction hook and the shared process executor check this token alongside the hook-specific one.
 
 ### Timeout Hierarchy
 
@@ -285,7 +284,7 @@ Hook-level timeout (e.g., 30s)
         └── Actually, process timeout < hook timeout to be useful
 ```
 
-If the hook-level timeout fires while a process is running, the process is killed and the entire hook aborts with `timed_out: true`.
+If the hook-level timeout fires while a process is running, the process is killed and the entire hook aborts with a Lua timeout error, which `LuaExecutor` converts into `HookResult { timed_out: true }`.
 
 If the process-level timeout fires, only that process is killed. The script continues executing and can handle the timeout gracefully:
 
@@ -315,13 +314,13 @@ Script execution
     └─ Any other Lua error → Ok(HookResult { exit_code: 1, stderr: error_msg })
 ```
 
-Cancellation is the only case that returns `Err` from `execute_hook`. This matches the contract from `HookRunner::run_phase`: `Err` means "something catastrophic, the whole phase is broken." Timeouts and runtime errors are normal "the hook failed" outcomes and are captured in `HookResult`.
+Cancellation is the only case that returns `Err` from `execute_hook`. Timeouts and runtime errors are normal "the hook failed" outcomes and are captured in `HookResult`.
 
 ### Sentinel-Based Error Detection
 
 mlua wraps errors in layers of `CallbackError` and `WithContext`. To detect cancellation vs. timeout, the code uses a recursive `error_has_message` function that unwraps these layers looking for the exact sentinel strings `"Lua hook cancelled"` and `"Lua hook timed out"`.
 
-This is a pragmatic workaround. A cleaner approach would be custom error types, but mlua's error model makes that impractical without fighting the library. The sentinel approach works reliably because these exact strings are only produced by our instruction hook and process polling loop.
+This is a pragmatic workaround. A cleaner approach would be custom error types, but mlua's error model makes that impractical without fighting the library. The sentinel approach works reliably because these exact strings are only produced by our instruction hook and shared process execution path.
 
 ---
 
@@ -352,6 +351,7 @@ The capability checks happen at VM creation time, not at call time. If `logging`
 pub struct LuaRuntimeState {
     pub outcome: Arc<Mutex<LuaHookOutcome>>,
     pub log_buffer: Arc<Mutex<Vec<String>>>,
+    pub output: Option<OutputSender>,
     pub cancel_token: CancelToken,
     pub parent_cancel_token: Option<CancelToken>,
     pub hook_started_at: Instant,
@@ -361,7 +361,13 @@ pub struct LuaRuntimeState {
 
 This is the shared mutable state that Lua callbacks and the executor both access. The `Arc<Mutex<...>>` pattern is necessary because Lua closures (registered as API functions) capture cloned `Arc`s, and the executor reads the final state after script execution.
 
-The `cancel_token` and timing fields are also cloned into the process polling loop, creating a shared view of the execution context across all layers.
+The `output` sender is optional. When present, Lua log calls and `dbflux.process.run({ stream = true })` forward live output to the UI while still preserving the final buffered output in `HookResult`.
+
+The `cancel_token` and timing fields are also shared with process execution, creating a single view of the execution context across all layers.
+
+### LuaVmConfig
+
+`LuaEngine::create_vm()` takes a `LuaVmConfig` struct rather than a long argument list. It bundles the hook context, phase, capabilities, cancel state, optional output sender, and timeout metadata needed to build a fresh VM.
 
 ### LuaVm
 
@@ -464,7 +470,7 @@ end
 - **Use `return` after `hook.fail()`** — The script continues executing after `hook.fail()`, which just sets a flag. If you don't return, subsequent code might call `hook.ok()` and overwrite the failure. The last call wins.
 - **Log liberally** — `dbflux.log.info()` output appears in the result panel. It's the only way to communicate progress and debug issues.
 - **Check `result.ok` not `result.exit_code`** — The `ok` field accounts for both exit code and timeout. `exit_code` can be `nil` in edge cases.
-- **Don't rely on `hook.phase` being set in the editor** — When running a script from the code editor's Run button (not as part of a connection flow), the phase defaults to `"pre_connect"`. Phase-dependent logic should handle this gracefully.
+- **Don't rely on `hook.phase` being missing in the editor** — When running a script from the code editor's Run button (not as part of a connection flow), the phase defaults to `"pre_connect"`. Phase-dependent logic should handle this gracefully.
 
 ---
 
@@ -472,7 +478,7 @@ end
 
 ### No Async
 
-Everything is synchronous and blocking. The Lua VM runs on a background thread, and `dbflux.process.run` blocks that thread while polling. For most hook use cases (CLI tool calls, environment checks), this is fine. But you can't do async HTTP requests or parallel operations.
+Everything is synchronous and blocking. The Lua VM runs on a background thread, and `dbflux.process.run` blocks that thread until the shared process executor finishes. For most hook use cases (CLI tool calls, environment checks), this is fine. But you can't do async HTTP requests or parallel operations.
 
 ### No Network Access
 
@@ -480,7 +486,7 @@ There's no HTTP client, socket library, or network API. The only way to interact
 
 ### No File I/O
 
-No `io.open`, no `os.rename`, no file reading or writing. The `dbflux.process.run` output is the only way to get data from external sources. If you need to read a config file, use a shell command: `cat /path/to/file` via the `ssh_cli` or `python_cli` allowlist.
+No `io.open`, no `os.rename`, no direct file reading or writing from Lua itself. If you need data from the outside world, you have to go through an allowlisted process such as Python or a cloud CLI.
 
 ### No Persistent State
 
@@ -502,9 +508,9 @@ The process allowlists are hardcoded. Adding a new tool requires a code change, 
 
 gpui-component (v0.5.0) does not include a `tree-sitter-lua` grammar. When editing Lua scripts in the code editor, there's no syntax highlighting. The `editor_mode()` returns `"lua"` which gracefully falls back to plaintext. Python and Bash scripts get full highlighting.
 
-### No `print()`
+### Output Is API-Driven
 
-The base `print` function is not available (it depends on the `io` library). Use `dbflux.log.info()` instead. This is a common gotcha for users writing their first hook.
+The supported way to communicate progress and diagnostics is `dbflux.log.*`. That output is buffered into the final `HookResult`, and it can also be streamed live when the caller requests it.
 
 ---
 
@@ -540,30 +546,17 @@ pub struct CompositeExecutor {
 
 ### Run Button Integration
 
-The code editor's Run button (`execution.rs`) uses `CompositeExecutor` to execute scripts. For Lua scripts, it creates an inline `ConnectionHook` from the editor content with default capabilities and a 30-second timeout, and passes it to `execute_hook`. The stdout (log buffer) and stderr are displayed in the result panel as a text body.
+The code editor's Run button (`execution.rs`) uses `CompositeExecutor` to execute scripts. For Lua scripts, it creates an inline `ConnectionHook` from the editor content with `LuaCapabilities::all_enabled()` and a 30-second timeout, passes an output channel to `execute_hook`, and renders live output in the results panel while the script is still running. The final stdout (log buffer) and stderr are still preserved in the completed text result.
 
 ---
 
 ## Testing
 
-All tests are in the crate itself (not in a separate `tests/` directory). Test coverage is comprehensive:
+All tests are in the crate itself (not in a separate `tests/` directory). Coverage currently spans:
 
-### executor.rs (12 tests)
-
-- Basic execution (success, warn, fail)
-- File-backed scripts
-- Runtime errors become `exit_code: 1`
-- Timeout detection
-- Cancellation detection
-- Process execution with allowlists (enabled, disabled, unknown allowlist, rejected program, process timeout)
-
-### engine.rs (6 tests)
-
-- Hook phase and connection metadata registration
-- Unsafe libraries are blocked (`io`, `os`, `debug`, `package` are nil)
-- Capabilities correctly hide optional APIs
-- Logging and env APIs work when enabled
-- Process API visibility toggled by capability
+- `executor.rs`: normal outcomes, runtime errors, file-backed scripts, cancellation, timeouts, capability gating, allowlist enforcement, and streamed process output behavior
+- `engine.rs`: hook phase, connection metadata, hidden unsafe libraries, optional API visibility, and VM construction behavior
+- `api/dbflux.rs`: process option validation, expired hook timeout handling before spawn, live log event formatting, and streamed partial stdout/stderr during cancellation
 
 ### Running the tests
 
@@ -597,7 +590,7 @@ The instruction hook fires every 1,000 instructions. This means:
 
 ### process_run Timeout Layering
 
-The three-layer timeout (instruction hook, process polling, per-process) can be confusing. The key insight: **process-level timeout is recoverable** (the script continues), **hook-level timeout is not** (the VM is killed). So you should always set `timeout_ms` on `dbflux.process.run` calls to something lower than the hook's timeout, allowing the script to handle the failure gracefully.
+The three-layer timeout (instruction hook, shared process executor, per-process timeout) can be confusing. The key insight: **process-level timeout is recoverable** (the script continues), **hook-level timeout is not** (the hook fails). So you should always set `timeout_ms` on `dbflux.process.run` calls to something lower than the hook's timeout, allowing the script to handle the failure gracefully.
 
 ### Why Not Just Allow `os.execute()`?
 

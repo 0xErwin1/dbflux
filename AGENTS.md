@@ -334,9 +334,13 @@ Key abstractions for UI adaptation:
 ### Connection Hooks
 
 - Hooks are reusable command definitions (name, command, args, cwd, env, timeout, failure policy)
+- Hook execution modes are `Command`, `Script`, and `Lua`
+- Process-backed hooks can be inline or file-backed; Lua hooks run in-process through `dbflux_lua`
 - Profile phase bindings: PreConnect, PostConnect, PreDisconnect, PostDisconnect
 - `HookRunner` orchestrates execution with `HookPhaseOutcome` (success/warning/abort)
 - Each hook runs as its own background task with stdout/stderr visible in Tasks panel
+- Process-backed hooks and `dbflux.process.run()` share the same streaming executor in `dbflux_core`; avoid duplicating process execution logic
+- Editor-run Lua scripts use `LuaCapabilities::all_enabled()` and stream live output into a document-owned buffer via channel, not a shared mutex string
 - Failure policies: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
 - Hooks section in Settings for global definitions; Hooks tab in Connection Manager for per-profile bindings
 - Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
@@ -366,8 +370,9 @@ Documents follow a consistent pattern for tab-based UI:
 1. **Handle**: `DocumentHandle` wraps the entity and provides metadata
 2. **State**: Document struct implements `Render` with internal focus management
 3. **Tabs**: CodeDocument supports multiple result tabs with `TabManager`
-4. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
-5. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
+4. **Scripts**: Lua/Python/Bash use the same document shell but execute as scripts, not DB queries; script output streams into `code/live_output.rs`
+5. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
+6. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
 
 ## Common Pitfalls
 
@@ -388,7 +393,8 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/dock/sidebar_dock.rs`              | Collapsible, resizable sidebar                      |
 | `crates/dbflux/src/ui/sidebar.rs`                        | Schema tree with lazy loading                       |
 | `crates/dbflux/src/ui/document/mod.rs`                   | Document system exports                             |
-| `crates/dbflux/src/ui/document/code/mod.rs`              | Language-aware query editor (SQL/MongoDB/etc)       |
+| `crates/dbflux/src/ui/document/code/mod.rs`              | Language-aware query and script editor              |
+| `crates/dbflux/src/ui/document/code/live_output.rs`      | Live output buffer for script execution             |
 | `crates/dbflux/src/ui/document/data_grid_panel.rs`       | Data grid with table/document view modes            |
 | `crates/dbflux/src/ui/document/tab_manager.rs`           | MRU tab ordering                                    |
 | `crates/dbflux/src/ui/dangerous_query.rs`                | Query safety analysis and confirmation              |
@@ -422,6 +428,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_core/src/config/scripts_directory.rs`     | Scripts folder tree (file/folder CRUD)              |
 | `crates/dbflux_lua/src/executor.rs`                     | Lua hook executor                                   |
 | `crates/dbflux_lua/src/engine.rs`                       | Lua VM creation and sandbox setup                   |
+| `crates/dbflux_lua/src/api/dbflux.rs`                   | Lua logging, env, and process APIs                  |
 | `crates/dbflux_core/src/connection/context.rs`           | Per-tab execution context (connection/database)     |
 | `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
 | `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |

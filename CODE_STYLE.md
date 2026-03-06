@@ -36,6 +36,9 @@
 - Trait-based deduplication: `HasSecretRef` unifies keyring operations, `Identifiable` unifies ID access. Prefer a shared trait + generic method over per-type copy-paste (crates/dbflux_core/src/storage/secret_manager.rs, crates/dbflux_core/src/connection/item_manager.rs).
 - Callback injection for cross-crate boundaries: `CreateTunnelFn` avoids circular dependency by defining a function signature in `dbflux_core` and supplying the real implementation from the app crate (crates/dbflux_core/src/connection/manager.rs, crates/dbflux/src/proxy.rs).
 - Reusable navigation components: `TreeNav` (plain struct, not Entity) for tree navigation; `FormGridNav<F>` for 2D grid form navigation. Both take dynamic state as input rather than storing it (crates/dbflux/src/ui/components/tree_nav.rs, crates/dbflux/src/ui/windows/settings/form_nav.rs).
+- Shared process execution: process-backed hooks and `dbflux.process.run()` should reuse `dbflux_core::execute_streaming_process()` instead of maintaining separate polling or output-capture loops.
+- Live script output: prefer a channel plus a document-owned buffer (`LiveOutputState`) for streamed UI output; do not use shared `Arc<Mutex<String>>` buffers for live rendering.
+- Script languages (`Lua`, `Python`, `Bash`) are handled by `CodeDocument`; they execute as scripts, not DB queries, and should not depend on connection context UI.
 
 ## Error Handling
 
@@ -55,6 +58,7 @@
 - Tests use `#[test]` and `assert_eq!`/`assert!` with snake_case names.
 - Integration tests for drivers use Docker containers managed by `dbflux_test_support` and are `#[ignore]` by default (require Docker daemon).
 - Test-only constructors (e.g., `ItemManager::with_store`) are gated behind `#[cfg(test)]`.
+- For large GPUI-heavy modules, extract pure state helpers into small modules when that keeps unit tests simple and avoids bloating the main document module.
 
 ## Do's and Don'ts
 
@@ -63,11 +67,13 @@
 - Do propagate or log errors; do not silently discard fallible results (AGENTS.md).
 - Do refactor and modularize functions that grow beyond ~100 lines; treat this as a design smell.
 - Do use abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt UI behavior instead of driver-specific conditionals.
+- Do use `LuaCapabilities::all_enabled()` for editor-run Lua scripts so the script runner matches the full hook-testing environment.
 - Do treat external service `Hello` metadata/form definition as the source of truth for RPC drivers.
 - Do use `mod.rs` for module directories (e.g., `core/mod.rs`, not a sibling `core.rs`) (AGENTS.md).
 - Don't use deprecated GPUI types (`Model<T>`, `View<T>`, etc.) (AGENTS.md).
 - Don't add driver-specific logic in UI code (e.g., `if driver == "mongodb"`). Use capability flags and metadata from `DriverMetadata` instead.
 - Don't import driver crates directly in UI code. All driver interaction goes through `dbflux_core` traits.
+- Don't add a second subprocess execution path for hooks or Lua helpers when the shared streaming executor already fits the job.
 - Don't use `config.json` to define driver metadata/forms for external services; it is runtime launch/socket config only.
 - Do use type-erased handles (`Box<dyn Any + Send + Sync>`) when storing cross-crate RAII objects to avoid circular dependencies.
 - Do use the `TunnelConnector` trait for new tunnel protocols instead of duplicating RAII/lifecycle logic.

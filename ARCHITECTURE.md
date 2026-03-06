@@ -34,14 +34,15 @@ crates/
       mod.rs                # Document exports and shared types
       handle.rs             # DocumentHandle for entity management
       types.rs              # DocumentId, DocumentKind, DocumentState
-      sql_query.rs          # Query editor with language-aware syntax (SQL/MongoDB/etc)
-      sql_query/file_ops.rs # Auto-save, scratch/shadow file management
-      sql_query/context_bar.rs  # Execution context dropdowns (connection/database/schema)
-      sql_query/render.rs   # Toolbar and editor rendering
-      sql_query/execution.rs # Query execution flow
-      sql_query/completion.rs # Language-aware autocompletion
-      sql_query/diagnostics.rs # Live query diagnostics
-      sql_query/focus.rs    # Internal focus management
+      code/mod.rs           # CodeDocument: query/script editor with language-aware behavior
+      code/file_ops.rs      # Auto-save, scratch/shadow file management
+      code/context_bar.rs   # Execution context dropdowns (connection/database/schema)
+      code/render.rs        # Toolbar, editor, and live output rendering
+      code/execution.rs     # Query and script execution flow
+      code/completion.rs    # Language-aware autocompletion
+      code/diagnostics.rs   # Live query diagnostics
+      code/focus.rs         # Internal focus management
+      code/live_output.rs   # Document-owned streamed script output buffer
       data_document.rs      # Standalone data browsing document
       tab_manager.rs        # MRU tab ordering and activation
       tab_bar.rs            # Visual tab bar rendering
@@ -168,6 +169,10 @@ crates/
   dbflux_driver_redis/      # Redis driver implementation
     src/driver.rs           # Connection, key-value API, schema discovery
     src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
+  dbflux_lua/               # Embedded Lua runtime for in-process hooks
+    src/executor.rs         # Lua HookExecutor implementation
+    src/engine.rs           # Lua VM creation and shared runtime state
+    src/api/dbflux.rs       # dbflux.log/env/process Lua APIs
   dbflux_tunnel_core/       # Shared RAII tunnel infrastructure
     src/lib.rs              # Tunnel, TunnelConnector, ForwardingConnection<R>
   dbflux_proxy/             # SOCKS5/HTTP CONNECT proxy tunnel
@@ -193,7 +198,7 @@ crates/
 `crates/dbflux/src/ui/document/` implements a tab-based document architecture:
 
 - `DocumentHandle` manages document lifecycle as GPUI entities
-- `SqlQueryDocument` provides language-aware query editing (SQL/MongoDB/etc) with multiple result tabs (Ctrl+Enter to run, Ctrl+Shift+Enter for new tab). Supports file-backed script documents with execution context dropdowns (connection/database/schema).
+- `CodeDocument` provides language-aware editing for queries and scripts (SQL/MongoDB/Redis/Lua/Python/Bash) with multiple result tabs and live output for scripts. Connection/database/schema controls are only shown for languages that support connection context.
 - Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Explicit Ctrl+S writes to the original file. Tabs close without warnings.
 - Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files.
 - `DataDocument` enables standalone data browsing independent of queries
@@ -209,7 +214,7 @@ crates/
 
 ### Schema & Navigation
 
-- Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
+- Sidebar: `crates/dbflux/src/ui/sidebar.rs` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
 - Sidebar dock: `crates/dbflux/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
@@ -239,10 +244,12 @@ crates/
 
 ### Connection Hooks
 
-- `crates/dbflux_core/src/connection/hook.rs` defines reusable hook commands (name, command, args, cwd, env, timeout, failure policy).
+- `crates/dbflux_core/src/connection/hook.rs` defines reusable hook definitions with three execution modes: `Command`, `Script`, and `Lua`.
+- Process-backed hooks can be inline or file-backed and cover Bash/Python plus arbitrary commands.
+- Lua hooks run in-process through `dbflux_lua`, with capability-gated access to `hook.*`, `connection.*`, `dbflux.log.*`, `dbflux.env.*`, and `dbflux.process.run()`.
 - Profile phase bindings: `PreConnect`, `PostConnect`, `PreDisconnect`, `PostDisconnect`.
 - `HookRunner` orchestrates execution with `HookPhaseOutcome` (success/warning/abort).
-- Each hook runs as an external process with stdout/stderr visible in the Tasks panel.
+- Process-backed hooks and Lua-triggered subprocesses share a common streaming executor. Output is visible in the Tasks panel for lifecycle hooks and in the document results panel for editor-run scripts.
 - Failure policies: `Disconnect` (abort flow), `Warn` (continue with warning), `Ignore` (log only).
 - Settings UI: `settings/hooks.rs` for global definitions; Connection Manager `hooks_tab.rs` for per-profile phase bindings.
 
@@ -324,7 +331,8 @@ crates/
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/workspace.rs).
 - External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which optionally creates a proxy tunnel, then connects and fetches schema (crates/dbflux/src/app.rs). Supports form-based configuration, direct URI input, optional proxy tunneling, and SSH tunneling (mutually exclusive). Connection hooks run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
-- Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
+- Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
+- Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
 - View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
 - Query preview: `SqlPreviewModal` operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/workspace.rs).
@@ -365,7 +373,7 @@ crates/
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/storage/saved_query.rs).
 - Session data (data dir via `dirs::data_dir`):
   - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/storage/session.rs).
-  - `sessions/*.sql` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
+  - `sessions/` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
   - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
   - `state.json` persisted UI state — sidebar collapse, etc. (crates/dbflux_core/src/storage/ui_state.rs).
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
