@@ -1,7 +1,7 @@
 use crate::{
     Connection, ConnectionProfile, CustomTypeInfo, DbConfig, DbDriver, DbKind, DbSchemaInfo,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore,
-    ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
+    ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
@@ -312,6 +312,10 @@ impl ConnectedProfile {
             .unwrap_or_else(|| self.connection.clone())
     }
 
+    pub fn remove_database_connection(&mut self, database: &str) -> Option<DatabaseConnection> {
+        self.database_connections.remove(database)
+    }
+
     /// Returns the per-database schema if available, otherwise the primary.
     pub fn schema_for_target_database(&self, database: &str) -> Option<&SchemaSnapshot> {
         self.database_connections
@@ -372,6 +376,32 @@ impl ConnectionManager {
         self.connections
             .get(&profile_id)
             .map(|c| c.connection.clone())
+    }
+
+    pub fn connection_for_task_target(&self, target: &TaskTarget) -> Option<Arc<dyn Connection>> {
+        let connected = self.connections.get(&target.profile_id)?;
+
+        match target.database.as_deref() {
+            Some(database)
+                if connected.connection.schema_loading_strategy()
+                    == SchemaLoadingStrategy::ConnectionPerDatabase =>
+            {
+                let is_primary = connected
+                    .schema
+                    .as_ref()
+                    .and_then(|schema| schema.current_database())
+                    .is_some_and(|current| current == database);
+
+                if is_primary {
+                    Some(connected.connection.clone())
+                } else {
+                    connected
+                        .database_connection(database)
+                        .map(|db_conn| db_conn.connection.clone())
+                }
+            }
+            _ => Some(connected.connection.clone()),
+        }
     }
 
     pub fn set_active_connection(&mut self, profile_id: Uuid) {
@@ -614,6 +644,23 @@ impl ConnectionManager {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
             connected.add_database_connection(database, DatabaseConnection { connection, schema });
         }
+    }
+
+    pub fn remove_database_connection(&mut self, profile_id: Uuid, database: &str) -> bool {
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return false;
+        };
+
+        let removed = connected.remove_database_connection(database).is_some();
+
+        if removed && connected.active_database.as_deref() == Some(database) {
+            connected.active_database = connected
+                .schema
+                .as_ref()
+                .and_then(|schema| schema.current_database().map(String::from));
+        }
+
+        removed
     }
 
     // --- Pending operations ---

@@ -119,7 +119,9 @@ pub use table_browser::{
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
     TableCountRequest, TableRef,
 };
-pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus};
+pub use task::{
+    CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
     QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,

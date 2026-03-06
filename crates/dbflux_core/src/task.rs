@@ -7,6 +7,12 @@ use uuid::Uuid;
 
 pub type TaskId = Uuid;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskTarget {
+    pub profile_id: Uuid,
+    pub database: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskKind {
     Query,
@@ -89,6 +95,7 @@ pub struct Task {
     pub completed_at: Option<Instant>,
     pub progress: Option<f32>,
     pub profile_id: Option<Uuid>,
+    pub target: Option<TaskTarget>,
     cancel_token: CancelToken,
 }
 
@@ -119,6 +126,7 @@ pub struct TaskSnapshot {
     pub progress: Option<f32>,
     pub is_cancellable: bool,
     pub profile_id: Option<Uuid>,
+    pub target: Option<TaskTarget>,
 }
 
 impl From<&Task> for TaskSnapshot {
@@ -132,6 +140,7 @@ impl From<&Task> for TaskSnapshot {
             progress: task.progress,
             is_cancellable: task.is_cancellable(),
             profile_id: task.profile_id,
+            target: task.target.clone(),
         }
     }
 }
@@ -153,17 +162,18 @@ impl TaskManager {
         kind: TaskKind,
         description: impl Into<String>,
     ) -> (TaskId, CancelToken) {
-        self.start_for_profile(kind, description, None)
+        self.start_for_target(kind, description, None)
     }
 
-    pub fn start_for_profile(
+    pub fn start_for_target(
         &mut self,
         kind: TaskKind,
         description: impl Into<String>,
-        profile_id: Option<Uuid>,
+        target: Option<TaskTarget>,
     ) -> (TaskId, CancelToken) {
         let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
+        let profile_id = target.as_ref().map(|target| target.profile_id);
 
         let task = Task {
             id,
@@ -174,6 +184,7 @@ impl TaskManager {
             completed_at: None,
             progress: None,
             profile_id,
+            target,
             cancel_token: cancel_token.clone(),
         };
 

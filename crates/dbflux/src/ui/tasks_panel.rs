@@ -88,23 +88,24 @@ impl TasksPanel {
     ) {
         match task_kind {
             TaskKind::Query => {
-                let conn = profile_id.and_then(|pid| {
+                let task_target = self
+                    .app_state
+                    .read(cx)
+                    .tasks()
+                    .get(task_id)
+                    .and_then(|task| task.target);
+
+                if let Some(target) = task_target {
+                    self.app_state.read(cx).cancel_query_for_target(&target);
+                } else if let Some(profile_id) = profile_id {
+                    let fallback_target = dbflux_core::TaskTarget {
+                        profile_id,
+                        database: None,
+                    };
+
                     self.app_state
                         .read(cx)
-                        .connections()
-                        .get(&pid)
-                        .map(|c| c.connection.clone())
-                });
-
-                if let Some(conn) = conn {
-                    let cancel_handle = conn.cancel_handle();
-                    if let Err(e) = cancel_handle.cancel() {
-                        log::warn!("Failed to send cancel via handle: {}", e);
-                    }
-
-                    if let Err(e) = conn.cancel_active() {
-                        log::warn!("Failed to send cancel to database: {}", e);
-                    }
+                        .cancel_query_for_target(&fallback_target);
                 }
             }
 
@@ -119,8 +120,6 @@ impl TasksPanel {
             state.tasks_mut().cancel(task_id);
             cx.emit(AppStateChanged);
         });
-
-        log::info!("Cancelled task from panel");
     }
 
     fn format_elapsed(secs: f64) -> String {

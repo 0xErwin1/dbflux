@@ -9,15 +9,12 @@ impl SqlQueryDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Entity<Dropdown>, Subscription) {
-        let connections = app_state.read(cx).connections();
-        let items: Vec<DropdownItem> = connections
-            .values()
-            .map(|c| DropdownItem::with_value(&c.profile.name, c.profile.id.to_string()))
-            .collect();
+        let items = Self::connection_items(app_state, cx);
 
-        let selected_index = exec_ctx
-            .connection_id
-            .and_then(|id| connections.values().position(|c| c.profile.id == id));
+        let selected_index = exec_ctx.connection_id.and_then(|id| {
+            let id = id.to_string();
+            items.iter().position(|item| item.value.as_ref() == id)
+        });
 
         let dropdown = cx.new(|_cx| {
             Dropdown::new("ctx-connection")
@@ -30,11 +27,184 @@ impl SqlQueryDocument {
             &dropdown,
             window,
             |this, _, event: &DropdownSelectionChanged, window, cx| {
-                this.on_connection_changed(event.index, window, cx);
+                this.on_connection_changed(&event.item, window, cx);
             },
         );
 
         (dropdown, sub)
+    }
+
+    fn connection_items(app_state: &Entity<AppState>, cx: &App) -> Vec<DropdownItem> {
+        let mut items: Vec<_> = app_state
+            .read(cx)
+            .connections()
+            .values()
+            .map(|connected| {
+                DropdownItem::with_value(&connected.profile.name, connected.profile.id.to_string())
+            })
+            .collect();
+
+        items.sort_by(|left, right| left.label.as_ref().cmp(right.label.as_ref()));
+        items
+    }
+
+    fn default_database_for_connection(
+        app_state: &Entity<AppState>,
+        connection_id: Uuid,
+        cx: &App,
+    ) -> Option<String> {
+        let connected = app_state.read(cx).connections().get(&connection_id)?;
+
+        connected.active_database.clone().or_else(|| {
+            connected
+                .schema
+                .as_ref()
+                .and_then(|schema| schema.current_database().map(String::from))
+        })
+    }
+
+    fn update_completion_provider(&mut self, cx: &mut Context<Self>) {
+        let connection_id = self
+            .connection_id
+            .filter(|id| self.app_state.read(cx).connections().contains_key(id));
+
+        let completion_provider: Rc<dyn CompletionProvider> =
+            Rc::new(QueryCompletionProvider::new(
+                self.query_language,
+                self.app_state.clone(),
+                connection_id,
+            ));
+
+        self.input_state.update(cx, |state, _cx| {
+            state.lsp.completion_provider = Some(completion_provider);
+        });
+    }
+
+    pub(super) fn sync_context_dropdowns(&mut self, cx: &mut Context<Self>) {
+        let mut did_change = false;
+
+        if self.connection_id.is_none()
+            && self.exec_ctx.connection_id.is_none()
+            && let Some(active_connection_id) = self.app_state.read(cx).active_connection_id()
+            && self
+                .app_state
+                .read(cx)
+                .connections()
+                .contains_key(&active_connection_id)
+        {
+            self.connection_id = Some(active_connection_id);
+            self.exec_ctx.connection_id = Some(active_connection_id);
+            did_change = true;
+        }
+
+        let connection_items = Self::connection_items(&self.app_state, cx);
+        let selected_connection_index = self.connection_id.and_then(|id| {
+            let id = id.to_string();
+            connection_items
+                .iter()
+                .position(|item| item.value.as_ref() == id)
+        });
+
+        let has_selected_connection = self
+            .connection_id
+            .is_some_and(|id| self.app_state.read(cx).connections().contains_key(&id));
+
+        self.connection_dropdown.update(cx, |dd, cx| {
+            dd.set_items(connection_items, cx);
+            dd.set_selected_index(selected_connection_index, cx);
+        });
+
+        if has_selected_connection {
+            if let Some(connection_id) = self.connection_id {
+                self.runner.set_profile_id(connection_id);
+
+                let database_items =
+                    Self::database_items_for_connection(&self.app_state, Some(connection_id), cx);
+
+                if self.exec_ctx.database.is_none() {
+                    self.exec_ctx.database =
+                        Self::default_database_for_connection(&self.app_state, connection_id, cx);
+                    did_change = true;
+                }
+
+                if self.exec_ctx.database.as_ref().is_some_and(|database| {
+                    !database_items
+                        .iter()
+                        .any(|item| item.value.as_ref() == database)
+                }) {
+                    self.exec_ctx.database =
+                        Self::default_database_for_connection(&self.app_state, connection_id, cx);
+                    did_change = true;
+                }
+
+                let selected_database_index =
+                    self.exec_ctx.database.as_ref().and_then(|database| {
+                        database_items
+                            .iter()
+                            .position(|item| item.value.as_ref() == database)
+                    });
+
+                self.database_dropdown.update(cx, |dd, cx| {
+                    dd.set_items(database_items, cx);
+                    dd.set_selected_index(selected_database_index, cx);
+                });
+
+                let schema_items =
+                    Self::schema_items_for_connection(&self.app_state, &self.exec_ctx, cx);
+                let selected_schema_index = self.exec_ctx.schema.as_ref().and_then(|schema| {
+                    schema_items
+                        .iter()
+                        .position(|item| item.value.as_ref() == schema)
+                });
+
+                let next_schema = if selected_schema_index.is_some() {
+                    self.exec_ctx.schema.clone()
+                } else if schema_items
+                    .iter()
+                    .any(|item| item.value.as_ref() == "public")
+                {
+                    Some("public".to_string())
+                } else {
+                    None
+                };
+
+                if self.exec_ctx.schema != next_schema {
+                    self.exec_ctx.schema = next_schema.clone();
+                    did_change = true;
+                }
+
+                let selected_schema_index = next_schema.as_ref().and_then(|schema| {
+                    schema_items
+                        .iter()
+                        .position(|item| item.value.as_ref() == schema)
+                });
+
+                self.schema_dropdown.update(cx, |dd, cx| {
+                    dd.set_items(schema_items, cx);
+                    dd.set_selected_index(selected_schema_index, cx);
+                });
+            }
+        } else {
+            self.runner.clear_profile_id();
+
+            self.database_dropdown.update(cx, |dd, cx| {
+                dd.set_items(Vec::new(), cx);
+                dd.set_selected_index(None, cx);
+            });
+
+            self.schema_dropdown.update(cx, |dd, cx| {
+                dd.set_items(Vec::new(), cx);
+                dd.set_selected_index(None, cx);
+            });
+        }
+
+        self.update_completion_provider(cx);
+
+        if did_change {
+            cx.emit(DocumentEvent::MetaChanged);
+        }
+
+        cx.notify();
     }
 
     pub(super) fn create_database_dropdown(
@@ -101,60 +271,30 @@ impl SqlQueryDocument {
 
     // === Event handlers for context changes ===
 
-    fn on_connection_changed(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let connections = self.app_state.read(cx).connections();
-        let conn = connections.values().nth(index);
-
-        let Some(conn) = conn else {
+    fn on_connection_changed(
+        &mut self,
+        item: &DropdownItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(new_conn_id) = Uuid::parse_str(item.value.as_ref()) else {
+            log::warn!("Invalid connection id in dropdown: {}", item.value.as_ref());
             return;
         };
 
-        let new_conn_id = conn.profile.id;
         self.exec_ctx.connection_id = Some(new_conn_id);
         self.connection_id = Some(new_conn_id);
-
-        // Reset dependent dropdowns
-        self.exec_ctx.database = conn.active_database.clone();
+        self.exec_ctx.database =
+            Self::default_database_for_connection(&self.app_state, new_conn_id, cx);
         self.exec_ctx.schema = None;
         self.exec_ctx.container = None;
 
-        // Update the task runner
-        self.runner.set_profile_id(new_conn_id);
-
-        // Refresh database dropdown items
-        let db_items = Self::database_items_for_connection(&self.app_state, Some(new_conn_id), cx);
-        let db_selected = self
-            .exec_ctx
-            .database
-            .as_ref()
-            .and_then(|db| db_items.iter().position(|item| item.value.as_ref() == db));
-
-        self.database_dropdown.update(cx, |dd, cx| {
-            dd.set_items(db_items, cx);
-            dd.set_selected_index(db_selected, cx);
-        });
-
-        // Refresh schema dropdown with default pre-selection
-        self.refresh_schema_dropdown_with_default(cx);
-
-        // Update completion provider
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
-                self.query_language,
-                self.app_state.clone(),
-                Some(new_conn_id),
-            ));
-        self.input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = Some(completion_provider);
-        });
+        self.sync_context_dropdowns(cx);
 
         // Re-validate context bar index since dropdown visibility may have changed
         if self.focus_mode == SqlQueryFocus::ContextBar {
             self.revalidate_context_bar_index(window, cx);
         }
-
-        cx.emit(DocumentEvent::MetaChanged);
-        cx.notify();
     }
 
     fn on_database_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
@@ -190,11 +330,13 @@ impl SqlQueryDocument {
 
         self.refresh_schema_dropdown_with_default(cx);
 
+        cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
 
     fn on_schema_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
         self.exec_ctx.schema = Some(item.value.to_string());
+        cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
 
@@ -202,17 +344,34 @@ impl SqlQueryDocument {
     fn refresh_schema_dropdown_with_default(&mut self, cx: &mut Context<Self>) {
         let schema_items = Self::schema_items_for_connection(&self.app_state, &self.exec_ctx, cx);
 
-        let default_index = schema_items
-            .iter()
-            .position(|item| item.value.as_ref() == "public");
+        let selected_index = self.exec_ctx.schema.as_ref().and_then(|schema| {
+            schema_items
+                .iter()
+                .position(|item| item.value.as_ref() == schema)
+        });
 
-        if default_index.is_some() {
-            self.exec_ctx.schema = Some("public".to_string());
-        }
+        let next_schema = if selected_index.is_some() {
+            self.exec_ctx.schema.clone()
+        } else if schema_items
+            .iter()
+            .any(|item| item.value.as_ref() == "public")
+        {
+            Some("public".to_string())
+        } else {
+            None
+        };
+
+        self.exec_ctx.schema = next_schema.clone();
+
+        let selected_index = next_schema.as_ref().and_then(|schema| {
+            schema_items
+                .iter()
+                .position(|item| item.value.as_ref() == schema)
+        });
 
         self.schema_dropdown.update(cx, |dd, cx| {
             dd.set_items(schema_items, cx);
-            dd.set_selected_index(default_index, cx);
+            dd.set_selected_index(selected_index, cx);
         });
     }
 
@@ -416,26 +575,6 @@ impl SqlQueryDocument {
                     .contains(DriverCapabilities::SCHEMAS)
             })
             .unwrap_or(false)
-    }
-
-    /// Refresh context dropdowns when connections change externally.
-    #[allow(dead_code)]
-    pub fn refresh_context_dropdowns(&mut self, cx: &mut Context<Self>) {
-        let connections = self.app_state.read(cx).connections();
-        let items: Vec<DropdownItem> = connections
-            .values()
-            .map(|c| DropdownItem::with_value(&c.profile.name, c.profile.id.to_string()))
-            .collect();
-
-        let selected_index = self
-            .exec_ctx
-            .connection_id
-            .and_then(|id| connections.values().position(|c| c.profile.id == id));
-
-        self.connection_dropdown.update(cx, |dd, cx| {
-            dd.set_items(items, cx);
-            dd.set_selected_index(selected_index, cx);
-        });
     }
 
     // === Context bar keyboard navigation ===
