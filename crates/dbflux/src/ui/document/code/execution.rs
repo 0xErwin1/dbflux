@@ -632,8 +632,8 @@ impl CodeDocument {
     fn run_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::hook_executor::CompositeExecutor;
         use dbflux_core::{
-            CancelToken, ConnectionHook, HookContext, HookExecutor, HookFailureMode, HookKind,
-            LuaCapabilities, ScriptLanguage, ScriptSource,
+            CancelToken, ConnectionHook, HookContext, HookExecutionMode, HookExecutor,
+            HookFailureMode, HookKind, LuaCapabilities, ScriptLanguage, ScriptSource,
         };
 
         let content = self.input_state.read(cx).value().to_string();
@@ -673,6 +673,8 @@ impl CodeDocument {
             env: std::collections::HashMap::new(),
             inherit_env: true,
             timeout_ms: Some(30_000),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Warn,
         };
 
@@ -719,8 +721,14 @@ impl CodeDocument {
 
         let task = cx.background_executor().spawn(async move {
             let started_at = Instant::now();
-            let result =
-                executor.execute_hook(&hook, &context, &bg_cancel, None, Some(&output_sender));
+            let result = executor.execute_hook(
+                &hook,
+                &context,
+                &bg_cancel,
+                None,
+                Some(&output_sender),
+                None,
+            );
 
             match result {
                 Ok(hook_result) => {

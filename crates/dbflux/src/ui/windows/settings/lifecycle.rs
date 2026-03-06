@@ -355,6 +355,16 @@ impl SettingsWindow {
                 .placeholder("Enter script content...")
         });
         let input_hook_interpreter = cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
+        let hook_execution_mode_dropdown = cx.new(|_cx| {
+            Dropdown::new("hook-execution-mode")
+                .items(vec![
+                    DropdownItem::with_value("Blocking", "blocking"),
+                    DropdownItem::with_value("Detached", "detached"),
+                ])
+                .selected_index(Some(0))
+        });
+        let input_hook_ready_signal =
+            cx.new(|cx| InputState::new(window, cx).placeholder("DBFLUX_READY"));
         let input_hook_cwd =
             cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/working-dir"));
         let input_hook_env =
@@ -395,6 +405,13 @@ impl SettingsWindow {
                 this.refresh_hook_script_content_editor(window, cx);
             },
         );
+        let hook_execution_mode_sub = cx.subscribe_in(
+            &hook_execution_mode_dropdown,
+            window,
+            |_, _, _: &DropdownSelectionChanged, _window, cx| {
+                cx.notify();
+            },
+        );
         let hook_script_source_sub = cx.subscribe_in(
             &script_source_dropdown,
             window,
@@ -407,6 +424,7 @@ impl SettingsWindow {
         let hook_args_sub = notify_on_input_change(&input_hook_args, window, cx);
         let hook_script_file_sub = notify_on_input_change(&input_hook_script_file_path, window, cx);
         let hook_interpreter_sub = notify_on_input_change(&input_hook_interpreter, window, cx);
+        let hook_ready_signal_sub = notify_on_input_change(&input_hook_ready_signal, window, cx);
         let hook_cwd_sub = notify_on_input_change(&input_hook_cwd, window, cx);
         let hook_env_sub = notify_on_input_change(&input_hook_env, window, cx);
         let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
@@ -503,6 +521,8 @@ impl SettingsWindow {
             input_hook_script_content,
             hook_script_content_subscription: None,
             input_hook_interpreter,
+            hook_execution_mode_dropdown,
+            input_hook_ready_signal,
             input_hook_cwd,
             input_hook_env,
             input_hook_timeout,
@@ -556,12 +576,14 @@ impl SettingsWindow {
                 drv_requires_preview_sub,
                 hook_kind_sub,
                 hook_script_language_sub,
+                hook_execution_mode_sub,
                 hook_script_source_sub,
                 hook_id_sub,
                 hook_command_sub,
                 hook_args_sub,
                 hook_script_file_sub,
                 hook_interpreter_sub,
+                hook_ready_signal_sub,
                 hook_cwd_sub,
                 hook_env_sub,
                 hook_timeout_sub,

@@ -1,6 +1,6 @@
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookResult, OutputSender,
-    ProcessExecutor,
+    CancelToken, ConnectionHook, DetachedProcessSender, HookContext, HookExecutor, HookKind,
+    HookResult, OutputSender, ProcessExecutor,
 };
 
 #[derive(Clone)]
@@ -34,17 +34,26 @@ impl HookExecutor for CompositeExecutor {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String> {
         match &hook.kind {
-            HookKind::Command { .. } | HookKind::Script { .. } => {
-                self.process
-                    .execute_hook(hook, context, cancel_token, parent_cancel_token, output)
-            }
+            HookKind::Command { .. } | HookKind::Script { .. } => self.process.execute_hook(
+                hook,
+                context,
+                cancel_token,
+                parent_cancel_token,
+                output,
+                detached,
+            ),
             #[cfg(feature = "lua")]
-            HookKind::Lua { .. } => {
-                self.lua
-                    .execute_hook(hook, context, cancel_token, parent_cancel_token, output)
-            }
+            HookKind::Lua { .. } => self.lua.execute_hook(
+                hook,
+                context,
+                cancel_token,
+                parent_cancel_token,
+                output,
+                detached,
+            ),
             #[cfg(not(feature = "lua"))]
             HookKind::Lua { .. } => {
                 Err("Lua hooks require the 'lua' feature to be enabled".to_string())
@@ -94,6 +103,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }
@@ -111,6 +122,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: dbflux_core::HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }

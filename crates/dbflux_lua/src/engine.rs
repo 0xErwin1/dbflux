@@ -1,6 +1,8 @@
 use crate::api;
 use crate::api::hook::LuaHookOutcome;
-use dbflux_core::{CancelToken, HookContext, HookPhase, LuaCapabilities, OutputSender};
+use dbflux_core::{
+    CancelToken, DetachedProcessSender, HookContext, HookPhase, LuaCapabilities, OutputSender,
+};
 use mlua::{Lua, LuaOptions, Result as LuaResult, StdLib};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -10,6 +12,7 @@ pub struct LuaRuntimeState {
     pub outcome: Arc<Mutex<LuaHookOutcome>>,
     pub log_buffer: Arc<Mutex<Vec<String>>>,
     pub output: Option<OutputSender>,
+    pub detached: Option<DetachedProcessSender>,
     pub cancel_token: CancelToken,
     pub parent_cancel_token: Option<CancelToken>,
     pub hook_started_at: Instant,
@@ -28,6 +31,7 @@ pub struct LuaVmConfig<'a> {
     pub cancel_token: CancelToken,
     pub parent_cancel_token: Option<CancelToken>,
     pub output: Option<OutputSender>,
+    pub detached: Option<DetachedProcessSender>,
     pub hook_started_at: Instant,
     pub hook_timeout: Option<Duration>,
 }
@@ -43,6 +47,7 @@ impl LuaEngine {
             cancel_token,
             parent_cancel_token,
             output,
+            detached,
             hook_started_at,
             hook_timeout,
         } = config;
@@ -54,6 +59,7 @@ impl LuaEngine {
             outcome: Arc::new(Mutex::new(LuaHookOutcome::Ok)),
             log_buffer: Arc::new(Mutex::new(Vec::new())),
             output,
+            detached,
             cancel_token,
             parent_cancel_token,
             hook_started_at,
@@ -112,6 +118,7 @@ mod tests {
             cancel_token: CancelToken::new(),
             parent_cancel_token: None,
             output: None,
+            detached: None,
             hook_started_at: Instant::now(),
             hook_timeout: None,
         }

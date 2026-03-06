@@ -45,7 +45,15 @@ impl CodeDocument {
                 .unwrap_or("untitled")
                 .to_string()
         } else {
-            format!("untitled.{}", default_ext)
+            let title = self.title.trim();
+
+            if title.is_empty() {
+                format!("untitled.{}", default_ext)
+            } else if title.contains('.') {
+                title.to_string()
+            } else {
+                format!("{}.{}", title, default_ext)
+            }
         };
 
         let entity = cx.entity().clone();

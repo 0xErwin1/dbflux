@@ -22,6 +22,14 @@ pub enum HookFailureMode {
     Ignore,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HookExecutionMode {
+    #[default]
+    Blocking,
+    Detached,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookPhase {
@@ -174,16 +182,14 @@ impl HookKind {
                 language,
                 interpreter,
                 ..
-            } => {
-                interpreter
-                    .clone()
-                    .or_else(|| {
-                        language
-                            .default_interpreter()
-                            .map(std::string::ToString::to_string)
-                    })
-                    .ok_or_else(|| {
-                        match language {
+            } => interpreter
+                .clone()
+                .or_else(|| {
+                    language
+                        .default_interpreter()
+                        .map(std::string::ToString::to_string)
+                })
+                .ok_or_else(|| match language {
                     ScriptLanguage::Bash => {
                         "Bash is not supported on Windows. Set an explicit interpreter override."
                             .to_string()
@@ -192,9 +198,7 @@ impl HookKind {
                     "{} is not supported on this platform. Set an explicit interpreter override.",
                     language.label()
                 ),
-                }
-                    })
-            }
+                }),
             Self::Lua { .. } => {
                 Err("Lua hooks run in-process and do not use an interpreter".into())
             }
@@ -216,6 +220,10 @@ pub struct ConnectionHook {
     pub inherit_env: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub execution_mode: HookExecutionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_signal: Option<String>,
     #[serde(default)]
     pub on_failure: HookFailureMode,
 }
@@ -245,6 +253,10 @@ impl<'de> Deserialize<'de> for ConnectionHook {
             .map_err(de::Error::custom)?
             .unwrap_or_else(default_inherit_env);
         let timeout_ms = take_field(&mut object, "timeout_ms").map_err(de::Error::custom)?;
+        let execution_mode = take_field(&mut object, "execution_mode")
+            .map_err(de::Error::custom)?
+            .unwrap_or_default();
+        let ready_signal = take_field(&mut object, "ready_signal").map_err(de::Error::custom)?;
         let on_failure = take_field(&mut object, "on_failure")
             .map_err(de::Error::custom)?
             .unwrap_or_default();
@@ -277,6 +289,8 @@ impl<'de> Deserialize<'de> for ConnectionHook {
             env,
             inherit_env,
             timeout_ms,
+            execution_mode,
+            ready_signal,
             on_failure,
         })
     }
@@ -484,6 +498,32 @@ pub struct HookResult {
     pub warnings: Vec<String>,
 }
 
+pub struct DetachedProcessHandle {
+    pub child: Child,
+    pub description: String,
+    pub timeout: Option<Duration>,
+    pub ready_signal: Option<String>,
+    _temp_file: Option<NamedTempFile>,
+}
+
+impl DetachedProcessHandle {
+    pub fn new(
+        child: Child,
+        description: String,
+        timeout: Option<Duration>,
+        ready_signal: Option<String>,
+        temp_file: Option<NamedTempFile>,
+    ) -> Self {
+        Self {
+            child,
+            description,
+            timeout,
+            ready_signal,
+            _temp_file: temp_file,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputStreamKind {
     Stdout,
@@ -508,8 +548,14 @@ impl OutputEvent {
 
 pub type OutputSender = mpsc::Sender<OutputEvent>;
 pub type OutputReceiver = mpsc::Receiver<OutputEvent>;
+pub type DetachedProcessSender = mpsc::Sender<DetachedProcessHandle>;
+pub type DetachedProcessReceiver = mpsc::Receiver<DetachedProcessHandle>;
 
 pub fn output_channel() -> (OutputSender, OutputReceiver) {
+    mpsc::channel()
+}
+
+pub fn detached_process_channel() -> (DetachedProcessSender, DetachedProcessReceiver) {
     mpsc::channel()
 }
 
@@ -614,6 +660,7 @@ pub trait HookExecutor: Send + Sync {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String>;
 }
 
@@ -628,10 +675,11 @@ impl HookExecutor for ProcessExecutor {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String> {
         match &hook.kind {
             HookKind::Command { .. } | HookKind::Script { .. } => {
-                hook.execute_process(context, cancel_token, parent_cancel_token, output)
+                hook.execute_process(context, cancel_token, parent_cancel_token, output, detached)
             }
             HookKind::Lua { .. } => {
                 Err("Lua hooks require the 'lua' feature to be enabled".to_string())
@@ -701,8 +749,12 @@ impl ConnectionHook {
         matches!(self.kind, HookKind::Command { .. })
     }
 
+    pub fn is_detached(&self) -> bool {
+        self.execution_mode == HookExecutionMode::Detached
+    }
+
     pub fn summary(&self) -> String {
-        match &self.kind {
+        let mut summary = match &self.kind {
             HookKind::Command { .. } => self.display_command(),
             HookKind::Script {
                 language, source, ..
@@ -710,7 +762,17 @@ impl ConnectionHook {
                 format!("{} · {}", language.label(), source.summary_label())
             }
             HookKind::Lua { source, .. } => format!("Lua · {}", source.summary_label()),
+        };
+
+        if self.execution_mode == HookExecutionMode::Detached {
+            summary.push_str(" · detached");
         }
+
+        if self.ready_signal.is_some() {
+            summary.push_str(" · waits for ready");
+        }
+
+        summary
     }
 
     fn resolve_execution(&self) -> Result<ResolvedExecution, String> {
@@ -770,7 +832,7 @@ impl ConnectionHook {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
     ) -> Result<HookResult, String> {
-        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token, None)
+        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token, None, None)
     }
 
     pub fn execute_with_output(
@@ -779,8 +841,16 @@ impl ConnectionHook {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String> {
-        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token, output)
+        ProcessExecutor.execute_hook(
+            self,
+            context,
+            cancel_token,
+            parent_cancel_token,
+            output,
+            detached,
+        )
     }
 
     pub(crate) fn execute_process(
@@ -789,35 +859,16 @@ impl ConnectionHook {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String> {
-        let resolved = self.resolve_execution()?;
-
-        let mut command = Command::new(&resolved.program);
-        command.args(&resolved.args);
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-
-        if let Some(cwd) = &self.cwd {
-            command.current_dir(cwd);
+        if self.execution_mode == HookExecutionMode::Detached {
+            return self.execute_detached_process(context, detached);
         }
 
-        if self.inherit_env {
-            command.envs(std::env::vars());
-        } else {
-            command.env_clear();
-        }
-
-        command.envs(self.context_env(context));
-        command.envs(self.env.iter());
-
-        let mut child = command.spawn().map_err(|error| {
-            format!("Failed to execute '{}': {}", self.display_command(), error)
-        })?;
-
-        let _temp_file = resolved._temp_file;
+        let mut spawned = self.spawn_process(context)?;
 
         match execute_streaming_process(
-            &mut child,
+            &mut spawned.child,
             cancel_token,
             parent_cancel_token,
             self.timeout_ms.map(Duration::from_millis),
@@ -848,6 +899,70 @@ impl ConnectionHook {
                 stderr
             )),
         }
+    }
+
+    fn execute_detached_process(
+        &self,
+        context: &HookContext,
+        detached: Option<&DetachedProcessSender>,
+    ) -> Result<HookResult, String> {
+        let Some(detached) = detached else {
+            return Err("Detached hooks are not available in this context".to_string());
+        };
+
+        let spawned = self.spawn_process(context)?;
+
+        detached
+            .send(spawned)
+            .map_err(|_| "Failed to register detached hook process".to_string())?;
+
+        Ok(HookResult {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn spawn_process(&self, context: &HookContext) -> Result<DetachedProcessHandle, String> {
+        let resolved = self.resolve_execution()?;
+
+        let mut command = Command::new(&resolved.program);
+        command.args(&resolved.args);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
+
+        if self.inherit_env {
+            command.envs(std::env::vars());
+        } else {
+            command.env_clear();
+        }
+
+        command.envs(self.context_env(context));
+        command.envs(self.env.iter());
+
+        let child = command.spawn().map_err(|error| {
+            format!("Failed to execute '{}': {}", self.display_command(), error)
+        })?;
+
+        Ok(DetachedProcessHandle::new(
+            child,
+            self.display_command(),
+            self.timeout_ms.map(Duration::from_millis),
+            self.ready_signal.clone(),
+            resolved._temp_file,
+        ))
     }
 
     pub fn failure_message(&self, phase: HookPhase, result: &Result<HookResult, String>) -> String {
@@ -1053,11 +1168,47 @@ fn drain_output_events(
 }
 
 fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
+    #[cfg(unix)]
+    terminate_process_group(child);
+
     let _ = child.kill();
     child
         .wait()
         .map(|_| ())
         .map_err(|error| ProcessExecutionError::Wait(error.to_string()))
+}
+
+#[cfg(unix)]
+fn terminate_process_group(child: &Child) {
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+
+    const SIGTERM: i32 = 15;
+    const SIGKILL: i32 = 9;
+
+    let Ok(pid) = i32::try_from(child.id()) else {
+        return;
+    };
+
+    if pid <= 0 {
+        return;
+    }
+
+    unsafe {
+        let _ = kill(-pid, SIGTERM);
+    }
+
+    let start = Instant::now();
+    let grace = Duration::from_millis(300);
+
+    while start.elapsed() < grace {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    unsafe {
+        let _ = kill(-pid, SIGKILL);
+    }
 }
 
 fn join_output_reader(handle: thread::JoinHandle<()>) {
@@ -1106,7 +1257,7 @@ impl HookRunner {
             }
 
             let result =
-                executor.execute_hook(hook, context, cancel_token, parent_cancel_token, None);
+                executor.execute_hook(hook, context, cancel_token, parent_cancel_token, None, None);
 
             if let Ok(output) = &result {
                 warnings.extend(output.warnings.iter().cloned());
@@ -1155,8 +1306,8 @@ impl HookRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AppConfig;
     use crate::connection::profile::{ConnectionProfile, DbConfig};
+    use crate::AppConfig;
 
     // =========================================================================
     // Helpers
@@ -1185,6 +1336,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }
@@ -1200,6 +1353,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }
@@ -1263,6 +1418,8 @@ mod tests {
             env: HashMap::from([("PG_COLOR".to_string(), "always".to_string())]),
             inherit_env: false,
             timeout_ms: Some(5000),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Warn,
         };
 
@@ -1994,6 +2151,7 @@ mod tests {
                 _cancel_token: &CancelToken,
                 _parent_cancel_token: Option<&CancelToken>,
                 _output: Option<&OutputSender>,
+                _detached: Option<&DetachedProcessSender>,
             ) -> Result<HookResult, String> {
                 Ok(HookResult {
                     exit_code: Some(0),
@@ -2146,11 +2304,19 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
-        let result =
-            ProcessExecutor.execute_hook(&hook, &test_context(), &CancelToken::new(), None, None);
+        let result = ProcessExecutor.execute_hook(
+            &hook,
+            &test_context(),
+            &CancelToken::new(),
+            None,
+            None,
+            None,
+        );
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("lua"));
@@ -2172,6 +2338,8 @@ mod tests {
                 env: HashMap::new(),
                 inherit_env: true,
                 timeout_ms: None,
+                execution_mode: HookExecutionMode::Blocking,
+                ready_signal: None,
                 on_failure: HookFailureMode::Disconnect,
             }
         } else {
@@ -2188,6 +2356,8 @@ mod tests {
                 env: HashMap::new(),
                 inherit_env: true,
                 timeout_ms: None,
+                execution_mode: HookExecutionMode::Blocking,
+                ready_signal: None,
                 on_failure: HookFailureMode::Disconnect,
             }
         };
@@ -2200,6 +2370,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 Some(&sender),
+                None,
             )
             .unwrap();
         drop(sender);
@@ -2432,6 +2603,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
@@ -2454,6 +2627,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
@@ -2481,6 +2656,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
@@ -2517,6 +2694,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
@@ -2548,6 +2727,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: Some(100),
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 
@@ -2582,6 +2763,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         };
 

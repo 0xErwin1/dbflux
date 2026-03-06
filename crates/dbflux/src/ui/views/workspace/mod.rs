@@ -203,18 +203,6 @@ impl Workspace {
                         cx.toast_warning(format!("Unsupported file type: {}", name), window);
                     }
                 }
-                SidebarEvent::OpenInlineScript {
-                    title,
-                    body,
-                    language,
-                } => {
-                    this.open_inline_script_editor(
-                        title.clone(),
-                        body.clone(),
-                        language.clone(),
-                        cx,
-                    );
-                }
             },
         )
         .detach();

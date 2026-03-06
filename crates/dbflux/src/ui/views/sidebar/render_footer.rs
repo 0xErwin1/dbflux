@@ -71,17 +71,6 @@ impl Sidebar {
                                                 crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                                                     cx.emit(SidebarEvent::OpenScript { path: path.clone() });
                                                 }
-                                                crate::ui::windows::settings::SettingsEvent::OpenInlineScript {
-                                                    title,
-                                                    body,
-                                                    language,
-                                                } => {
-                                                    cx.emit(SidebarEvent::OpenInlineScript {
-                                                        title: title.clone(),
-                                                        body: body.clone(),
-                                                        language: language.clone(),
-                                                    });
-                                                }
                                             }
                                         });
                                     },

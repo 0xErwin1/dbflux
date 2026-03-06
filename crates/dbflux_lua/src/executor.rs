@@ -1,8 +1,8 @@
 use crate::api::hook::LuaHookOutcome;
 use crate::engine::{LuaEngine, LuaVmConfig};
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookExecutor, HookKind, HookPhase, HookResult,
-    OutputSender,
+    CancelToken, ConnectionHook, DetachedProcessSender, HookContext, HookExecutor, HookKind,
+    HookPhase, HookResult, OutputSender,
 };
 use mlua::{Error as LuaError, HookTriggers, VmState};
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ impl HookExecutor for LuaExecutor {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
         output: Option<&OutputSender>,
+        detached: Option<&DetachedProcessSender>,
     ) -> Result<HookResult, String> {
         let HookKind::Lua {
             source,
@@ -58,6 +59,7 @@ impl HookExecutor for LuaExecutor {
             cancel_token: cancel_token.clone(),
             parent_cancel_token: parent_cancel_token.cloned(),
             output: output.cloned(),
+            detached: detached.cloned(),
             hook_started_at: start,
             hook_timeout: timeout,
         })
@@ -164,7 +166,8 @@ fn map_outcome(stdout: String, outcome: LuaHookOutcome) -> HookResult {
 mod tests {
     use super::*;
     use dbflux_core::{
-        HookFailureMode, LuaCapabilities, OutputStreamKind, ScriptSource, output_channel,
+        HookExecutionMode, HookFailureMode, LuaCapabilities, OutputStreamKind, ScriptSource,
+        detached_process_channel, output_channel,
     };
     use std::collections::HashMap;
     use std::io::Write;
@@ -199,6 +202,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }
@@ -219,6 +224,8 @@ mod tests {
             env: HashMap::new(),
             inherit_env: true,
             timeout_ms: None,
+            execution_mode: HookExecutionMode::Blocking,
+            ready_signal: None,
             on_failure: HookFailureMode::Disconnect,
         }
     }
@@ -230,6 +237,7 @@ mod tests {
                 &lua_hook("dbflux.log.info('hello')"),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
                 None,
             )
@@ -248,6 +256,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -262,6 +271,7 @@ mod tests {
                 &lua_hook("hook.fail('boom')"),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
                 None,
             )
@@ -280,6 +290,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -296,6 +307,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -309,7 +321,14 @@ mod tests {
         hook.timeout_ms = Some(10);
 
         let result = LuaExecutor::new()
-            .execute_hook(&hook, &test_context(), &CancelToken::new(), None, None)
+            .execute_hook(
+                &hook,
+                &test_context(),
+                &CancelToken::new(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         assert!(result.timed_out);
@@ -325,6 +344,7 @@ mod tests {
             &lua_hook("while true do end"),
             &test_context(),
             &token,
+            None,
             None,
             None,
         );
@@ -356,6 +376,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -372,6 +393,7 @@ mod tests {
                 ),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
                 None,
             )
@@ -396,6 +418,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -416,6 +439,7 @@ mod tests {
                 ),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
                 None,
             )
@@ -446,6 +470,7 @@ mod tests {
                 ),
                 &test_context(),
                 &CancelToken::new(),
+                None,
                 None,
                 None,
             )
@@ -480,6 +505,7 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 Some(&sender),
+                None,
             )
             .unwrap();
         drop(sender);
@@ -523,8 +549,10 @@ mod tests {
                 &CancelToken::new(),
                 None,
                 Some(&sender),
+                None,
             )
             .unwrap();
+
         drop(sender);
 
         let events: Vec<_> = receiver.try_iter().collect();
@@ -537,5 +565,45 @@ mod tests {
         assert!(!events.iter().any(|event| {
             event.stream == OutputStreamKind::Stdout && event.text.contains("hello-buffered")
         }));
+    }
+
+    #[test]
+    fn controlled_process_run_can_detach_explicitly() {
+        let python = if cfg!(target_os = "windows") {
+            "python"
+        } else {
+            "python3"
+        };
+
+        let hook = lua_hook_with_capabilities(
+            &format!(
+                "local result = dbflux.process.run({{ program = '{python}', allowlist = 'python_cli', detached = true, args = {{'-c', 'import time; time.sleep(0.1)'}} }})\nif not result.detached then hook.fail('expected detached process') end"
+            ),
+            LuaCapabilities {
+                process_run: true,
+                ..LuaCapabilities::default()
+            },
+        );
+
+        let (detached_sender, detached_receiver) = detached_process_channel();
+        let result = LuaExecutor::new()
+            .execute_hook(
+                &hook,
+                &test_context(),
+                &CancelToken::new(),
+                None,
+                None,
+                Some(&detached_sender),
+            )
+            .unwrap();
+
+        let detached = detached_receiver.try_recv().unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.contains("[PROCESS/python_cli]"));
+        assert_eq!(
+            detached.description,
+            format!("{python} -c import time; time.sleep(0.1)")
+        );
     }
 }

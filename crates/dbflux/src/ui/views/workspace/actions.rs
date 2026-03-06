@@ -99,18 +99,6 @@ impl Workspace {
                             crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                                 this.open_script_from_path(path.clone(), cx);
                             }
-                            crate::ui::windows::settings::SettingsEvent::OpenInlineScript {
-                                title,
-                                body,
-                                language,
-                            } => {
-                                this.open_inline_script_editor(
-                                    title.clone(),
-                                    body.clone(),
-                                    language.clone(),
-                                    cx,
-                                );
-                            }
                         });
                     },
                 )
@@ -615,24 +603,6 @@ impl Workspace {
             language,
             connection_id,
             exec_ctx,
-        });
-        cx.notify();
-    }
-
-    pub(super) fn open_inline_script_editor(
-        &mut self,
-        title: String,
-        body: String,
-        language: QueryLanguage,
-        cx: &mut Context<Self>,
-    ) {
-        self.pending_open_script = Some(PendingOpenScript {
-            path: None,
-            title,
-            body,
-            language,
-            connection_id: None,
-            exec_ctx: ExecutionContext::default(),
         });
         cx.notify();
     }

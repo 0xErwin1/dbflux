@@ -19,7 +19,7 @@ use crate::ui::components::tree_nav::{TreeNav, TreeNavAction};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{
     AppConfigStore, ConnectionHook, DriverFormDef, DriverKey, DriverMetadata, FormValues,
-    GeneralSettings, GlobalOverrides, QueryLanguage, ServiceConfig,
+    GeneralSettings, GlobalOverrides, ServiceConfig,
 };
 use gpui::prelude::*;
 use gpui::*;
@@ -300,6 +300,8 @@ pub struct SettingsWindow {
     input_hook_script_content: Entity<InputState>,
     hook_script_content_subscription: Option<Subscription>,
     input_hook_interpreter: Entity<InputState>,
+    hook_execution_mode_dropdown: Entity<Dropdown>,
+    input_hook_ready_signal: Entity<InputState>,
     input_hook_cwd: Entity<InputState>,
     input_hook_env: Entity<InputState>,
     input_hook_timeout: Entity<InputState>,
@@ -357,14 +359,7 @@ impl EventEmitter<DismissEvent> for SettingsWindow {}
 
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
-    OpenScript {
-        path: std::path::PathBuf,
-    },
-    OpenInlineScript {
-        title: String,
-        body: String,
-        language: QueryLanguage,
-    },
+    OpenScript { path: std::path::PathBuf },
 }
 
 impl EventEmitter<SettingsEvent> for SettingsWindow {}

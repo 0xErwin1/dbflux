@@ -1,22 +1,25 @@
 use super::*;
 use crate::hook_executor::CompositeExecutor;
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookKind, HookPhase, HookPhaseOutcome, HookResult,
-    HookRunner,
+    CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
+    HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind,
+    detached_process_channel, execute_streaming_process, output_channel,
 };
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::{Duration, Instant};
+
+const DETACHED_HOOK_STARTED_MESSAGE: &str = "Detached process started in background";
+
+type DetachedReadyReceiver = std::sync::mpsc::Receiver<Result<(), String>>;
+
+struct DetachedHookTaskStart {
+    ready_receiver: Option<DetachedReadyReceiver>,
+}
 
 enum HookPhaseState {
     Continue { warnings: Vec<String> },
     Aborted { error: String },
     Cancelled,
-}
-
-fn single_hook_result(executions: Vec<dbflux_core::HookExecution>) -> Result<HookResult, String> {
-    executions
-        .into_iter()
-        .last()
-        .map(|execution| execution.result)
-        .unwrap_or_else(|| Err("Hook execution produced no result".to_string()))
 }
 
 fn hook_task_details(
@@ -81,6 +84,402 @@ fn hook_task_details(
     }
 }
 
+fn detached_hook_task_details(
+    phase: HookPhase,
+    command_display: &str,
+    result: &Result<HookResult, String>,
+) -> String {
+    match result {
+        Ok(output) => {
+            let mut lines = vec![
+                format!("Phase: {}", phase.label()),
+                format!("Process: {}", command_display),
+                format!("Timed out: {}", output.timed_out),
+                format!("Exit code: {:?}", output.exit_code),
+                String::new(),
+                "stdout:".to_string(),
+            ];
+
+            if output.stdout.trim().is_empty() {
+                lines.push("<empty>".to_string());
+            } else {
+                lines.push(output.stdout.clone());
+            }
+
+            lines.push(String::new());
+            lines.push("stderr:".to_string());
+
+            if output.stderr.trim().is_empty() {
+                lines.push("<empty>".to_string());
+            } else {
+                lines.push(output.stderr.clone());
+            }
+
+            lines.join("\n")
+        }
+        Err(error) => format!(
+            "Phase: {}\nProcess: {}\nError: {}",
+            phase.label(),
+            command_display,
+            error
+        ),
+    }
+}
+
+fn hook_started_detached_details(
+    hook: &ConnectionHook,
+    phase: HookPhase,
+    command_display: &str,
+) -> String {
+    let mut lines = vec![
+        format!("Phase: {}", phase.label()),
+        format!("Summary: {}", hook.summary()),
+        format!("Process: {}", command_display),
+        DETACHED_HOOK_STARTED_MESSAGE.to_string(),
+    ];
+
+    if let Some(ready_signal) = &hook.ready_signal {
+        lines.push(format!("Waiting for ready signal: {ready_signal}"));
+    }
+
+    lines.join("\n")
+}
+
+fn detached_process_error_message(error: &ProcessExecutionError, description: &str) -> String {
+    match error {
+        ProcessExecutionError::Spawn(message) => {
+            format!("Failed to execute detached hook process '{description}': {message}")
+        }
+        ProcessExecutionError::Wait(message) => {
+            format!("Failed to wait for detached hook process '{description}': {message}")
+        }
+        ProcessExecutionError::Cancelled { stdout, stderr } => {
+            format!("Detached hook process '{description}' cancelled\n{stdout}{stderr}")
+        }
+        ProcessExecutionError::TimedOut { stdout, stderr } => {
+            format!("Detached hook process '{description}' timed out\n{stdout}{stderr}")
+        }
+    }
+}
+
+fn start_task_output_drain(
+    app_state: Entity<AppState>,
+    task_id: TaskId,
+    receiver: OutputReceiver,
+    ready_signal: Option<String>,
+    ready_sender: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    ready_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cx: &mut AsyncApp,
+) {
+    cx.spawn(async move |cx| {
+        drain_task_output(
+            app_state,
+            task_id,
+            receiver,
+            ready_signal,
+            ready_sender,
+            ready_seen,
+            cx,
+        )
+        .await;
+    })
+    .detach();
+}
+
+async fn drain_task_output(
+    app_state: Entity<AppState>,
+    task_id: TaskId,
+    receiver: OutputReceiver,
+    ready_signal: Option<String>,
+    ready_sender: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    ready_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cx: &mut AsyncApp,
+) {
+    let mut ready_sender = ready_sender;
+    let mut signal_buffer = String::new();
+
+    loop {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(100))
+            .await;
+
+        let mut chunk = String::new();
+        let mut disconnected = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => chunk.push_str(&event.text),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if !chunk.is_empty() {
+            if let Some(signal) = ready_signal.as_deref() {
+                signal_buffer.push_str(&chunk);
+
+                if !ready_seen.load(std::sync::atomic::Ordering::SeqCst)
+                    && signal_buffer.contains(signal)
+                {
+                    ready_seen.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                    if let Some(sender) = ready_sender.take() {
+                        let _ = sender.send(Ok(()));
+                    }
+                }
+
+                let max_buffer_len = signal.len().saturating_add(1024);
+                if signal_buffer.len() > max_buffer_len {
+                    let keep_from = signal_buffer.len() - max_buffer_len;
+                    signal_buffer = signal_buffer.split_off(keep_from);
+                }
+            }
+
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    state.append_task_details(task_id, &chunk);
+                    cx.emit(AppStateChanged);
+                });
+            })
+            .ok();
+        }
+
+        if disconnected {
+            break;
+        }
+    }
+}
+
+fn start_detached_hook_task(
+    app_state: Entity<AppState>,
+    profile_id: Uuid,
+    profile_name: &str,
+    phase: HookPhase,
+    handle: DetachedProcessHandle,
+    parent_cancel_token: Option<CancelToken>,
+    cx: &mut AsyncApp,
+) -> Result<DetachedHookTaskStart, ()> {
+    let description = handle.description.clone();
+    let ready_signal = handle.ready_signal.clone();
+
+    let (task_id, cancel_token) = cx
+        .update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let task = state.start_task_for_profile(
+                    TaskKind::Hook { phase },
+                    format!(
+                        "Hook Process: {} — {} — {}",
+                        phase.label(),
+                        profile_name,
+                        description
+                    ),
+                    Some(profile_id),
+                );
+                state.register_detached_hook_task(profile_id, task.0);
+                cx.emit(AppStateChanged);
+                task
+            })
+        })
+        .map_err(|_| ())?;
+
+    let (ready_sender, ready_receiver) = if ready_signal.is_some() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+
+    let ready_seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (output_sender, output_receiver) = output_channel();
+    start_task_output_drain(
+        app_state.clone(),
+        task_id,
+        output_receiver,
+        ready_signal.clone(),
+        ready_sender.clone(),
+        ready_seen.clone(),
+        cx,
+    );
+
+    let description_for_completion = description.clone();
+    let app_state_for_completion = app_state.clone();
+    let task_cancel_token = cancel_token.clone();
+    let parent_cancel_for_task = parent_cancel_token.clone();
+    let ready_signal_for_completion = ready_signal.clone();
+
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_executor()
+            .spawn(async move {
+                let mut child = handle.child;
+                execute_streaming_process(
+                    &mut child,
+                    &cancel_token,
+                    parent_cancel_for_task.as_ref(),
+                    handle.timeout,
+                    None,
+                    Some(&output_sender),
+                )
+            })
+            .await;
+
+        cx.update(|cx| {
+            app_state_for_completion.update(cx, |state, cx| {
+                state.unregister_detached_hook_task(profile_id, task_id);
+
+                if task_cancel_token.is_cancelled() {
+                    cx.emit(AppStateChanged);
+                    return;
+                }
+
+                if !ready_seen.load(std::sync::atomic::Ordering::SeqCst)
+                    && let (Some(signal), Some(sender)) =
+                        (ready_signal_for_completion.as_ref(), ready_sender.as_ref())
+                {
+                    let _ = sender.send(Err(format!(
+                        "Detached hook process exited before ready signal '{signal}'",
+                    )));
+                }
+
+                let details_result = result.as_ref().map(Clone::clone).map_err(|error| {
+                    detached_process_error_message(error, &description_for_completion)
+                });
+
+                let details =
+                    detached_hook_task_details(phase, &description_for_completion, &details_result);
+
+                match result {
+                    Ok(output) if output.is_success() => {
+                        state.complete_task_with_details(task_id, details);
+                    }
+                    Ok(output) if output.timed_out => {
+                        state.fail_task_with_details(
+                            task_id,
+                            "Detached hook process timed out",
+                            details,
+                        );
+                    }
+                    Ok(_) => {
+                        state.fail_task_with_details(
+                            task_id,
+                            "Detached hook process failed",
+                            details,
+                        );
+                    }
+                    Err(error) => {
+                        state.fail_task_with_details(
+                            task_id,
+                            detached_process_error_message(&error, &description_for_completion),
+                            details,
+                        );
+                    }
+                }
+
+                cx.emit(AppStateChanged);
+            });
+        })
+        .ok();
+    })
+    .detach();
+
+    Ok(DetachedHookTaskStart { ready_receiver })
+}
+
+async fn wait_for_detached_hook_ready(
+    receiver: DetachedReadyReceiver,
+    parent_cancel_token: Option<&CancelToken>,
+    cx: &mut AsyncApp,
+) -> Result<(), HookPhaseState> {
+    loop {
+        if parent_cancel_token.is_some_and(CancelToken::is_cancelled) {
+            return Err(HookPhaseState::Cancelled);
+        }
+
+        match receiver.try_recv() {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => return Err(HookPhaseState::Aborted { error }),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(HookPhaseState::Aborted {
+                    error: "Detached hook readiness watcher disconnected unexpectedly".to_string(),
+                });
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+            }
+        }
+    }
+}
+
+fn probe_tcp_endpoint(host: &str, port: u16) -> Result<bool, String> {
+    let probe_host = if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1"
+    } else {
+        host
+    };
+
+    let addrs: Vec<SocketAddr> = (probe_host, port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Failed to resolve {probe_host}:{port}: {error}"))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(format!("No addresses resolved for {probe_host}:{port}"));
+    }
+
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+async fn wait_for_hook_endpoint_ready(
+    host: String,
+    port: u16,
+    parent_cancel_token: Option<&CancelToken>,
+    cx: &mut AsyncApp,
+) -> Result<(), HookPhaseState> {
+    let start = Instant::now();
+
+    loop {
+        if parent_cancel_token.is_some_and(CancelToken::is_cancelled) {
+            return Err(HookPhaseState::Cancelled);
+        }
+
+        let host_for_probe = host.clone();
+        match cx
+            .background_executor()
+            .spawn(async move { probe_tcp_endpoint(&host_for_probe, port) })
+            .await
+        {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(HookPhaseState::Aborted { error });
+            }
+        }
+
+        if start.elapsed() > Duration::from_secs(15) {
+            return Err(HookPhaseState::Aborted {
+                error: format!(
+                    "Detached pre-connect hook reported ready, but {host}:{port} never accepted connections"
+                ),
+            });
+        }
+
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_hook_phase(
     app_state: Entity<AppState>,
@@ -125,6 +524,34 @@ async fn run_hook_phase(
             Err(_) => return HookPhaseState::Cancelled,
         };
 
+        if phase == HookPhase::PreConnect && hook.is_detached() && hook.ready_signal.is_none() {
+            let error = "Detached pre-connect hooks must set a ready signal before DBFlux can continue connecting"
+                .to_string();
+
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    state.fail_task(task_id, error.clone());
+                    cx.emit(AppStateChanged);
+                });
+            })
+            .ok();
+
+            return HookPhaseState::Aborted { error };
+        }
+
+        let (output_sender, output_receiver) = output_channel();
+        start_task_output_drain(
+            app_state.clone(),
+            task_id,
+            output_receiver,
+            None,
+            None,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            cx,
+        );
+
+        let (detached_sender, detached_receiver) = detached_process_channel();
+
         let parent_cancel_for_hook = parent_cancel.clone();
         let hook_for_execution = hook.clone();
         let mut hook_context = context.clone();
@@ -132,48 +559,120 @@ async fn run_hook_phase(
         let hook_cancel_for_execution = hook_cancel_token.clone();
         let executor = executor.clone();
 
-        let hook_outcome = cx
+        let hook_result = cx
             .background_executor()
             .spawn(async move {
-                HookRunner::run_phase(
-                    phase,
-                    &[hook_for_execution],
+                executor.execute_hook(
+                    &hook_for_execution,
                     &hook_context,
                     &hook_cancel_for_execution,
                     parent_cancel_for_hook.as_ref(),
-                    &executor,
+                    Some(&output_sender),
+                    Some(&detached_sender),
                 )
             })
             .await;
 
-        let (hook_result, warn_messages, abort_error) = match hook_outcome {
-            HookPhaseOutcome::Success { executions } => {
-                (single_hook_result(executions), Vec::new(), None)
-            }
-            HookPhaseOutcome::CompletedWithWarnings {
-                executions,
-                warnings,
-            } => (single_hook_result(executions), warnings, None),
-            HookPhaseOutcome::Aborted { executions, error } => {
-                (single_hook_result(executions), Vec::new(), Some(error))
-            }
-        };
+        let detached_handles: Vec<_> = detached_receiver.try_iter().collect();
 
-        let succeeded = hook_result
-            .as_ref()
-            .is_ok_and(|output: &HookResult| output.is_success());
+        if let Ok(output) = &hook_result {
+            warnings.extend(output.warnings.iter().cloned());
+        }
 
-        let failure_message = if succeeded {
-            None
+        let detached_started = !detached_handles.is_empty();
+        let mut ready_receivers = Vec::new();
+
+        let mut detached_task_registration_failed = None;
+        for handle in detached_handles {
+            match start_detached_hook_task(
+                app_state.clone(),
+                profile_id,
+                &profile_name,
+                phase,
+                handle,
+                parent_cancel.clone(),
+                cx,
+            ) {
+                Ok(start) => {
+                    if let Some(receiver) = start.ready_receiver {
+                        ready_receivers.push(receiver);
+                    }
+                }
+                Err(_) => {
+                    detached_task_registration_failed =
+                        Some("Failed to register detached hook task".to_string());
+                    break;
+                }
+            }
+        }
+
+        if let Some(error) = detached_task_registration_failed {
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    state.fail_task(task_id, error.clone());
+                    cx.emit(AppStateChanged);
+                });
+            })
+            .ok();
+
+            return HookPhaseState::Aborted { error };
+        }
+
+        let (succeeded, failure_message, abort_error, cancelled) = if detached_started {
+            let mut readiness_error = None;
+
+            for receiver in ready_receivers {
+                if let Err(state) =
+                    wait_for_detached_hook_ready(receiver, parent_cancel.as_ref(), cx).await
+                {
+                    readiness_error = Some(state);
+                    break;
+                }
+            }
+
+            if readiness_error.is_none() && phase == HookPhase::PreConnect {
+                if let (Some(host), Some(port)) = (context.host.clone(), context.port)
+                    && let Err(state) =
+                        wait_for_hook_endpoint_ready(host, port, parent_cancel.as_ref(), cx).await
+                {
+                    readiness_error = Some(state);
+                }
+            }
+
+            match readiness_error {
+                None => (true, None, None, false),
+                Some(HookPhaseState::Cancelled) => (false, None, None, true),
+                Some(HookPhaseState::Aborted { error }) => {
+                    (false, Some(error.clone()), Some(error), false)
+                }
+                Some(HookPhaseState::Continue { .. }) => unreachable!(),
+            }
         } else {
-            Some(
-                abort_error
-                    .clone()
-                    .or_else(|| warn_messages.first().cloned())
-                    .unwrap_or_else(|| hook.failure_message(phase, &hook_result)),
-            )
+            let succeeded = hook_result
+                .as_ref()
+                .is_ok_and(|output: &HookResult| output.is_success());
+
+            let failure_message = if succeeded {
+                None
+            } else {
+                Some(hook.failure_message(phase, &hook_result))
+            };
+
+            let abort_error =
+                if succeeded || hook.on_failure != dbflux_core::HookFailureMode::Disconnect {
+                    None
+                } else {
+                    failure_message.clone()
+                };
+
+            (succeeded, failure_message, abort_error, false)
         };
-        let details = hook_task_details(&hook, phase, &command_display, &hook_result);
+
+        let details = if detached_started {
+            hook_started_detached_details(&hook, phase, &command_display)
+        } else {
+            hook_task_details(&hook, phase, &command_display, &hook_result)
+        };
 
         cx.update(|cx| {
             app_state.update(cx, |state, cx| {
@@ -188,7 +687,9 @@ async fn run_hook_phase(
         })
         .ok();
 
-        warnings.extend(warn_messages);
+        if cancelled {
+            return HookPhaseState::Cancelled;
+        }
 
         if succeeded {
             continue;
@@ -204,6 +705,16 @@ async fn run_hook_phase(
 
         if let Some(error) = abort_error {
             return HookPhaseState::Aborted { error };
+        }
+
+        match hook.on_failure {
+            dbflux_core::HookFailureMode::Warn => {
+                warnings.push(hook.failure_message(phase, &hook_result));
+            }
+            dbflux_core::HookFailureMode::Ignore => {
+                log::warn!("{}", hook.failure_message(phase, &hook_result));
+            }
+            dbflux_core::HookFailureMode::Disconnect => {}
         }
     }
 
@@ -1003,6 +1514,7 @@ impl Sidebar {
                 HookPhaseState::Aborted { error } => {
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
+                            state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
@@ -1021,6 +1533,11 @@ impl Sidebar {
                 }
                 HookPhaseState::Cancelled => {
                     cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.cancel_detached_hook_tasks(profile_id);
+                            cx.emit(AppStateChanged);
+                        });
+
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
                                 state.finish_pending_operation(profile_id, None);
@@ -1080,6 +1597,7 @@ impl Sidebar {
                 Err(error) => {
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
+                            state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
@@ -1117,6 +1635,7 @@ impl Sidebar {
                 HookPhaseState::Aborted { error } => {
                     cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
+                            state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
@@ -1135,6 +1654,11 @@ impl Sidebar {
                 }
                 HookPhaseState::Cancelled => {
                     cx.update(|cx| {
+                        app_state.update(cx, |state, cx| {
+                            state.cancel_detached_hook_tasks(profile_id);
+                            cx.emit(AppStateChanged);
+                        });
+
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
                                 state.finish_pending_operation(profile_id, None);
@@ -1316,6 +1840,7 @@ impl Sidebar {
             cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
                     state.disconnect(profile_id);
+                    state.cancel_detached_hook_tasks(profile_id);
                     cx.emit(AppStateChanged);
                     cx.notify();
                 });
@@ -1426,6 +1951,7 @@ impl Sidebar {
 
     pub(super) fn refresh_connection(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
+            state.cancel_detached_hook_tasks(profile_id);
             state.disconnect(profile_id);
             log::info!("Refreshing connection for profile {}", profile_id);
             cx.notify();

@@ -2,7 +2,7 @@ use crate::app::AppStateChanged;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    AppConfig, AppConfigStore, ConnectionHook, HookFailureMode, HookKind, QueryLanguage,
+    AppConfig, AppConfigStore, ConnectionHook, HookExecutionMode, HookFailureMode, HookKind,
     ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
@@ -28,7 +28,6 @@ enum HookKindSelection {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScriptSourceSelection {
-    Inline,
     File,
 }
 
@@ -78,36 +77,7 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    /// Called when the script source dropdown changes. When switching from
-    /// File to Inline, reads the file content from disk and populates the
-    /// inline editor so the user sees the existing script body.
     pub(super) fn on_script_source_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let source = self.selected_script_source(cx);
-
-        if source == ScriptSourceSelection::Inline {
-            let file_path_str = self
-                .input_hook_script_file_path
-                .read(cx)
-                .value()
-                .to_string();
-
-            if !file_path_str.is_empty() {
-                let path = Path::new(&file_path_str);
-                if path.exists() {
-                    match std::fs::read_to_string(path) {
-                        Ok(content) => {
-                            self.input_hook_script_content.update(cx, |input, cx| {
-                                input.set_value(content, window, cx);
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to read script file {}: {}", file_path_str, e);
-                        }
-                    }
-                }
-            }
-        }
-
         self.refresh_hook_script_content_editor(window, cx);
     }
 
@@ -132,16 +102,8 @@ impl SettingsWindow {
     }
 
     fn selected_script_source(&self, cx: &App) -> ScriptSourceSelection {
-        match self
-            .script_source_dropdown
-            .read(cx)
-            .selected_value()
-            .map(|value| value.to_string())
-            .as_deref()
-        {
-            Some("inline") => ScriptSourceSelection::Inline,
-            _ => ScriptSourceSelection::File,
-        }
+        let _ = cx;
+        ScriptSourceSelection::File
     }
 
     fn selected_script_language(&self, cx: &App) -> ScriptLanguage {
@@ -154,6 +116,19 @@ impl SettingsWindow {
         {
             Some("bash") => ScriptLanguage::Bash,
             _ => ScriptLanguage::Python,
+        }
+    }
+
+    fn selected_hook_execution_mode(&self, cx: &App) -> HookExecutionMode {
+        match self
+            .hook_execution_mode_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|value| value.to_string())
+            .as_deref()
+        {
+            Some("detached") => HookExecutionMode::Detached,
+            _ => HookExecutionMode::Blocking,
         }
     }
 
@@ -172,7 +147,6 @@ impl SettingsWindow {
     fn set_script_source_dropdown(&self, source: ScriptSourceSelection, cx: &mut Context<Self>) {
         let index = match source {
             ScriptSourceSelection::File => 0,
-            ScriptSourceSelection::Inline => 1,
         };
 
         self.script_source_dropdown.update(cx, |dropdown, cx| {
@@ -195,6 +169,18 @@ impl SettingsWindow {
         self.script_language_dropdown.update(cx, |dropdown, cx| {
             dropdown.set_selected_index(Some(index), cx);
         });
+    }
+
+    fn set_hook_execution_mode_dropdown(&self, mode: HookExecutionMode, cx: &mut Context<Self>) {
+        let index = match mode {
+            HookExecutionMode::Blocking => 0,
+            HookExecutionMode::Detached => 1,
+        };
+
+        self.hook_execution_mode_dropdown
+            .update(cx, |dropdown, cx| {
+                dropdown.set_selected_index(Some(index), cx);
+            });
     }
 
     fn hook_interpreter_override(&self, cx: &App) -> Option<String> {
@@ -242,27 +228,7 @@ impl SettingsWindow {
                 }
             }
             HookKindSelection::Script => match self.resolved_script_interpreter(cx) {
-                Some(interpreter) => match self.selected_script_source(cx) {
-                    ScriptSourceSelection::File => {
-                        let path = self
-                            .input_hook_script_file_path
-                            .read(cx)
-                            .value()
-                            .trim()
-                            .to_string();
-
-                        if path.is_empty() {
-                            format!("{interpreter} <script file>")
-                        } else {
-                            format!("{interpreter} {path}")
-                        }
-                    }
-                    ScriptSourceSelection::Inline => format!("{interpreter} <inline script>"),
-                },
-                None => "Unsupported on this platform".to_string(),
-            },
-            HookKindSelection::Lua => match self.selected_script_source(cx) {
-                ScriptSourceSelection::File => {
+                Some(interpreter) => {
                     let path = self
                         .input_hook_script_file_path
                         .read(cx)
@@ -271,13 +237,27 @@ impl SettingsWindow {
                         .to_string();
 
                     if path.is_empty() {
-                        "lua <script file>".to_string()
+                        format!("{interpreter} <script file>")
                     } else {
-                        format!("lua {path}")
+                        format!("{interpreter} {path}")
                     }
                 }
-                ScriptSourceSelection::Inline => "lua <inline script>".to_string(),
+                None => "Unsupported on this platform".to_string(),
             },
+            HookKindSelection::Lua => {
+                let path = self
+                    .input_hook_script_file_path
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .to_string();
+
+                if path.is_empty() {
+                    "lua <script file>".to_string()
+                } else {
+                    format!("lua {path}")
+                }
+            }
         }
     }
 
@@ -322,11 +302,8 @@ impl SettingsWindow {
         warnings
     }
 
-    fn open_script_in_default_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.current_script_file_path(cx);
-
-        let Some(path) = path else {
-            cx.toast_warning("Set a script file path first", window);
+    fn open_script_in_default_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.ensure_hook_script_file(window, cx, true) else {
             return;
         };
 
@@ -335,55 +312,12 @@ impl SettingsWindow {
         }
     }
 
-    fn open_script_in_app(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.current_script_file_path(cx) else {
-            cx.toast_warning("Set a script file path first", window);
+    fn open_script_in_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.ensure_hook_script_file(window, cx, true) else {
             return;
         };
 
         cx.emit(SettingsEvent::OpenScript { path });
-    }
-
-    fn open_inline_script_in_app(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((title, body, language)) = self.inline_script_editor_payload(cx) else {
-            cx.toast_warning(
-                "Only inline script hooks can be opened in the app editor",
-                window,
-            );
-            return;
-        };
-
-        cx.emit(SettingsEvent::OpenInlineScript {
-            title,
-            body,
-            language,
-        });
-    }
-
-    fn inline_script_editor_payload(&self, cx: &App) -> Option<(String, String, QueryLanguage)> {
-        if self.selected_script_source(cx) != ScriptSourceSelection::Inline {
-            return None;
-        }
-
-        let (extension, language) = match self.selected_hook_kind(cx) {
-            HookKindSelection::Script => match self.selected_script_language(cx) {
-                ScriptLanguage::Bash => ("sh", QueryLanguage::Bash),
-                ScriptLanguage::Python => ("py", QueryLanguage::Python),
-            },
-            HookKindSelection::Lua => ("lua", QueryLanguage::Lua),
-            HookKindSelection::Command => return None,
-        };
-
-        let hook_id = self.input_hook_id.read(cx).value().trim().to_string();
-        let title = if hook_id.is_empty() {
-            format!("inline-hook.{extension}")
-        } else {
-            format!("{hook_id}.{extension}")
-        };
-
-        let body = self.input_hook_script_content.read(cx).value().to_string();
-
-        Some((title, body, language))
     }
 
     fn current_script_file_path(&self, cx: &App) -> Option<PathBuf> {
@@ -401,31 +335,48 @@ impl SettingsWindow {
         }
     }
 
-    fn convert_inline_hook_to_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (hook_id, hook) = match self.hook_from_form(cx, true) {
-            Ok(Some(hook)) => hook,
-            Ok(None) => return,
-            Err(error) => {
-                cx.toast_error(error, window);
-                return;
+    fn ensure_hook_script_file(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        persist_hook: bool,
+    ) -> Option<PathBuf> {
+        let hook_id = self.input_hook_id.read(cx).value().trim().to_string();
+
+        if hook_id.is_empty() {
+            cx.toast_error("Hook ID is required", window);
+            return None;
+        }
+
+        let (extension, content) = match self.selected_hook_kind(cx) {
+            HookKindSelection::Script => (
+                self.selected_script_language(cx).extension().to_string(),
+                self.input_hook_script_content.read(cx).value().to_string(),
+            ),
+            HookKindSelection::Lua => (
+                "lua".to_string(),
+                self.input_hook_script_content.read(cx).value().to_string(),
+            ),
+            HookKindSelection::Command => {
+                cx.toast_warning("Commands do not open in the script editor", window);
+                return None;
             }
         };
 
-        let (extension, content) = match hook.kind {
-            HookKind::Script {
-                language,
-                source: ScriptSource::Inline { content },
-                ..
-            } => (language.extension().to_string(), content),
-            HookKind::Lua {
-                source: ScriptSource::Inline { content },
-                ..
-            } => ("lua".to_string(), content),
-            _ => {
-                cx.toast_warning("Only inline script hooks can be converted to files", window);
-                return;
+        if let Some(path) = self.current_script_file_path(cx) {
+            if !path.exists()
+                && let Err(error) = std::fs::write(&path, &content)
+            {
+                cx.toast_error(format!("Failed to write script file: {error}"), window);
+                return None;
             }
-        };
+
+            if persist_hook {
+                self.save_hook(window, cx);
+            }
+
+            return Some(path);
+        }
 
         let path = match self.app_state.update(cx, |state, cx| {
             let scripts_dir = state
@@ -449,7 +400,7 @@ impl SettingsWindow {
             Ok(path) => path,
             Err(error) => {
                 cx.toast_error(error, window);
-                return;
+                return None;
             }
         };
 
@@ -458,7 +409,11 @@ impl SettingsWindow {
             input.set_value(path.to_string_lossy().to_string(), window, cx)
         });
 
-        self.save_hook(window, cx);
+        if persist_hook {
+            self.save_hook(window, cx);
+        }
+
+        Some(path)
     }
 
     pub(super) fn has_unsaved_hook_changes(&self, cx: &App) -> bool {
@@ -506,6 +461,12 @@ impl SettingsWindow {
                 .value()
                 .trim()
                 .is_empty()
+            || !self
+                .input_hook_ready_signal
+                .read(cx)
+                .value()
+                .trim()
+                .is_empty()
             || !self.input_hook_cwd.read(cx).value().trim().is_empty()
             || !self.input_hook_env.read(cx).value().trim().is_empty()
             || !self.input_hook_timeout.read(cx).value().trim().is_empty()
@@ -530,6 +491,12 @@ impl SettingsWindow {
         let cwd_text = self.input_hook_cwd.read(cx).value().trim().to_string();
         let env_text = self.input_hook_env.read(cx).value().trim().to_string();
         let timeout_text = self.input_hook_timeout.read(cx).value().trim().to_string();
+        let ready_signal = self
+            .input_hook_ready_signal
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         let interpreter = self.hook_interpreter_override(cx);
 
         if !strict
@@ -541,6 +508,7 @@ impl SettingsWindow {
             && interpreter.is_none()
             && cwd_text.is_empty()
             && env_text.is_empty()
+            && ready_signal.is_empty()
         {
             return Ok(None);
         }
@@ -600,25 +568,12 @@ impl SettingsWindow {
             }
             HookKindSelection::Script => {
                 let language = self.selected_script_language(cx);
-                let source = match self.selected_script_source(cx) {
-                    ScriptSourceSelection::File => {
-                        if script_file_path.is_empty() {
-                            return Err("Script file path is required".to_string());
-                        }
+                if script_file_path.is_empty() {
+                    return Err("Script file path is required".to_string());
+                }
 
-                        ScriptSource::File {
-                            path: PathBuf::from(script_file_path),
-                        }
-                    }
-                    ScriptSourceSelection::Inline => {
-                        if strict && script_content_trimmed.is_empty() {
-                            return Err("Script content is required".to_string());
-                        }
-
-                        ScriptSource::Inline {
-                            content: script_content,
-                        }
-                    }
+                let source = ScriptSource::File {
+                    path: PathBuf::from(script_file_path),
                 };
 
                 HookKind::Script {
@@ -628,25 +583,12 @@ impl SettingsWindow {
                 }
             }
             HookKindSelection::Lua => {
-                let source = match self.selected_script_source(cx) {
-                    ScriptSourceSelection::File => {
-                        if script_file_path.is_empty() {
-                            return Err("Lua script file path is required".to_string());
-                        }
+                if script_file_path.is_empty() {
+                    return Err("Lua script file path is required".to_string());
+                }
 
-                        ScriptSource::File {
-                            path: PathBuf::from(script_file_path),
-                        }
-                    }
-                    ScriptSourceSelection::Inline => {
-                        if strict && script_content_trimmed.is_empty() {
-                            return Err("Lua script content is required".to_string());
-                        }
-
-                        ScriptSource::Inline {
-                            content: script_content,
-                        }
-                    }
+                let source = ScriptSource::File {
+                    path: PathBuf::from(script_file_path),
                 };
 
                 HookKind::Lua {
@@ -672,6 +614,16 @@ impl SettingsWindow {
                 self.hook_inherit_env
             },
             timeout_ms,
+            execution_mode: if selected_kind == HookKindSelection::Lua {
+                HookExecutionMode::Blocking
+            } else {
+                self.selected_hook_execution_mode(cx)
+            },
+            ready_signal: if selected_kind == HookKindSelection::Lua || ready_signal.is_empty() {
+                None
+            } else {
+                Some(ready_signal)
+            },
             on_failure,
         };
 
@@ -718,6 +670,7 @@ impl SettingsWindow {
         self.hook_lua_env_read = true;
         self.hook_lua_connection_metadata = true;
         self.hook_lua_process_run = false;
+        self.set_hook_execution_mode_dropdown(HookExecutionMode::Blocking, cx);
 
         self.set_hook_kind_dropdown(HookKindSelection::Command, cx);
         self.set_script_language_dropdown(ScriptLanguage::Python, cx);
@@ -735,6 +688,8 @@ impl SettingsWindow {
         self.input_hook_script_content
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.input_hook_interpreter
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.input_hook_ready_signal
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.input_hook_cwd
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -767,6 +722,7 @@ impl SettingsWindow {
         let (command, args, script_file_path, script_content, interpreter) = match &hook.kind {
             HookKind::Command { command, args } => {
                 self.set_hook_kind_dropdown(HookKindSelection::Command, cx);
+                self.set_hook_execution_mode_dropdown(hook.execution_mode, cx);
                 self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
                 self.set_script_language_dropdown(ScriptLanguage::Python, cx);
                 self.hook_lua_logging = true;
@@ -788,6 +744,7 @@ impl SettingsWindow {
                 interpreter,
             } => {
                 self.set_hook_kind_dropdown(HookKindSelection::Script, cx);
+                self.set_hook_execution_mode_dropdown(hook.execution_mode, cx);
                 self.set_script_language_dropdown(*language, cx);
                 self.hook_lua_logging = true;
                 self.hook_lua_env_read = true;
@@ -800,7 +757,7 @@ impl SettingsWindow {
                         (path.to_string_lossy().to_string(), String::new())
                     }
                     ScriptSource::Inline { content } => {
-                        self.set_script_source_dropdown(ScriptSourceSelection::Inline, cx);
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
                         (String::new(), content.clone())
                     }
                 };
@@ -818,6 +775,7 @@ impl SettingsWindow {
                 capabilities,
             } => {
                 self.set_hook_kind_dropdown(HookKindSelection::Lua, cx);
+                self.set_hook_execution_mode_dropdown(HookExecutionMode::Blocking, cx);
                 self.set_script_language_dropdown(ScriptLanguage::Python, cx);
                 self.hook_lua_logging = capabilities.logging;
                 self.hook_lua_env_read = capabilities.env_read;
@@ -830,7 +788,7 @@ impl SettingsWindow {
                         (path.to_string_lossy().to_string(), String::new())
                     }
                     ScriptSource::Inline { content } => {
-                        self.set_script_source_dropdown(ScriptSourceSelection::Inline, cx);
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
                         (String::new(), content.clone())
                     }
                 };
@@ -858,6 +816,9 @@ impl SettingsWindow {
             .update(cx, |input, cx| input.set_value(script_content, window, cx));
         self.input_hook_interpreter
             .update(cx, |input, cx| input.set_value(interpreter, window, cx));
+        self.input_hook_ready_signal.update(cx, |input, cx| {
+            input.set_value(hook.ready_signal.unwrap_or_default(), window, cx)
+        });
         self.input_hook_cwd.update(cx, |input, cx| {
             input.set_value(
                 hook.cwd
@@ -900,6 +861,16 @@ impl SettingsWindow {
     }
 
     pub(super) fn save_hook(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.selected_hook_kind(cx),
+            HookKindSelection::Script | HookKindSelection::Lua
+        ) && self.current_script_file_path(cx).is_none()
+        {
+            if self.ensure_hook_script_file(window, cx, false).is_none() {
+                return;
+            }
+        }
+
         let (hook_id, hook) = match self.hook_from_form(cx, true) {
             Ok(Some(hook)) => hook,
             Ok(None) => return,
@@ -994,21 +965,6 @@ impl SettingsWindow {
         }
 
         Ok(env)
-    }
-
-    fn render_script_content_editor(&self) -> impl IntoElement {
-        div()
-            .h(px(180.0))
-            .w_full()
-            .border_1()
-            .rounded(px(6.0))
-            .overflow_hidden()
-            .child(
-                Input::new(&self.input_hook_script_content)
-                    .appearance(false)
-                    .w_full()
-                    .h_full(),
-            )
     }
 
     pub(super) fn render_hooks_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1144,11 +1100,9 @@ impl SettingsWindow {
         let editing = self.editing_hook_id.is_some();
         let title = if editing { "Edit Hook" } else { "New Hook" };
         let hook_kind = self.selected_hook_kind(cx);
-        let script_source = self.selected_script_source(cx);
         let is_script = hook_kind == HookKindSelection::Script;
         let is_lua = hook_kind == HookKindSelection::Lua;
         let uses_script_source = is_script || is_lua;
-        let is_inline_script = script_source == ScriptSourceSelection::Inline;
         let warnings = self.hook_form_warnings(cx);
         let preview = self.hook_form_preview(cx);
         let default_interpreter = self.default_script_interpreter_label(cx);
@@ -1277,95 +1231,45 @@ impl SettingsWindow {
                                             div()
                                                 .text_sm()
                                                 .font_weight(FontWeight::MEDIUM)
-                                            .child(if is_lua { "Lua Source" } else { "Source" }),
+                                                .child("File Path"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("Scripts are edited in the app editor and stored under hooks/ by default"),
+                                        )
+                                        .child(
+                                            Input::new(&self.input_hook_script_file_path).small(),
                                         )
                                         .child(
                                             div()
-                                                .w(px(220.0))
-                                                .child(self.script_source_dropdown.clone()),
+                                                .flex()
+                                                .gap_2()
+                                                .child(
+                                                    Button::new("open-script-app")
+                                                        .label("Open in App")
+                                                        .small()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.open_script_in_app(window, cx);
+                                                        })),
+                                                )
+                                                .child(
+                                                    Button::new("open-script-editor")
+                                                        .label("Open in Editor")
+                                                        .small()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.open_script_in_default_editor(window, cx);
+                                                        })),
+                                                ),
                                         ),
                                 )
-                                .when(script_source == ScriptSourceSelection::File, |container| {
-                                    container.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child("File Path"),
-                                            )
-                                            .child(
-                                                Input::new(&self.input_hook_script_file_path).small(),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .gap_2()
-                                                    .child(
-                                                        Button::new("open-script-app")
-                                                            .label("Open in App")
-                                                            .small()
-                                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                                this.open_script_in_app(window, cx);
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        Button::new("open-script-editor")
-                                                            .label("Open in Editor")
-                                                            .small()
-                                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                                this.open_script_in_default_editor(window, cx);
-                                                            })),
-                                                    ),
-                                            ),
-                                    )
-                                })
-                                .when(is_inline_script, |container| {
-                                    container.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child("Content"),
-                                            )
-                                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                                if is_lua {
-                                                    "Inline Lua hooks are stored in config and materialized at execution time"
-                                                } else {
-                                                    "Inline scripts are stored in config and materialized at execution time"
-                                                },
-                                            ))
-                                            .child(self.render_script_content_editor()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap_2()
-                                            .child(
-                                                Button::new("open-inline-script-app")
-                                                    .label("Open in App")
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.open_inline_script_in_app(window, cx);
-                                                    })),
-                                            )
-                                            .child(
-                                                Button::new("convert-hook-script")
-                                                    .label("Convert to File")
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.convert_inline_hook_to_file(window, cx);
-                                                    })),
-                                            ),
-                                    )
-                                })
                                 .when(is_script, |container| {
                                     container.child(
                                         div()
@@ -1468,6 +1372,48 @@ impl SettingsWindow {
                                     )
                                 }),
                         )
+                    })
+                    .when(!is_lua, |container| {
+                        container.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Execution Mode"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Detached runs in background and does not block connect/disconnect"),
+                            )
+                            .child(div().w(px(220.0)).child(self.hook_execution_mode_dropdown.clone())),
+                    )
+                    })
+                    .when(!is_lua && self.selected_hook_execution_mode(cx) == HookExecutionMode::Detached, |container| {
+                        container.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Ready Signal"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks."),
+                            )
+                            .child(Input::new(&self.input_hook_ready_signal).small()),
+                    )
                     })
                     .when(!is_lua, |container| {
                         container.child(

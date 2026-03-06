@@ -482,9 +482,12 @@ fn build_mysql_opts(
     password: Option<&str>,
     ssl_mode: SslMode,
 ) -> Opts {
+    let host = normalize_mysql_tcp_host(host);
+
     let mut builder = OptsBuilder::new()
         .ip_or_hostname(Some(host))
         .tcp_port(port)
+        .prefer_socket(false)
         .user(Some(user))
         .pass(password);
 
@@ -510,6 +513,14 @@ fn build_mysql_opts(
     }
 
     builder.into()
+}
+
+fn normalize_mysql_tcp_host(host: &str) -> &str {
+    if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1"
+    } else {
+        host
+    }
 }
 
 impl MysqlDriver {
@@ -2134,7 +2145,9 @@ fn fetch_foreign_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{MysqlDialect, MysqlDriver, inject_password_into_mysql_uri};
+    use super::{
+        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, normalize_mysql_tcp_host,
+    };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, QueryLanguage,
         SqlDialect, Value,
@@ -2239,6 +2252,14 @@ mod tests {
     fn inject_password_into_uri_adds_password_for_user_without_one() {
         let uri = inject_password_into_mysql_uri("mysql://root@localhost:3306/app", Some("new p"));
         assert_eq!(uri, "mysql://root:new%20p@localhost:3306/app");
+    }
+
+    #[test]
+    fn normalize_mysql_tcp_host_rewrites_localhost_to_ipv4_loopback() {
+        assert_eq!(normalize_mysql_tcp_host("localhost"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("LOCALHOST"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(normalize_mysql_tcp_host("db.internal"), "db.internal");
     }
 
     #[test]

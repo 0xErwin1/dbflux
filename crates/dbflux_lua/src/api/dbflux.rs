@@ -1,6 +1,7 @@
 use crate::engine::LuaRuntimeState;
 use dbflux_core::{
-    OutputEvent, OutputStreamKind, ProcessExecutionError, execute_streaming_process,
+    DetachedProcessHandle, OutputEvent, OutputStreamKind, ProcessExecutionError,
+    execute_streaming_process,
 };
 use mlua::{Lua, Result as LuaResult, Table, Value};
 use std::path::Path;
@@ -96,6 +97,7 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     let timeout = read_optional_u64(&options, "timeout_ms")?.map(Duration::from_millis);
     let cwd = read_optional_string(&options, "cwd")?;
     let stream_output = read_optional_bool(&options, "stream")?.unwrap_or(false);
+    let detached = read_optional_bool(&options, "detached")?.unwrap_or(false);
 
     if state.cancel_token.is_cancelled()
         || state
@@ -142,6 +144,30 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
         mlua::Error::RuntimeError(format!("Failed to spawn process '{program}': {error}"))
     })?;
 
+    if detached {
+        let Some(detached_sender) = &state.detached else {
+            return Err(mlua::Error::RuntimeError(
+                "Detached processes are not available in this context".to_string(),
+            ));
+        };
+
+        let description = format_process_description(&program, &args);
+
+        detached_sender
+            .send(DetachedProcessHandle::new(
+                child,
+                description,
+                timeout,
+                None,
+                None,
+            ))
+            .map_err(|_| {
+                mlua::Error::RuntimeError("Failed to register detached process".to_string())
+            })?;
+
+        return process_result_table(lua, None, String::new(), String::new(), false, true);
+    }
+
     let hook_timeout_remaining = state
         .hook_timeout
         .map(|limit| limit.saturating_sub(state.hook_started_at.elapsed()));
@@ -162,6 +188,7 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
             result.stdout,
             result.stderr,
             result.timed_out,
+            false,
         ),
         Err(ProcessExecutionError::Cancelled { .. }) => {
             Err(mlua::Error::RuntimeError("Lua hook cancelled".to_string()))
@@ -181,14 +208,24 @@ fn process_result_table(
     stdout: String,
     stderr: String,
     timed_out: bool,
+    detached: bool,
 ) -> LuaResult<Table> {
     let result = lua.create_table()?;
-    result.set("ok", exit_code == Some(0) && !timed_out)?;
+    result.set("ok", detached || (exit_code == Some(0) && !timed_out))?;
+    result.set("detached", detached)?;
     result.set("exit_code", exit_code)?;
     result.set("stdout", stdout)?;
     result.set("stderr", stderr)?;
     result.set("timed_out", timed_out)?;
     Ok(result)
+}
+
+fn format_process_description(program: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        program.to_string()
+    } else {
+        format!("{} {}", program, args.join(" "))
+    }
 }
 
 fn ensure_program_allowed(program: &str, allowlist: &str) -> LuaResult<()> {
@@ -310,6 +347,7 @@ mod tests {
             outcome: Arc::new(Mutex::new(LuaHookOutcome::Ok)),
             log_buffer: Arc::new(Mutex::new(Vec::new())),
             output,
+            detached: None,
             cancel_token: dbflux_core::CancelToken::new(),
             parent_cancel_token: None,
             hook_started_at,

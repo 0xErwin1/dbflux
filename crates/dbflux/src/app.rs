@@ -8,7 +8,7 @@ use dbflux_core::{
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -59,6 +59,7 @@ pub struct AppState {
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
+    detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -108,6 +109,7 @@ impl AppState {
             driver_overrides,
             driver_settings,
             hook_definitions,
+            detached_hook_tasks: HashMap::new(),
             recent_files,
             scripts_directory,
             session_store,
@@ -929,6 +931,10 @@ impl AppState {
         self.facade.tasks.complete_with_details(id, details);
     }
 
+    pub fn append_task_details(&mut self, id: TaskId, details: impl AsRef<str>) {
+        self.facade.tasks.append_details(id, details);
+    }
+
     pub fn fail_task(&mut self, id: TaskId, error: impl Into<String>) {
         self.facade.tasks.fail(id, error);
     }
@@ -945,6 +951,43 @@ impl AppState {
     #[allow(dead_code)]
     pub fn cancel_task(&mut self, id: TaskId) -> bool {
         self.facade.tasks.cancel(id)
+    }
+
+    pub fn register_detached_hook_task(&mut self, profile_id: Uuid, task_id: TaskId) {
+        self.detached_hook_tasks
+            .entry(profile_id)
+            .or_default()
+            .insert(task_id);
+    }
+
+    pub fn unregister_detached_hook_task(&mut self, profile_id: Uuid, task_id: TaskId) {
+        if let Some(tasks) = self.detached_hook_tasks.get_mut(&profile_id) {
+            tasks.remove(&task_id);
+
+            if tasks.is_empty() {
+                self.detached_hook_tasks.remove(&profile_id);
+            }
+        }
+    }
+
+    pub fn cancel_detached_hook_tasks(&mut self, profile_id: Uuid) -> usize {
+        let Some(task_ids) = self.detached_hook_tasks.remove(&profile_id) else {
+            return 0;
+        };
+
+        task_ids
+            .into_iter()
+            .filter(|task_id| self.facade.tasks.cancel(*task_id))
+            .count()
+    }
+
+    pub fn cancel_all_detached_hook_tasks(&mut self) -> usize {
+        let profile_ids: Vec<Uuid> = self.detached_hook_tasks.keys().copied().collect();
+
+        profile_ids
+            .into_iter()
+            .map(|profile_id| self.cancel_detached_hook_tasks(profile_id))
+            .sum()
     }
 
     #[allow(dead_code)]
@@ -975,6 +1018,7 @@ impl AppState {
     }
 
     pub fn close_all_connections(&mut self) {
+        self.cancel_all_detached_hook_tasks();
         self.facade.close_all_connections();
     }
 

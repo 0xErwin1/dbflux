@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 use crate::HookPhase;
 
+const MAX_TASK_DETAILS_BYTES: usize = 4 * 1024 * 1024;
+const TASK_DETAILS_TRUNCATED_NOTICE: &str = "\n[output truncated]\n";
+
 pub type TaskId = Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +219,29 @@ impl TaskManager {
         }
     }
 
+    pub fn append_details(&mut self, id: TaskId, chunk: impl AsRef<str>) {
+        let Some(task) = self.tasks.get_mut(&id) else {
+            return;
+        };
+
+        if task.status.is_terminal() {
+            return;
+        }
+
+        let chunk = chunk.as_ref();
+        if chunk.is_empty() {
+            return;
+        }
+
+        let details = task.details.get_or_insert_with(String::new);
+        append_with_limit(
+            details,
+            chunk,
+            MAX_TASK_DETAILS_BYTES,
+            TASK_DETAILS_TRUNCATED_NOTICE,
+        );
+    }
+
     pub fn fail(&mut self, id: TaskId, error: impl Into<String>) {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
@@ -379,6 +405,53 @@ impl TaskManager {
             .max_by_key(|t| t.completed_at)
             .map(TaskSnapshot::from)
     }
+}
+
+fn append_with_limit(target: &mut String, chunk: &str, max_bytes: usize, truncated_notice: &str) {
+    if target.contains(truncated_notice) {
+        return;
+    }
+
+    let remaining = max_bytes.saturating_sub(target.len());
+
+    if remaining == 0 {
+        return;
+    }
+
+    if chunk.len() <= remaining {
+        target.push_str(chunk);
+        return;
+    }
+
+    if remaining > truncated_notice.len() {
+        target.push_str(&safe_prefix_by_bytes(
+            chunk,
+            remaining - truncated_notice.len(),
+        ));
+        target.push_str(truncated_notice);
+    } else {
+        target.push_str(&safe_prefix_by_bytes(truncated_notice, remaining));
+    }
+}
+
+fn safe_prefix_by_bytes(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    let mut safe_end = 0;
+
+    for (index, ch) in input.char_indices() {
+        let next = index + ch.len_utf8();
+
+        if next > max_bytes {
+            break;
+        }
+
+        safe_end = next;
+    }
+
+    input[..safe_end].to_string()
 }
 
 // ---------------------------------------------------------------------------
