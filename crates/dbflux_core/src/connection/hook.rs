@@ -133,6 +133,17 @@ impl Default for LuaCapabilities {
     }
 }
 
+impl LuaCapabilities {
+    pub fn all_enabled() -> Self {
+        Self {
+            logging: true,
+            env_read: true,
+            connection_metadata: true,
+            process_run: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HookKind {

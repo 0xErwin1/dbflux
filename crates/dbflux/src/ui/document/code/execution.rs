@@ -596,7 +596,7 @@ impl CodeDocument {
                 source: ScriptSource::Inline {
                     content: content.clone(),
                 },
-                capabilities: LuaCapabilities::default(),
+                capabilities: LuaCapabilities::all_enabled(),
             },
             QueryLanguage::Python => HookKind::Script {
                 language: ScriptLanguage::Python,
