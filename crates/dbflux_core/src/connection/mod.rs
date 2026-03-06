@@ -14,7 +14,8 @@ pub(crate) mod tree_store;
 pub use context::ExecutionContext;
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, HookContext, HookExecution,
-    HookFailureMode, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult,
+    HookRunner, LuaCapabilities, ProcessExecutor, ScriptLanguage, ScriptSource,
 };
 pub use item_manager::{Identifiable, ItemManager};
 pub use manager::{

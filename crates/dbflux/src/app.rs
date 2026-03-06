@@ -1,11 +1,11 @@
 use dbflux_core::{
     AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbKind, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
+    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
     GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -21,6 +21,9 @@ use dbflux_driver_sqlite::SqliteDriver;
 
 #[cfg(feature = "postgres")]
 use dbflux_driver_postgres::PostgresDriver;
+
+#[cfg(feature = "mysql")]
+use dbflux_core::DbKind;
 
 #[cfg(feature = "mysql")]
 use dbflux_driver_mysql::MysqlDriver;

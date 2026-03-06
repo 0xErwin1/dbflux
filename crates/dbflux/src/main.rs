@@ -4,6 +4,7 @@
 mod app;
 mod assets;
 mod cli;
+mod hook_executor;
 mod ipc_server;
 mod keymap;
 mod proxy;

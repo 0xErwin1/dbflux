@@ -1,3 +1,4 @@
+use crate::connection::hook::ScriptLanguage;
 use crate::DbError;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,16 @@ impl ScriptsDirectory {
 
     pub fn entries(&self) -> &[ScriptEntry] {
         &self.entries
+    }
+
+    pub fn hooks_directory(&self) -> Result<PathBuf, DbError> {
+        let hooks_dir = self.root.join("hooks");
+
+        if !hooks_dir.exists() {
+            fs::create_dir_all(&hooks_dir).map_err(DbError::IoError)?;
+        }
+
+        Ok(hooks_dir)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -280,16 +291,18 @@ impl ScriptsDirectory {
     }
 }
 
-/// All extensions recognized by `QueryLanguage::from_path`.
-const RECOGNIZED_EXTENSIONS: &[&str] = &[
-    "sql", "js", "mongodb", "redis", "red", "cypher", "cyp", "influxql", "flux", "cql",
+pub fn hook_script_path(hooks_dir: &Path, hook_id: &str, language: ScriptLanguage) -> PathBuf {
+    hooks_dir.join(format!("{}.{}", hook_id, language.extension()))
+}
+
+/// Extensions openable in the code editor (recognized by `QueryLanguage::from_path`).
+const OPENABLE_EXTENSIONS: &[&str] = &[
+    "sql", "js", "mongodb", "redis", "red", "cypher", "cyp", "influxql", "flux", "cql", "lua",
+    "py", "sh", "bash",
 ];
 
-fn is_recognized_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| RECOGNIZED_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
+fn has_file_extension(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some()
 }
 
 /// Recursively scan a directory, returning sorted entries (folders first, then files).
@@ -324,7 +337,7 @@ fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
                 name,
                 children,
             });
-        } else if is_recognized_extension(&path) {
+        } else if has_file_extension(&path) {
             let extension = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -345,9 +358,17 @@ fn scan_directory(dir: &Path) -> Vec<ScriptEntry> {
     folders.into_iter().chain(files).collect()
 }
 
-/// Collect all recognized file extensions for use in file dialogs.
+/// Collect all openable file extensions for use in file dialogs.
 pub fn all_script_extensions() -> Vec<&'static str> {
-    RECOGNIZED_EXTENSIONS.to_vec()
+    OPENABLE_EXTENSIONS.to_vec()
+}
+
+/// Returns `true` if the file extension is openable in the code editor.
+pub fn is_openable_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| OPENABLE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
 }
 
 /// Filter a tree of entries by name query (case-insensitive).
@@ -463,15 +484,46 @@ mod tests {
     }
 
     #[test]
-    fn test_ignores_unrecognized_extensions() {
+    fn test_shows_all_files_with_extensions() {
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join("notes.txt"), "hello").unwrap();
         fs::write(tmp.path().join("query.sql"), "SELECT 1").unwrap();
-        fs::write(tmp.path().join("image.png"), &[0u8]).unwrap();
+        fs::write(tmp.path().join("hook.lua"), "print('hi')").unwrap();
+        fs::write(tmp.path().join("setup.py"), "pass").unwrap();
+        fs::write(tmp.path().join("deploy.sh"), "echo ok").unwrap();
+
+        let dir = make_dir(tmp.path());
+        assert_eq!(dir.entries().len(), 5);
+
+        let names: Vec<&str> = dir.entries().iter().map(|e| e.name()).collect();
+        assert!(names.contains(&"query.sql"));
+        assert!(names.contains(&"hook.lua"));
+        assert!(names.contains(&"setup.py"));
+        assert!(names.contains(&"deploy.sh"));
+        assert!(names.contains(&"notes.txt"));
+    }
+
+    #[test]
+    fn test_skips_files_without_extension() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("Makefile"), "all:").unwrap();
+        fs::write(tmp.path().join("query.sql"), "SELECT 1").unwrap();
 
         let dir = make_dir(tmp.path());
         assert_eq!(dir.entries().len(), 1);
         assert_eq!(dir.entries()[0].name(), "query.sql");
+    }
+
+    #[test]
+    fn test_is_openable_script() {
+        assert!(is_openable_script(Path::new("test.sql")));
+        assert!(is_openable_script(Path::new("hook.lua")));
+        assert!(is_openable_script(Path::new("setup.py")));
+        assert!(is_openable_script(Path::new("deploy.sh")));
+        assert!(is_openable_script(Path::new("run.bash")));
+        assert!(!is_openable_script(Path::new("notes.txt")));
+        assert!(!is_openable_script(Path::new("image.png")));
+        assert!(!is_openable_script(Path::new("Makefile")));
     }
 
     #[test]
@@ -577,13 +629,37 @@ mod tests {
         assert!(dir.create_folder(Some(&outside), "bad").is_err());
         assert!(dir.rename(&outside.join("file.sql"), "new.sql").is_err());
         assert!(dir.delete(&outside.join("file.sql")).is_err());
-        assert!(
-            dir.move_entry(&outside.join("file.sql"), tmp.path())
-                .is_err()
+        assert!(dir
+            .move_entry(&outside.join("file.sql"), tmp.path())
+            .is_err());
+        assert!(dir
+            .move_entry(&tmp.path().join("file.sql"), &outside)
+            .is_err());
+    }
+
+    #[test]
+    fn test_hooks_directory_is_created() {
+        let tmp = TempDir::new().unwrap();
+        let dir = make_dir(tmp.path());
+
+        let hooks_dir = dir.hooks_directory().unwrap();
+
+        assert_eq!(hooks_dir, tmp.path().join("hooks"));
+        assert!(hooks_dir.exists());
+        assert!(hooks_dir.is_dir());
+    }
+
+    #[test]
+    fn test_hook_script_path_uses_language_extension() {
+        let hooks_dir = PathBuf::from("/tmp/dbflux-hooks");
+
+        assert_eq!(
+            hook_script_path(&hooks_dir, "setup", ScriptLanguage::Bash),
+            hooks_dir.join("setup.sh")
         );
-        assert!(
-            dir.move_entry(&tmp.path().join("file.sql"), &outside)
-                .is_err()
+        assert_eq!(
+            hook_script_path(&hooks_dir, "seed", ScriptLanguage::Python),
+            hooks_dir.join("seed.py")
         );
     }
 }

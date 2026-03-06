@@ -441,6 +441,15 @@ pub enum QueryLanguage {
     /// CQL (Cassandra Query Language).
     Cql,
 
+    /// Lua scripts.
+    Lua,
+
+    /// Python scripts.
+    Python,
+
+    /// Bash/shell scripts.
+    Bash,
+
     /// Custom or proprietary query language.
     Custom(String),
 }
@@ -459,6 +468,9 @@ impl QueryLanguage {
             "cypher" | "cyp" => Some(Self::Cypher),
             "influxql" | "flux" => Some(Self::InfluxQuery),
             "cql" => Some(Self::Cql),
+            "lua" => Some(Self::Lua),
+            "py" => Some(Self::Python),
+            "sh" | "bash" => Some(Self::Bash),
             _ => None,
         }
     }
@@ -471,6 +483,9 @@ impl QueryLanguage {
             Self::RedisCommands => "redis",
             Self::Cypher => "cypher",
             Self::InfluxQuery => "influxql",
+            Self::Lua => "lua",
+            Self::Python => "py",
+            Self::Bash => "sh",
             Self::Custom(_) => "txt",
         }
     }
@@ -484,6 +499,9 @@ impl QueryLanguage {
             Self::Cypher => &["cypher", "cyp"],
             Self::InfluxQuery => &["influxql", "flux"],
             Self::Cql => &["cql"],
+            Self::Lua => &["lua"],
+            Self::Python => &["py"],
+            Self::Bash => &["sh", "bash"],
             Self::Custom(_) => &["txt"],
         }
     }
@@ -496,6 +514,9 @@ impl QueryLanguage {
             QueryLanguage::Cypher => "Cypher",
             QueryLanguage::InfluxQuery => "InfluxQL",
             QueryLanguage::Cql => "CQL",
+            QueryLanguage::Lua => "Lua",
+            QueryLanguage::Python => "Python",
+            QueryLanguage::Bash => "Bash",
             QueryLanguage::Custom(name) => name,
         }
     }
@@ -509,6 +530,9 @@ impl QueryLanguage {
             QueryLanguage::Cypher => "cypher",
             QueryLanguage::InfluxQuery => "influxql",
             QueryLanguage::Cql => "cql",
+            QueryLanguage::Lua => "lua",
+            QueryLanguage::Python => "py",
+            QueryLanguage::Bash => "sh",
             QueryLanguage::Custom(_) => "txt",
         }
     }
@@ -521,6 +545,9 @@ impl QueryLanguage {
             QueryLanguage::RedisCommands => "plaintext",
             QueryLanguage::Cypher => "cypher",
             QueryLanguage::InfluxQuery => "sql",
+            QueryLanguage::Lua => "lua",
+            QueryLanguage::Python => "python",
+            QueryLanguage::Bash => "bash",
             QueryLanguage::Custom(_) => "plaintext",
         }
     }
@@ -534,6 +561,9 @@ impl QueryLanguage {
             QueryLanguage::Cypher => "// Enter Cypher query...",
             QueryLanguage::InfluxQuery => "-- Enter InfluxQL...",
             QueryLanguage::Cql => "-- Enter CQL...",
+            QueryLanguage::Lua => "-- Enter Lua script...",
+            QueryLanguage::Python => "# Enter Python script...",
+            QueryLanguage::Bash => "# Enter Bash script...",
             QueryLanguage::Custom(_) => "Enter query...",
         }
     }
@@ -543,9 +573,22 @@ impl QueryLanguage {
         match self {
             QueryLanguage::Sql | QueryLanguage::InfluxQuery | QueryLanguage::Cql => "--",
             QueryLanguage::MongoQuery | QueryLanguage::Cypher => "//",
-            QueryLanguage::RedisCommands => "#",
+            QueryLanguage::RedisCommands | QueryLanguage::Python | QueryLanguage::Bash => "#",
+            QueryLanguage::Lua => "--",
             QueryLanguage::Custom(_) => "#",
         }
+    }
+
+    pub fn supports_connection_context(&self) -> bool {
+        matches!(
+            self,
+            QueryLanguage::Sql
+                | QueryLanguage::MongoQuery
+                | QueryLanguage::RedisCommands
+                | QueryLanguage::Cypher
+                | QueryLanguage::InfluxQuery
+                | QueryLanguage::Cql
+        )
     }
 }
 

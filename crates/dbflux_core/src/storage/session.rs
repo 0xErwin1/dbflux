@@ -41,6 +41,9 @@ impl SessionTab {
             "cypher" => QueryLanguage::Cypher,
             "influx" => QueryLanguage::InfluxQuery,
             "cql" => QueryLanguage::Cql,
+            "lua" => QueryLanguage::Lua,
+            "python" => QueryLanguage::Python,
+            "bash" => QueryLanguage::Bash,
             _ => QueryLanguage::Sql,
         }
     }
@@ -53,6 +56,9 @@ impl SessionTab {
             QueryLanguage::Cypher => "cypher".into(),
             QueryLanguage::InfluxQuery => "influx".into(),
             QueryLanguage::Cql => "cql".into(),
+            QueryLanguage::Lua => "lua".into(),
+            QueryLanguage::Python => "python".into(),
+            QueryLanguage::Bash => "bash".into(),
             QueryLanguage::Custom(_) => "sql".into(),
         }
     }

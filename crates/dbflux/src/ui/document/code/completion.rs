@@ -76,7 +76,10 @@ impl QueryCompletionProvider {
             dbflux_core::QueryLanguage::Cypher => &[
                 "MATCH", "WHERE", "RETURN", "CREATE", "MERGE", "SET", "DELETE", "DETACH", "LIMIT",
             ],
-            dbflux_core::QueryLanguage::Custom(_) => &[],
+            dbflux_core::QueryLanguage::Lua
+            | dbflux_core::QueryLanguage::Python
+            | dbflux_core::QueryLanguage::Bash
+            | dbflux_core::QueryLanguage::Custom(_) => &[],
         }
     }
 

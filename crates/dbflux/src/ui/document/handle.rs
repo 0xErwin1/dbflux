@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use super::code::CodeDocument;
 use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
-use super::sql_query::SqlQueryDocument;
 use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use dbflux_core::{RefreshPolicy, Value};
@@ -15,9 +15,9 @@ use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 #[derive(Clone)]
 pub enum DocumentHandle {
     /// SQL script with editor + embedded results.
-    SqlQuery {
+    Code {
         id: DocumentId,
-        entity: Entity<SqlQueryDocument>,
+        entity: Entity<CodeDocument>,
     },
     /// Data grid document (table browser or promoted result).
     Data {
@@ -31,10 +31,10 @@ pub enum DocumentHandle {
 }
 
 impl DocumentHandle {
-    /// Creates a new SqlQuery document handle.
-    pub fn sql_query(entity: Entity<SqlQueryDocument>, cx: &App) -> Self {
+    /// Creates a new code document handle.
+    pub fn code(entity: Entity<CodeDocument>, cx: &App) -> Self {
         let id = entity.read(cx).id();
-        Self::SqlQuery { id, entity }
+        Self::Code { id, entity }
     }
 
     /// Creates a new Data document handle.
@@ -51,7 +51,7 @@ impl DocumentHandle {
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
-            Self::SqlQuery { id, .. } => *id,
+            Self::Code { id, .. } => *id,
             Self::Data { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
         }
@@ -60,7 +60,7 @@ impl DocumentHandle {
     /// Document kind (no cx required).
     pub fn kind(&self) -> DocumentKind {
         match self {
-            Self::SqlQuery { .. } => DocumentKind::Script,
+            Self::Code { .. } => DocumentKind::Script,
             Self::Data { .. } => DocumentKind::Data,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
         }
@@ -69,9 +69,7 @@ impl DocumentHandle {
     /// Checks if this document is backed by the given file path.
     pub fn is_file(&self, path: &std::path::Path, cx: &App) -> bool {
         match self {
-            Self::SqlQuery { entity, .. } => {
-                entity.read(cx).path().map(|p| p.as_path()) == Some(path)
-            }
+            Self::Code { entity, .. } => entity.read(cx).path().map(|p| p.as_path()) == Some(path),
             _ => false,
         }
     }
@@ -106,7 +104,7 @@ impl DocumentHandle {
     /// Gets metadata snapshot (requires cx to read entity).
     pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
         match self {
-            Self::SqlQuery { id, entity } => {
+            Self::Code { id, entity } => {
                 let doc = entity.read(cx);
                 let icon = if doc.is_file_backed() {
                     DocumentIcon::Script
@@ -163,21 +161,21 @@ impl DocumentHandle {
     /// Can this document be closed? (checks unsaved changes)
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
-            Self::SqlQuery { entity, .. } => entity.read(cx).can_close(cx),
+            Self::Code { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
         }
     }
 
     pub fn flush_auto_save(&self, cx: &App) {
-        if let Self::SqlQuery { entity, .. } = self {
+        if let Self::Code { entity, .. } = self {
             entity.read(cx).flush_auto_save(cx);
         }
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         match self {
-            Self::SqlQuery { entity, .. } => entity.read(cx).refresh_policy(),
+            Self::Code { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
         }
@@ -185,7 +183,7 @@ impl DocumentHandle {
 
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
         match self {
-            Self::SqlQuery { entity, .. } => {
+            Self::Code { entity, .. } => {
                 entity.update(cx, |doc, _cx| doc.set_active_tab(active));
             }
             Self::Data { entity, .. } => {
@@ -199,7 +197,7 @@ impl DocumentHandle {
 
     pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
         match self {
-            Self::SqlQuery { entity, .. } => {
+            Self::Code { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
             }
             Self::Data { entity, .. } => {
@@ -214,7 +212,7 @@ impl DocumentHandle {
     /// Renders the document.
     pub fn render(&self) -> AnyElement {
         match self {
-            Self::SqlQuery { entity, .. } => entity.clone().into_any_element(),
+            Self::Code { entity, .. } => entity.clone().into_any_element(),
             Self::Data { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
         }
@@ -223,7 +221,7 @@ impl DocumentHandle {
     /// Dispatch commands to the active document.
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
-            Self::SqlQuery { entity, .. } => {
+            Self::Code { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
             Self::Data { entity, .. } => {
@@ -238,7 +236,7 @@ impl DocumentHandle {
     /// Gives focus to the document.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
-            Self::SqlQuery { entity, .. } => {
+            Self::Code { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
             Self::Data { entity, .. } => {
@@ -254,7 +252,7 @@ impl DocumentHandle {
     /// Documents determine their context based on internal focus state.
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
-            Self::SqlQuery { entity, .. } => entity.read(cx).active_context(cx),
+            Self::Code { entity, .. } => entity.read(cx).active_context(cx),
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
         }
@@ -267,7 +265,7 @@ impl DocumentHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         match self {
-            Self::SqlQuery { entity, .. } => {
+            Self::Code { entity, .. } => {
                 cx.subscribe(entity, move |_entity, event, cx| callback(event, cx))
             }
             Self::Data { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {

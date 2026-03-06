@@ -2,6 +2,7 @@
 members = [
     "crates/dbflux",
     "crates/dbflux_core",
+    "crates/dbflux_lua",
     "crates/dbflux_ipc",
     "crates/dbflux_driver_ipc",
     "crates/dbflux_test_support",
@@ -31,6 +32,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_lua = { path = "crates/dbflux_lua" }
 dbflux_test_support = { path = "crates/dbflux_test_support" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
@@ -63,3 +65,4 @@ env_logger = "0.11"
 fuzzy-matcher = "0.3"
 hex = "0.4"
 interprocess = "2.4"
+mlua = "0.10"

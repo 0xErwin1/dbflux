@@ -2,7 +2,7 @@ use super::*;
 
 const DIAGNOSTIC_DEBOUNCE_MS: u64 = 200;
 
-impl SqlQueryDocument {
+impl CodeDocument {
     /// Debounced diagnostic refresh. Bumps request id so stale runs are discarded.
     pub(super) fn schedule_diagnostic_refresh(&mut self, cx: &mut Context<Self>) {
         self.diagnostic_request_id += 1;

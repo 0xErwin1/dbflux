@@ -9,7 +9,7 @@ use crate::keymap::{
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    DataDocument, DocumentHandle, SqlQueryDocument, TabBar, TabBarEvent, TabManager,
+    DataDocument, DocumentHandle, CodeDocument, TabBar, TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
@@ -53,7 +53,8 @@ impl PanelState {
 
 /// Deferred until render (needs `Window` access).
 pub(super) struct PendingOpenScript {
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
+    pub title: String,
     pub body: String,
     pub language: QueryLanguage,
     pub connection_id: Option<uuid::Uuid>,
@@ -194,7 +195,31 @@ impl Workspace {
                     });
                 }
                 SidebarEvent::OpenScript { path } => {
-                    this.open_script_from_path(path.clone(), cx);
+                    if dbflux_core::is_openable_script(path) {
+                        this.open_script_from_path(path.clone(), cx);
+                    } else {
+                        use crate::ui::components::toast::ToastExt;
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("file");
+                        cx.toast_warning(
+                            format!("Unsupported file type: {}", name),
+                            window,
+                        );
+                    }
+                }
+                SidebarEvent::OpenInlineScript {
+                    title,
+                    body,
+                    language,
+                } => {
+                    this.open_inline_script_editor(
+                        title.clone(),
+                        body.clone(),
+                        language.clone(),
+                        cx,
+                    );
                 }
             },
         )

@@ -15,7 +15,7 @@ pub use config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
     GlobalOverrides, RefreshPolicy, RefreshPolicySetting, ScriptEntry, ScriptsDirectory,
     ServiceConfig, StartupFocus, ThemeSetting, all_script_extensions, driver_maps_differ,
-    filter_entries,
+    filter_entries, hook_script_path, is_openable_script,
 };
 
 pub use connection::{
@@ -27,11 +27,12 @@ pub use connection::{
     FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
     FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
     FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
-    HookExecutionContext, HookFailureMode, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
-    Identifiable, ItemManager, OwnedCacheEntry, PendingOperation, ProfileManager, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
-    SwitchDatabaseParams, SwitchDatabaseResult,
+    HookExecutionContext, HookExecutor, HookFailureMode, HookKind, HookPhase,
+    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
+    OwnedCacheEntry, PendingOperation, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind,
+    ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig,
+    SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 
 pub use core::{

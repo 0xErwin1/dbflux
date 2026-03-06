@@ -1,6 +1,6 @@
 use dbflux_core::{
     CancelToken, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionProfile,
-    DbConfig, HookContext, HookPhase, HookPhaseOutcome, HookRunner,
+    DbConfig, HookContext, HookPhase, HookPhaseOutcome, HookRunner, ProcessExecutor,
 };
 use std::collections::HashMap;
 
@@ -41,6 +41,25 @@ fn disabled_echo() -> ConnectionHook {
     .unwrap()
 }
 
+fn inline_script_hook(message: &str) -> ConnectionHook {
+    let interpreter = if cfg!(target_os = "windows") {
+        "python"
+    } else {
+        "python3"
+    };
+
+    serde_json::from_value(serde_json::json!({
+        "kind": "script",
+        "language": "python",
+        "source": {
+            "type": "inline",
+            "content": format!("print('{}')", message)
+        },
+        "interpreter": interpreter
+    }))
+    .unwrap()
+}
+
 fn test_profile() -> ConnectionProfile {
     ConnectionProfile::new("integration-test", DbConfig::default_postgres())
 }
@@ -49,6 +68,10 @@ fn test_definitions() -> HashMap<String, ConnectionHook> {
     HashMap::from([
         ("setup-vpn".to_string(), echo_hook("vpn-up")),
         ("warm-cache".to_string(), echo_hook("cache-warmed")),
+        (
+            "script-setup".to_string(),
+            inline_script_hook("script-ready"),
+        ),
         ("cleanup".to_string(), echo_hook("cleaned")),
         ("fail-warn".to_string(), failing_hook_warn()),
         ("fail-disconnect".to_string(), failing_hook_disconnect()),
@@ -66,7 +89,16 @@ fn run_all_phases(hooks: &ConnectionHooks, context: &HookContext) -> Vec<HookPha
         HookPhase::PostDisconnect,
     ]
     .iter()
-    .map(|&phase| HookRunner::run_phase(phase, hooks.phase_hooks(phase), context, &token, None))
+    .map(|&phase| {
+        HookRunner::run_phase(
+            phase,
+            hooks.phase_hooks(phase),
+            context,
+            &token,
+            None,
+            &ProcessExecutor,
+        )
+    })
     .collect()
 }
 
@@ -131,7 +163,7 @@ fn binding_references_missing_hook_is_skipped() {
         1,
         "missing binding should be skipped"
     );
-    assert_eq!(hooks.pre_connect[0].args, vec!["vpn-up"]);
+    assert_eq!(hooks.pre_connect[0].display_command(), "echo vpn-up");
 }
 
 #[test]
@@ -158,6 +190,7 @@ fn profile_without_bindings_uses_inline_hooks() {
         &context,
         &token,
         None,
+        &ProcessExecutor,
     );
 
     match outcome {
@@ -210,6 +243,7 @@ fn mixed_failure_modes_across_phases() {
         &context,
         &token,
         None,
+        &ProcessExecutor,
     );
 
     match pre {
@@ -229,6 +263,7 @@ fn mixed_failure_modes_across_phases() {
         &context,
         &token,
         None,
+        &ProcessExecutor,
     );
 
     match post {
@@ -267,6 +302,7 @@ fn disabled_hooks_in_bindings_are_skipped() {
         &context,
         &token,
         None,
+        &ProcessExecutor,
     );
 
     match outcome {
@@ -274,5 +310,48 @@ fn disabled_hooks_in_bindings_are_skipped() {
             assert_eq!(executions.len(), 0, "disabled hook should not execute");
         }
         other => panic!("expected Success with 0 executions, got {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_from_bindings_supports_mixed_command_and_script_hooks() {
+    let definitions = test_definitions();
+
+    let mut profile = test_profile();
+    profile.hook_bindings = Some(ConnectionHookBindings {
+        pre_connect: vec!["setup-vpn".to_string(), "script-setup".to_string()],
+        ..Default::default()
+    });
+
+    let hooks = ConnectionHooks::resolve_from_bindings(&profile, &definitions);
+    let context = HookContext::from_profile(&profile);
+    let token = CancelToken::new();
+
+    let outcome = HookRunner::run_phase(
+        HookPhase::PreConnect,
+        hooks.phase_hooks(HookPhase::PreConnect),
+        &context,
+        &token,
+        None,
+        &ProcessExecutor,
+    );
+
+    match outcome {
+        HookPhaseOutcome::Success { executions } => {
+            assert_eq!(executions.len(), 2);
+            assert_eq!(executions[0].hook.display_command(), "echo vpn-up");
+            assert!(executions[1]
+                .hook
+                .display_command()
+                .contains("<inline script>"));
+            assert!(executions[1].hook.display_command().starts_with("python"));
+            assert!(executions[1]
+                .result
+                .as_ref()
+                .unwrap()
+                .stdout
+                .contains("script-ready"));
+        }
+        other => panic!("expected Success, got {:?}", other),
     }
 }

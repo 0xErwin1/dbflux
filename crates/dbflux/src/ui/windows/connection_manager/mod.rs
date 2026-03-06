@@ -888,16 +888,17 @@ impl ConnectionManagerWindow {
             "No hook", "",
         )];
 
-        let mut hook_ids: Vec<String> = self
-            .app_state
-            .read(cx)
-            .hook_definitions()
-            .keys()
-            .cloned()
-            .collect();
+        let hook_definitions = self.app_state.read(cx).hook_definitions().clone();
+
+        let mut hook_ids: Vec<String> = hook_definitions.keys().cloned().collect();
         hook_ids.sort();
         hook_items.extend(hook_ids.iter().map(|hook_id| {
-            crate::ui::components::dropdown::DropdownItem::with_value(hook_id, hook_id)
+            let label = hook_definitions
+                .get(hook_id)
+                .map(|hook| format!("{} - {}", hook_id, hook.summary()))
+                .unwrap_or_else(|| hook_id.clone());
+
+            crate::ui::components::dropdown::DropdownItem::with_value(label, hook_id)
         }));
 
         let (pre_selected, pre_extra) = hook_bindings

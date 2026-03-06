@@ -1,6 +1,8 @@
 use super::*;
+use crate::hook_executor::CompositeExecutor;
 use dbflux_core::{
-    CancelToken, ConnectionHook, HookContext, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    CancelToken, ConnectionHook, HookContext, HookKind, HookPhase, HookPhaseOutcome, HookResult,
+    HookRunner,
 };
 
 enum HookPhaseState {
@@ -18,15 +20,23 @@ fn single_hook_result(executions: Vec<dbflux_core::HookExecution>) -> Result<Hoo
 }
 
 fn hook_task_details(
+    hook: &ConnectionHook,
     phase: HookPhase,
     command_display: &str,
     result: &Result<HookResult, String>,
 ) -> String {
+    let label = match hook.kind {
+        HookKind::Command { .. } => "Command",
+        HookKind::Script { .. } => "Script",
+        HookKind::Lua { .. } => "Lua",
+    };
+
     match result {
         Ok(output) => {
             let mut lines = vec![
                 format!("Phase: {}", phase.label()),
-                format!("Command: {}", command_display),
+                format!("{}: {}", label, command_display),
+                format!("Summary: {}", hook.summary()),
                 format!("Timed out: {}", output.timed_out),
                 format!("Exit code: {:?}", output.exit_code),
                 String::new(),
@@ -48,13 +58,23 @@ fn hook_task_details(
                 lines.push(output.stderr.clone());
             }
 
+            if output.warnings.is_empty() {
+                return lines.join("\n");
+            }
+
+            lines.push(String::new());
+            lines.push("warnings:".to_string());
+            lines.extend(output.warnings.iter().cloned());
+
             lines.join("\n")
         }
         Err(error) => {
             format!(
-                "Phase: {}\nCommand: {}\nError: {}",
+                "Phase: {}\n{}: {}\nSummary: {}\nError: {}",
                 phase.label(),
+                label,
                 command_display,
+                hook.summary(),
                 error
             )
         }
@@ -73,6 +93,7 @@ async fn run_hook_phase(
     cx: &mut AsyncApp,
 ) -> HookPhaseState {
     let mut warnings = Vec::new();
+    let executor = CompositeExecutor::new();
 
     for hook in hooks {
         if !hook.enabled {
@@ -106,8 +127,10 @@ async fn run_hook_phase(
 
         let parent_cancel_for_hook = parent_cancel.clone();
         let hook_for_execution = hook.clone();
-        let hook_context = context.clone();
+        let mut hook_context = context.clone();
+        hook_context.phase = Some(phase);
         let hook_cancel_for_execution = hook_cancel_token.clone();
+        let executor = executor.clone();
 
         let hook_outcome = cx
             .background_executor()
@@ -118,6 +141,7 @@ async fn run_hook_phase(
                     &hook_context,
                     &hook_cancel_for_execution,
                     parent_cancel_for_hook.as_ref(),
+                    &executor,
                 )
             })
             .await;
@@ -149,7 +173,7 @@ async fn run_hook_phase(
                     .unwrap_or_else(|| hook.failure_message(phase, &hook_result)),
             )
         };
-        let details = hook_task_details(phase, &command_display, &hook_result);
+        let details = hook_task_details(&hook, phase, &command_display, &hook_result);
 
         cx.update(|cx| {
             app_state.update(cx, |state, cx| {
@@ -163,6 +187,8 @@ async fn run_hook_phase(
             });
         })
         .ok();
+
+        warnings.extend(warn_messages);
 
         if succeeded {
             continue;
@@ -179,8 +205,6 @@ async fn run_hook_phase(
         if let Some(error) = abort_error {
             return HookPhaseState::Aborted { error };
         }
-
-        warnings.extend(warn_messages);
     }
 
     HookPhaseState::Continue { warnings }

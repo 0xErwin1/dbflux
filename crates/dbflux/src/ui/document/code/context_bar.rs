@@ -1,6 +1,6 @@
 use super::*;
 
-impl SqlQueryDocument {
+impl CodeDocument {
     // === Context dropdown creation ===
 
     pub(super) fn create_connection_dropdown(
@@ -137,15 +137,16 @@ impl SqlQueryDocument {
         // Refresh schema dropdown with default pre-selection
         self.refresh_schema_dropdown_with_default(cx);
 
-        // Update completion provider
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
-                self.query_language.clone(),
-                self.app_state.clone(),
-                Some(new_conn_id),
-            ));
         self.input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = Some(completion_provider);
+            state.lsp.completion_provider = if self.query_language.supports_connection_context() {
+                Some(Rc::new(QueryCompletionProvider::new(
+                    self.query_language.clone(),
+                    self.app_state.clone(),
+                    Some(new_conn_id),
+                )) as Rc<dyn CompletionProvider>)
+            } else {
+                None
+            };
         });
 
         // Re-validate context bar index since dropdown visibility may have changed
@@ -443,6 +444,10 @@ impl SqlQueryDocument {
     /// Returns the list of visible dropdown indices:
     /// 0 = Connection (always), 1 = Database (if visible), 2 = Schema (if visible).
     fn visible_dropdown_indices(&self, cx: &App) -> Vec<usize> {
+        if !self.query_language.supports_connection_context() {
+            return Vec::new();
+        }
+
         let mut indices = vec![0]; // Connection is always visible
         if self.should_show_database_dropdown(cx) {
             indices.push(1);
@@ -597,7 +602,11 @@ impl SqlQueryDocument {
 
     // === Render the context bar ===
 
-    pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.query_language.supports_connection_context() {
+            return div().id("exec-context-bar").into_any_element();
+        }
+
         let theme = cx.theme();
 
         let show_db = self.should_show_database_dropdown(cx);
@@ -667,5 +676,6 @@ impl SqlQueryDocument {
                         .child(path.display().to_string()),
                 )
             })
+            .into_any_element()
     }
 }

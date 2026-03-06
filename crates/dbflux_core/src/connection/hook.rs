@@ -1,12 +1,15 @@
 use crate::connection::profile::{ConnectionProfile, DbConfig};
 use crate::core::task::CancelToken;
+use serde::de::{self, DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -38,23 +41,229 @@ impl HookPhase {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptLanguage {
+    Bash,
+    Python,
+}
+
+impl ScriptLanguage {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Bash => "sh",
+            Self::Python => "py",
+        }
+    }
+
+    pub fn default_interpreter(&self) -> Option<&'static str> {
+        match self {
+            Self::Bash => {
+                if cfg!(target_os = "windows") {
+                    None
+                } else {
+                    Some("bash")
+                }
+            }
+            Self::Python => {
+                if cfg!(target_os = "windows") {
+                    Some("python")
+                } else {
+                    Some("python3")
+                }
+            }
+        }
+    }
+
+    pub fn supported_on_current_platform(&self) -> bool {
+        self.default_interpreter().is_some()
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Bash => "Bash",
+            Self::Python => "Python",
+        }
+    }
+
+    pub fn available() -> Vec<Self> {
+        [Self::Bash, Self::Python]
+            .into_iter()
+            .filter(|language| language.supported_on_current_platform())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ScriptSource {
+    Inline { content: String },
+    File { path: PathBuf },
+}
+
+impl ScriptSource {
+    fn summary_label(&self) -> &'static str {
+        match self {
+            Self::Inline { .. } => "inline",
+            Self::File { .. } => "file",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LuaCapabilities {
+    #[serde(default = "default_true")]
+    pub logging: bool,
+    #[serde(default = "default_true")]
+    pub env_read: bool,
+    #[serde(default = "default_true")]
+    pub connection_metadata: bool,
+    #[serde(default)]
+    pub process_run: bool,
+}
+
+impl Default for LuaCapabilities {
+    fn default() -> Self {
+        Self {
+            logging: true,
+            env_read: true,
+            connection_metadata: true,
+            process_run: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum HookKind {
+    Command {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    Script {
+        language: ScriptLanguage,
+        source: ScriptSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interpreter: Option<String>,
+    },
+    Lua {
+        source: ScriptSource,
+        #[serde(default)]
+        capabilities: LuaCapabilities,
+    },
+}
+
+impl HookKind {
+    pub fn resolve_interpreter(&self) -> Result<String, String> {
+        match self {
+            Self::Command { command, .. } => Ok(command.clone()),
+            Self::Script {
+                language,
+                interpreter,
+                ..
+            } => interpreter
+                .clone()
+                .or_else(|| {
+                    language
+                        .default_interpreter()
+                        .map(std::string::ToString::to_string)
+                })
+                .ok_or_else(|| match language {
+                    ScriptLanguage::Bash => {
+                        "Bash is not supported on Windows. Set an explicit interpreter override."
+                            .to_string()
+                    }
+                    _ => format!(
+                    "{} is not supported on this platform. Set an explicit interpreter override.",
+                    language.label()
+                ),
+                }),
+            Self::Lua { .. } => {
+                Err("Lua hooks run in-process and do not use an interpreter".into())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConnectionHook {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
+    #[serde(flatten)]
+    pub kind: HookKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
     #[serde(default = "default_inherit_env")]
     pub inherit_env: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub on_failure: HookFailureMode,
+}
+
+impl<'de> Deserialize<'de> for ConnectionHook {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = match Value::deserialize(deserializer)? {
+            Value::Object(object) => object,
+            other => {
+                return Err(de::Error::custom(format!(
+                    "expected hook object, got {other:?}"
+                )));
+            }
+        };
+
+        let enabled = take_field(&mut object, "enabled")
+            .map_err(de::Error::custom)?
+            .unwrap_or_else(default_enabled);
+        let cwd = take_field(&mut object, "cwd").map_err(de::Error::custom)?;
+        let env = take_field(&mut object, "env")
+            .map_err(de::Error::custom)?
+            .unwrap_or_default();
+        let inherit_env = take_field(&mut object, "inherit_env")
+            .map_err(de::Error::custom)?
+            .unwrap_or_else(default_inherit_env);
+        let timeout_ms = take_field(&mut object, "timeout_ms").map_err(de::Error::custom)?;
+        let on_failure = take_field(&mut object, "on_failure")
+            .map_err(de::Error::custom)?
+            .unwrap_or_default();
+
+        let kind = if object.contains_key("kind") {
+            serde_json::from_value(Value::Object(object)).map_err(de::Error::custom)?
+        } else if object.contains_key("command") {
+            let command = take_required_field(&mut object, "command").map_err(de::Error::custom)?;
+            let args = take_field(&mut object, "args")
+                .map_err(de::Error::custom)?
+                .unwrap_or_default();
+
+            if let Some(unexpected) = object.keys().next().cloned() {
+                return Err(de::Error::custom(format!(
+                    "unexpected field '{unexpected}' in legacy hook definition"
+                )));
+            }
+
+            HookKind::Command { command, args }
+        } else {
+            return Err(de::Error::custom(
+                "hook definition must include either 'kind' or legacy 'command'",
+            ));
+        };
+
+        Ok(Self {
+            enabled,
+            kind,
+            cwd,
+            env,
+            inherit_env,
+            timeout_ms,
+            on_failure,
+        })
+    }
 }
 
 fn default_enabled() -> bool {
@@ -63,6 +272,28 @@ fn default_enabled() -> bool {
 
 fn default_inherit_env() -> bool {
     true
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn take_field<T>(object: &mut Map<String, Value>, key: &str) -> Result<Option<T>, String>
+where
+    T: DeserializeOwned,
+{
+    object
+        .remove(key)
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("invalid '{key}' field: {error}"))
+}
+
+fn take_required_field<T>(object: &mut Map<String, Value>, key: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    take_field(object, key)?.ok_or_else(|| format!("missing required '{key}' field"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -167,6 +398,7 @@ pub struct HookContext {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub database: Option<String>,
+    pub phase: Option<HookPhase>,
 }
 
 impl HookContext {
@@ -180,6 +412,7 @@ impl HookContext {
             host,
             port,
             database,
+            phase: None,
         }
     }
 }
@@ -232,6 +465,13 @@ pub struct HookResult {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    pub warnings: Vec<String>,
+}
+
+struct ResolvedExecution {
+    program: String,
+    args: Vec<String>,
+    _temp_file: Option<NamedTempFile>,
 }
 
 impl HookResult {
@@ -244,6 +484,38 @@ impl HookResult {
 pub struct HookExecution {
     pub hook: ConnectionHook,
     pub result: Result<HookResult, String>,
+}
+
+pub trait HookExecutor: Send + Sync {
+    fn execute_hook(
+        &self,
+        hook: &ConnectionHook,
+        context: &HookContext,
+        cancel_token: &CancelToken,
+        parent_cancel_token: Option<&CancelToken>,
+    ) -> Result<HookResult, String>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessExecutor;
+
+impl HookExecutor for ProcessExecutor {
+    fn execute_hook(
+        &self,
+        hook: &ConnectionHook,
+        context: &HookContext,
+        cancel_token: &CancelToken,
+        parent_cancel_token: Option<&CancelToken>,
+    ) -> Result<HookResult, String> {
+        match &hook.kind {
+            HookKind::Command { .. } | HookKind::Script { .. } => {
+                hook.execute_process(context, cancel_token, parent_cancel_token)
+            }
+            HookKind::Lua { .. } => {
+                Err("Lua hooks require the 'lua' feature to be enabled".to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -263,11 +535,111 @@ pub enum HookPhaseOutcome {
 
 impl ConnectionHook {
     pub fn display_command(&self) -> String {
-        if self.args.is_empty() {
-            return self.command.clone();
-        }
+        match &self.kind {
+            HookKind::Command { command, args } => {
+                if args.is_empty() {
+                    command.clone()
+                } else {
+                    format!("{} {}", command, args.join(" "))
+                }
+            }
+            HookKind::Script {
+                source,
+                interpreter,
+                language,
+            } => {
+                let program = interpreter.clone().or_else(|| {
+                    language
+                        .default_interpreter()
+                        .map(std::string::ToString::to_string)
+                });
 
-        format!("{} {}", self.command, self.args.join(" "))
+                match program {
+                    Some(program) => match source {
+                        ScriptSource::Inline { .. } => format!("{} <inline script>", program),
+                        ScriptSource::File { path } => {
+                            format!("{} {}", program, path.display())
+                        }
+                    },
+                    None => "Unsupported on this platform".to_string(),
+                }
+            }
+            HookKind::Lua { source, .. } => match source {
+                ScriptSource::Inline { .. } => "lua <inline script>".to_string(),
+                ScriptSource::File { path } => format!("lua {}", path.display()),
+            },
+        }
+    }
+
+    pub fn is_script(&self) -> bool {
+        matches!(self.kind, HookKind::Script { .. })
+    }
+
+    pub fn is_command(&self) -> bool {
+        matches!(self.kind, HookKind::Command { .. })
+    }
+
+    pub fn summary(&self) -> String {
+        match &self.kind {
+            HookKind::Command { .. } => self.display_command(),
+            HookKind::Script {
+                language, source, ..
+            } => {
+                format!("{} · {}", language.label(), source.summary_label())
+            }
+            HookKind::Lua { source, .. } => format!("Lua · {}", source.summary_label()),
+        }
+    }
+
+    fn resolve_execution(&self) -> Result<ResolvedExecution, String> {
+        match &self.kind {
+            HookKind::Command { command, args } => Ok(ResolvedExecution {
+                program: command.clone(),
+                args: args.clone(),
+                _temp_file: None,
+            }),
+            HookKind::Script { source, .. } => {
+                let program = self.kind.resolve_interpreter()?;
+
+                match source {
+                    ScriptSource::File { path } => Ok(ResolvedExecution {
+                        program,
+                        args: vec![path.to_string_lossy().into_owned()],
+                        _temp_file: None,
+                    }),
+                    ScriptSource::Inline { content } => {
+                        let mut temp_file = tempfile::Builder::new()
+                            .suffix(&format!(
+                                ".{}",
+                                match &self.kind {
+                                    HookKind::Script { language, .. } => language.extension(),
+                                    HookKind::Command { .. } => unreachable!(),
+                                    HookKind::Lua { .. } => unreachable!(),
+                                }
+                            ))
+                            .tempfile()
+                            .map_err(|error| {
+                                format!("Failed to create temp file for hook script: {error}")
+                            })?;
+
+                        temp_file.write_all(content.as_bytes()).map_err(|error| {
+                            format!("Failed to write temp file for hook script: {error}")
+                        })?;
+
+                        let temp_path = temp_file.path().to_string_lossy().into_owned();
+
+                        Ok(ResolvedExecution {
+                            program,
+                            args: vec![temp_path],
+                            _temp_file: Some(temp_file),
+                        })
+                    }
+                }
+            }
+            HookKind::Lua { .. } => {
+                Err("Lua hooks run in-process and cannot be executed as child processes".into())
+            }
+        }
     }
 
     pub fn execute(
@@ -276,8 +648,19 @@ impl ConnectionHook {
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
     ) -> Result<HookResult, String> {
-        let mut command = Command::new(&self.command);
-        command.args(&self.args);
+        ProcessExecutor.execute_hook(self, context, cancel_token, parent_cancel_token)
+    }
+
+    pub(crate) fn execute_process(
+        &self,
+        context: &HookContext,
+        cancel_token: &CancelToken,
+        parent_cancel_token: Option<&CancelToken>,
+    ) -> Result<HookResult, String> {
+        let resolved = self.resolve_execution()?;
+
+        let mut command = Command::new(&resolved.program);
+        command.args(&resolved.args);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
@@ -297,6 +680,8 @@ impl ConnectionHook {
         let mut child = command.spawn().map_err(|error| {
             format!("Failed to execute '{}': {}", self.display_command(), error)
         })?;
+
+        let _temp_file = resolved._temp_file;
 
         let start = Instant::now();
         let timeout = self.timeout_ms.map(Duration::from_millis);
@@ -328,6 +713,7 @@ impl ConnectionHook {
                     stdout,
                     stderr,
                     timed_out: true,
+                    warnings: Vec::new(),
                 });
             }
 
@@ -340,6 +726,7 @@ impl ConnectionHook {
                         stdout,
                         stderr,
                         timed_out: false,
+                        warnings: Vec::new(),
                     });
                 }
                 Ok(None) => {
@@ -461,6 +848,7 @@ impl HookRunner {
         context: &HookContext,
         cancel_token: &CancelToken,
         parent_cancel_token: Option<&CancelToken>,
+        executor: &dyn HookExecutor,
     ) -> HookPhaseOutcome {
         let mut warnings = Vec::new();
         let mut executions = Vec::new();
@@ -470,7 +858,12 @@ impl HookRunner {
                 continue;
             }
 
-            let result = hook.execute(context, cancel_token, parent_cancel_token);
+            let result = executor.execute_hook(hook, context, cancel_token, parent_cancel_token);
+
+            if let Ok(output) = &result {
+                warnings.extend(output.warnings.iter().cloned());
+            }
+
             let succeeded = result.as_ref().is_ok_and(HookResult::is_success);
 
             executions.push(HookExecution {
@@ -514,8 +907,8 @@ impl HookRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AppConfig;
     use crate::connection::profile::{ConnectionProfile, DbConfig};
+    use crate::AppConfig;
 
     // =========================================================================
     // Helpers
@@ -529,14 +922,17 @@ mod tests {
             host: Some("localhost".to_string()),
             port: Some(5432),
             database: Some("mydb".to_string()),
+            phase: None,
         }
     }
 
     fn echo_hook(message: &str) -> ConnectionHook {
         ConnectionHook {
             enabled: true,
-            command: "echo".to_string(),
-            args: vec![message.to_string()],
+            kind: HookKind::Command {
+                command: "echo".to_string(),
+                args: vec![message.to_string()],
+            },
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
@@ -548,8 +944,10 @@ mod tests {
     fn failing_hook() -> ConnectionHook {
         ConnectionHook {
             enabled: true,
-            command: "false".to_string(),
-            args: vec![],
+            kind: HookKind::Command {
+                command: "false".to_string(),
+                args: vec![],
+            },
             cwd: None,
             env: HashMap::new(),
             inherit_env: true,
@@ -609,8 +1007,10 @@ mod tests {
     fn connection_hook_serde_roundtrip() {
         let hook = ConnectionHook {
             enabled: true,
-            command: "pg_isready".to_string(),
-            args: vec!["-h".to_string(), "localhost".to_string()],
+            kind: HookKind::Command {
+                command: "pg_isready".to_string(),
+                args: vec!["-h".to_string(), "localhost".to_string()],
+            },
             cwd: Some(PathBuf::from("/tmp")),
             env: HashMap::from([("PG_COLOR".to_string(), "always".to_string())]),
             inherit_env: false,
@@ -629,13 +1029,79 @@ mod tests {
         let hook: ConnectionHook = serde_json::from_str(r#"{"command": "echo"}"#).unwrap();
 
         assert!(hook.enabled);
-        assert_eq!(hook.command, "echo");
-        assert!(hook.args.is_empty());
+        assert_eq!(
+            hook.kind,
+            HookKind::Command {
+                command: "echo".to_string(),
+                args: vec![],
+            }
+        );
         assert!(hook.cwd.is_none());
         assert!(hook.env.is_empty());
         assert!(hook.inherit_env);
         assert!(hook.timeout_ms.is_none());
         assert_eq!(hook.on_failure, HookFailureMode::Disconnect);
+    }
+
+    #[test]
+    fn connection_hook_new_command_kind_roundtrip() {
+        let hook: ConnectionHook = serde_json::from_str(
+            r#"{
+                "kind": "command",
+                "command": "echo",
+                "args": ["hello"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(hook.display_command(), "echo hello");
+        assert!(hook.is_command());
+        assert!(!hook.is_script());
+    }
+
+    #[test]
+    fn connection_hook_new_script_kind_roundtrip() {
+        let hook: ConnectionHook = serde_json::from_str(
+            r#"{
+                "kind": "script",
+                "language": "python",
+                "source": {
+                    "type": "inline",
+                    "content": "print('hello')"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(hook.summary(), "Python · inline");
+        assert!(hook.is_script());
+        assert!(!hook.is_command());
+    }
+
+    #[test]
+    fn connection_hook_new_lua_kind_roundtrip() {
+        let hook: ConnectionHook = serde_json::from_str(
+            r#"{
+                "kind": "lua",
+                "source": {
+                    "type": "inline",
+                    "content": "hook.ok()"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(hook.summary(), "Lua · inline");
+        assert_eq!(hook.display_command(), "lua <inline script>");
+
+        let HookKind::Lua { capabilities, .. } = hook.kind else {
+            panic!("expected lua hook kind");
+        };
+
+        assert!(capabilities.logging);
+        assert!(capabilities.env_read);
+        assert!(capabilities.connection_metadata);
+        assert!(!capabilities.process_run);
     }
 
     #[test]
@@ -837,6 +1303,7 @@ mod tests {
 
         assert_eq!(ctx.profile_id, profile.id);
         assert_eq!(ctx.profile_name, "my-db");
+        assert_eq!(ctx.phase, None);
     }
 
     // =========================================================================
@@ -850,6 +1317,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            warnings: Vec::new(),
         };
 
         assert!(result.is_success());
@@ -862,6 +1330,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            warnings: Vec::new(),
         };
 
         assert!(!result.is_success());
@@ -874,6 +1343,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            warnings: Vec::new(),
         };
 
         assert!(!result.is_success());
@@ -886,6 +1356,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            warnings: Vec::new(),
         };
 
         assert!(!result.is_success());
@@ -910,8 +1381,10 @@ mod tests {
     #[test]
     fn execute_captures_stderr() {
         let hook = ConnectionHook {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo errmsg >&2".to_string()],
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), "echo errmsg >&2".to_string()],
+            },
             ..echo_hook("")
         };
 
@@ -936,8 +1409,10 @@ mod tests {
     #[test]
     fn execute_invalid_command_returns_error() {
         let hook = ConnectionHook {
-            command: "nonexistent_command_xyz_12345".to_string(),
-            args: vec![],
+            kind: HookKind::Command {
+                command: "nonexistent_command_xyz_12345".to_string(),
+                args: vec![],
+            },
             ..echo_hook("")
         };
 
@@ -950,8 +1425,10 @@ mod tests {
     #[test]
     fn execute_timeout_kills_process() {
         let hook = ConnectionHook {
-            command: "sleep".to_string(),
-            args: vec!["10".to_string()],
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
             timeout_ms: Some(100),
             ..echo_hook("")
         };
@@ -970,8 +1447,10 @@ mod tests {
         token.cancel();
 
         let hook = ConnectionHook {
-            command: "sleep".to_string(),
-            args: vec!["10".to_string()],
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
             ..echo_hook("")
         };
 
@@ -988,8 +1467,10 @@ mod tests {
         parent.cancel();
 
         let hook = ConnectionHook {
-            command: "sleep".to_string(),
-            args: vec!["10".to_string()],
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
             ..echo_hook("")
         };
 
@@ -1002,11 +1483,14 @@ mod tests {
     #[test]
     fn execute_injects_context_env_vars() {
         let hook = ConnectionHook {
-            command: "sh".to_string(),
-            args: vec![
-                "-c".to_string(),
-                "echo $DBFLUX_PROFILE_NAME:$DBFLUX_HOST:$DBFLUX_PORT:$DBFLUX_DATABASE".to_string(),
-            ],
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo $DBFLUX_PROFILE_NAME:$DBFLUX_HOST:$DBFLUX_PORT:$DBFLUX_DATABASE"
+                        .to_string(),
+                ],
+            },
             ..echo_hook("")
         };
 
@@ -1020,8 +1504,10 @@ mod tests {
     #[test]
     fn execute_custom_env_overrides_context() {
         let hook = ConnectionHook {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo $DBFLUX_HOST".to_string()],
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), "echo $DBFLUX_HOST".to_string()],
+            },
             env: HashMap::from([("DBFLUX_HOST".to_string(), "override-host".to_string())]),
             ..echo_hook("")
         };
@@ -1036,8 +1522,10 @@ mod tests {
     #[test]
     fn execute_inherit_env_false_clears_environment() {
         let hook = ConnectionHook {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo ${HOME:-empty}".to_string()],
+            kind: HookKind::Command {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), "echo ${HOME:-empty}".to_string()],
+            },
             inherit_env: false,
             ..echo_hook("")
         };
@@ -1052,8 +1540,10 @@ mod tests {
     #[test]
     fn execute_respects_cwd() {
         let hook = ConnectionHook {
-            command: "pwd".to_string(),
-            args: vec![],
+            kind: HookKind::Command {
+                command: "pwd".to_string(),
+                args: vec![],
+            },
             cwd: Some(PathBuf::from("/tmp")),
             ..echo_hook("")
         };
@@ -1098,7 +1588,7 @@ mod tests {
             .push(echo_hook("added"));
 
         assert_eq!(hooks.post_connect.len(), 1);
-        assert_eq!(hooks.post_connect[0].args, vec!["added"]);
+        assert_eq!(hooks.post_connect[0].display_command(), "echo added");
     }
 
     // =========================================================================
@@ -1132,6 +1622,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         assert!(
@@ -1149,6 +1640,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         assert!(
@@ -1166,6 +1658,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         assert!(
@@ -1183,6 +1676,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         match outcome {
@@ -1206,6 +1700,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         assert!(matches!(outcome, HookPhaseOutcome::Aborted { .. }));
@@ -1224,6 +1719,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         match outcome {
@@ -1233,6 +1729,47 @@ mod tests {
             } => {
                 assert_eq!(executions.len(), 2);
                 assert_eq!(warnings.len(), 1);
+            }
+            other => panic!("expected CompletedWithWarnings, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_phase_collects_executor_warnings() {
+        struct WarningExecutor;
+
+        impl HookExecutor for WarningExecutor {
+            fn execute_hook(
+                &self,
+                _hook: &ConnectionHook,
+                _context: &HookContext,
+                _cancel_token: &CancelToken,
+                _parent_cancel_token: Option<&CancelToken>,
+            ) -> Result<HookResult, String> {
+                Ok(HookResult {
+                    exit_code: Some(0),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    timed_out: false,
+                    warnings: vec!["be careful".to_string()],
+                })
+            }
+        }
+
+        let hooks = [echo_hook("ok")];
+
+        let outcome = HookRunner::run_phase(
+            HookPhase::PreConnect,
+            &hooks,
+            &test_context(),
+            &CancelToken::new(),
+            None,
+            &WarningExecutor,
+        );
+
+        match outcome {
+            HookPhaseOutcome::CompletedWithWarnings { warnings, .. } => {
+                assert_eq!(warnings, vec!["be careful"]);
             }
             other => panic!("expected CompletedWithWarnings, got {:?}", other),
         }
@@ -1251,6 +1788,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         match outcome {
@@ -1277,6 +1815,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         match outcome {
@@ -1307,6 +1846,7 @@ mod tests {
             &test_context(),
             &CancelToken::new(),
             None,
+            &ProcessExecutor,
         );
 
         assert!(matches!(outcome, HookPhaseOutcome::Aborted { .. }));
@@ -1318,13 +1858,21 @@ mod tests {
         token.cancel();
 
         let hooks = [ConnectionHook {
-            command: "sleep".to_string(),
-            args: vec!["10".to_string()],
+            kind: HookKind::Command {
+                command: "sleep".to_string(),
+                args: vec!["10".to_string()],
+            },
             ..echo_hook("")
         }];
 
-        let outcome =
-            HookRunner::run_phase(HookPhase::PreConnect, &hooks, &test_context(), &token, None);
+        let outcome = HookRunner::run_phase(
+            HookPhase::PreConnect,
+            &hooks,
+            &test_context(),
+            &token,
+            None,
+            &ProcessExecutor,
+        );
 
         match outcome {
             HookPhaseOutcome::Aborted { executions, .. } => {
@@ -1333,6 +1881,30 @@ mod tests {
             }
             other => panic!("expected Aborted on cancellation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn process_executor_rejects_lua_hooks() {
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Lua {
+                source: ScriptSource::Inline {
+                    content: "hook.ok()".to_string(),
+                },
+                capabilities: LuaCapabilities::default(),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        let result =
+            ProcessExecutor.execute_hook(&hook, &test_context(), &CancelToken::new(), None);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("lua"));
     }
 
     // =========================================================================
@@ -1351,6 +1923,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
+            warnings: Vec::new(),
         });
 
         let message = hook.failure_message(HookPhase::PreConnect, &result);
@@ -1369,6 +1942,7 @@ mod tests {
             stdout: String::new(),
             stderr: "something went wrong".to_string(),
             timed_out: false,
+            warnings: Vec::new(),
         });
 
         let message = hook.failure_message(HookPhase::PostConnect, &result);
@@ -1396,7 +1970,10 @@ mod tests {
     #[test]
     fn display_command_no_args() {
         let hook = ConnectionHook {
-            args: vec![],
+            kind: HookKind::Command {
+                command: "echo".to_string(),
+                args: vec![],
+            },
             ..echo_hook("")
         };
 
@@ -1408,5 +1985,179 @@ mod tests {
         let hook = echo_hook("hello world");
 
         assert_eq!(hook.display_command(), "echo hello world");
+    }
+
+    #[test]
+    fn display_command_for_inline_script() {
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "print('hello')".to_string(),
+                },
+                interpreter: Some("python-custom".to_string()),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        assert_eq!(hook.display_command(), "python-custom <inline script>");
+        assert_eq!(hook.summary(), "Python · inline");
+    }
+
+    #[test]
+    fn display_command_for_file_script() {
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::File {
+                    path: PathBuf::from("/tmp/test_hook.py"),
+                },
+                interpreter: Some("python-custom".to_string()),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        assert_eq!(hook.display_command(), "python-custom /tmp/test_hook.py");
+        assert_eq!(hook.summary(), "Python · file");
+    }
+
+    #[test]
+    fn execute_inline_script() {
+        let interpreter = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "print('hello from script')".to_string(),
+                },
+                interpreter: Some(interpreter),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.contains("hello from script"));
+    }
+
+    #[test]
+    fn execute_file_backed_script() {
+        let interpreter = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+
+        let mut script = tempfile::Builder::new().suffix(".py").tempfile().unwrap();
+        script
+            .write_all(b"print('hello from file script')")
+            .unwrap();
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::File {
+                    path: script.path().to_path_buf(),
+                },
+                interpreter: Some(interpreter),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.contains("hello from file script"));
+    }
+
+    #[test]
+    fn execute_inline_script_timeout() {
+        let interpreter = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "import time\ntime.sleep(10)".to_string(),
+                },
+                interpreter: Some(interpreter),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: Some(100),
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        let result = hook
+            .execute(&test_context(), &CancelToken::new(), None)
+            .unwrap();
+
+        assert!(result.timed_out);
+        assert!(!result.is_success());
+    }
+
+    #[test]
+    fn execute_inline_script_cancellation_returns_error() {
+        let interpreter = ScriptLanguage::Python
+            .default_interpreter()
+            .unwrap_or("python")
+            .to_string();
+
+        let token = CancelToken::new();
+        token.cancel();
+
+        let hook = ConnectionHook {
+            enabled: true,
+            kind: HookKind::Script {
+                language: ScriptLanguage::Python,
+                source: ScriptSource::Inline {
+                    content: "import time\ntime.sleep(10)".to_string(),
+                },
+                interpreter: Some(interpreter),
+            },
+            cwd: None,
+            env: HashMap::new(),
+            inherit_env: true,
+            timeout_ms: None,
+            on_failure: HookFailureMode::Disconnect,
+        };
+
+        let result = hook.execute(&test_context(), &token, None);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cancelled"));
     }
 }

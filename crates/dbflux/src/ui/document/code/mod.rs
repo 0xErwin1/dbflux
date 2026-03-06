@@ -47,7 +47,7 @@ mod render;
 
 use completion::QueryCompletionProvider;
 
-/// A single result tab within the SqlQueryDocument.
+/// A single result tab within the CodeDocument.
 struct ResultTab {
     id: Uuid,
     title: String,
@@ -73,7 +73,7 @@ pub enum SqlQueryFocus {
     ContextBar,
 }
 
-pub struct SqlQueryDocument {
+pub struct CodeDocument {
     // Identity
     id: DocumentId,
     title: String,
@@ -181,7 +181,7 @@ pub struct ExecutionRecord {
     pub rows_affected: Option<u64>,
 }
 
-impl SqlQueryDocument {
+impl CodeDocument {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let connection_id = app_state.read(cx).active_connection_id();
 
@@ -216,8 +216,11 @@ impl SqlQueryDocument {
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language.clone(), app_state.clone(), connection_id),
         );
+        let supports_connection_context = query_language.supports_connection_context();
+
         input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = Some(completion_provider);
+            state.lsp.completion_provider = supports_connection_context
+                .then_some(completion_provider.clone());
         });
 
         let input_change_sub = cx.subscribe_in(
@@ -805,4 +808,4 @@ impl SqlQueryDocument {
     }
 }
 
-impl EventEmitter<DocumentEvent> for SqlQueryDocument {}
+impl EventEmitter<DocumentEvent> for CodeDocument {}

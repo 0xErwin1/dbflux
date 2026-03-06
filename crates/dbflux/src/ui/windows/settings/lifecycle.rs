@@ -1,5 +1,28 @@
 use super::*;
 
+fn language_label_value(language: dbflux_core::ScriptLanguage) -> &'static str {
+    match language {
+        dbflux_core::ScriptLanguage::Bash => "bash",
+        dbflux_core::ScriptLanguage::Python => "python",
+    }
+}
+
+fn notify_on_input_change(
+    input: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> Subscription {
+    cx.subscribe_in(
+        input,
+        window,
+        |_, _, event: &gpui_component::input::InputEvent, _window, cx| {
+            if matches!(event, gpui_component::input::InputEvent::Change) {
+                cx.notify();
+            }
+        },
+    )
+}
+
 impl SettingsWindow {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
@@ -282,8 +305,55 @@ impl SettingsWindow {
         let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
 
         let input_hook_id = cx.new(|cx| InputState::new(window, cx).placeholder("hook-id"));
+        let hook_kind_dropdown = cx.new(|_cx| {
+            #[cfg(feature = "lua")]
+            let items = vec![
+                DropdownItem::with_value("Command", "command"),
+                DropdownItem::with_value("Script", "script"),
+                DropdownItem::with_value("Lua", "lua"),
+            ];
+
+            #[cfg(not(feature = "lua"))]
+            let items = vec![
+                DropdownItem::with_value("Command", "command"),
+                DropdownItem::with_value("Script", "script"),
+            ];
+
+            Dropdown::new("hook-kind").items(items).selected_index(Some(0))
+        });
         let input_hook_command = cx.new(|cx| InputState::new(window, cx).placeholder("command"));
         let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 ..."));
+        let script_language_dropdown = cx.new(|_cx| {
+            let items = dbflux_core::ScriptLanguage::available()
+                .into_iter()
+                .map(|language| {
+                    DropdownItem::with_value(language.label(), language_label_value(language))
+                })
+                .collect();
+
+            Dropdown::new("hook-script-language")
+                .items(items)
+                .selected_index(Some(0))
+        });
+        let script_source_dropdown = cx.new(|_cx| {
+            Dropdown::new("hook-script-source")
+                .items(vec![
+                    DropdownItem::with_value("File", "file"),
+                    DropdownItem::with_value("Inline", "inline"),
+                ])
+                .selected_index(Some(0))
+        });
+        let input_hook_script_file_path =
+            cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/script.py"));
+        let input_hook_script_content = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("python")
+                .line_number(true)
+                .soft_wrap(true)
+                .placeholder("Enter script content...")
+        });
+        let input_hook_interpreter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
         let input_hook_cwd =
             cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/working-dir"));
         let input_hook_env =
@@ -309,6 +379,37 @@ impl SettingsWindow {
         };
 
         let hook_definitions = app_state.read(cx).hook_definitions().clone();
+
+        let hook_kind_sub = cx.subscribe_in(
+            &hook_kind_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, window, cx| {
+                this.refresh_hook_script_content_editor(window, cx);
+            },
+        );
+        let hook_script_language_sub = cx.subscribe_in(
+            &script_language_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, window, cx| {
+                this.refresh_hook_script_content_editor(window, cx);
+            },
+        );
+        let hook_script_source_sub = cx.subscribe_in(
+            &script_source_dropdown,
+            window,
+            |this, _, _: &DropdownSelectionChanged, window, cx| {
+                this.on_script_source_changed(window, cx);
+            },
+        );
+        let hook_id_sub = notify_on_input_change(&input_hook_id, window, cx);
+        let hook_command_sub = notify_on_input_change(&input_hook_command, window, cx);
+        let hook_args_sub = notify_on_input_change(&input_hook_args, window, cx);
+        let hook_script_file_sub =
+            notify_on_input_change(&input_hook_script_file_path, window, cx);
+        let hook_interpreter_sub = notify_on_input_change(&input_hook_interpreter, window, cx);
+        let hook_cwd_sub = notify_on_input_change(&input_hook_cwd, window, cx);
+        let hook_env_sub = notify_on_input_change(&input_hook_env, window, cx);
+        let hook_timeout_sub = notify_on_input_change(&input_hook_timeout, window, cx);
 
         // Focus the window on creation
         focus_handle.focus(window);
@@ -393,13 +494,24 @@ impl SettingsWindow {
             editing_hook_id: None,
             pending_delete_hook_id: None,
             input_hook_id,
+            hook_kind_dropdown,
             input_hook_command,
             input_hook_args,
+            script_language_dropdown,
+            script_source_dropdown,
+            input_hook_script_file_path,
+            input_hook_script_content,
+            hook_script_content_subscription: None,
+            input_hook_interpreter,
             input_hook_cwd,
             input_hook_env,
             input_hook_timeout,
             hook_enabled: true,
             hook_inherit_env: true,
+            hook_lua_logging: true,
+            hook_lua_env_read: true,
+            hook_lua_connection_metadata: true,
+            hook_lua_process_run: false,
             hook_failure_dropdown,
 
             drv_entries: Vec::new(),
@@ -442,11 +554,23 @@ impl SettingsWindow {
                 drv_confirm_dangerous_sub,
                 drv_requires_where_sub,
                 drv_requires_preview_sub,
+                hook_kind_sub,
+                hook_script_language_sub,
+                hook_script_source_sub,
+                hook_id_sub,
+                hook_command_sub,
+                hook_args_sub,
+                hook_script_file_sub,
+                hook_interpreter_sub,
+                hook_cwd_sub,
+                hook_env_sub,
+                hook_timeout_sub,
             ],
         };
 
         this.load_services();
         this.drv_load_entries(window, cx);
+        this.refresh_hook_script_content_editor(window, cx);
 
         let entity = cx.entity().clone();
         window.on_window_should_close(cx, move |_window, cx| {

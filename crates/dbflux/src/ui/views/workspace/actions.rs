@@ -74,6 +74,7 @@ impl Workspace {
         }
 
         let app_state = self.app_state.clone();
+        let workspace = cx.entity().clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
         if let Ok(handle) = cx.open_window(
@@ -90,6 +91,30 @@ impl Workspace {
             },
             |window, cx| {
                 let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
+
+                cx.subscribe(&settings, move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                    workspace.update(cx, |this, cx| {
+                        match event {
+                            crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
+                                this.open_script_from_path(path.clone(), cx);
+                            }
+                            crate::ui::windows::settings::SettingsEvent::OpenInlineScript {
+                                title,
+                                body,
+                                language,
+                            } => {
+                                this.open_inline_script_editor(
+                                    title.clone(),
+                                    body.clone(),
+                                    language.clone(),
+                                    cx,
+                                );
+                            }
+                        }
+                    });
+                })
+                .detach();
+
                 cx.new(|cx| Root::new(settings, window, cx))
             },
         ) {
@@ -404,7 +429,7 @@ impl Workspace {
             .read(cx)
             .document(doc_id)
             .and_then(|handle| {
-                if let crate::ui::document::DocumentHandle::SqlQuery { entity, .. } = handle {
+                if let crate::ui::document::DocumentHandle::Code { entity, .. } = handle {
                     let doc = entity.read(cx);
                     if doc.is_file_backed() && doc.is_content_empty(cx) {
                         return doc.path().cloned();
@@ -548,16 +573,28 @@ impl Workspace {
         use dbflux_core::{ExecutionContext, QueryLanguage};
 
         let language = QueryLanguage::from_path(&path).unwrap_or(QueryLanguage::Sql);
-        let exec_ctx = ExecutionContext::parse_from_content(&content, language.clone());
+        let uses_connection_context = language.supports_connection_context();
 
-        // Determine connection from exec_ctx or fall back to active
-        let connection_id = exec_ctx
-            .connection_id
-            .filter(|id| self.app_state.read(cx).connections().contains_key(id))
-            .or_else(|| self.app_state.read(cx).active_connection_id());
+        let exec_ctx = if uses_connection_context {
+            ExecutionContext::parse_from_content(&content, language.clone())
+        } else {
+            ExecutionContext::default()
+        };
 
-        // Strip annotation header from content before setting editor text
-        let body = Self::strip_annotation_header(&content, &language);
+        let connection_id = if uses_connection_context {
+            exec_ctx
+                .connection_id
+                .filter(|id| self.app_state.read(cx).connections().contains_key(id))
+                .or_else(|| self.app_state.read(cx).active_connection_id())
+        } else {
+            None
+        };
+
+        let body = if uses_connection_context {
+            Self::strip_annotation_header(&content, &language)
+        } else {
+            &content
+        };
 
         // Track in recent files
         self.app_state.update(cx, |state, cx| {
@@ -567,11 +604,34 @@ impl Workspace {
 
         // We need window access; use pending_open_script pattern
         self.pending_open_script = Some(PendingOpenScript {
-            path,
+            title: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Untitled")
+                .to_string(),
+            path: Some(path),
             body: body.to_string(),
             language,
             connection_id,
             exec_ctx,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn open_inline_script_editor(
+        &mut self,
+        title: String,
+        body: String,
+        language: QueryLanguage,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_open_script = Some(PendingOpenScript {
+            path: None,
+            title,
+            body,
+            language,
+            connection_id: None,
+            exec_ctx: ExecutionContext::default(),
         });
         cx.notify();
     }
@@ -613,21 +673,25 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let doc = cx.new(|cx| {
-            let mut doc = SqlQueryDocument::new_with_language(
+            let mut doc = CodeDocument::new_with_language(
                 self.app_state.clone(),
                 pending.connection_id,
                 pending.language,
                 window,
                 cx,
             )
-            .with_path(pending.path)
+            .with_title(pending.title)
             .with_exec_ctx(pending.exec_ctx);
+
+            if let Some(path) = pending.path {
+                doc = doc.with_path(path);
+            }
 
             doc.set_content(&pending.body, window, cx);
             doc
         });
 
-        let handle = DocumentHandle::sql_query(doc, cx);
+        let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(handle, cx);
@@ -659,7 +723,7 @@ impl Workspace {
         });
 
         let doc = cx.new(|cx| {
-            let mut doc = SqlQueryDocument::new(self.app_state.clone(), window, cx);
+            let mut doc = CodeDocument::new(self.app_state.clone(), window, cx);
             if let Some(path) = script_path {
                 let title = path
                     .file_name()
@@ -675,7 +739,7 @@ impl Workspace {
             doc.read(cx).initial_auto_save(cx);
         }
 
-        let handle = DocumentHandle::sql_query(doc, cx);
+        let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(handle, cx);
@@ -711,7 +775,7 @@ impl Workspace {
         });
 
         let doc = cx.new(|cx| {
-            let mut doc = SqlQueryDocument::new(self.app_state.clone(), window, cx);
+            let mut doc = CodeDocument::new(self.app_state.clone(), window, cx);
             if let Some(ref path) = script_path {
                 let title = path
                     .file_name()
@@ -736,7 +800,7 @@ impl Workspace {
             }
         }
 
-        let handle = DocumentHandle::sql_query(doc, cx);
+        let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(handle, cx);
@@ -759,7 +823,7 @@ impl Workspace {
         let mut tabs = Vec::new();
 
         for doc_handle in manager.documents() {
-            let DocumentHandle::SqlQuery { entity, .. } = doc_handle else {
+            let DocumentHandle::Code { entity, .. } = doc_handle else {
                 continue;
             };
 
@@ -826,7 +890,20 @@ impl Workspace {
         }
 
         for tab in &manifest.tabs {
-            let language = tab.query_language();
+            let manifest_language = tab.query_language();
+
+            // Old manifests may have stored script tabs as "sql". Re-infer
+            // the language from the file path or scratch title so that
+            // .lua/.py/.sh files restore with the correct editor mode.
+            let language = match &tab.kind {
+                SessionTabKind::FileBacked { file_path, .. } => {
+                    QueryLanguage::from_path(file_path).unwrap_or(manifest_language)
+                }
+                SessionTabKind::Scratch { title, .. } => {
+                    let title_path = std::path::Path::new(title.as_str());
+                    QueryLanguage::from_path(title_path).unwrap_or(manifest_language)
+                }
+            };
 
             let (content, path, scratch_path, shadow_path) = match &tab.kind {
                 SessionTabKind::Scratch {
@@ -892,7 +969,7 @@ impl Workspace {
             };
 
             let doc = cx.new(|cx| {
-                let mut doc = SqlQueryDocument::new_with_language(
+                let mut doc = CodeDocument::new_with_language(
                     self.app_state.clone(),
                     connection_id,
                     language,
@@ -923,7 +1000,7 @@ impl Workspace {
                 doc
             });
 
-            let handle = DocumentHandle::sql_query(doc, cx);
+            let handle = DocumentHandle::code(doc, cx);
 
             self.tab_manager.update(cx, |mgr, cx| {
                 mgr.open(handle, cx);

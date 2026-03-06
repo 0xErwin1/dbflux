@@ -1,6 +1,6 @@
 use super::*;
 
-impl SqlQueryDocument {
+impl CodeDocument {
     pub(super) fn enter_editor_mode(&mut self, cx: &mut Context<Self>) {
         if self.focus_mode != SqlQueryFocus::Editor {
             self.focus_mode = SqlQueryFocus::Editor;

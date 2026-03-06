@@ -20,6 +20,7 @@ crates/
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
 ├── dbflux_driver_mongodb/     # MongoDB driver
 ├── dbflux_driver_redis/       # Redis driver
+├── dbflux_lua/                # Embedded Lua runtime for in-process hooks
 ├── dbflux_tunnel_core/        # Shared RAII tunnel infrastructure (proxy + SSH)
 ├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
 ├── dbflux_ssh/                # SSH tunnel support
@@ -261,6 +262,7 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_tunnel_core`: RAII `Tunnel`, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, adaptive sleep
 - `dbflux_proxy`: SOCKS5/HTTP CONNECT proxy via `TunnelConnector` impl
 - `dbflux_ssh`: SSH tunnel via `TunnelConnector` impl (all SSH ops serialized to one thread for libssh2 safety)
+- `dbflux_lua`: Embedded Lua runtime and `HookExecutor` implementation for in-process hooks
 - `dbflux`: UI only, drivers via feature flags
 
 ### Proxy and SSH Tunnels
@@ -363,7 +365,7 @@ Documents follow a consistent pattern for tab-based UI:
 
 1. **Handle**: `DocumentHandle` wraps the entity and provides metadata
 2. **State**: Document struct implements `Render` with internal focus management
-3. **Tabs**: SqlQueryDocument supports multiple result tabs with `TabManager`
+3. **Tabs**: CodeDocument supports multiple result tabs with `TabManager`
 4. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
 5. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
 
@@ -386,7 +388,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/dock/sidebar_dock.rs`              | Collapsible, resizable sidebar                      |
 | `crates/dbflux/src/ui/sidebar.rs`                        | Schema tree with lazy loading                       |
 | `crates/dbflux/src/ui/document/mod.rs`                   | Document system exports                             |
-| `crates/dbflux/src/ui/document/sql_query.rs`             | Language-aware query editor (SQL/MongoDB/etc)       |
+| `crates/dbflux/src/ui/document/code/mod.rs`              | Language-aware query editor (SQL/MongoDB/etc)       |
 | `crates/dbflux/src/ui/document/data_grid_panel.rs`       | Data grid with table/document view modes            |
 | `crates/dbflux/src/ui/document/tab_manager.rs`           | MRU tab ordering                                    |
 | `crates/dbflux/src/ui/dangerous_query.rs`                | Query safety analysis and confirmation              |
@@ -398,6 +400,7 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/windows/settings/form_nav.rs`     | Generic 2D grid navigation for settings forms       |
 | `crates/dbflux/src/ui/windows/settings/proxies.rs`      | Proxy CRUD form in Settings                         |
 | `crates/dbflux/src/ui/windows/settings/hooks.rs`        | Hook definitions CRUD in Settings                   |
+| `crates/dbflux/src/hook_executor.rs`                    | Composite hook executor routing                     |
 | `crates/dbflux/src/ui/windows/settings/drivers.rs`      | Per-driver settings overrides UI                    |
 | `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs` | Per-profile hook bindings                     |
 | `crates/dbflux/src/proxy.rs`                             | `create_proxy_tunnel` callback for `CreateTunnelFn` |
@@ -417,6 +420,8 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_core/src/sql/dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
 | `crates/dbflux_core/src/storage/session.rs`              | Session persistence (scratch/shadow files, manifest)|
 | `crates/dbflux_core/src/config/scripts_directory.rs`     | Scripts folder tree (file/folder CRUD)              |
+| `crates/dbflux_lua/src/executor.rs`                     | Lua hook executor                                   |
+| `crates/dbflux_lua/src/engine.rs`                       | Lua VM creation and sandbox setup                   |
 | `crates/dbflux_core/src/connection/context.rs`           | Per-tab execution context (connection/database)     |
 | `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
 | `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |

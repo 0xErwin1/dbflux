@@ -74,6 +74,11 @@ pub enum SidebarEvent {
     OpenScript {
         path: std::path::PathBuf,
     },
+    OpenInlineScript {
+        title: String,
+        body: String,
+        language: QueryLanguage,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes

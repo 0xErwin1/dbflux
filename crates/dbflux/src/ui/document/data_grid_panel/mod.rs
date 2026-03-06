@@ -319,7 +319,7 @@ pub struct DataGridPanel {
     edit_state: EditState,
     switching_input: bool,
 
-    // Panel controls (shown when embedded in SqlQueryDocument)
+    // Panel controls (shown when embedded in CodeDocument)
     show_panel_controls: bool,
     is_maximized: bool,
 
