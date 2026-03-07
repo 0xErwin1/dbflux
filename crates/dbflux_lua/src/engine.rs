@@ -54,6 +54,7 @@ impl LuaEngine {
 
         let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
         let lua = Lua::new_with(stdlib, LuaOptions::default())?;
+        lua.set_memory_limit(16 * 1024 * 1024)?;
 
         let state = LuaRuntimeState {
             outcome: Arc::new(Mutex::new(LuaHookOutcome::Ok)),

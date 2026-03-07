@@ -5,9 +5,10 @@
 //! Uses `dbflux_tunnel_core::Tunnel` for the shared RAII lifecycle and
 //! implements `TunnelConnector` for SSH-specific forwarding logic.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -122,6 +123,8 @@ pub fn establish_session(
         .handshake()
         .map_err(|e| DbError::connection_failed(format!("SSH handshake failed: {}", e)))?;
 
+    verify_or_store_host_key(&session, &config.host, config.port)?;
+
     log::info!(
         "[SSH] Phase 2/3: Handshake completed in {:.2}ms",
         phase_start.elapsed().as_secs_f64() * 1000.0
@@ -182,6 +185,128 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
     }
 
     path.to_path_buf()
+}
+
+fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<(), DbError> {
+    let fingerprint = current_host_key_fingerprint(session)?;
+
+    let known_hosts_path = tofu_known_hosts_path()?;
+    let mut entries = load_tofu_known_hosts(&known_hosts_path)?;
+    let entry_key = format!("{}\t{}", host, port);
+
+    if let Some(existing) = entries.get(&entry_key) {
+        if existing == &fingerprint {
+            return Ok(());
+        }
+
+        return Err(DbError::connection_failed(format!(
+            "SSH host key mismatch for {}:{} (possible MITM attack)",
+            host, port
+        )));
+    }
+
+    entries.insert(entry_key, fingerprint);
+    save_tofu_known_hosts(&known_hosts_path, &entries)?;
+
+    log::warn!(
+        "[SSH] First connection to {}:{} -- storing host key (TOFU)",
+        host,
+        port
+    );
+
+    Ok(())
+}
+
+fn current_host_key_fingerprint(session: &Session) -> Result<String, DbError> {
+    let (key, _) = session.host_key().ok_or_else(|| {
+        DbError::connection_failed("SSH server did not present a host key".to_string())
+    })?;
+
+    Ok(hex_encode(key))
+}
+
+fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
+    let config_dir = dirs::config_dir().ok_or_else(|| {
+        DbError::connection_failed("Could not find config directory for SSH known hosts")
+    })?;
+
+    let app_dir = config_dir.join("dbflux");
+    std::fs::create_dir_all(&app_dir).map_err(|error| {
+        DbError::connection_failed(format!("Failed to create config directory: {}", error))
+    })?;
+
+    Ok(app_dir.join("ssh_known_hosts"))
+}
+
+fn load_tofu_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, DbError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        DbError::connection_failed(format!("Failed to read SSH known hosts: {}", error))
+    })?;
+
+    let mut entries = BTreeMap::new();
+
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.splitn(3, '\t');
+
+        let Some(host) = parts.next() else {
+            continue;
+        };
+        let Some(port) = parts.next() else {
+            continue;
+        };
+        let Some(fingerprint) = parts.next() else {
+            continue;
+        };
+
+        entries.insert(format!("{}\t{}", host, port), fingerprint.to_string());
+    }
+
+    Ok(entries)
+}
+
+fn save_tofu_known_hosts(path: &Path, entries: &BTreeMap<String, String>) -> Result<(), DbError> {
+    let mut output = String::new();
+
+    for (key, fingerprint) in entries {
+        let mut parts = key.splitn(2, '\t');
+        let Some(host) = parts.next() else {
+            continue;
+        };
+        let Some(port) = parts.next() else {
+            continue;
+        };
+
+        output.push_str(host);
+        output.push('\t');
+        output.push_str(port);
+        output.push('\t');
+        output.push_str(fingerprint);
+        output.push('\n');
+    }
+
+    std::fs::write(path, output).map_err(|error| {
+        DbError::connection_failed(format!("Failed to write SSH known hosts: {}", error))
+    })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    output
 }
 
 fn authenticate_with_key(

@@ -701,7 +701,7 @@ impl RpcClient {
         session_id: Option<Uuid>,
         body: DriverRequestBody,
     ) -> Result<DriverResponseBody, RpcError> {
-        let request_id = self.next_request_id();
+        let request_id = self.next_request_id()?;
         let mut envelope = DriverRequestEnvelope::new(request_id, body);
 
         if let Some(sid) = session_id {
@@ -739,7 +739,10 @@ impl RpcClient {
     fn send_raw(&self, request: DriverRequestEnvelope) -> Result<DriverResponseEnvelope, RpcError> {
         let expected_id = request.request_id;
 
-        let mut stream = self.stream.lock().unwrap();
+        let mut stream = self
+            .stream
+            .lock()
+            .map_err(|_| RpcError::Protocol("Stream mutex poisoned".into()))?;
 
         framing::send_msg(&mut *stream, &request).map_err(RpcError::Io)?;
 
@@ -753,9 +756,12 @@ impl RpcClient {
         Ok(response)
     }
 
-    fn next_request_id(&self) -> u64 {
-        let mut id = self.request_id.lock().unwrap();
+    fn next_request_id(&self) -> Result<u64, RpcError> {
+        let mut id = self
+            .request_id
+            .lock()
+            .map_err(|_| RpcError::Protocol("Request ID mutex poisoned".into()))?;
         *id += 1;
-        *id
+        Ok(*id)
     }
 }

@@ -33,10 +33,10 @@ impl DbKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SslMode {
     /// No SSL (unencrypted connection).
-    #[default]
     Disable,
 
     /// Try SSL, fall back to unencrypted if unavailable.
+    #[default]
     Prefer,
 
     /// Require SSL (fail if server doesn't support it).
@@ -345,6 +345,85 @@ impl DbConfig {
             DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
         }
     }
+
+    /// Strips a password embedded in the URI for URI-mode configs.
+    ///
+    /// Returns the extracted password when one was present and updates the
+    /// stored URI in-place to a sanitized form without the password.
+    pub fn strip_uri_password(&mut self) -> Option<String> {
+        let (use_uri, uri) = match self {
+            DbConfig::Postgres { use_uri, uri, .. }
+            | DbConfig::MySQL { use_uri, uri, .. }
+            | DbConfig::MongoDB { use_uri, uri, .. }
+            | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
+            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
+        };
+
+        if !*use_uri {
+            return None;
+        }
+
+        let current_uri = uri.as_deref()?;
+
+        let (sanitized_uri, extracted_password) = strip_password_from_uri(current_uri);
+
+        if extracted_password.is_some() {
+            *uri = Some(sanitized_uri);
+        }
+
+        extracted_password
+    }
+}
+
+/// Removes an embedded password from a connection URI.
+///
+/// Returns `(sanitized_uri, extracted_password)` where `extracted_password` is
+/// URL-decoded when possible.
+pub fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
+    let Some(scheme_end) = uri.find("://") else {
+        return (uri.to_string(), None);
+    };
+
+    let prefix = &uri[..scheme_end + 3];
+    let rest = &uri[scheme_end + 3..];
+
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+
+    let authority = &rest[..authority_end];
+    let suffix = &rest[authority_end..];
+
+    let Some(at_pos) = authority.rfind('@') else {
+        return (uri.to_string(), None);
+    };
+
+    let userinfo = &authority[..at_pos];
+    let host_port = &authority[at_pos + 1..];
+
+    let Some(colon_pos) = userinfo.find(':') else {
+        return (uri.to_string(), None);
+    };
+
+    let username = &userinfo[..colon_pos];
+    let password = &userinfo[colon_pos + 1..];
+
+    if password.is_empty() {
+        return (uri.to_string(), None);
+    }
+
+    let decoded_password = urlencoding::decode(password)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_else(|_| password.to_string());
+
+    let sanitized_authority = if username.is_empty() {
+        host_port.to_string()
+    } else {
+        format!("{}@{}", username, host_port)
+    };
+
+    (
+        format!("{}{}{}", prefix, sanitized_authority, suffix),
+        Some(decoded_password),
+    )
 }
 
 /// Saved connection profile.
@@ -528,9 +607,9 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RefreshPolicySetting;
     use crate::config::app::GlobalOverrides;
     use crate::driver::form::FormValues;
+    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
@@ -693,5 +772,56 @@ mod tests {
         assert!(profile.connection_settings.is_none());
         assert!(profile.hooks.is_none());
         assert!(profile.hook_bindings.is_none());
+    }
+
+    #[test]
+    fn ssl_mode_defaults_to_prefer() {
+        assert_eq!(SslMode::default(), SslMode::Prefer);
+    }
+
+    #[test]
+    fn strip_password_from_uri_extracts_and_sanitizes_credentials() {
+        let (sanitized, password) =
+            strip_password_from_uri("postgresql://alice:p%40ss@localhost:5432/app?sslmode=require");
+
+        assert_eq!(
+            sanitized,
+            "postgresql://alice@localhost:5432/app?sslmode=require"
+        );
+        assert_eq!(password.as_deref(), Some("p@ss"));
+    }
+
+    #[test]
+    fn strip_password_from_uri_keeps_uris_without_password() {
+        let input = "postgresql://alice@localhost:5432/app";
+        let (sanitized, password) = strip_password_from_uri(input);
+
+        assert_eq!(sanitized, input);
+        assert!(password.is_none());
+    }
+
+    #[test]
+    fn strip_uri_password_updates_uri_mode_config_in_place() {
+        let mut config = DbConfig::Redis {
+            use_uri: true,
+            uri: Some("redis://:sekret@localhost:6379/0".to_string()),
+            host: String::new(),
+            port: 6379,
+            user: None,
+            database: Some(0),
+            tls: false,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+
+        let extracted = config.strip_uri_password();
+
+        assert_eq!(extracted.as_deref(), Some("sekret"));
+        assert!(matches!(
+            config,
+            DbConfig::Redis {
+                uri: Some(ref uri), ..
+            } if uri == "redis://localhost:6379/0"
+        ));
     }
 }

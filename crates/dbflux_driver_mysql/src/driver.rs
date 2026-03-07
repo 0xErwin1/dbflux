@@ -291,7 +291,7 @@ impl DbDriver for MysqlDriver {
                 port: 3306,
                 user: String::new(),
                 database: None,
-                ssl_mode: SslMode::Disable,
+                ssl_mode: SslMode::Prefer,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -325,7 +325,7 @@ impl DbDriver for MysqlDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Disable,
+            ssl_mode: SslMode::Prefer,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -2213,6 +2213,41 @@ mod tests {
 
         let result = driver.build_config(&values);
         assert!(matches!(result, Err(DbError::InvalidProfile(_))));
+    }
+
+    #[test]
+    fn build_config_defaults_to_prefer_ssl_mode() {
+        let driver = MysqlDriver::new(DbKind::MySQL);
+
+        let mut manual_values = FormValues::new();
+        manual_values.insert("host".to_string(), "localhost".to_string());
+        manual_values.insert("port".to_string(), "3306".to_string());
+        manual_values.insert("user".to_string(), "root".to_string());
+
+        let manual_config = driver.build_config(&manual_values).unwrap();
+        assert!(matches!(
+            manual_config,
+            DbConfig::MySQL {
+                ssl_mode: dbflux_core::SslMode::Prefer,
+                ..
+            }
+        ));
+
+        let mut uri_values = FormValues::new();
+        uri_values.insert("use_uri".to_string(), "true".to_string());
+        uri_values.insert(
+            "uri".to_string(),
+            "mysql://root@localhost:3306/app".to_string(),
+        );
+
+        let uri_config = driver.build_config(&uri_values).unwrap();
+        assert!(matches!(
+            uri_config,
+            DbConfig::MySQL {
+                ssl_mode: dbflux_core::SslMode::Prefer,
+                ..
+            }
+        ));
     }
 
     #[test]

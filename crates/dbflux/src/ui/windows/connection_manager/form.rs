@@ -241,11 +241,19 @@ impl ConnectionManagerWindow {
             return;
         }
 
-        let Some(profile) = self.build_profile(cx) else {
+        let Some(mut profile) = self.build_profile(cx) else {
             return;
         };
 
-        let password = self.input_password.read(cx).value().to_string();
+        let mut password = self.input_password.read(cx).value().to_string();
+        let uri_password = profile.config.strip_uri_password();
+
+        if password.is_empty()
+            && let Some(uri_password) = uri_password
+        {
+            password = uri_password;
+        }
+
         let ssh_secret = self.get_ssh_secret(cx);
         let is_edit = self.editing_profile_id.is_some();
 

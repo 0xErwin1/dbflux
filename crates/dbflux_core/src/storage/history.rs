@@ -189,9 +189,3 @@ impl HistoryStore {
         self.entries.iter().filter(|e| e.is_favorite).collect()
     }
 }
-
-impl Default for HistoryStore {
-    fn default() -> Self {
-        Self::new().expect("Failed to create history store")
-    }
-}

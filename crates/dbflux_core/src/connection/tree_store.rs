@@ -67,9 +67,3 @@ impl ConnectionTreeStore {
         Ok(())
     }
 }
-
-impl Default for ConnectionTreeStore {
-    fn default() -> Self {
-        Self::new().expect("Failed to create connection tree store")
-    }
-}

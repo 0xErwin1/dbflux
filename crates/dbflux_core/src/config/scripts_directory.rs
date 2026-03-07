@@ -165,6 +165,12 @@ impl ScriptsDirectory {
 
     /// Rename a file or folder. Returns the new path.
     pub fn rename(&mut self, old_path: &Path, new_name: &str) -> Result<PathBuf, DbError> {
+        if new_name.contains('/') || new_name.contains('\\') || new_name.contains("..") {
+            return Err(DbError::IoError(std::io::Error::other(
+                "Invalid name: must not contain path separators or '..'",
+            )));
+        }
+
         if !old_path.starts_with(&self.root) {
             return Err(DbError::IoError(std::io::Error::other(
                 "Path is outside scripts root",
@@ -637,6 +643,18 @@ mod tests {
             dir.move_entry(&tmp.path().join("file.sql"), &outside)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_rename_rejects_path_traversal_names() {
+        let tmp = TempDir::new().unwrap();
+        let mut dir = make_dir(tmp.path());
+
+        let source = dir.create_file(None, "query", "sql").unwrap();
+
+        assert!(dir.rename(&source, "../outside.sql").is_err());
+        assert!(dir.rename(&source, "..\\outside.sql").is_err());
+        assert!(dir.rename(&source, "folder/name.sql").is_err());
     }
 
     #[test]

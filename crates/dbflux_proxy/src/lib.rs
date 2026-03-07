@@ -13,6 +13,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{fmt, fmt::Debug};
 
 use dbflux_core::{DbError, ProxyAuth, ProxyKind, ProxyProfile};
 use dbflux_tunnel_core::{
@@ -27,19 +28,39 @@ pub enum ProxyProtocol {
 }
 
 /// Authentication credentials for the proxy server.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyCredentials {
     pub username: String,
     pub password: String,
 }
 
+impl Debug for ProxyCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyCredentials")
+            .field("username", &self.username)
+            .field("password", &"***")
+            .finish()
+    }
+}
+
 /// Configuration for establishing a proxy tunnel.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyTunnelConfig {
     pub protocol: ProxyProtocol,
     pub proxy_host: String,
     pub proxy_port: u16,
     pub credentials: Option<ProxyCredentials>,
+}
+
+impl Debug for ProxyTunnelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyTunnelConfig")
+            .field("protocol", &self.protocol)
+            .field("proxy_host", &self.proxy_host)
+            .field("proxy_port", &self.proxy_port)
+            .field("credentials", &self.credentials)
+            .finish()
+    }
 }
 
 impl ProxyTunnelConfig {
@@ -400,6 +421,19 @@ mod tests {
         let debug = format!("{:?}", config);
         assert!(debug.contains("Socks5"));
         assert!(debug.contains("proxy.local"));
+    }
+
+    #[test]
+    fn proxy_credentials_debug_redacts_password() {
+        let credentials = ProxyCredentials {
+            username: "admin".to_string(),
+            password: "super-secret".to_string(),
+        };
+
+        let debug = format!("{:?}", credentials);
+        assert!(debug.contains("admin"));
+        assert!(debug.contains("***"));
+        assert!(!debug.contains("super-secret"));
     }
 
     #[test]

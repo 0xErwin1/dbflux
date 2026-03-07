@@ -591,8 +591,28 @@ impl PostgresDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_pg_uri(base_uri, password);
 
+        let ssl_mode = parse_pg_uri_sslmode(&uri);
+
+        if ssl_mode == PgUriSslMode::Disable {
+            let client =
+                Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?;
+
+            let cancel_token = client.cancel_token();
+            log::info!("[CONNECT] PostgreSQL connection established via URI");
+
+            return Ok(Box::new(PostgresConnection {
+                client: Mutex::new(client),
+                ssh_tunnel: None,
+                cancel_token,
+                active_query: RwLock::new(None),
+                cancelled: Arc::new(AtomicBool::new(false)),
+            }));
+        }
+
+        let accept_invalid_certs = matches!(ssl_mode, PgUriSslMode::Prefer | PgUriSslMode::Require);
+
         let connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
             .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))?;
 
@@ -600,9 +620,10 @@ impl PostgresDriver {
 
         let client = match Client::connect(&uri, tls) {
             Ok(c) => c,
-            Err(_) => {
+            Err(_) if ssl_mode == PgUriSslMode::Prefer => {
                 Client::connect(&uri, NoTls).map_err(|e| format_pg_uri_error(&e, base_uri))?
             }
+            Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
 
         let cancel_token = client.cancel_token();
@@ -731,6 +752,35 @@ impl PostgresDriver {
             active_query: RwLock::new(None),
             cancelled: Arc::new(AtomicBool::new(false)),
         }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PgUriSslMode {
+    Disable,
+    Prefer,
+    Require,
+    Verify,
+}
+
+fn parse_pg_uri_sslmode(uri: &str) -> PgUriSslMode {
+    let Some(query_start) = uri.find('?') else {
+        return PgUriSslMode::Prefer;
+    };
+
+    let query = &uri[query_start + 1..];
+
+    let sslmode = query
+        .split('&')
+        .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
+        .map(|(_, value)| value.to_ascii_lowercase());
+
+    match sslmode.as_deref() {
+        Some("disable") => PgUriSslMode::Disable,
+        Some("prefer") | Some("allow") => PgUriSslMode::Prefer,
+        Some("require") => PgUriSslMode::Require,
+        Some("verify-ca") | Some("verify-full") => PgUriSslMode::Verify,
+        _ => PgUriSslMode::Prefer,
     }
 }
 
@@ -2640,7 +2690,10 @@ fn get_schema_foreign_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{PostgresDialect, PostgresDriver, inject_password_into_pg_uri};
+    use super::{
+        PgUriSslMode, PostgresDialect, PostgresDriver, inject_password_into_pg_uri,
+        parse_pg_uri_sslmode,
+    };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
     };
@@ -2766,6 +2819,26 @@ mod tests {
         let uri =
             inject_password_into_pg_uri("postgresql://user@localhost:5432/app", Some("new pass"));
         assert_eq!(uri, "postgresql://user:new%20pass@localhost:5432/app");
+    }
+
+    #[test]
+    fn parse_pg_uri_sslmode_uses_reasonable_defaults() {
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app"),
+            PgUriSslMode::Prefer
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=disable"),
+            PgUriSslMode::Disable
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=require"),
+            PgUriSslMode::Require
+        );
+        assert_eq!(
+            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-full"),
+            PgUriSslMode::Verify
+        );
     }
 
     #[test]
