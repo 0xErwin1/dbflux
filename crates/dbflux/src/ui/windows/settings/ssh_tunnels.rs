@@ -1,6 +1,6 @@
 use crate::app::AppStateChanged;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
-use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use gpui::*;
 use uuid::Uuid;
@@ -244,7 +244,7 @@ impl SettingsWindow {
 
         self.app_state.update(cx, |state, cx| {
             if tunnel.save_secret && !secret.is_empty() {
-                state.save_ssh_tunnel_secret(&tunnel, &secret);
+                state.save_ssh_tunnel_secret(&tunnel, &SecretString::from(secret.clone()));
             }
 
             if is_edit {

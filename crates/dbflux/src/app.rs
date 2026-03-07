@@ -6,7 +6,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::{HashMap, HashSet};
@@ -644,7 +644,7 @@ impl AppState {
         self.facade.secrets.secret_store_arc()
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &str) {
+    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
         self.facade.secrets.save_password(profile, password);
     }
 
@@ -660,7 +660,7 @@ impl AppState {
         self.facade.secrets.get_ssh_password(profile)
     }
 
-    pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &str) {
+    pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &SecretString) {
         self.facade.secrets.save_ssh_password(profile, secret);
     }
 
@@ -672,7 +672,7 @@ impl AppState {
         self.facade.secrets.get_ssh_tunnel_secret(tunnel)
     }
 
-    pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &str) {
+    pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &SecretString) {
         self.facade.secrets.save_ssh_tunnel_secret(tunnel, secret);
     }
 
@@ -728,7 +728,7 @@ impl AppState {
         self.facade.secrets.get_proxy_secret(proxy)
     }
 
-    pub fn save_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile, secret: &str) {
+    pub fn save_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile, secret: &SecretString) {
         self.facade.secrets.save_proxy_secret(proxy, secret);
     }
 

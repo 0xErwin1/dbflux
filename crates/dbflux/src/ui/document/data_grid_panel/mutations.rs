@@ -2,6 +2,7 @@ use super::utils::value_to_json;
 use super::{DataGridPanel, DataSource, PendingDeleteConfirm, PendingToast};
 use crate::ui::components::document_tree::NodeId;
 use crate::ui::components::toast::ToastExt;
+use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::{
     CollectionRef, DocumentFilter, DocumentUpdate, Pagination, RowDelete, RowIdentity, RowInsert,
     RowPatch, RowState, TableRef, TaskKind, Value,
@@ -255,8 +256,7 @@ impl DataGridPanel {
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -265,7 +265,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -307,7 +307,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -486,8 +486,7 @@ impl DataGridPanel {
                                 .ok()
                         })
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -496,7 +495,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -514,7 +513,7 @@ impl DataGridPanel {
                     panel.handle_save_result(row_idx, result, cx);
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -594,8 +593,7 @@ impl DataGridPanel {
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -614,7 +612,7 @@ impl DataGridPanel {
                         }
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -632,7 +630,7 @@ impl DataGridPanel {
                     panel.handle_save_result(row_idx, result, cx);
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -758,8 +756,7 @@ impl DataGridPanel {
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -768,7 +765,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -807,7 +804,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -896,8 +893,7 @@ impl DataGridPanel {
                                 .ok()
                         })
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -906,7 +902,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -945,7 +941,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -1068,8 +1064,7 @@ impl DataGridPanel {
                         .get(&profile_id)
                         .map(|c| c.connection.clone())
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1078,7 +1073,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -1115,7 +1110,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -1200,8 +1195,7 @@ impl DataGridPanel {
                                 .ok()
                         })
                 })
-                .ok()
-                .flatten();
+                .unwrap_or_log_dropped();
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1210,7 +1204,7 @@ impl DataGridPanel {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
                 })
-                .ok();
+                .log_if_dropped();
                 return;
             };
 
@@ -1247,7 +1241,7 @@ impl DataGridPanel {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

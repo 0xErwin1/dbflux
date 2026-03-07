@@ -124,7 +124,7 @@ impl ConnectionManagerWindow {
             if tunnel.save_secret
                 && let Some(ref secret) = secret
             {
-                state.save_ssh_tunnel_secret(&tunnel, secret);
+                state.save_ssh_tunnel_secret(&tunnel, &SecretString::from(secret.clone()));
             }
             state.add_ssh_tunnel(tunnel.clone());
             cx.emit(crate::app::AppStateChanged);

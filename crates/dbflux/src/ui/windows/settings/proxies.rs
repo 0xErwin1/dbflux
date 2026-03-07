@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use gpui::*;
 use uuid::Uuid;
@@ -253,7 +253,7 @@ impl SettingsWindow {
                 && matches!(proxy.auth, ProxyAuth::Basic { .. })
                 && !password.is_empty()
             {
-                state.save_proxy_secret(&proxy, &password);
+                state.save_proxy_secret(&proxy, &SecretString::from(password.clone()));
             } else if is_edit {
                 state.delete_proxy_secret(&proxy);
             }

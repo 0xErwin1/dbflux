@@ -60,7 +60,7 @@ impl SecretManager {
         }
     }
 
-    pub fn save_secret<T: HasSecretRef>(&self, item: &T, secret: &str, label: &str) {
+    pub fn save_secret<T: HasSecretRef>(&self, item: &T, secret: &SecretString, label: &str) {
         let store = self.store_read();
 
         if !store.is_available() {
@@ -84,7 +84,7 @@ impl SecretManager {
         }
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &str) {
+    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
         if !profile.save_password {
             return;
         }
@@ -144,7 +144,7 @@ impl SecretManager {
         }
     }
 
-    pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &str) {
+    pub fn save_ssh_password(&self, profile: &ConnectionProfile, secret: &SecretString) {
         let store = self.store_read();
 
         if !store.is_available() {
@@ -172,7 +172,7 @@ impl SecretManager {
         self.get_secret(tunnel, "SSH tunnel")
     }
 
-    pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &str) {
+    pub fn save_ssh_tunnel_secret(&self, tunnel: &SshTunnelProfile, secret: &SecretString) {
         self.save_secret(tunnel, secret, "SSH tunnel");
     }
 
@@ -184,7 +184,7 @@ impl SecretManager {
         self.get_secret(proxy, "proxy")
     }
 
-    pub fn save_proxy_secret(&self, proxy: &ProxyProfile, secret: &str) {
+    pub fn save_proxy_secret(&self, proxy: &ProxyProfile, secret: &SecretString) {
         self.save_secret(proxy, secret, "proxy");
     }
 

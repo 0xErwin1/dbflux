@@ -8,6 +8,7 @@ use dbflux_core::{
     SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TaskKind,
     ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
+use crate::ui::AsyncUpdateResultExt;
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
 
@@ -161,7 +162,7 @@ impl super::KeyValueDocument {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -259,7 +260,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -375,7 +376,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
 
@@ -502,7 +503,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -701,7 +702,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
 
@@ -829,7 +830,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -977,7 +978,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

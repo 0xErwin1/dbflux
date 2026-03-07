@@ -1,6 +1,5 @@
 use super::*;
 use crate::hook_executor::CompositeExecutor;
-use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
     HookPhase, HookResult, OutputReceiver, ProcessExecutionError, TaskId, TaskKind,
@@ -894,11 +893,11 @@ impl Sidebar {
 
             state.add_profile_in_folder(cloned.clone(), folder_id);
 
-            if let Some(pw) = password {
-                state.save_password(&cloned, pw.expose_secret());
+            if let Some(ref pw) = password {
+                state.save_password(&cloned, pw);
             }
-            if let Some(pw) = ssh_password {
-                state.save_ssh_password(&cloned, pw.expose_secret());
+            if let Some(ref pw) = ssh_password {
+                state.save_ssh_password(&cloned, pw);
             }
 
             cx.emit(AppStateChanged);

@@ -1,4 +1,5 @@
 use super::parsing::parse_database_name;
+use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::{DbError, KeyGetRequest, KeyScanRequest, TaskKind};
 use gpui::*;
 
@@ -151,7 +152,7 @@ impl super::KeyValueDocument {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }
@@ -231,7 +232,7 @@ impl super::KeyValueDocument {
                     cx.notify();
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

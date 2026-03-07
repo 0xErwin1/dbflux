@@ -293,7 +293,7 @@ impl ConnectionManagerWindow {
         self.app_state.update(cx, |state, cx| {
             if profile.save_password && !password.is_empty() {
                 info!("Saving password to keyring for profile {}", profile.id);
-                state.save_password(&profile, &password);
+                state.save_password(&profile, &SecretString::from(password.clone()));
             } else if !profile.save_password {
                 state.delete_password(&profile);
             }
@@ -301,7 +301,7 @@ impl ConnectionManagerWindow {
             if self.form_save_ssh_secret {
                 if let Some(ref secret) = ssh_secret {
                     info!("Saving SSH secret to keyring for profile {}", profile.id);
-                    state.save_ssh_password(&profile, secret);
+                    state.save_ssh_password(&profile, &SecretString::from(secret.clone()));
                 }
             } else {
                 state.delete_ssh_password(&profile);

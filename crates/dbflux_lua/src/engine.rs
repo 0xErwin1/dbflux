@@ -275,4 +275,36 @@ mod tests {
 
         assert!(has_process);
     }
+
+    #[test]
+    fn exceeding_memory_limit_returns_error() {
+        let context = test_context();
+        let capabilities = LuaCapabilities::default();
+        let vm = LuaEngine::create_vm(test_vm_config(
+            &context,
+            HookPhase::PreConnect,
+            &capabilities,
+        ))
+        .unwrap();
+
+        let result: mlua::Result<()> = vm
+            .lua
+            .load(
+                r#"
+            local t = {}
+            for i = 1, 10000000 do
+                t[i] = string.rep("x", 1024)
+            end
+            "#,
+            )
+            .exec();
+
+        assert!(result.is_err(), "Script exceeding memory limit should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not enough memory"),
+            "Error should mention memory: {}",
+            err_msg
+        );
+    }
 }
