@@ -6,6 +6,7 @@ use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::AsyncUpdateResultExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -99,7 +100,7 @@ impl ToastHost {
                     });
                 }
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

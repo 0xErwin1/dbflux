@@ -4,7 +4,7 @@ use secrecy::SecretString;
 pub trait SecretStore: Send + Sync {
     fn is_available(&self) -> bool;
     fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, DbError>;
-    fn set(&self, secret_ref: &str, value: &str) -> Result<(), DbError>;
+    fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), DbError>;
     fn delete(&self, secret_ref: &str) -> Result<(), DbError>;
 }
 
@@ -19,7 +19,7 @@ impl SecretStore for NoopSecretStore {
         Ok(None)
     }
 
-    fn set(&self, _secret_ref: &str, _value: &str) -> Result<(), DbError> {
+    fn set(&self, _secret_ref: &str, _value: &SecretString) -> Result<(), DbError> {
         Ok(())
     }
 
@@ -78,7 +78,9 @@ impl SecretStore for KeyringSecretStore {
         }
     }
 
-    fn set(&self, secret_ref: &str, value: &str) -> Result<(), DbError> {
+    fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), DbError> {
+        use secrecy::ExposeSecret;
+
         if !self.available {
             return Ok(());
         }
@@ -87,7 +89,7 @@ impl SecretStore for KeyringSecretStore {
             .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))?;
 
         entry
-            .set_password(value)
+            .set_password(value.expose_secret())
             .map_err(|e| DbError::IoError(std::io::Error::other(e.to_string())))
     }
 

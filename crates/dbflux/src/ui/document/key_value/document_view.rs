@@ -3,6 +3,7 @@ use super::{KeyValueDocumentEvent, KvValueViewMode};
 use crate::ui::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId,
 };
+use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::{DbError, HashSetRequest, KeyType, TaskKind, Value};
 use gpui::*;
 
@@ -192,7 +193,7 @@ impl super::KeyValueDocument {
                     }
                 });
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

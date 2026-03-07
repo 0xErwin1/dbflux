@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::AsyncUpdateResultExt;
 
 impl CodeDocument {
     // === Context dropdown creation ===
@@ -426,7 +427,7 @@ impl CodeDocument {
                         })
                         .ok();
                     })
-                    .ok();
+                    .log_if_dropped();
                 }
                 Err(e) => {
                     log::error!("Failed to connect to database {}: {}", target_db, e);
@@ -442,7 +443,7 @@ impl CodeDocument {
                         })
                         .ok();
                     })
-                    .ok();
+                    .log_if_dropped();
                 }
             }
         })

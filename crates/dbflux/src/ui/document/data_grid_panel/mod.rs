@@ -16,6 +16,7 @@ use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, Docu
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
 use crate::ui::components::toast::ToastExt;
+use crate::ui::AsyncUpdateResultExt;
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };
@@ -499,7 +500,7 @@ impl DataGridPanel {
                     });
                 }
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
     }

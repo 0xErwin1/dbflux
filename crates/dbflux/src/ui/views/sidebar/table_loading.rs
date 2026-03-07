@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::AsyncUpdateResultExt;
 
 impl Sidebar {
     pub(super) fn find_table_for_item<'a>(
@@ -161,7 +162,7 @@ impl Sidebar {
 
                 on_finalize(&app_state, cx);
             })
-            .ok();
+            .log_if_dropped();
         })
         .detach();
 
