@@ -1,7 +1,7 @@
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    socket_name,
+    read_app_control_token, socket_name,
 };
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 use std::io;
@@ -45,8 +45,9 @@ fn try_send(path: Option<&PathBuf>) -> io::Result<()> {
         None => IpcMessage::Focus,
     };
 
+    let auth_token = read_app_control_token()?;
     let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let request = AppControlRequest::new(request_id, msg);
+    let request = AppControlRequest::new(request_id, Some(auth_token), msg);
 
     framing::send_msg(&mut stream, &request)?;
     let response: AppControlResponse = framing::recv_msg(&mut stream)?;

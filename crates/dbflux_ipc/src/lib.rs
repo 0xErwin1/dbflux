@@ -1,9 +1,14 @@
+pub mod auth;
 pub mod driver_protocol;
 pub mod envelope;
 pub mod framing;
 pub mod protocol;
 pub mod socket;
 
+pub use auth::{
+    APP_CONTROL_AUTH_TOKEN_ENV, DRIVER_RPC_AUTH_TOKEN_ENV, app_control_token_path,
+    init_process_auth_tokens, read_app_control_token, write_app_control_token,
+};
 pub use driver_protocol::{
     DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
     DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcError,

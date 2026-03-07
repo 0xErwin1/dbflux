@@ -21,11 +21,16 @@ enum IpcCommand {
 }
 
 impl IpcServer {
-    pub fn start_with_listener(listener: IpcListener, workspace: Entity<Workspace>, cx: &mut App) {
+    pub fn start_with_listener(
+        listener: IpcListener,
+        workspace: Entity<Workspace>,
+        auth_token: String,
+        cx: &mut App,
+    ) {
         let (cmd_tx, cmd_rx): (Sender<IpcCommand>, Receiver<IpcCommand>) = mpsc::channel();
 
         thread::spawn(move || {
-            accept_loop(listener, cmd_tx);
+            accept_loop(listener, cmd_tx, auth_token);
         });
 
         cx.spawn(async move |cx| {
@@ -35,11 +40,11 @@ impl IpcServer {
     }
 }
 
-fn accept_loop(listener: IpcListener, cmd_tx: Sender<IpcCommand>) {
+fn accept_loop(listener: IpcListener, cmd_tx: Sender<IpcCommand>, auth_token: String) {
     loop {
         match listener.accept() {
             Ok(stream) => {
-                if let Err(e) = handle_connection(stream, &cmd_tx) {
+                if let Err(e) = handle_connection(stream, &cmd_tx, &auth_token) {
                     log::warn!("IPC connection error: {}", e);
                 }
             }
@@ -54,7 +59,11 @@ fn accept_loop(listener: IpcListener, cmd_tx: Sender<IpcCommand>) {
     }
 }
 
-fn handle_connection(mut stream: IpcStream, cmd_tx: &Sender<IpcCommand>) -> io::Result<()> {
+fn handle_connection(
+    mut stream: IpcStream,
+    cmd_tx: &Sender<IpcCommand>,
+    expected_auth_token: &str,
+) -> io::Result<()> {
     let request: AppControlRequest = framing::recv_msg(&mut stream)?;
     let request_id = request.request_id;
 
@@ -66,6 +75,17 @@ fn handle_connection(mut stream: IpcStream, cmd_tx: &Sender<IpcCommand>) -> io::
             request_id,
             IpcResponse::Error {
                 message: "incompatible app-control protocol version".to_string(),
+            },
+        );
+        framing::send_msg(&mut stream, &response)?;
+        return Ok(());
+    }
+
+    if request.auth_token.as_deref() != Some(expected_auth_token) {
+        let response = AppControlResponse::ok(
+            request_id,
+            IpcResponse::Error {
+                message: "unauthorized app-control request".to_string(),
             },
         );
         framing::send_msg(&mut stream, &response)?;

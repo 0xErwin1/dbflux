@@ -11,7 +11,7 @@ use dbflux_ipc::driver_protocol::{
     DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
     DriverResponseEnvelope, DriverRpcErrorCode,
 };
-use dbflux_ipc::{DRIVER_RPC_VERSION, framing};
+use dbflux_ipc::{DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, framing};
 use interprocess::local_socket::{
     GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
 };
@@ -22,6 +22,9 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = parse_args();
+    let auth_token = std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)
+        .ok()
+        .filter(|token| !token.is_empty());
 
     let driver = create_driver(&args.driver)
         .unwrap_or_else(|e| fatal(&format!("Failed to create driver '{}': {e}", args.driver)));
@@ -49,7 +52,7 @@ fn main() {
         match listener.accept() {
             Ok(stream) => {
                 log::info!("Client connected");
-                handle_connection(stream, driver.as_ref());
+                handle_connection(stream, driver.as_ref(), auth_token.as_deref());
                 log::info!("Client disconnected");
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -64,7 +67,11 @@ fn main() {
 }
 
 /// Handles one client connection for its entire lifetime.
-fn handle_connection(mut stream: interprocess::local_socket::Stream, driver: &dyn DbDriver) {
+fn handle_connection(
+    mut stream: interprocess::local_socket::Stream,
+    driver: &dyn DbDriver,
+    expected_auth_token: Option<&str>,
+) {
     let mut sessions = SessionManager::new();
     let mut hello_done = false;
 
@@ -86,41 +93,53 @@ fn handle_connection(mut stream: interprocess::local_socket::Stream, driver: &dy
 
         let response = match envelope.body {
             DriverRequestBody::Hello(hello_req) => {
-                hello_done = true;
-
-                let compatible = hello_req
-                    .supported_versions
-                    .iter()
-                    .any(|v| v.is_compatible_with(DRIVER_RPC_VERSION));
-
-                if !compatible {
+                if let Some(expected_token) = expected_auth_token
+                    && hello_req.auth_token.as_deref() != Some(expected_token)
+                {
                     DriverResponseEnvelope::error(
                         request_id,
                         None,
-                        DriverRpcErrorCode::VersionMismatch,
-                        format!(
-                            "No compatible protocol version. Server: {}.{}",
-                            DRIVER_RPC_VERSION.major, DRIVER_RPC_VERSION.minor
-                        ),
+                        DriverRpcErrorCode::InvalidRequest,
+                        "Unauthorized driver RPC client",
                         false,
                     )
                 } else {
-                    DriverResponseEnvelope::ok(
-                        request_id,
-                        None,
-                        DriverResponseBody::Hello(DriverHelloResponse {
-                            server_name: "dbflux-driver-host".to_string(),
-                            server_version: env!("CARGO_PKG_VERSION").to_string(),
-                            selected_version: DRIVER_RPC_VERSION,
-                            capabilities: hello_req.requested_capabilities,
-                            driver_kind: driver.kind(),
-                            driver_metadata: driver.metadata().clone(),
-                            form_definition: driver.form_definition().clone(),
-                            settings_schema: driver
-                                .settings_schema()
-                                .map(|schema| schema.as_ref().clone()),
-                        }),
-                    )
+                    hello_done = true;
+
+                    let compatible = hello_req
+                        .supported_versions
+                        .iter()
+                        .any(|v| v.is_compatible_with(DRIVER_RPC_VERSION));
+
+                    if !compatible {
+                        DriverResponseEnvelope::error(
+                            request_id,
+                            None,
+                            DriverRpcErrorCode::VersionMismatch,
+                            format!(
+                                "No compatible protocol version. Server: {}.{}",
+                                DRIVER_RPC_VERSION.major, DRIVER_RPC_VERSION.minor
+                            ),
+                            false,
+                        )
+                    } else {
+                        DriverResponseEnvelope::ok(
+                            request_id,
+                            None,
+                            DriverResponseBody::Hello(DriverHelloResponse {
+                                server_name: "dbflux-driver-host".to_string(),
+                                server_version: env!("CARGO_PKG_VERSION").to_string(),
+                                selected_version: DRIVER_RPC_VERSION,
+                                capabilities: hello_req.requested_capabilities,
+                                driver_kind: driver.kind(),
+                                driver_metadata: driver.metadata().clone(),
+                                form_definition: driver.form_definition().clone(),
+                                settings_schema: driver
+                                    .settings_schema()
+                                    .map(|schema| schema.as_ref().clone()),
+                            }),
+                        )
+                    }
                 }
             }
 

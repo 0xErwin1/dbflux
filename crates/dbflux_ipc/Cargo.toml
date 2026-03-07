@@ -14,3 +14,4 @@ bincode = "1"
 interprocess.workspace = true
 dbflux_core.workspace = true
 uuid.workspace = true
+dirs.workspace = true

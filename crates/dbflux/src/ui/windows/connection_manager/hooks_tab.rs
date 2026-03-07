@@ -1,7 +1,7 @@
 use super::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::input::Input;
 use gpui_component::Sizable;
+use gpui_component::input::Input;
 
 impl ConnectionManagerWindow {
     fn selected_hook_ids(&self, cx: &Context<Self>) -> Vec<String> {

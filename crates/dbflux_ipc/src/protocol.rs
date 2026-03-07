@@ -26,14 +26,17 @@ pub enum IpcResponse {
 pub struct AppControlRequest {
     pub protocol_version: ProtocolVersion,
     pub request_id: u64,
+    #[serde(default)]
+    pub auth_token: Option<String>,
     pub body: IpcMessage,
 }
 
 impl AppControlRequest {
-    pub fn new(request_id: u64, body: IpcMessage) -> Self {
+    pub fn new(request_id: u64, auth_token: Option<String>, body: IpcMessage) -> Self {
         Self {
             protocol_version: APP_CONTROL_VERSION,
             request_id,
+            auth_token,
             body,
         }
     }
