@@ -11,7 +11,9 @@ pub use error_formatter::{
     QueryErrorFormatter, sanitize_uri,
 };
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
-pub use task::{CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus};
+pub use task::{
+    CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+};
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
     QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,

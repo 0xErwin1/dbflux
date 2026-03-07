@@ -1,5 +1,5 @@
 use crate::app::{AppState, AppStateChanged};
-use dbflux_core::{CancelToken, TaskId, TaskKind, TaskSlot};
+use dbflux_core::{CancelToken, TaskId, TaskKind, TaskSlot, TaskTarget};
 use gpui::*;
 use uuid::Uuid;
 
@@ -22,6 +22,17 @@ impl DocumentTaskRunner {
         self.profile_id = Some(profile_id);
     }
 
+    pub fn clear_profile_id(&mut self) {
+        self.profile_id = None;
+    }
+
+    fn default_target(&self) -> Option<TaskTarget> {
+        self.profile_id.map(|profile_id| TaskTarget {
+            profile_id,
+            database: None,
+        })
+    }
+
     // -- Primary slot (reads — auto-cancel-previous) --
 
     pub fn start_primary(
@@ -30,9 +41,18 @@ impl DocumentTaskRunner {
         description: impl Into<String>,
         cx: &mut App,
     ) -> (TaskId, CancelToken) {
-        let profile_id = self.profile_id;
+        self.start_primary_for_target(kind, description, self.default_target(), cx)
+    }
+
+    pub fn start_primary_for_target(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        target: Option<TaskTarget>,
+        cx: &mut App,
+    ) -> (TaskId, CancelToken) {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, _cx| {
-            state.start_task_for_profile(kind, description, profile_id)
+            state.start_task_for_target(kind, description, target)
         });
 
         if let Some(old_id) = self.primary.start(task_id, cancel_token.clone()) {
@@ -74,6 +94,10 @@ impl DocumentTaskRunner {
         false
     }
 
+    pub fn clear_primary(&mut self, task_id: TaskId) {
+        let _ = self.primary.take_if(task_id);
+    }
+
     pub fn is_primary_active(&self) -> bool {
         self.primary.is_active()
     }
@@ -91,9 +115,8 @@ impl DocumentTaskRunner {
         description: impl Into<String>,
         cx: &mut App,
     ) -> (TaskId, CancelToken) {
-        let profile_id = self.profile_id;
         self.app_state.update(cx, |state, _cx| {
-            state.start_task_for_profile(kind, description, profile_id)
+            state.start_task_for_target(kind, description, self.default_target())
         })
     }
 
