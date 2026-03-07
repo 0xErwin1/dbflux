@@ -174,6 +174,8 @@ pub struct DriverHelloRequest {
     pub client_version: String,
     pub supported_versions: Vec<ProtocolVersion>,
     pub requested_capabilities: Vec<DriverCapability>,
+    #[serde(default)]
+    pub auth_token: Option<String>,
 }
 
 /// Handshake response sent by driver hosts.

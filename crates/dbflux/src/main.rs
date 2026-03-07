@@ -15,9 +15,9 @@ use assets::Assets;
 use dbflux_core::ShutdownPhase;
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
-    APP_CONTROL_VERSION, framing,
+    APP_CONTROL_VERSION, framing, init_process_auth_tokens,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    socket_name,
+    read_app_control_token, socket_name,
 };
 use gpui::*;
 use gpui_component::Root;
@@ -89,7 +89,8 @@ fn bind_ipc_socket() -> Result<IpcListener, ()> {
 }
 
 fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::Result<()> {
-    let request = AppControlRequest::new(request_id, IpcMessage::Focus);
+    let auth_token = read_app_control_token()?;
+    let request = AppControlRequest::new(request_id, Some(auth_token), IpcMessage::Focus);
     framing::send_msg(&mut *stream, &request)?;
 
     let response: AppControlResponse = framing::recv_msg(&mut *stream)?;
@@ -114,6 +115,14 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 }
 
 fn run_gui() {
+    let auth_token = match init_process_auth_tokens() {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("Failed to initialize IPC auth token: {}", error);
+            std::process::exit(1);
+        }
+    };
+
     let listener = match bind_ipc_socket() {
         Ok(l) => l,
         Err(()) => std::process::exit(1),
@@ -149,7 +158,7 @@ fn run_gui() {
 
                     let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                    IpcServer::start_with_listener(listener, workspace.clone(), cx);
+                    IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
                     info!("IPC server started");
 
                     cx.new(|cx| Root::new(workspace, window, cx))

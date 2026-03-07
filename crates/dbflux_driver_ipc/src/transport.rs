@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_VERSION,
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
@@ -75,6 +75,10 @@ impl RpcClient {
         stream: &Arc<Mutex<IpcStream>>,
         request_id: &Arc<Mutex<u64>>,
     ) -> Result<DriverHelloResponse, RpcError> {
+        let auth_token = std::env::var(DRIVER_RPC_AUTH_TOKEN_ENV)
+            .ok()
+            .filter(|token| !token.is_empty());
+
         let request = DriverRequestEnvelope::new(
             0,
             DriverRequestBody::Hello(DriverHelloRequest {
@@ -87,6 +91,7 @@ impl RpcClient {
                     DriverCapability::SchemaIntrospection,
                     DriverCapability::MultiDatabase,
                 ],
+                auth_token,
             }),
         );
 
