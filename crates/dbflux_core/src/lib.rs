@@ -37,7 +37,7 @@ pub use connection::{
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter, DbDriver,
     DbError, DefaultErrorFormatter, ErrorLocation, FormattedError, KeyValueApi, NoopCancelHandle,
-    QueryCancelHandle, QueryErrorFormatter, SchemaFeatures, SchemaLoadingStrategy,
+    QueryCancelHandle, QueryErrorFormatter, SchemaFeatures, SchemaLoadingStrategy, TaskTarget,
     ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
     TaskStatus, Value, sanitize_uri,
 };
@@ -105,7 +105,6 @@ pub use storage::{
     SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore, connection_secret_ref,
     create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
 };
-
 pub use chrono;
 
 // Backward-compatible public module paths for external crates that use

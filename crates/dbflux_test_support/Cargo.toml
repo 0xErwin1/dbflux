@@ -1,6 +1,6 @@
 [package]
 name = "dbflux_test_support"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 authors.workspace = true
