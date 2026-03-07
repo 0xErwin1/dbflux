@@ -291,7 +291,11 @@ impl ConnectionManagerWindow {
                                 gpui::rgb(0xFCA5A5),
                                 test_error.unwrap_or_else(|| "Connection failed".to_string()),
                             ),
-                            TestStatus::None => unreachable!(),
+                            TestStatus::None => (
+                                gpui::rgb(0x1F2937),
+                                gpui::rgb(0x9CA3AF),
+                                "No test status available".to_string(),
+                            ),
                         };
 
                         d.child(
