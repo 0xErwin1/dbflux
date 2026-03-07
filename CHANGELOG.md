@@ -2,6 +2,33 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.7] – 2026-03-07
+
+### Added
+
+* Native file browser button on the SQLite connection form so users can pick a database file instead of typing the full path
+* Per-process authentication tokens for app-control IPC and driver RPC host handshakes, preventing unauthorized local process access
+
+### Changed
+
+* Credentials now use `SecretString` end-to-end across core, drivers, IPC handoff, and UI; plain strings are only exposed at explicit boundaries (keyring write, driver connect)
+* `SecretStore::set()` accepts `&SecretString` instead of `&str`, pushing `expose_secret()` to the keyring boundary
+* Detached async tasks that silently discarded `cx.update()` failures now log warnings through an `AsyncUpdateResultExt` trait (38 call sites across 9 files)
+
+### Fixed
+
+* SSH tunnels now enforce host key TOFU verification instead of accepting any host key
+* Proxy tunnels enforce TLS when the target uses HTTPS, and `unreachable!` branches in proxy transport are replaced with safe fallbacks
+* PostgreSQL URI `sslmode` parameter is now honored during connection
+* URI passwords are sanitized before profile persistence to prevent accidental credential storage in plaintext config
+* Lua VM memory is capped at 16 MiB to prevent runaway scripts from exhausting host memory
+* Script rename validation rejects path traversal sequences
+* IPC mutex operations replaced with explicit error handling instead of panic-prone `unwrap()`
+* Proxy credentials are redacted in debug output
+* Lua hook settings now warn when a hook has `process.run` capability enabled
+
+---
+
 ## [0.4.0-dev.6] – 2026-03-07
 
 ### Added

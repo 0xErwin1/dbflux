@@ -4,11 +4,11 @@ use super::{
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
 };
 use crate::keymap::{Command, ContextId};
+use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, QueryRequest,

@@ -8,6 +8,7 @@ mod utils;
 use super::result_view::ResultViewMode;
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppState;
+use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
     TableModel,
@@ -16,7 +17,6 @@ use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, Docu
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
 use crate::ui::components::toast::ToastExt;
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };

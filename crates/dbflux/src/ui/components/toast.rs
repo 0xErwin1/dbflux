@@ -4,9 +4,9 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, Global, Hsla, MouseButton, Window, px, rems};
 use gpui_component::ActiveTheme;
 
+use crate::ui::AsyncUpdateResultExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
-use crate::ui::AsyncUpdateResultExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
