@@ -194,7 +194,9 @@ fn run_gui() {
                     false
                 });
             })
-            .ok();
+            .unwrap_or_else(|error| {
+                log::warn!("Failed to install window close handler: {:?}", error);
+            });
     });
 }
 

@@ -363,7 +363,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(_connection) => {
@@ -379,8 +379,12 @@ impl ConnectionManagerWindow {
                     }
                     cx.notify();
                 });
-            })
-            .ok();
+            }) {
+                log::warn!(
+                    "Failed to apply test connection result to UI state: {:?}",
+                    error
+                );
+            }
         })
         .detach();
     }

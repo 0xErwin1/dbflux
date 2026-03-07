@@ -317,18 +317,24 @@ impl CodeDocument {
                     log::warn!("Cleanup after cancel failed: {}", error);
                 }
 
-                cx.update(|cx| {
+                if let Err(error) = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
                         doc.complete_cancelled_query(task_id, exec_id, &task_target, cx);
                     })
-                    .ok();
-                })
-                .ok();
+                    .unwrap_or_else(|inner_error| {
+                        log::warn!(
+                            "Failed to update document after cancelled query: {:?}",
+                            inner_error
+                        );
+                    });
+                }) {
+                    log::warn!("Failed to apply cancelled query state to UI: {:?}", error);
+                }
 
                 return;
             }
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |doc, cx| {
                     doc.pending_result = Some(PendingQueryResult {
                         task_id,
@@ -338,9 +344,15 @@ impl CodeDocument {
                     });
                     cx.notify();
                 })
-                .ok();
-            })
-            .ok();
+                .unwrap_or_else(|inner_error| {
+                    log::warn!(
+                        "Failed to update document with query result payload: {:?}",
+                        inner_error
+                    );
+                });
+            }) {
+                log::warn!("Failed to apply query result to UI state: {:?}", error);
+            }
         })
         .detach();
     }
@@ -884,7 +896,7 @@ impl CodeDocument {
                 return;
             }
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |doc, cx| {
                     doc.pending_result = Some(PendingQueryResult {
                         task_id,
@@ -894,9 +906,18 @@ impl CodeDocument {
                     });
                     cx.notify();
                 })
-                .ok();
-            })
-            .ok();
+                .unwrap_or_else(|inner_error| {
+                    log::warn!(
+                        "Failed to update script document with execution result: {:?}",
+                        inner_error
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply script execution result to UI state: {:?}",
+                    error
+                );
+            }
         })
         .detach();
     }

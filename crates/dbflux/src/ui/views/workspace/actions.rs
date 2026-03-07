@@ -41,7 +41,7 @@ impl Workspace {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
 
-        cx.open_window(
+        if let Err(error) = cx.open_window(
             WindowOptions {
                 app_id: Some("dbflux".into()),
                 titlebar: Some(TitlebarOptions {
@@ -56,8 +56,9 @@ impl Workspace {
                 let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
                 cx.new(|cx| Root::new(manager, window, cx))
             },
-        )
-        .ok();
+        ) {
+            log::warn!("Failed to open connection manager window: {:?}", error);
+        }
     }
 
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
@@ -155,7 +156,7 @@ impl Workspace {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| match result {
+            if let Err(error) = cx.update(|cx| match result {
                 Ok(schema) => {
                     app_state.update(cx, |state, cx| {
                         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
@@ -167,8 +168,12 @@ impl Workspace {
                 Err(e) => {
                     log::error!("Failed to refresh schema: {:?}", e);
                 }
-            })
-            .ok();
+            }) {
+                log::warn!(
+                    "Failed to apply refreshed schema to workspace state: {:?}",
+                    error
+                );
+            }
         })
         .detach();
 
@@ -459,25 +464,32 @@ impl Workspace {
             let path = handle.path().to_path_buf();
 
             // Check if this file is already open
-            let already_open = cx
-                .update(|cx| {
-                    tab_manager
-                        .read(cx)
-                        .documents()
-                        .iter()
-                        .find(|doc| doc.is_file(&path, cx))
-                        .map(|doc| doc.id())
-                })
-                .ok()
-                .flatten();
+            let already_open = match cx.update(|cx| {
+                tab_manager
+                    .read(cx)
+                    .documents()
+                    .iter()
+                    .find(|doc| doc.is_file(&path, cx))
+                    .map(|doc| doc.id())
+            }) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        "Failed to inspect open tabs while opening script: {:?}",
+                        error
+                    );
+                    None
+                }
+            };
 
             if let Some(id) = already_open {
-                cx.update(|cx| {
+                if let Err(error) = cx.update(|cx| {
                     tab_manager.update(cx, |mgr, cx| {
                         mgr.activate(id, cx);
                     });
-                })
-                .ok();
+                }) {
+                    log::warn!("Failed to activate already-open script tab: {:?}", error);
+                }
                 return;
             }
 
@@ -496,13 +508,22 @@ impl Workspace {
                 }
             };
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |ws, cx| {
                     ws.open_script_with_content(path, content, cx);
                 })
-                .ok();
-            })
-            .ok();
+                .unwrap_or_else(|inner_error| {
+                    log::warn!(
+                        "Failed to update workspace while opening selected script: {:?}",
+                        inner_error
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply selected script content to workspace: {:?}",
+                    error
+                );
+            }
         })
         .detach();
     }
@@ -541,13 +562,22 @@ impl Workspace {
                 }
             };
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |ws, cx| {
                     ws.open_script_with_content(path, content, cx);
                 })
-                .ok();
-            })
-            .ok();
+                .unwrap_or_else(|inner_error| {
+                    log::warn!(
+                        "Failed to update workspace while opening script path: {:?}",
+                        inner_error
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply script content from explicit path to workspace: {:?}",
+                    error
+                );
+            }
         })
         .detach();
     }

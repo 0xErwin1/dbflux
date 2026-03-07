@@ -164,7 +164,7 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            cx.update(|cx| {
+            if let Err(error) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(()) => {
@@ -180,8 +180,9 @@ impl ConnectionManagerWindow {
                     }
                     cx.notify();
                 });
-            })
-            .ok();
+            }) {
+                log::warn!("Failed to apply SSH test result to UI state: {:?}", error);
+            }
         })
         .detach();
     }
@@ -202,14 +203,18 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path {
-                cx.update(|cx| {
+            if let Some(path) = path
+                && let Err(error) = cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         this.pending_ssh_key_path = Some(path.to_string_lossy().to_string());
                         cx.notify();
                     });
                 })
-                .ok();
+            {
+                log::warn!(
+                    "Failed to apply selected SSH key path to UI state: {:?}",
+                    error
+                );
             }
         })
         .detach();
