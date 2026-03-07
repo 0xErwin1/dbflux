@@ -1,5 +1,6 @@
 [package]
 name = "dbflux_driver_sqlite"
+version.workspace = true
 edition.workspace = true
 publish = false
 authors.workspace = true

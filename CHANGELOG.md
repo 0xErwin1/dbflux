@@ -2,6 +2,26 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.3.7] – 2026-03-06
+
+### Added
+
+* Dedicated style CI workflow that runs `cargo fmt --check` and `cargo clippy --workspace -- -D warnings`
+
+### Changed
+
+* New connections and SSH tunnels now save credentials to the system keyring by default unless the checkbox is explicitly disabled
+* Release workflow now blocks artifact builds until both tests and style checks pass
+
+### Fixed
+
+* SQL query context selectors now refresh when connections and databases change, so tabs opened before connecting can pick their execution target correctly
+* Per-database query task cancellation now cleans up the exact connection target, allowing the sidebar to reopen those databases after cancellation
+* PostgreSQL connection retry setup and live integration tests now compile cleanly under current type inference requirements
+* Restored the full `LICENSE-MIT` text in release artifacts
+
+---
+
 ## [0.3.6] – 2026-02-28
 
 ### Added
