@@ -69,7 +69,7 @@ impl FormFocus {
         if state.uses_file_form {
             return match self {
                 Name => Database,
-                Database => TestConnection,
+                Database | FileBrowse => TestConnection,
                 TestConnection => Save,
                 Save => Name,
                 _ => Name,
@@ -119,7 +119,7 @@ impl FormFocus {
         if state.uses_file_form {
             return match self {
                 Name => Save,
-                Database => Name,
+                Database | FileBrowse => Name,
                 TestConnection => Database,
                 Save => TestConnection,
                 _ => Save,
@@ -171,6 +171,7 @@ impl FormFocus {
 
         if state.uses_file_form {
             return match self {
+                FileBrowse => Database,
                 Save => TestConnection,
                 other => other,
             };
@@ -189,6 +190,7 @@ impl FormFocus {
 
         if state.uses_file_form {
             return match self {
+                Database => FileBrowse,
                 TestConnection => Save,
                 other => other,
             };
@@ -1079,6 +1081,10 @@ impl ConnectionManagerWindow {
                 self.input_ssh_password.update(cx, |state, cx| {
                     state.focus(window, cx);
                 });
+            }
+
+            FormFocus::FileBrowse => {
+                self.browse_file_path(window, cx);
             }
 
             FormFocus::SshKeyBrowse => {

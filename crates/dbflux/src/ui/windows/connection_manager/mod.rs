@@ -52,6 +52,7 @@ enum FormFocus {
     Host,
     Port,
     Database,
+    FileBrowse,
     User,
     Password,
     PasswordSave,
@@ -163,6 +164,7 @@ pub struct ConnectionManagerWindow {
     ssh_test_status: TestStatus,
     ssh_test_error: Option<String>,
     pending_ssh_key_path: Option<String>,
+    pending_file_path: Option<String>,
     pending_ssh_tunnel_selection: Option<Uuid>,
 
     show_password: bool,
@@ -391,6 +393,7 @@ impl ConnectionManagerWindow {
             ssh_test_status: TestStatus::None,
             ssh_test_error: None,
             pending_ssh_key_path: None,
+            pending_file_path: None,
             pending_ssh_tunnel_selection: None,
             show_password: false,
             show_ssh_passphrase: false,

@@ -219,4 +219,52 @@ impl ConnectionManagerWindow {
         })
         .detach();
     }
+
+    pub(super) fn browse_file_path(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().clone();
+
+        let current_value = self
+            .driver_inputs
+            .get("path")
+            .map(|input| input.read(cx).value().to_string());
+
+        let start_dir = current_value
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .and_then(|v| {
+                let path = std::path::Path::new(v);
+                path.parent().map(|p| p.to_path_buf())
+            })
+            .or_else(dirs::home_dir)
+            .unwrap_or_default();
+
+        let task = cx.background_executor().spawn(async move {
+            let dialog = rfd::FileDialog::new()
+                .set_title("Select Database File")
+                .set_directory(&start_dir)
+                .add_filter("Database files", &["db", "sqlite", "sqlite3", "db3"])
+                .add_filter("All files", &["*"]);
+
+            dialog.pick_file()
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let path = task.await;
+
+            if let Some(path) = path
+                && let Err(error) = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        this.pending_file_path = Some(path.to_string_lossy().to_string());
+                        cx.notify();
+                    });
+                })
+            {
+                log::warn!(
+                    "Failed to apply selected file path to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
 }

@@ -4,12 +4,12 @@ use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::{Icon, IconName};
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
@@ -368,10 +368,7 @@ impl ConnectionManagerWindow {
         let focused = show_focus && field_focus == Some(self.form_focus);
 
         match &field_def.kind {
-            FormFieldKind::Text
-            | FormFieldKind::Password
-            | FormFieldKind::Number
-            | FormFieldKind::FilePath => {
+            FormFieldKind::Text | FormFieldKind::Password | FormFieldKind::Number => {
                 let Some(input_state) = self.input_state_for_field(&field_def.id) else {
                     return div().into_any_element();
                 };
@@ -412,6 +409,77 @@ impl ConnectionManagerWindow {
                             }),
                     )
                     .child(Input::new(input_state).disabled(!field_enabled))
+                    .into_any_element()
+            }
+
+            FormFieldKind::FilePath => {
+                let Some(input_state) = self.input_state_for_field(&field_def.id) else {
+                    return div().into_any_element();
+                };
+
+                let browse_focused =
+                    show_focus && Some(FormFocus::FileBrowse) == Some(self.form_focus);
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(field_def.label.clone()),
+                            )
+                            .when(field_def.required, |d| {
+                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .rounded(px(4.0))
+                                    .border_2()
+                                    .when(focused, |d| d.border_color(ring_color))
+                                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
+                                    .p(px(2.0))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            if let Some(field) = field_focus {
+                                                this.enter_edit_mode_for_field(field, window, cx);
+                                            }
+                                        }),
+                                    )
+                                    .child(Input::new(input_state)),
+                            )
+                            .child(
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_2()
+                                    .when(browse_focused, |d| d.border_color(ring_color))
+                                    .when(!browse_focused, |d| {
+                                        d.border_color(gpui::transparent_black())
+                                    })
+                                    .child(
+                                        Button::new("browse-file-path")
+                                            .label("Browse")
+                                            .small()
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.browse_file_path(window, cx);
+                                            })),
+                                    ),
+                            ),
+                    )
                     .into_any_element()
             }
 
@@ -711,6 +779,14 @@ impl Render for ConnectionManagerWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = self.pending_ssh_key_path.take() {
             self.input_ssh_key_path.update(cx, |state, cx| {
+                state.set_value(path, window, cx);
+            });
+        }
+
+        if let Some(path) = self.pending_file_path.take()
+            && let Some(input) = self.driver_inputs.get("path").cloned()
+        {
+            input.update(cx, |state, cx| {
                 state.set_value(path, window, cx);
             });
         }
