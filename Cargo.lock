@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mongodb"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "base64 0.22.1",
  "bson",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mysql"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_postgres"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -1797,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_redis"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "dbflux_core",
  "dbflux_ssh",
@@ -1810,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_sqlite"
-version = "0.0.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "dbflux_core",
  "dbflux_test_support",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_export"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "base64 0.22.1",
  "csv",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ssh"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_test_support"
-version = "0.1.0"
+version = "0.4.0-dev.5"
 dependencies = [
  "dbflux_core",
  "serde_json",

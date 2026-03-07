@@ -898,15 +898,29 @@ impl AppState {
         self.facade.tasks.start(kind, description)
     }
 
+    pub fn start_task_for_target(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        target: Option<dbflux_core::TaskTarget>,
+    ) -> (TaskId, CancelToken) {
+        self.facade
+            .tasks
+            .start_for_target(kind, description, target)
+    }
+
     pub fn start_task_for_profile(
         &mut self,
         kind: TaskKind,
         description: impl Into<String>,
         profile_id: Option<Uuid>,
     ) -> (TaskId, CancelToken) {
-        self.facade
-            .tasks
-            .start_for_profile(kind, description, profile_id)
+        let target = profile_id.map(|profile_id| dbflux_core::TaskTarget {
+            profile_id,
+            database: None,
+        });
+
+        self.start_task_for_target(kind, description, target)
     }
 
     pub fn start_hook_task_for_profile(
@@ -1069,6 +1083,27 @@ impl AppState {
 
     pub fn connections(&self) -> &HashMap<Uuid, ConnectedProfile> {
         &self.facade.connections.connections
+    }
+
+    pub fn remove_database_connection(&mut self, profile_id: Uuid, database: &str) -> bool {
+        self.facade
+            .connections
+            .remove_database_connection(profile_id, database)
+    }
+
+    pub fn cancel_query_for_target(&self, target: &dbflux_core::TaskTarget) {
+        let Some(connection) = self.facade.connections.connection_for_task_target(target) else {
+            return;
+        };
+
+        let cancel_handle = connection.cancel_handle();
+        if let Err(error) = cancel_handle.cancel() {
+            log::warn!("Failed to send cancel via handle: {}", error);
+        }
+
+        if let Err(error) = connection.cancel_active() {
+            log::warn!("Failed to send cancel to database: {}", error);
+        }
     }
 
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {

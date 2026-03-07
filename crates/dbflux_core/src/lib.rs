@@ -42,7 +42,7 @@ pub use core::{
     DbError, DefaultErrorFormatter, ErrorLocation, FormattedError, KeyValueApi, NoopCancelHandle,
     QueryCancelHandle, QueryErrorFormatter, SchemaFeatures, SchemaLoadingStrategy,
     ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
-    TaskStatus, Value, sanitize_uri,
+    TaskStatus, TaskTarget, Value, sanitize_uri,
 };
 
 pub use data::{
@@ -101,6 +101,7 @@ pub use sql::{
     generate_truncate, generate_update_template,
 };
 
+pub use chrono;
 pub use storage::{
     HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore, KeyringSecretStore,
     NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore, SavedQuery,
@@ -108,8 +109,6 @@ pub use storage::{
     SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore, connection_secret_ref,
     create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
 };
-
-pub use chrono;
 
 // Backward-compatible public module paths for external crates that use
 // `dbflux_core::connection_manager::*` etc.

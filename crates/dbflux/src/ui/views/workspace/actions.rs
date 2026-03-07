@@ -651,8 +651,8 @@ impl Workspace {
                 window,
                 cx,
             )
-            .with_title(pending.title)
-            .with_exec_ctx(pending.exec_ctx);
+            .with_exec_ctx(pending.exec_ctx, cx);
+            doc = doc.with_title(pending.title);
 
             if let Some(path) = pending.path {
                 doc = doc.with_path(path);
@@ -954,7 +954,7 @@ impl Workspace {
                     doc = doc.with_path(p);
                 }
 
-                doc = doc.with_title(title).with_exec_ctx(exec_ctx);
+                doc = doc.with_title(title).with_exec_ctx(exec_ctx, cx);
                 doc.set_content(body, window, cx);
 
                 // If there was a shadow, the tab had unsaved changes — mark dirty

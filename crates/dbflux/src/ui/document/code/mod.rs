@@ -12,7 +12,8 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
+    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy,
+    SchemaLoadingStrategy, TaskTarget,
     ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
@@ -110,6 +111,7 @@ pub struct CodeDocument {
     pending_result: Option<PendingQueryResult>,
     live_output: Option<LiveOutputState>,
     _live_output_drain: Option<Task<()>>,
+    active_query_task: Option<ActiveQueryTask>,
 
     // Result tabs
     result_tabs: Vec<ResultTab>,
@@ -165,6 +167,11 @@ struct PendingQueryResult {
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
+}
+
+struct ActiveQueryTask {
+    task_id: dbflux_core::TaskId,
+    target: TaskTarget,
 }
 
 /// Pending dangerous query confirmation.
@@ -341,6 +348,9 @@ impl CodeDocument {
             Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
+        let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.sync_context_dropdowns(cx);
+        });
 
         let refresh_policy = default_refresh;
 
@@ -362,12 +372,13 @@ impl CodeDocument {
             connection_dropdown,
             database_dropdown,
             schema_dropdown,
-            _context_subscriptions: vec![conn_sub, db_sub, schema_sub],
+            _context_subscriptions: vec![conn_sub, db_sub, schema_sub, app_state_sub],
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
             live_output: None,
             _live_output_drain: None,
+            active_query_task: None,
             result_tabs: Vec::new(),
             active_result_index: None,
             result_tab_counter: 0,
@@ -482,11 +493,10 @@ impl CodeDocument {
     }
 
     /// Set the execution context (e.g. parsed from file header).
-    pub fn with_exec_ctx(mut self, ctx: ExecutionContext) -> Self {
-        if let Some(conn_id) = ctx.connection_id {
-            self.connection_id = Some(conn_id);
-            self.exec_ctx = ctx;
-        }
+    pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.connection_id = ctx.connection_id;
+        self.exec_ctx = ctx;
+        self.sync_context_dropdowns(cx);
         self
     }
 
