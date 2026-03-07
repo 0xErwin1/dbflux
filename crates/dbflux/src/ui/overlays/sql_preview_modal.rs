@@ -402,7 +402,13 @@ impl SqlPreviewModal {
             // DDL operations are handled above
             SqlGenerationType::CreateTable
             | SqlGenerationType::Truncate
-            | SqlGenerationType::DropTable => unreachable!(),
+            | SqlGenerationType::DropTable => {
+                log::error!(
+                    "[SQL Preview] Unexpected DDL generation type in DML generator path: {:?}",
+                    self.generation_type
+                );
+                return "-- Error: unsupported SQL generation type for this preview".to_string();
+            }
         };
 
         let request = SqlGenerationRequest {

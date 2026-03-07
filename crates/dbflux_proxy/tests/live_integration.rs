@@ -408,7 +408,7 @@ fn from_profile_http_with_auth() {
 }
 
 #[test]
-fn from_profile_https_maps_to_http_connect() {
+fn from_profile_https_maps_to_https_connect() {
     use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 
     let profile = ProxyProfile {
@@ -424,5 +424,5 @@ fn from_profile_https_maps_to_http_connect() {
     };
 
     let config = ProxyTunnelConfig::from_profile(&profile, None);
-    assert!(matches!(config.protocol, ProxyProtocol::HttpConnect));
+    assert!(matches!(config.protocol, ProxyProtocol::HttpsConnect));
 }

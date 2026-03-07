@@ -299,6 +299,13 @@ impl SettingsWindow {
             }
         }
 
+        if hook_kind == HookKindSelection::Lua && self.hook_lua_process_run {
+            warnings.push(
+                "Lua process.run is enabled: this hook can execute external programs with your user permissions"
+                    .to_string(),
+            );
+        }
+
         warnings
     }
 

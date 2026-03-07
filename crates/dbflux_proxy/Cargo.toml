@@ -17,6 +17,7 @@ dbflux_core = { path = "../dbflux_core" }
 dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
 log = "0.4"
 socks = "0.3"
+native-tls = "0.2"
 
 [dev-dependencies]
 testcontainers = "0.15"

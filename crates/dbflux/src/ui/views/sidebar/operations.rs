@@ -645,7 +645,16 @@ async fn run_hook_phase(
                 Some(HookPhaseState::Aborted { error }) => {
                     (false, Some(error.clone()), Some(error), false)
                 }
-                Some(HookPhaseState::Continue { .. }) => unreachable!(),
+                Some(HookPhaseState::Continue { warnings }) => {
+                    let message = if warnings.is_empty() {
+                        "Unexpected hook readiness state: continue without warning".to_string()
+                    } else {
+                        format!("Unexpected hook readiness state: {}", warnings.join("; "))
+                    };
+
+                    log::error!("[HOOK] {}", message);
+                    (false, Some(message.clone()), Some(message), false)
+                }
             }
         } else {
             let succeeded = hook_result

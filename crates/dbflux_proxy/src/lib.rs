@@ -19,12 +19,68 @@ use dbflux_core::{DbError, ProxyAuth, ProxyKind, ProxyProfile};
 use dbflux_tunnel_core::{
     ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep, blocking_write_all,
 };
+use native_tls::{TlsConnector, TlsStream};
 
 /// Proxy protocol to use for tunneling.
 #[derive(Debug, Clone)]
 pub enum ProxyProtocol {
     Socks5,
     HttpConnect,
+    HttpsConnect,
+}
+
+enum ProxiedStream {
+    Plain(TcpStream),
+    Tls(TlsStream<TcpStream>),
+}
+
+impl ProxiedStream {
+    fn set_nodelay(&self) {
+        match self {
+            Self::Plain(stream) => {
+                let _ = stream.set_nodelay(true);
+            }
+            Self::Tls(stream) => {
+                let _ = stream.get_ref().set_nodelay(true);
+            }
+        }
+    }
+
+    fn set_nonblocking(&self, nonblocking: bool) {
+        match self {
+            Self::Plain(stream) => {
+                let _ = stream.set_nonblocking(nonblocking);
+            }
+            Self::Tls(stream) => {
+                let _ = stream.get_ref().set_nonblocking(nonblocking);
+            }
+        }
+    }
+}
+
+impl Read for ProxiedStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read(buf),
+            Self::Tls(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for ProxiedStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.write(buf),
+            Self::Tls(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.flush(),
+            Self::Tls(stream) => stream.flush(),
+        }
+    }
 }
 
 /// Authentication credentials for the proxy server.
@@ -69,7 +125,8 @@ impl ProxyTunnelConfig {
     pub fn from_profile(profile: &ProxyProfile, password: Option<&str>) -> Self {
         let protocol = match profile.kind {
             ProxyKind::Socks5 => ProxyProtocol::Socks5,
-            ProxyKind::Http | ProxyKind::Https => ProxyProtocol::HttpConnect,
+            ProxyKind::Http => ProxyProtocol::HttpConnect,
+            ProxyKind::Https => ProxyProtocol::HttpsConnect,
         };
 
         let credentials = match &profile.auth {
@@ -144,10 +201,11 @@ fn open_proxied_stream(
     config: &ProxyTunnelConfig,
     remote_host: &str,
     remote_port: u16,
-) -> Result<TcpStream, DbError> {
+) -> Result<ProxiedStream, DbError> {
     match config.protocol {
         ProxyProtocol::Socks5 => open_socks5_stream(config, remote_host, remote_port),
         ProxyProtocol::HttpConnect => open_http_connect_stream(config, remote_host, remote_port),
+        ProxyProtocol::HttpsConnect => open_https_connect_stream(config, remote_host, remote_port),
     }
 }
 
@@ -155,7 +213,7 @@ fn open_socks5_stream(
     config: &ProxyTunnelConfig,
     remote_host: &str,
     remote_port: u16,
-) -> Result<TcpStream, DbError> {
+) -> Result<ProxiedStream, DbError> {
     let proxy_addr = (&*config.proxy_host, config.proxy_port);
     let target = (remote_host, remote_port);
 
@@ -169,20 +227,22 @@ fn open_socks5_stream(
         None => socks::Socks5Stream::connect(proxy_addr, target),
     };
 
-    stream.map(|s| s.into_inner()).map_err(|e| {
-        DbError::connection_failed(format!(
-            "SOCKS5 proxy connection to {}:{} failed: {}",
-            remote_host, remote_port, e
-        ))
-    })
+    stream
+        .map(|s| ProxiedStream::Plain(s.into_inner()))
+        .map_err(|e| {
+            DbError::connection_failed(format!(
+                "SOCKS5 proxy connection to {}:{} failed: {}",
+                remote_host, remote_port, e
+            ))
+        })
 }
 
 fn open_http_connect_stream(
     config: &ProxyTunnelConfig,
     remote_host: &str,
     remote_port: u16,
-) -> Result<TcpStream, DbError> {
-    let mut stream = TcpStream::connect((&*config.proxy_host, config.proxy_port)).map_err(|e| {
+) -> Result<ProxiedStream, DbError> {
+    let stream = TcpStream::connect((&*config.proxy_host, config.proxy_port)).map_err(|e| {
         DbError::connection_failed(format!(
             "Failed to connect to HTTP proxy {}:{}: {}",
             config.proxy_host, config.proxy_port, e
@@ -191,6 +251,45 @@ fn open_http_connect_stream(
 
     stream.set_nodelay(true).ok();
 
+    let stream = perform_connect_handshake(stream, config, remote_host, remote_port)?;
+    Ok(ProxiedStream::Plain(stream))
+}
+
+fn open_https_connect_stream(
+    config: &ProxyTunnelConfig,
+    remote_host: &str,
+    remote_port: u16,
+) -> Result<ProxiedStream, DbError> {
+    let stream = TcpStream::connect((&*config.proxy_host, config.proxy_port)).map_err(|e| {
+        DbError::connection_failed(format!(
+            "Failed to connect to HTTPS proxy {}:{}: {}",
+            config.proxy_host, config.proxy_port, e
+        ))
+    })?;
+
+    stream.set_nodelay(true).ok();
+
+    let connector = TlsConnector::new().map_err(|e| {
+        DbError::connection_failed(format!("Failed to initialize TLS connector: {}", e))
+    })?;
+
+    let tls_stream = connector.connect(&config.proxy_host, stream).map_err(|e| {
+        DbError::connection_failed(format!(
+            "TLS handshake with HTTPS proxy {}:{} failed: {}",
+            config.proxy_host, config.proxy_port, e
+        ))
+    })?;
+
+    let tls_stream = perform_connect_handshake(tls_stream, config, remote_host, remote_port)?;
+    Ok(ProxiedStream::Tls(tls_stream))
+}
+
+fn perform_connect_handshake<S: Read + Write>(
+    mut stream: S,
+    config: &ProxyTunnelConfig,
+    remote_host: &str,
+    remote_port: u16,
+) -> Result<S, DbError> {
     let mut request = format!(
         "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n",
         remote_host, remote_port, remote_host, remote_port,
@@ -252,7 +351,7 @@ fn open_http_connect_stream(
 /// beyond the line boundary are consumed. This avoids data loss that would
 /// occur with `BufReader` when the proxy sends payload data immediately
 /// after the header block (e.g. MySQL server greeting).
-fn read_http_line(stream: &mut TcpStream) -> io::Result<String> {
+fn read_http_line<R: Read>(stream: &mut R) -> io::Result<String> {
     let mut line = Vec::with_capacity(128);
     let mut byte = [0u8; 1];
 
@@ -270,6 +369,27 @@ fn read_http_line(stream: &mut TcpStream) -> io::Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
+fn write_to_proxied_stream(stream: &mut ProxiedStream, data: &[u8]) -> io::Result<()> {
+    match stream {
+        ProxiedStream::Plain(tcp_stream) => blocking_write_all(tcp_stream, data),
+        ProxiedStream::Tls(tls_stream) => {
+            {
+                let inner = tls_stream.get_mut();
+                inner.set_nonblocking(false)?;
+            }
+
+            let result = tls_stream.write_all(data);
+
+            {
+                let inner = tls_stream.get_mut();
+                let _ = inner.set_nonblocking(true);
+            }
+
+            result
+        }
+    }
 }
 
 /// Minimal Base64 encoder (RFC 4648) — avoids pulling in a dependency for
@@ -316,7 +436,7 @@ fn run_proxy_tunnel_loop(
     remote_port: u16,
     shutdown: Arc<AtomicBool>,
 ) {
-    let mut connections: Vec<ForwardingConnection<TcpStream>> = Vec::new();
+    let mut connections: Vec<ForwardingConnection<ProxiedStream>> = Vec::new();
 
     while !shutdown.load(Ordering::SeqCst) {
         let mut activity = false;
@@ -327,8 +447,8 @@ fn run_proxy_tunnel_loop(
 
                 match open_proxied_stream(&config, &remote_host, remote_port) {
                     Ok(proxied_stream) => {
-                        proxied_stream.set_nodelay(true).ok();
-                        proxied_stream.set_nonblocking(true).ok();
+                        proxied_stream.set_nodelay();
+                        proxied_stream.set_nonblocking(true);
 
                         match ForwardingConnection::new(client_stream, proxied_stream) {
                             Ok(conn) => {
@@ -353,7 +473,7 @@ fn run_proxy_tunnel_loop(
         }
 
         for conn in &mut connections {
-            if conn.poll(blocking_write_all, blocking_write_all) {
+            if conn.poll(write_to_proxied_stream, blocking_write_all) {
                 activity = true;
             }
         }
@@ -434,6 +554,24 @@ mod tests {
         assert!(debug.contains("admin"));
         assert!(debug.contains("***"));
         assert!(!debug.contains("super-secret"));
+    }
+
+    #[test]
+    fn from_profile_https_maps_to_https_connect() {
+        let profile = ProxyProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "test".to_string(),
+            kind: ProxyKind::Https,
+            host: "proxy.local".to_string(),
+            port: 3128,
+            auth: ProxyAuth::None,
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+
+        let config = ProxyTunnelConfig::from_profile(&profile, None);
+        assert!(matches!(config.protocol, ProxyProtocol::HttpsConnect));
     }
 
     #[test]

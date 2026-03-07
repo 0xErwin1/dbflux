@@ -475,7 +475,7 @@ impl ConnectionManagerWindow {
                 .into_any_element(),
         );
 
-        let hooks_rows = self.render_hooks_rows(muted);
+        let hooks_rows = self.render_hooks_rows(muted, cx);
 
         sections.push(
             self.render_section("Connection Hooks", hooks_rows, &theme)

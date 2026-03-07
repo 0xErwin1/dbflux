@@ -1863,6 +1863,7 @@ dependencies = [
  "dbflux_tunnel_core",
  "env_logger",
  "log",
+ "native-tls",
  "postgres",
  "socks",
  "testcontainers",
