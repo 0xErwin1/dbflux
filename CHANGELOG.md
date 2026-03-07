@@ -2,6 +2,32 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.6] – 2026-03-07
+
+### Added
+
+* Script hooks now support Bash, Python, and embedded Lua with inline/file sources, interpreter overrides, and capability controls in Settings
+* Code documents can run Bash, Python, and Lua files directly, with live output streaming while scripts execute
+* New `dbflux_lua` crate provides sandboxed in-process Lua execution for hooks and editor-run scripts
+* Dedicated style CI workflow now runs `cargo fmt --check` and `cargo clippy --workspace -- -D warnings`
+
+### Changed
+
+* The old SQL query document evolved into a language-aware code document with script-specific execution UI and shared live-output plumbing for hooks and manual runs
+* Release workflow now waits for both test and style jobs before building artifacts
+* New connections and SSH tunnels now save credentials to the system keyring by default unless explicitly disabled
+
+### Fixed
+
+* Detached pre-connect hooks now wait for an explicit ready signal and a reachable TCP endpoint before opening the database connection
+* Hook-owned tunnel processes are cleaned up when startup fails or is cancelled, and MySQL `localhost` tunnel connections now consistently use IPv4
+* Query context selectors now refresh when connection state changes, and per-database query cancellation targets the correct connection so databases can be reopened cleanly
+* Typing `z` in the editor works again instead of toggling panels while text input is focused
+* PostgreSQL retry setup and live integration tests now compile cleanly under current type inference requirements
+* Restored the full `LICENSE-MIT` text in release artifacts
+
+---
+
 ## [0.4.0-dev.5] – 2026-03-05
 
 ### Added
