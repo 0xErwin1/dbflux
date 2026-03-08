@@ -25,6 +25,11 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
+        # OpenSSL built with static libraries for portable binaries.
+        # The default nixpkgs openssl only ships shared objects; this override
+        # enables the static output so OPENSSL_STATIC=1 works at build time.
+        opensslStatic = pkgs.openssl.override { static = true; };
+
         # Import default.nix with crane support
         dbflux = import ./default.nix {
           inherit pkgs craneLib;
@@ -41,12 +46,19 @@
           nativeBuildInputs = dbflux.nativeBuildInputs ++ [
             rustToolchain
             pkgs.rust-analyzer
+            opensslStatic.dev
           ];
 
           buildInputs = dbflux.buildInputs;
 
           LD_LIBRARY_PATH = dbflux.runtimeLibraryPath;
           ZSTD_SYS_USE_PKG_CONFIG = "1";
+
+          # Link OpenSSL statically so the binary runs outside the Nix store
+          # (e.g. on Arch Linux without /nix/store available at runtime).
+          OPENSSL_STATIC = "1";
+          OPENSSL_LIB_DIR = "${opensslStatic.out}/lib";
+          OPENSSL_INCLUDE_DIR = "${opensslStatic.dev}/include";
 
           shellHook = ''
             echo "DBFlux development environment loaded (Nix flake)"

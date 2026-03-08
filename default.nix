@@ -36,6 +36,7 @@ let
     pkg-config
     cmake
     makeWrapper
+    openssl.dev
   ];
 
   # Library path for runtime
