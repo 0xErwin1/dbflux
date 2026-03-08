@@ -385,58 +385,68 @@ Documents follow a consistent pattern for tab-based UI:
 
 ## Key Files
 
-| File                                                     | Purpose                                             |
-| -------------------------------------------------------- | --------------------------------------------------- |
-| `crates/dbflux/src/app.rs`                               | AppState, driver registry                           |
-| `crates/dbflux/src/main.rs`                              | App-control IPC server/client and graceful shutdown |
-| `crates/dbflux/src/ui/workspace.rs`                      | Main layout, command dispatch                       |
-| `crates/dbflux/src/ui/dock/sidebar_dock.rs`              | Collapsible, resizable sidebar                      |
-| `crates/dbflux/src/ui/sidebar.rs`                        | Schema tree with lazy loading                       |
-| `crates/dbflux/src/ui/document/mod.rs`                   | Document system exports                             |
-| `crates/dbflux/src/ui/document/code/mod.rs`              | Language-aware query and script editor              |
-| `crates/dbflux/src/ui/document/code/live_output.rs`      | Live output buffer for script execution             |
-| `crates/dbflux/src/ui/document/data_grid_panel.rs`       | Data grid with table/document view modes            |
-| `crates/dbflux/src/ui/document/tab_manager.rs`           | MRU tab ordering                                    |
-| `crates/dbflux/src/ui/dangerous_query.rs`                | Query safety analysis and confirmation              |
-| `crates/dbflux/src/ui/toast.rs`                          | Toast notification system                           |
-| `crates/dbflux/src/ui/cell_editor_modal.rs`              | Modal editor for JSON/long text                     |
-| `crates/dbflux/src/ui/components/data_table/table.rs`    | Virtualized data table with column resize           |
-| `crates/dbflux/src/ui/components/document_tree/state.rs` | Document tree state (cursor, search, expansion)     |
-| `crates/dbflux/src/ui/components/tree_nav.rs`            | Reusable tree navigation (cursor, expand, select)   |
-| `crates/dbflux/src/ui/windows/settings/form_nav.rs`     | Generic 2D grid navigation for settings forms       |
-| `crates/dbflux/src/ui/windows/settings/proxies.rs`      | Proxy CRUD form in Settings                         |
-| `crates/dbflux/src/ui/windows/settings/hooks.rs`        | Hook definitions CRUD in Settings                   |
-| `crates/dbflux/src/ui/windows/settings/drivers.rs`      | Per-driver settings overrides UI                    |
-| `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs` | Per-profile hook bindings                     |
-| `crates/dbflux/src/proxy.rs`                             | `create_proxy_tunnel` callback for `CreateTunnelFn` |
-| `crates/dbflux/src/keymap/defaults.rs`                   | Key bindings per context                            |
-| `crates/dbflux/src/keymap/command.rs`                    | Command enum and dispatch                           |
-| `crates/dbflux/src/keymap/focus.rs`                      | FocusTarget (Document/Sidebar/BackgroundTasks)      |
-| `crates/dbflux_core/src/core/traits.rs`                  | `DbDriver`, `Connection` traits                     |
-| `crates/dbflux_core/src/driver/capabilities.rs`          | DatabaseCategory, QueryLanguage, DriverCapabilities |
-| `crates/dbflux_core/src/config/app.rs`                   | External RPC service runtime config (`config.json`) |
-| `crates/dbflux_core/src/core/error_formatter.rs`         | ErrorFormatter trait for driver errors              |
-| `crates/dbflux_core/src/query/generator.rs`              | QueryGenerator trait, MutationRequest routing       |
-| `crates/dbflux_core/src/connection/hook.rs`              | Hook types, HookRunner, phase orchestration         |
-| `crates/dbflux_core/src/query/language_service.rs`       | Dangerous query detection (SQL, MongoDB, Redis)     |
-| `crates/dbflux_core/src/schema/types.rs`                 | Schema types with lazy loading support              |
-| `crates/dbflux_core/src/data/crud.rs`                    | CRUD mutation types for all database paradigms      |
-| `crates/dbflux_core/src/data/key_value.rs`               | Key-value operation types (Hash, Set, List, ZSet)   |
-| `crates/dbflux_core/src/sql/dialect.rs`                  | SqlDialect trait for SQL flavor differences         |
-| `crates/dbflux_core/src/storage/session.rs`              | Session persistence (scratch/shadow files, manifest)|
-| `crates/dbflux_core/src/config/scripts_directory.rs`     | Scripts folder tree (file/folder CRUD)              |
-| `crates/dbflux_lua/src/executor.rs`                     | Lua hook executor                                   |
-| `crates/dbflux_lua/src/engine.rs`                       | Lua VM creation and sandbox setup                   |
-| `crates/dbflux_lua/src/api/dbflux.rs`                   | Lua logging, env, and process APIs                  |
-| `crates/dbflux_core/src/connection/context.rs`           | Per-tab execution context (connection/database)     |
-| `crates/dbflux_driver_mongodb/src/driver.rs`             | MongoDB driver implementation                       |
-| `crates/dbflux_driver_mongodb/src/query_parser.rs`       | MongoDB query syntax parser                         |
-| `crates/dbflux_driver_mongodb/src/query_generator.rs`    | MongoDB shell query generator                       |
-| `crates/dbflux_driver_redis/src/driver.rs`               | Redis driver implementation                         |
-| `crates/dbflux_driver_redis/src/command_generator.rs`    | Redis command generator                             |
-| `crates/dbflux_ipc/src/driver_protocol.rs`               | Driver RPC protocol schema and DTOs                 |
-| `crates/dbflux_driver_ipc/src/driver.rs`                 | IpcDriver and managed host lifecycle                |
-| `crates/dbflux_driver_ipc/src/transport.rs`              | Driver RPC client transport and handshake           |
-| `crates/dbflux_tunnel_core/src/lib.rs`                   | Tunnel, TunnelConnector, ForwardingConnection       |
-| `crates/dbflux_proxy/src/lib.rs`                         | SOCKS5/HTTP CONNECT proxy tunnel                    |
-| `crates/dbflux_driver_host/src/main.rs`                  | External RPC host server entrypoint                 |
+| File                                                              | Purpose                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
+| `crates/dbflux/src/app.rs`                                        | AppState, driver registry                           |
+| `crates/dbflux/src/main.rs`                                       | App entry point, logging, window setup              |
+| `crates/dbflux/src/cli.rs`                                        | CLI arg parsing, single-instance IPC client         |
+| `crates/dbflux/src/ipc_server.rs`                                 | App-control IPC server (Focus, OpenScript)          |
+| `crates/dbflux/src/hook_executor.rs`                              | Composite hook executor routing                     |
+| `crates/dbflux/src/proxy.rs`                                      | `create_proxy_tunnel` callback for `CreateTunnelFn` |
+| `crates/dbflux/src/ui/views/workspace/mod.rs`                     | Main layout, command dispatch                       |
+| `crates/dbflux/src/ui/dock/sidebar_dock.rs`                       | Collapsible, resizable sidebar                      |
+| `crates/dbflux/src/ui/views/sidebar/mod.rs`                       | Schema tree with lazy loading                       |
+| `crates/dbflux/src/ui/document/mod.rs`                            | Document system exports                             |
+| `crates/dbflux/src/ui/document/code/mod.rs`                       | Language-aware query and script editor              |
+| `crates/dbflux/src/ui/document/code/execution.rs`                 | Query/script execution, dangerous-query confirmation|
+| `crates/dbflux/src/ui/document/code/live_output.rs`               | Live output buffer for script execution             |
+| `crates/dbflux/src/ui/document/data_grid_panel/mod.rs`            | Data grid with table/document view modes            |
+| `crates/dbflux/src/ui/document/key_value/mod.rs`                  | Redis key-value document view                       |
+| `crates/dbflux/src/ui/document/tab_manager.rs`                    | MRU tab ordering                                    |
+| `crates/dbflux/src/ui/overlays/cell_editor_modal.rs`              | Modal editor for JSON/long text                     |
+| `crates/dbflux/src/ui/overlays/history_modal.rs`                  | Recent/saved queries modal                          |
+| `crates/dbflux/src/ui/overlays/sql_preview_modal.rs`              | SQL/query preview modal (dual-mode)                 |
+| `crates/dbflux/src/ui/overlays/command_palette.rs`                | Fuzzy command palette                               |
+| `crates/dbflux/src/ui/components/toast.rs`                        | Toast notification system                           |
+| `crates/dbflux/src/ui/components/data_table/table.rs`             | Virtualized data table with column resize           |
+| `crates/dbflux/src/ui/components/document_tree/state.rs`          | Document tree state (cursor, search, expansion)     |
+| `crates/dbflux/src/ui/components/tree_nav/mod.rs`                 | Reusable tree navigation (cursor, expand, select)   |
+| `crates/dbflux/src/ui/windows/settings/form_nav.rs`               | Generic 2D grid navigation for settings forms       |
+| `crates/dbflux/src/ui/windows/settings/proxies.rs`                | Proxy CRUD form in Settings                         |
+| `crates/dbflux/src/ui/windows/settings/hooks.rs`                  | Hook definitions CRUD in Settings                   |
+| `crates/dbflux/src/ui/windows/settings/drivers.rs`                | Per-driver settings overrides UI                    |
+| `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs`    | Per-profile hook bindings                           |
+| `crates/dbflux/src/keymap/defaults.rs`                            | Key bindings per context                            |
+| `crates/dbflux/src/keymap/command.rs`                             | Command enum and dispatch                           |
+| `crates/dbflux/src/keymap/focus.rs`                               | FocusTarget (Document/Sidebar/BackgroundTasks)      |
+| `crates/dbflux_core/src/core/traits.rs`                           | `DbDriver`, `Connection` traits                     |
+| `crates/dbflux_core/src/driver/capabilities.rs`                   | DatabaseCategory, QueryLanguage, DriverCapabilities |
+| `crates/dbflux_core/src/config/app.rs`                            | External RPC service runtime config (`config.json`) |
+| `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
+| `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |
+| `crates/dbflux_core/src/query/language_service.rs`                | Dangerous query detection (SQL, MongoDB, Redis)     |
+| `crates/dbflux_core/src/schema/types.rs`                          | Schema types with lazy loading support              |
+| `crates/dbflux_core/src/data/crud.rs`                             | CRUD mutation types for all database paradigms      |
+| `crates/dbflux_core/src/data/key_value.rs`                        | Key-value operation types (Hash, Set, List, ZSet)   |
+| `crates/dbflux_core/src/sql/dialect.rs`                           | SqlDialect trait for SQL flavor differences         |
+| `crates/dbflux_core/src/storage/session.rs`                       | Session persistence (scratch/shadow files, manifest)|
+| `crates/dbflux_core/src/config/scripts_directory.rs`              | Scripts folder tree (file/folder CRUD)              |
+| `crates/dbflux_lua/src/executor.rs`                               | Lua hook executor                                   |
+| `crates/dbflux_lua/src/engine.rs`                                 | Lua VM creation and sandbox setup                   |
+| `crates/dbflux_lua/src/api/dbflux.rs`                             | Lua logging, env, and process APIs                  |
+| `crates/dbflux_lua/src/api/connection.rs`                         | Lua connection.* API (exposes HookContext)          |
+| `crates/dbflux_lua/src/api/hook.rs`                               | Lua hook.* API (phase, failure policy)              |
+| `crates/dbflux_core/src/connection/context.rs`                    | Per-tab execution context (connection/database)     |
+| `crates/dbflux_driver_mongodb/src/driver.rs`                      | MongoDB driver implementation                       |
+| `crates/dbflux_driver_mongodb/src/query_parser.rs`                | MongoDB query syntax parser                         |
+| `crates/dbflux_driver_mongodb/src/query_generator.rs`             | MongoDB shell query generator                       |
+| `crates/dbflux_driver_redis/src/driver.rs`                        | Redis driver implementation                         |
+| `crates/dbflux_driver_redis/src/command_generator.rs`             | Redis command generator                             |
+| `crates/dbflux_ipc/src/driver_protocol.rs`                        | Driver RPC protocol schema and DTOs                 |
+| `crates/dbflux_ipc/src/auth.rs`                                   | IPC auth token management                           |
+| `crates/dbflux_driver_ipc/src/driver.rs`                          | IpcDriver and managed host lifecycle                |
+| `crates/dbflux_driver_ipc/src/transport.rs`                       | Driver RPC client transport and handshake           |
+| `crates/dbflux_tunnel_core/src/lib.rs`                            | Tunnel, TunnelConnector, ForwardingConnection       |
+| `crates/dbflux_proxy/src/lib.rs`                                  | SOCKS5/HTTP CONNECT proxy tunnel                    |
+| `crates/dbflux_driver_host/src/main.rs`                           | External RPC host server entrypoint                 |
