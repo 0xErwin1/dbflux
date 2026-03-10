@@ -119,7 +119,7 @@ enum AccessTabMode {
     Direct,
     Ssh,
     Proxy,
-    Ssm,
+    ManagedSsm,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -622,27 +622,29 @@ impl ConnectionManagerWindow {
             instance.selected_ssh_tunnel_id = Some(*ssh_tunnel_profile_id);
         }
 
-        // Populate SSM fields if access kind is SSM
-        if let Some(AccessKind::Ssm {
-            instance_id,
-            region,
-            remote_port,
-            auth_profile_id,
-            ..
-        }) = &profile.access_kind
-        {
-            instance.input_ssm_instance_id.update(cx, |state, cx| {
-                state.set_value(instance_id, window, cx);
-            });
-            instance.input_ssm_region.update(cx, |state, cx| {
-                state.set_value(region, window, cx);
-            });
-            instance.input_ssm_remote_port.update(cx, |state, cx| {
-                state.set_value(remote_port.to_string(), window, cx);
-            });
-            instance.selected_ssm_auth_profile_id = *auth_profile_id;
-            if instance.selected_auth_profile_id.is_none() {
-                instance.selected_auth_profile_id = *auth_profile_id;
+        // Populate SSM fields if access kind is a managed aws-ssm access
+        if let Some(AccessKind::Managed { provider, params }) = &profile.access_kind {
+            if provider == "aws-ssm" {
+                let instance_id = params.get("instance_id").cloned().unwrap_or_default();
+                let region = params.get("region").cloned().unwrap_or_default();
+                let remote_port = params.get("remote_port").cloned().unwrap_or_default();
+                let auth_profile_id: Option<uuid::Uuid> = params
+                    .get("auth_profile_id")
+                    .and_then(|s| s.parse().ok());
+
+                instance.input_ssm_instance_id.update(cx, |state, cx| {
+                    state.set_value(instance_id, window, cx);
+                });
+                instance.input_ssm_region.update(cx, |state, cx| {
+                    state.set_value(region, window, cx);
+                });
+                instance.input_ssm_remote_port.update(cx, |state, cx| {
+                    state.set_value(remote_port, window, cx);
+                });
+                instance.selected_ssm_auth_profile_id = auth_profile_id;
+                if instance.selected_auth_profile_id.is_none() {
+                    instance.selected_auth_profile_id = auth_profile_id;
+                }
             }
         }
 
@@ -1858,8 +1860,8 @@ impl ConnectionManagerWindow {
     // -----------------------------------------------------------------
 
     fn sync_access_tab_mode_from_state(&mut self) {
-        self.access_tab_mode = if matches!(self.access_kind, Some(AccessKind::Ssm { .. })) {
-            AccessTabMode::Ssm
+        self.access_tab_mode = if matches!(self.access_kind, Some(AccessKind::Managed { .. })) {
+            AccessTabMode::ManagedSsm
         } else if self.selected_proxy_id.is_some()
             || matches!(self.access_kind, Some(AccessKind::Proxy { .. }))
         {
@@ -1896,7 +1898,7 @@ impl ConnectionManagerWindow {
             AccessTabMode::Direct => 0,
             AccessTabMode::Ssh => 1,
             AccessTabMode::Proxy => 2,
-            AccessTabMode::Ssm => 3,
+            AccessTabMode::ManagedSsm => 3,
         }
     }
 
@@ -1908,7 +1910,7 @@ impl ConnectionManagerWindow {
         self.access_tab_mode = match event.index {
             1 => AccessTabMode::Ssh,
             2 => AccessTabMode::Proxy,
-            3 => AccessTabMode::Ssm,
+            3 => AccessTabMode::ManagedSsm,
             _ => AccessTabMode::Direct,
         };
 
@@ -1929,11 +1931,11 @@ impl ConnectionManagerWindow {
                 self.selected_ssh_tunnel_id = None;
                 self.access_kind = None;
             }
-            AccessTabMode::Ssm => {
+            AccessTabMode::ManagedSsm => {
                 self.ssh_enabled = false;
                 self.selected_ssh_tunnel_id = None;
                 self.selected_proxy_id = None;
-                self.access_kind = Some(self.collect_ssm_access_kind(cx));
+                self.access_kind = Some(self.collect_managed_access_kind(cx));
             }
         }
 
@@ -1942,24 +1944,30 @@ impl ConnectionManagerWindow {
 
     /// Returns true when SSM Tunnel is the currently selected access method.
     fn is_ssm_selected(&self) -> bool {
-        self.access_tab_mode == AccessTabMode::Ssm
+        self.access_tab_mode == AccessTabMode::ManagedSsm
     }
 
-    /// Collect the current SSM AccessKind from the inline fields.
-    fn collect_ssm_access_kind(&self, cx: &Context<Self>) -> AccessKind {
+    /// Collect the current managed (aws-ssm) AccessKind from the inline fields.
+    fn collect_managed_access_kind(&self, cx: &Context<Self>) -> AccessKind {
         let instance_id = self.input_ssm_instance_id.read(cx).value().to_string();
         let region = self.input_ssm_region.read(cx).value().to_string();
-        let port_str = self.input_ssm_remote_port.read(cx).value().to_string();
-        let remote_port = port_str.parse::<u16>().unwrap_or(5432);
+        let remote_port = self.input_ssm_remote_port.read(cx).value().to_string();
+
         let auth_profile_id = self
             .selected_ssm_auth_profile_id
             .or(self.selected_auth_profile_id);
 
-        AccessKind::Ssm {
-            instance_id,
-            region,
-            remote_port,
-            auth_profile_id,
+        let mut params = std::collections::HashMap::new();
+        params.insert("instance_id".to_string(), instance_id);
+        params.insert("region".to_string(), region);
+        params.insert("remote_port".to_string(), remote_port);
+        if let Some(id) = auth_profile_id {
+            params.insert("auth_profile_id".to_string(), id.to_string());
+        }
+
+        AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params,
         }
     }
 }

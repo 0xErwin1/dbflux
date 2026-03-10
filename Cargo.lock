@@ -2116,6 +2116,7 @@ dependencies = [
  "fuzzy-matcher",
  "gpui",
  "gpui-component",
+ "indexmap",
  "interprocess",
  "libc",
  "log",

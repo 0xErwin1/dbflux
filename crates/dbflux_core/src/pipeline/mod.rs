@@ -208,7 +208,7 @@ pub struct PipelineOutput {
 ///
 /// Driver connect and schema fetch are handled by the caller.
 pub async fn run_pipeline(
-    input: PipelineInput,
+    mut input: PipelineInput,
     state_tx: &StateSender,
 ) -> Result<PipelineOutput, PipelineError> {
     let cancel = &input.cancel;
@@ -224,6 +224,14 @@ pub async fn run_pipeline(
     .await?;
 
     cancel.check_pipeline()?;
+
+    if let Some(provider) = input.auth_provider.as_deref()
+        && let Some(profile) = input.auth_profile.as_ref()
+    {
+        provider
+            .register_value_providers(profile, auth_session.as_ref(), &mut input.resolver)
+            .map_err(PipelineError::resolve)?;
+    }
 
     // --- Stage 2: Resolve values ---
 
@@ -382,16 +390,17 @@ fn access_kind_label(kind: &AccessKind) -> String {
         AccessKind::Direct => "Direct".to_string(),
         AccessKind::Ssh { .. } => "SSH tunnel".to_string(),
         AccessKind::Proxy { .. } => "Proxy".to_string(),
-        AccessKind::Ssm { region, .. } => format!("SSM ({})", region),
+        AccessKind::Managed { provider, params } => {
+            let region = params.get("region").map(String::as_str).unwrap_or("?");
+            format!("{} ({})", provider, region)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::{
-        AuthProfile, AuthProfileConfig, AuthSession, AuthSessionState, ResolvedCredentials,
-    };
+    use crate::auth::{AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials};
     use crate::connection::profile::{ConnectionProfile, DbConfig};
     use crate::values::{SecretProvider, ValueCache, ValueRef};
     use secrecy::{ExposeSecret, SecretString};
@@ -492,13 +501,18 @@ mod tests {
         AuthProfile::new(
             "test-sso",
             "mock_auth",
-            AuthProfileConfig::AwsSso {
-                profile_name: "test".to_string(),
-                region: "us-east-1".to_string(),
-                sso_start_url: "https://example.awsapps.com/start".to_string(),
-                sso_account_id: "123456789012".to_string(),
-                sso_role_name: "TestRole".to_string(),
-            },
+            [
+                ("profile_name".to_string(), "test".to_string()),
+                ("region".to_string(), "us-east-1".to_string()),
+                (
+                    "sso_start_url".to_string(),
+                    "https://example.awsapps.com/start".to_string(),
+                ),
+                ("sso_account_id".to_string(), "123456789012".to_string()),
+                ("sso_role_name".to_string(), "TestRole".to_string()),
+            ]
+            .into_iter()
+            .collect(),
         )
     }
 

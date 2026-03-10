@@ -520,7 +520,7 @@ impl FormFocus {
                 Save => AccessMethod,
                 _ => AccessMethod,
             },
-            AccessTabMode::Ssm => match self {
+            AccessTabMode::ManagedSsm => match self {
                 AccessMethod => SsmInstanceId,
                 SsmInstanceId => SsmRegion,
                 SsmRegion | SsmRemotePort => TestConnection,
@@ -554,7 +554,7 @@ impl FormFocus {
                 Save => TestConnection,
                 _ => Save,
             },
-            AccessTabMode::Ssm => match self {
+            AccessTabMode::ManagedSsm => match self {
                 AccessMethod => Save,
                 SsmInstanceId => AccessMethod,
                 SsmRegion | SsmRemotePort => SsmInstanceId,
@@ -582,7 +582,7 @@ impl FormFocus {
         use FormFocus::*;
 
         match mode {
-            AccessTabMode::Ssm => match self {
+            AccessTabMode::ManagedSsm => match self {
                 SsmRemotePort => SsmRegion,
                 Save => TestConnection,
                 other => other,
@@ -611,7 +611,7 @@ impl FormFocus {
         use FormFocus::*;
 
         match mode {
-            AccessTabMode::Ssm => match self {
+            AccessTabMode::ManagedSsm => match self {
                 SsmRegion => SsmRemotePort,
                 TestConnection => Save,
                 other => other,
@@ -1216,7 +1216,7 @@ impl ConnectionManagerWindow {
                     AccessMethod => 0,
                     _ => 1,
                 },
-                AccessTabMode::Ssm => match self.form_focus {
+                AccessTabMode::ManagedSsm => match self.form_focus {
                     AccessMethod => 0,
                     SsmInstanceId | SsmRegion | SsmRemotePort => 1,
                     _ => 2,

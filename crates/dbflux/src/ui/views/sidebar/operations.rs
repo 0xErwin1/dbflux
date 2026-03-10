@@ -2109,35 +2109,6 @@ impl Sidebar {
             let pipeline_result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut input = input;
-
-                    #[cfg(feature = "aws")]
-                    {
-                        if let Some(auth_profile) = input.auth_profile.as_ref()
-                            && auth_profile.provider_id.starts_with("aws")
-                        {
-                            // Use the blocking variant — the GPUI background executor
-                            // has no Tokio runtime, so the async version panics.
-                            match dbflux_aws::value_providers_for_auth_profile_blocking(auth_profile) {
-                                Ok((secret_provider, parameter_provider)) => {
-                                    input
-                                        .resolver
-                                        .register_secret_provider(std::sync::Arc::new(secret_provider));
-                                    input
-                                        .resolver
-                                        .register_parameter_provider(std::sync::Arc::new(parameter_provider));
-                                }
-                                Err(err) => {
-                                    log::warn!(
-                                        "Failed to initialize AWS value providers for profile '{}': {}",
-                                        auth_profile.name,
-                                        err
-                                    );
-                                }
-                            }
-                        }
-                    }
-
                     dbflux_core::run_pipeline(input, &state_tx_for_pipeline).await
                 })
                 .await;

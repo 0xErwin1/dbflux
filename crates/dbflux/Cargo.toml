@@ -35,6 +35,7 @@ lsp-types = "0.97"
 bincode = "1"
 interprocess.workspace = true
 open = "5"
+indexmap = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

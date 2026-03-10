@@ -90,7 +90,7 @@ impl ConnectionManagerWindow {
             }
             AccessTabMode::Ssh => sections.extend(self.render_ssh_tab(cx)),
             AccessTabMode::Proxy => sections.extend(self.render_proxy_tab(cx)),
-            AccessTabMode::Ssm => sections.push(self.render_ssm_access_section(cx)),
+            AccessTabMode::ManagedSsm => sections.push(self.render_ssm_access_section(cx)),
         }
 
         sections

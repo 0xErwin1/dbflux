@@ -1,11 +1,10 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AppConfigStore, AuthProfileConfig, CancelToken, Connection, ConnectionHook, ConnectionHooks,
-    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore,
-    SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
-    SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
-    TaskSnapshot,
+    AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
+    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
+    GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
+    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
@@ -15,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
+
+use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 
 pub struct AppStateChanged;
 
@@ -62,6 +63,7 @@ pub struct AppState {
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
+    auth_provider_registry: AuthProviderRegistry,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -104,6 +106,16 @@ impl AppState {
             .history
             .set_max_entries(general_settings.max_history_entries);
 
+        let mut auth_provider_registry = AuthProviderRegistry::new();
+        #[cfg(feature = "aws")]
+        {
+            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
+            auth_provider_registry
+                .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
+            auth_provider_registry
+                .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
+        }
+
         Self {
             facade,
             settings_window: None,
@@ -112,6 +124,7 @@ impl AppState {
             driver_settings,
             hook_definitions,
             detached_hook_tasks: HashMap::new(),
+            auth_provider_registry,
             recent_files,
             scripts_directory,
             session_store,
@@ -1305,6 +1318,17 @@ impl AppState {
         self.hook_definitions = definitions;
     }
 
+    pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
+        &self.auth_provider_registry
+    }
+
+    pub fn auth_provider_by_id(
+        &self,
+        provider_id: &str,
+    ) -> Option<Arc<dyn dbflux_core::DynAuthProvider>> {
+        self.auth_provider_registry.get(provider_id)
+    }
+
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }
@@ -1343,9 +1367,9 @@ impl AppState {
             .access_kind
             .as_ref()
             .and_then(|kind| match kind {
-                dbflux_core::access::AccessKind::Ssm {
-                    auth_profile_id, ..
-                } => *auth_profile_id,
+                dbflux_core::access::AccessKind::Managed { params, .. } => {
+                    params.get("auth_profile_id").and_then(|s| s.parse().ok())
+                }
                 _ => None,
             })
             .or(profile.auth_profile_id);
@@ -1359,48 +1383,58 @@ impl AppState {
                 .cloned()
         });
 
-        if matches!(
+        let uses_managed_access = matches!(
             profile.access_kind,
-            Some(dbflux_core::access::AccessKind::Ssm { .. })
-        ) && auth_profile.is_none()
-        {
+            Some(dbflux_core::access::AccessKind::Managed { .. })
+        );
+        if uses_managed_access && auth_profile.is_none() {
             return Err(
-                "SSM access requires an auth profile. Select one in Access > SSM Auth Profile."
+                "Managed access requires an auth profile. Select one in Access > SSM Auth Profile."
                     .to_string(),
             );
         }
 
-        let uses_aws_value_sources = profile
-            .value_refs
-            .values()
-            .any(|value_ref| match value_ref {
-                dbflux_core::values::ValueRef::Secret { provider, .. }
-                | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
-                    provider.starts_with("aws")
-                }
-                _ => false,
-            });
+        let registered_auth_provider_ids: HashSet<&str> = self
+            .auth_provider_registry
+            .providers()
+            .map(|provider| provider.provider_id())
+            .collect();
 
-        if uses_aws_value_sources && auth_profile.is_none() {
+        let uses_registered_auth_value_sources =
+            profile
+                .value_refs
+                .values()
+                .any(|value_ref| match value_ref {
+                    dbflux_core::values::ValueRef::Secret { provider, .. }
+                    | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
+                        registered_auth_provider_ids.contains(provider.as_str())
+                    }
+                    _ => false,
+                });
+
+        if uses_registered_auth_value_sources && auth_profile.is_none() {
             return Err(
-                "AWS value sources (Secret/Parameter) require an auth profile. Select one before connecting."
+                "Value sources requiring auth providers need an auth profile. Select one before connecting."
                     .to_string(),
             );
         }
 
-        #[cfg(feature = "aws")]
         let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> =
-            auth_profile.as_ref().and_then(|profile| {
-                if profile.provider_id.starts_with("aws") {
-                    Some(Box::new(dbflux_aws::AwsAuthProvider::new())
-                        as Box<dyn dbflux_core::auth::DynAuthProvider>)
-                } else {
-                    None
-                }
-            });
+            if let Some(auth_profile) = auth_profile.as_ref() {
+                let provider = self
+                    .auth_provider_registry
+                    .get(&auth_profile.provider_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Auth provider '{}' is not available",
+                            auth_profile.provider_id
+                        )
+                    })?;
 
-        #[cfg(not(feature = "aws"))]
-        let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> = None;
+                Some(RegistryAuthProviderWrapper::boxed(provider))
+            } else {
+                None
+            };
 
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),
@@ -1410,13 +1444,7 @@ impl AppState {
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile
             .as_ref()
-            .and_then(|profile| match &profile.config {
-                AuthProfileConfig::AwsSso { profile_name, .. }
-                | AuthProfileConfig::AwsSharedCredentials { profile_name, .. } => {
-                    Some(profile_name.clone())
-                }
-                AuthProfileConfig::AwsStaticCredentials { .. } => None,
-            });
+            .and_then(|p| p.fields.get("profile_name").cloned());
 
         let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
             Arc::new(crate::access_manager::AppAccessManager::new(
@@ -1448,10 +1476,14 @@ impl EventEmitter<AppStateChanged> for AppState {}
 #[cfg(test)]
 mod tests {
     use super::AppState;
-    use dbflux_core::{DbDriver, DbKind, FormValues, GeneralSettings, RefreshPolicySetting};
+    use dbflux_core::{
+        AuthProfile, CancelToken, DbDriver, DbKind, FormValues, GeneralSettings,
+        RefreshPolicySetting,
+    };
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn test_state(general_settings: GeneralSettings) -> AppState {
         let fake = FakeDriver::new(DbKind::SQLite);
@@ -1719,5 +1751,29 @@ mod tests {
 
         assert!(!state.driver_overrides().contains_key("builtin:redis"));
         assert!(!state.driver_settings().contains_key("builtin:redis"));
+    }
+
+    #[test]
+    fn build_pipeline_input_fails_for_unknown_auth_provider() {
+        let mut state = test_state(GeneralSettings::default());
+
+        let auth_profile_id = Uuid::new_v4();
+        state.add_auth_profile(AuthProfile {
+            id: auth_profile_id,
+            name: "Unknown Provider Profile".to_string(),
+            provider_id: "unknown-provider".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+        });
+
+        let mut profile = fake_profile(&state);
+        profile.auth_profile_id = Some(auth_profile_id);
+
+        let error = match state.build_pipeline_input_for_profile(profile, CancelToken::new()) {
+            Ok(_) => panic!("unknown provider must fail before pipeline start"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "Auth provider 'unknown-provider' is not available");
     }
 }

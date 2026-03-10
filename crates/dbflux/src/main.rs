@@ -4,6 +4,7 @@
 mod access_manager;
 mod app;
 mod assets;
+mod auth_provider_registry;
 mod cli;
 mod hook_executor;
 mod ipc_server;

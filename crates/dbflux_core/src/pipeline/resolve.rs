@@ -58,24 +58,17 @@ fn patch_access_kind_field(
     let val = value.expose_secret();
 
     match access_kind {
-        crate::access::AccessKind::Ssm {
-            instance_id,
-            region,
-            remote_port,
-            ..
-        } => match field {
+        crate::access::AccessKind::Managed { params, .. } => match field {
             "ssm_instance_id" => {
-                *instance_id = val.to_string();
+                params.insert("instance_id".to_string(), val.to_string());
                 true
             }
             "ssm_region" => {
-                *region = val.to_string();
+                params.insert("region".to_string(), val.to_string());
                 true
             }
             "ssm_remote_port" => {
-                if let Ok(parsed) = val.parse::<u16>() {
-                    *remote_port = parsed;
-                }
+                params.insert("remote_port".to_string(), val.to_string());
                 true
             }
             _ => false,
@@ -284,12 +277,15 @@ mod tests {
         refs.insert("ssm_region".to_string(), ValueRef::literal("us-east-1"));
         refs.insert("ssm_remote_port".to_string(), ValueRef::literal("15432"));
 
+        let mut params = HashMap::new();
+        params.insert("instance_id".to_string(), "i-old".to_string());
+        params.insert("region".to_string(), "eu-west-1".to_string());
+        params.insert("remote_port".to_string(), "5432".to_string());
+
         let mut profile = test_profile_with_refs(refs);
-        profile.access_kind = Some(crate::access::AccessKind::Ssm {
-            instance_id: "i-old".to_string(),
-            region: "eu-west-1".to_string(),
-            remote_port: 5432,
-            auth_profile_id: None,
+        profile.access_kind = Some(crate::access::AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params,
         });
 
         let resolver = test_resolver();
@@ -300,17 +296,13 @@ mod tests {
             .unwrap();
 
         match patched.access_kind {
-            Some(crate::access::AccessKind::Ssm {
-                instance_id,
-                region,
-                remote_port,
-                ..
-            }) => {
-                assert_eq!(instance_id, "i-abc123");
-                assert_eq!(region, "us-east-1");
-                assert_eq!(remote_port, 15432);
+            Some(crate::access::AccessKind::Managed { provider, params }) => {
+                assert_eq!(provider, "aws-ssm");
+                assert_eq!(params["instance_id"], "i-abc123");
+                assert_eq!(params["region"], "us-east-1");
+                assert_eq!(params["remote_port"], "15432");
             }
-            other => panic!("expected AccessKind::Ssm, got {:?}", other),
+            other => panic!("expected AccessKind::Managed, got {:?}", other),
         }
     }
 }

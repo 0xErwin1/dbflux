@@ -18,8 +18,8 @@ pub mod values;
 pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use auth::{
-    AuthProfile, AuthProfileConfig, AuthProfileSummary, AuthProvider, AuthSession,
-    AuthSessionState, DynAuthProvider, ResolvedCredentials,
+    AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSession, AuthSessionState,
+    DynAuthProvider, ImportableProfile, ResolvedCredentials,
 };
 
 pub use config::{

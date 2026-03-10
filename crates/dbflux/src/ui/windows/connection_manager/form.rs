@@ -148,9 +148,14 @@ impl ConnectionManagerWindow {
                 .find(|profile| profile.id == auth_profile_id);
 
             if let Some(profile) = selected_profile {
-                if !profile.provider_id.starts_with("aws") {
+                if self
+                    .app_state
+                    .read(cx)
+                    .auth_provider_by_id(&profile.provider_id)
+                    .is_none()
+                {
                     self.validation_errors.push(format!(
-                        "Selected Auth Profile '{}' cannot resolve AWS Secret/Parameter value sources.",
+                        "Selected Auth Profile '{}' has no registered provider for dynamic value sources.",
                         profile.name
                     ));
                 }
@@ -293,7 +298,7 @@ impl ConnectionManagerWindow {
 
         // Collect access kind — update SSM fields from inputs if SSM is selected
         let access_kind = if self.is_ssm_selected() {
-            Some(self.collect_ssm_access_kind(cx))
+            Some(self.collect_managed_access_kind(cx))
         } else {
             self.access_kind.clone()
         };
@@ -463,44 +468,12 @@ impl ConnectionManagerWindow {
             };
 
             cx.background_executor().spawn(async move {
-                let mut input = pipeline_input;
-
-                #[cfg(feature = "aws")]
-                {
-                    if let Some(auth_profile) = input.auth_profile.as_ref()
-                        && auth_profile.provider_id.starts_with("aws")
-                    {
-                        // Use the blocking variant — the GPUI background executor
-                        // has no Tokio runtime, so the async version panics.
-                        match dbflux_aws::value_providers_for_auth_profile_blocking(auth_profile) {
-                            Ok((secret_provider, parameter_provider)) => {
-                                input
-                                    .resolver
-                                    .register_secret_provider(std::sync::Arc::new(secret_provider));
-                                input
-                                    .resolver
-                                    .register_parameter_provider(std::sync::Arc::new(
-                                        parameter_provider,
-                                    ));
-                            }
-                            Err(error) => {
-                                log::warn!(
-                                    "Failed to initialize AWS value providers for profile '{}': {}",
-                                    auth_profile.name,
-                                    error
-                                );
-                            }
-                        }
-                    }
-                }
-
                 let (state_tx, _state_rx) = dbflux_core::pipeline_state_channel();
-                let pipeline_output =
-                    dbflux_core::run_pipeline(input, &state_tx)
-                        .await
-                        .map_err(|error| {
-                            format!("Pipeline stage '{}': {}", error.stage, error.source)
-                        })?;
+                let pipeline_output = dbflux_core::run_pipeline(pipeline_input, &state_tx)
+                    .await
+                    .map_err(|error| {
+                        format!("Pipeline stage '{}': {}", error.stage, error.source)
+                    })?;
 
                 let mut profile = pipeline_output.resolved_profile;
                 if pipeline_output.access_handle.is_tunneled() {

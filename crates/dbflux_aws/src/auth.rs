@@ -3,8 +3,9 @@
 ///
 /// SSO session validation reads cached tokens from `~/.aws/sso/cache/`
 /// using the SHA-1 hash of the `sso_start_url` as the filename.
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -15,10 +16,14 @@ use aws_sdk_sts::config::ProvideCredentials;
 
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthProfile, AuthProfileConfig, AuthSession, AuthSessionState, ResolvedCredentials, UrlCallback,
+    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ImportableProfile,
+    ResolvedCredentials, UrlCallback,
 };
+use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab};
 
 use crate::config::CachedAwsConfig;
+use crate::parameters::AwsSsmParameterProvider;
+use crate::secrets::AwsSecretsManagerProvider;
 
 const SSO_EXPIRY_BUFFER_SECS: i64 = 300;
 const SSO_LOGIN_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -375,14 +380,14 @@ pub fn wait_for_sso_session_blocking(
     }
 }
 
-pub struct AwsAuthProvider {
-    config_cache: std::sync::Mutex<CachedAwsConfig>,
+pub struct AwsSsoAuthProvider {
+    config_cache: Mutex<CachedAwsConfig>,
 }
 
-impl AwsAuthProvider {
+impl AwsSsoAuthProvider {
     pub fn new() -> Self {
         Self {
-            config_cache: std::sync::Mutex::new(CachedAwsConfig::new()),
+            config_cache: Mutex::new(CachedAwsConfig::new()),
         }
     }
 
@@ -394,48 +399,198 @@ impl AwsAuthProvider {
     }
 }
 
-impl Default for AwsAuthProvider {
+impl Default for AwsSsoAuthProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
+pub struct AwsSharedCredentialsAuthProvider;
+
+impl AwsSharedCredentialsAuthProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for AwsSharedCredentialsAuthProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct AwsStaticCredentialsAuthProvider;
+
+impl AwsStaticCredentialsAuthProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for AwsStaticCredentialsAuthProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef {
+    FormFieldDef {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind: FormFieldKind::Text,
+        placeholder: placeholder.to_string(),
+        required: true,
+        default_value: String::new(),
+        enabled_when_checked: None,
+        enabled_when_unchecked: None,
+    }
+}
+
+fn build_aws_sso_form() -> AuthFormDef {
+    AuthFormDef {
+        tabs: vec![FormTab {
+            id: "main".to_string(),
+            label: "Main".to_string(),
+            sections: vec![FormSection {
+                title: "AWS SSO".to_string(),
+                fields: vec![
+                    required_text_field("profile_name", "AWS Profile Name", "dev"),
+                    required_text_field(
+                        "sso_start_url",
+                        "SSO Start URL",
+                        "https://my-org.awsapps.com/start",
+                    ),
+                    required_text_field("region", "Region", "us-east-1"),
+                    required_text_field("sso_account_id", "Account ID", ""),
+                    required_text_field("sso_role_name", "Role Name", ""),
+                ],
+            }],
+        }],
+    }
+}
+
+fn build_aws_shared_credentials_form() -> AuthFormDef {
+    AuthFormDef {
+        tabs: vec![FormTab {
+            id: "main".to_string(),
+            label: "Main".to_string(),
+            sections: vec![FormSection {
+                title: "AWS Shared Credentials".to_string(),
+                fields: vec![
+                    required_text_field("profile_name", "AWS Profile Name", "default"),
+                    required_text_field("region", "Region", "us-east-1"),
+                ],
+            }],
+        }],
+    }
+}
+
+fn build_aws_static_credentials_form() -> AuthFormDef {
+    AuthFormDef {
+        tabs: vec![FormTab {
+            id: "main".to_string(),
+            label: "Main".to_string(),
+            sections: vec![FormSection {
+                title: "AWS Static Credentials".to_string(),
+                fields: vec![required_text_field("region", "Region", "us-east-1")],
+            }],
+        }],
+    }
+}
+
+fn non_expiring_login(profile: &AuthProfile, provider_id: &str, url_callback: UrlCallback) -> AuthSession {
+    url_callback(None);
+
+    AuthSession {
+        provider_id: provider_id.to_string(),
+        profile_id: profile.id,
+        expires_at: None,
+        data: None,
+    }
+}
+
+fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, &str) {
+    let profile_name = profile.fields.get("profile_name").map(String::as_str);
+    let region = profile
+        .fields
+        .get("region")
+        .map(String::as_str)
+        .unwrap_or("us-east-1");
+
+    (profile_name, region)
+}
+
+fn build_aws_value_providers_blocking(
+    profile: &AuthProfile,
+) -> Result<(AwsSecretsManagerProvider, AwsSsmParameterProvider), DbError> {
+    let (profile_name, region) = profile_name_and_region(profile);
+    let profile_name = profile_name.map(ToOwned::to_owned);
+    let region = region.to_string();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|err| {
+            DbError::ValueResolutionFailed(format!(
+                "Failed to create Tokio runtime for AWS provider init: {}",
+                err
+            ))
+        })?;
+
+    runtime.block_on(async move {
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new(region));
+
+        if let Some(name) = profile_name {
+            loader = loader.profile_name(name);
+        }
+
+        let sdk_config = loader.load().await;
+
+        Ok((
+            AwsSecretsManagerProvider::new(sdk_config.clone()),
+            AwsSsmParameterProvider::new(sdk_config),
+        ))
+    })
+}
+
 #[async_trait::async_trait]
-impl dbflux_core::auth::DynAuthProvider for AwsAuthProvider {
+impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     fn provider_id(&self) -> &'static str {
-        "aws"
+        "aws-sso"
     }
 
     fn display_name(&self) -> &'static str {
-        "AWS"
+        "AWS SSO"
+    }
+
+    fn form_def(&self) -> &'static AuthFormDef {
+        static FORM: OnceLock<AuthFormDef> = OnceLock::new();
+        FORM.get_or_init(build_aws_sso_form)
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        match &profile.config {
-            AuthProfileConfig::AwsSso {
-                profile_name,
-                sso_start_url,
-                ..
-            } => {
-                let Some(url) = resolve_sso_start_url(profile_name, sso_start_url) else {
-                    // No URL available — we have no way to check the cache.
-                    // Treat as LoginRequired so the user gets prompted.
-                    log::debug!(
-                        "No sso_start_url for profile '{}', treating as LoginRequired",
-                        profile_name
-                    );
-                    return Ok(AuthSessionState::LoginRequired);
-                };
+        let profile_name = profile
+            .fields
+            .get("profile_name")
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(String::as_str)
+            .unwrap_or("");
 
-                validate_sso_session(&url)
-            }
-            AuthProfileConfig::AwsSharedCredentials { .. } => {
-                Ok(AuthSessionState::Valid { expires_at: None })
-            }
-            AuthProfileConfig::AwsStaticCredentials { .. } => {
-                Ok(AuthSessionState::Valid { expires_at: None })
-            }
-        }
+        let Some(url) = resolve_sso_start_url(profile_name, sso_start_url) else {
+            log::debug!(
+                "No sso_start_url for profile '{}', treating as LoginRequired",
+                profile_name
+            );
+            return Ok(AuthSessionState::LoginRequired);
+        };
+
+        validate_sso_session(&url)
     }
 
     async fn login(
@@ -443,39 +598,212 @@ impl dbflux_core::auth::DynAuthProvider for AwsAuthProvider {
         profile: &AuthProfile,
         url_callback: UrlCallback,
     ) -> Result<AuthSession, DbError> {
-        match &profile.config {
-            AuthProfileConfig::AwsSso {
-                profile_name,
-                region,
-                sso_start_url,
-                sso_account_id,
-                sso_role_name,
-            } => {
-                // Ensure ~/.aws/config has a complete profile block so that
-                // `aws sso login` doesn't prompt the user to pick an account/role.
-                let sso_config = SsoProfileConfig {
-                    profile_name: profile_name.clone(),
-                    region: region.clone(),
-                    sso_start_url: sso_start_url.clone(),
-                    sso_account_id: sso_account_id.clone(),
-                    sso_role_name: sso_role_name.clone(),
-                };
-                if let Err(err) = ensure_aws_profile_configured(&sso_config) {
-                    log::warn!("Could not write AWS profile config: {}", err);
-                }
-                sso_login_with_url(profile, profile_name, sso_start_url, url_callback).await
-            }
-            AuthProfileConfig::AwsSharedCredentials { .. }
-            | AuthProfileConfig::AwsStaticCredentials { .. } => {
-                url_callback(None);
-                Ok(AuthSession {
-                    provider_id: "aws".to_string(),
-                    profile_id: profile.id,
-                    expires_at: None,
-                    data: None,
-                })
-            }
+        let profile_name = profile
+            .fields
+            .get("profile_name")
+            .cloned()
+            .unwrap_or_default();
+        let region = profile.fields.get("region").cloned().unwrap_or_default();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .cloned()
+            .unwrap_or_default();
+        let sso_account_id = profile
+            .fields
+            .get("sso_account_id")
+            .cloned()
+            .unwrap_or_default();
+        let sso_role_name = profile
+            .fields
+            .get("sso_role_name")
+            .cloned()
+            .unwrap_or_default();
+
+        let sso_config = SsoProfileConfig {
+            profile_name: profile_name.clone(),
+            region,
+            sso_start_url: sso_start_url.clone(),
+            sso_account_id,
+            sso_role_name,
+        };
+        if let Err(err) = ensure_aws_profile_configured(&sso_config) {
+            log::warn!("Could not write AWS profile config: {}", err);
         }
+
+        sso_login_with_url(profile, &profile_name, &sso_start_url, url_callback).await
+    }
+
+    async fn resolve_credentials(
+        &self,
+        profile: &AuthProfile,
+    ) -> Result<ResolvedCredentials, DbError> {
+        resolve_aws_credentials(profile).await
+    }
+
+    fn register_value_providers(
+        &self,
+        profile: &AuthProfile,
+        _session: Option<&AuthSession>,
+        resolver: &mut dbflux_core::values::CompositeValueResolver,
+    ) -> Result<(), DbError> {
+        let (secret_provider, param_provider) = build_aws_value_providers_blocking(profile)?;
+
+        resolver.register_secret_provider(Arc::new(secret_provider));
+        resolver.register_parameter_provider(Arc::new(param_provider));
+
+        Ok(())
+    }
+
+    fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+
+        cache
+            .profiles()
+            .iter()
+            .filter(|profile| profile.is_sso)
+            .map(|profile| {
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), profile.name.clone());
+
+                if let Some(region) = profile.region.clone() {
+                    fields.insert("region".to_string(), region);
+                }
+
+                if let Some(sso_start_url) = profile.sso_start_url.clone() {
+                    fields.insert("sso_start_url".to_string(), sso_start_url);
+                }
+
+                ImportableProfile {
+                    display_name: profile.name.clone(),
+                    provider_id: "aws-sso".to_string(),
+                    fields,
+                }
+            })
+            .collect()
+    }
+
+    fn after_profile_saved(&self, profile: &AuthProfile) {
+        let Some(profile_name) = profile.fields.get("profile_name") else {
+            return;
+        };
+        let Some(sso_start_url) = profile.fields.get("sso_start_url") else {
+            return;
+        };
+        let Some(region) = profile.fields.get("region") else {
+            return;
+        };
+        let Some(sso_account_id) = profile.fields.get("sso_account_id") else {
+            return;
+        };
+        let Some(sso_role_name) = profile.fields.get("sso_role_name") else {
+            return;
+        };
+
+        if let Err(err) = crate::config::append_aws_sso_profile(
+            profile_name,
+            sso_start_url,
+            region,
+            sso_account_id,
+            sso_role_name,
+            region,
+        ) {
+            log::warn!("Failed to append AWS SSO profile to config: {}", err);
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
+    fn provider_id(&self) -> &'static str {
+        "aws-shared-credentials"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "AWS Shared Credentials"
+    }
+
+    fn form_def(&self) -> &'static AuthFormDef {
+        static FORM: OnceLock<AuthFormDef> = OnceLock::new();
+        FORM.get_or_init(build_aws_shared_credentials_form)
+    }
+
+    async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        Ok(AuthSessionState::Valid { expires_at: None })
+    }
+
+    async fn login(
+        &self,
+        profile: &AuthProfile,
+        url_callback: UrlCallback,
+    ) -> Result<AuthSession, DbError> {
+        Ok(non_expiring_login(profile, self.provider_id(), url_callback))
+    }
+
+    async fn resolve_credentials(
+        &self,
+        profile: &AuthProfile,
+    ) -> Result<ResolvedCredentials, DbError> {
+        resolve_aws_credentials(profile).await
+    }
+
+    fn register_value_providers(
+        &self,
+        profile: &AuthProfile,
+        _session: Option<&AuthSession>,
+        resolver: &mut dbflux_core::values::CompositeValueResolver,
+    ) -> Result<(), DbError> {
+        let (secret_provider, param_provider) = build_aws_value_providers_blocking(profile)?;
+
+        resolver.register_secret_provider(Arc::new(secret_provider));
+        resolver.register_parameter_provider(Arc::new(param_provider));
+
+        Ok(())
+    }
+
+    fn after_profile_saved(&self, profile: &AuthProfile) {
+        let Some(profile_name) = profile.fields.get("profile_name") else {
+            return;
+        };
+        let Some(region) = profile.fields.get("region") else {
+            return;
+        };
+
+        if let Err(err) = crate::config::append_aws_shared_credentials_profile(profile_name, region)
+        {
+            log::warn!(
+                "Failed to append AWS shared credentials profile to config: {}",
+                err
+            );
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
+    fn provider_id(&self) -> &'static str {
+        "aws-static-credentials"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "AWS Static Credentials"
+    }
+
+    fn form_def(&self) -> &'static AuthFormDef {
+        static FORM: OnceLock<AuthFormDef> = OnceLock::new();
+        FORM.get_or_init(build_aws_static_credentials_form)
+    }
+
+    async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        Ok(AuthSessionState::Valid { expires_at: None })
+    }
+
+    async fn login(
+        &self,
+        profile: &AuthProfile,
+        url_callback: UrlCallback,
+    ) -> Result<AuthSession, DbError> {
+        Ok(non_expiring_login(profile, self.provider_id(), url_callback))
     }
 
     async fn resolve_credentials(
@@ -571,18 +899,12 @@ pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionSta
 /// is safe to call from async contexts without an active Tokio reactor
 /// (e.g. the GPUI background executor).
 async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCredentials, DbError> {
-    let profile_name = match &profile.config {
-        AuthProfileConfig::AwsSso { profile_name, .. }
-        | AuthProfileConfig::AwsSharedCredentials { profile_name, .. } => {
-            Some(profile_name.clone())
-        }
-        AuthProfileConfig::AwsStaticCredentials { .. } => None,
-    };
-    let region = match &profile.config {
-        AuthProfileConfig::AwsSso { region, .. }
-        | AuthProfileConfig::AwsSharedCredentials { region, .. }
-        | AuthProfileConfig::AwsStaticCredentials { region } => region.clone(),
-    };
+    let profile_name = profile.fields.get("profile_name").cloned();
+    let region = profile
+        .fields
+        .get("region")
+        .cloned()
+        .unwrap_or_else(|| "us-east-1".to_string());
 
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -653,25 +975,32 @@ fn resolve_aws_credentials_blocking(
                 ))
             })?;
 
-        let mut resolved = ResolvedCredentials {
-            access_key_id: Some(creds.access_key_id().to_string()),
-            secret_access_key: Some(SecretString::from(creds.secret_access_key().to_string())),
-            session_token: creds
-                .session_token()
-                .map(|t| SecretString::from(t.to_string())),
-            region: Some(region),
-            extra: std::collections::HashMap::new(),
-            provider_data: Some(Arc::new(sdk_config)),
-        };
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("access_key_id".to_string(), creds.access_key_id().to_string());
+        fields.insert("region".to_string(), region);
+
+        let mut secret_fields = std::collections::HashMap::new();
+        secret_fields.insert(
+            "secret_access_key".to_string(),
+            SecretString::from(creds.secret_access_key().to_string()),
+        );
+        if let Some(token) = creds.session_token() {
+            secret_fields.insert(
+                "session_token".to_string(),
+                SecretString::from(token.to_string()),
+            );
+        }
 
         if let Some(expiry) = creds.expiry() {
             let dt = chrono::DateTime::<Utc>::from(expiry);
-            resolved
-                .extra
-                .insert("expires_at".to_string(), dt.to_rfc3339());
+            fields.insert("expires_at".to_string(), dt.to_rfc3339());
         }
 
-        Ok(resolved)
+        Ok(ResolvedCredentials {
+            fields,
+            secret_fields,
+            provider_data: Some(Arc::new(sdk_config)),
+        })
     })
 }
 
@@ -792,7 +1121,7 @@ async fn sso_login_with_url(
 
         // Poll the token cache until the session appears, times out, or is aborted.
         let session =
-            wait_for_sso_session_blocking(profile_id, "aws", &start_url, &handle.abort_flag);
+            wait_for_sso_session_blocking(profile_id, "aws-sso", &start_url, &handle.abort_flag);
         let _ = result_tx.send(session);
     });
 
@@ -916,7 +1245,7 @@ pub fn login_sso_blocking(
 
     // No external abort signal for the Settings UI path — use a flag that
     // is never set so the poll runs to completion or timeout.
-    wait_for_sso_session_blocking(profile_id, "aws", sso_start_url, &handle.abort_flag)
+    wait_for_sso_session_blocking(profile_id, "aws-sso", sso_start_url, &handle.abort_flag)
 }
 
 /// AWS SSO tokens use ISO 8601 / RFC 3339 format for `expiresAt`, but
@@ -1000,16 +1329,17 @@ mod tests {
 
     #[test]
     fn shared_credentials_always_valid() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("profile_name".to_string(), "default".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
         let profile = AuthProfile::new(
             "test-shared",
-            "aws",
-            AuthProfileConfig::AwsSharedCredentials {
-                profile_name: "default".to_string(),
-                region: "us-east-1".to_string(),
-            },
+            "aws-shared-credentials",
+            fields,
         );
 
-        let provider = AwsAuthProvider::new();
+        let provider = AwsSharedCredentialsAuthProvider::new();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

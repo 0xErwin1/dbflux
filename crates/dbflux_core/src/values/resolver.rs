@@ -265,36 +265,18 @@ fn extract_json_field(
 }
 
 fn resolve_auth_field(credentials: &ResolvedCredentials, field: &str) -> Result<String, DbError> {
-    match field {
-        "access_key_id" => credentials
-            .access_key_id
-            .clone()
-            .ok_or_else(|| DbError::value_resolution_failed("access_key_id not available")),
-
-        "secret_access_key" => credentials
-            .secret_access_key
-            .as_ref()
-            .map(|s| s.expose_secret().to_string())
-            .ok_or_else(|| DbError::value_resolution_failed("secret_access_key not available")),
-
-        "session_token" => credentials
-            .session_token
-            .as_ref()
-            .map(|s| s.expose_secret().to_string())
-            .ok_or_else(|| DbError::value_resolution_failed("session_token not available")),
-
-        "region" => credentials
-            .region
-            .clone()
-            .ok_or_else(|| DbError::value_resolution_failed("region not available")),
-
-        other => credentials.extra.get(other).cloned().ok_or_else(|| {
-            DbError::value_resolution_failed(format!(
-                "Auth credential field '{}' not available",
-                other
-            ))
-        }),
+    if let Some(value) = credentials.fields.get(field) {
+        return Ok(value.clone());
     }
+
+    if let Some(secret) = credentials.secret_fields.get(field) {
+        return Ok(secret.expose_secret().to_string());
+    }
+
+    Err(DbError::value_resolution_failed(format!(
+        "Auth credential field '{}' is not available from the resolved credentials",
+        field
+    )))
 }
 
 #[cfg(test)]
@@ -467,8 +449,12 @@ mod tests {
     async fn resolve_auth_field_with_credentials() {
         let resolver = test_resolver();
         let creds = ResolvedCredentials {
-            access_key_id: Some("AKIATEST".to_string()),
-            region: Some("us-east-1".to_string()),
+            fields: [
+                ("access_key_id".to_string(), "AKIATEST".to_string()),
+                ("region".to_string(), "us-east-1".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let ctx = ResolveContext {
