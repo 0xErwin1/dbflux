@@ -3,8 +3,8 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, anchored,
-    deferred, div, point, px,
+    ParentElement, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
 
@@ -55,11 +55,14 @@ pub struct Dropdown {
     placeholder: SharedString,
     focus_ring_color: Option<Hsla>,
     compact_trigger: bool,
+    menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
 
 #[allow(dead_code)]
 impl Dropdown {
+    const PAGE_STEP: usize = 8;
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
@@ -71,6 +74,7 @@ impl Dropdown {
             placeholder: "Select".into(),
             focus_ring_color: None,
             compact_trigger: false,
+            menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
         }
     }
@@ -122,6 +126,9 @@ impl Dropdown {
         if let Some(idx) = index {
             if idx < self.items.len() {
                 self.selected_index = Some(idx);
+                if self.open {
+                    self.menu_scroll_handle.scroll_to_item(idx);
+                }
                 cx.notify();
             }
         } else {
@@ -157,6 +164,10 @@ impl Dropdown {
         self.open = !self.open;
         if self.open {
             self.highlighted_index = self.selected_index.or(Some(0));
+
+            if let Some(index) = self.highlighted_index {
+                self.menu_scroll_handle.scroll_to_item(index);
+            }
         }
         cx.notify();
     }
@@ -165,6 +176,11 @@ impl Dropdown {
         if !self.disabled && !self.items.is_empty() {
             self.open = true;
             self.highlighted_index = self.selected_index.or(Some(0));
+
+            if let Some(index) = self.highlighted_index {
+                self.menu_scroll_handle.scroll_to_item(index);
+            }
+
             cx.notify();
         }
     }
@@ -184,6 +200,9 @@ impl Dropdown {
             .map(|i| (i + 1) % self.items.len())
             .unwrap_or(0);
         self.highlighted_index = Some(next_index);
+        if self.open {
+            self.menu_scroll_handle.scroll_to_item(next_index);
+        }
         cx.notify();
     }
 
@@ -196,7 +215,56 @@ impl Dropdown {
             .map(|i| if i == 0 { self.items.len() - 1 } else { i - 1 })
             .unwrap_or(self.items.len() - 1);
         self.highlighted_index = Some(prev_index);
+        if self.open {
+            self.menu_scroll_handle.scroll_to_item(prev_index);
+        }
         cx.notify();
+    }
+
+    pub fn select_next_page(&mut self, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        let current = self.highlighted_index.unwrap_or(0);
+        let next_index = (current + Self::PAGE_STEP).min(self.items.len() - 1);
+        self.highlighted_index = Some(next_index);
+
+        if self.open {
+            self.menu_scroll_handle.scroll_to_item(next_index);
+        }
+
+        cx.notify();
+    }
+
+    pub fn select_prev_page(&mut self, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        let current = self.highlighted_index.unwrap_or(0);
+        let prev_index = current.saturating_sub(Self::PAGE_STEP);
+        self.highlighted_index = Some(prev_index);
+
+        if self.open {
+            self.menu_scroll_handle.scroll_to_item(prev_index);
+        }
+
+        cx.notify();
+    }
+
+    fn handle_menu_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = event.delta.pixel_delta(px(1.0));
+        if delta.y < px(0.0) {
+            self.select_next_item(cx);
+        } else if delta.y > px(0.0) {
+            self.select_prev_item(cx);
+        }
     }
 
     pub fn accept_selection(&mut self, cx: &mut Context<Self>) {
@@ -295,13 +363,17 @@ impl Dropdown {
             .collect();
 
         let menu = div()
+            .id("dropdown-menu")
             .min_w_full()
+            .max_h(px(220.0))
             .p_1()
             .border_1()
             .border_color(theme.border)
             .bg(theme.background)
             .rounded_md()
-            .overflow_hidden()
+            .overflow_scroll()
+            .track_scroll(&self.menu_scroll_handle)
+            .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
             .shadow_lg()
             .occlude()
             .children(items);

@@ -1,16 +1,26 @@
-use super::{SettingsFocus, SettingsSection, SettingsWindow};
+use super::{SettingsCoordinator, SettingsFocus, SettingsSectionId};
 use crate::ui::components::tree_nav::{TreeNav, TreeNavNode};
 use crate::ui::icons::AppIcon;
 use dbflux_core::{UiState, UiStateStore};
 use gpui::SharedString;
 use std::collections::HashSet;
 
-impl SettingsWindow {
+impl SettingsCoordinator {
     #[allow(clippy::result_large_err)]
     pub(super) fn build_sidebar_tree() -> TreeNav {
         let nodes = vec![
             TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
             TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::group(
+                "security",
+                "Security",
+                Some(AppIcon::Lock),
+                vec![TreeNavNode::leaf(
+                    "auth-profiles",
+                    "Auth Profiles",
+                    Some(AppIcon::KeyRound),
+                )],
+            ),
             TreeNavNode::group(
                 "network",
                 "Network",
@@ -38,10 +48,13 @@ impl SettingsWindow {
         ];
 
         let ui_state = UiStateStore::new()
-            .and_then(|s| s.load())
+            .and_then(|store| store.load())
             .unwrap_or_default();
 
         let mut expanded = HashSet::new();
+        if !ui_state.settings_collapsed_security {
+            expanded.insert(SharedString::from("security"));
+        }
         if !ui_state.settings_collapsed_network {
             expanded.insert(SharedString::from("network"));
         }
@@ -52,65 +65,60 @@ impl SettingsWindow {
         TreeNav::new(nodes, expanded)
     }
 
-    pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSection> {
+    pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
-            "general" => Some(SettingsSection::General),
-            "keybindings" => Some(SettingsSection::Keybindings),
-            "proxies" => Some(SettingsSection::Proxies),
-            "ssh-tunnels" => Some(SettingsSection::SshTunnels),
-            "services" => Some(SettingsSection::Services),
-            "hooks" => Some(SettingsSection::Hooks),
-            "drivers" => Some(SettingsSection::Drivers),
-            "about" => Some(SettingsSection::About),
+            "general" => Some(SettingsSectionId::General),
+            "keybindings" => Some(SettingsSectionId::Keybindings),
+            "proxies" => Some(SettingsSectionId::Proxies),
+            "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
+            "auth-profiles" => Some(SettingsSectionId::AuthProfiles),
+            "services" => Some(SettingsSectionId::Services),
+            "hooks" => Some(SettingsSectionId::Hooks),
+            "drivers" => Some(SettingsSectionId::Drivers),
+            "about" => Some(SettingsSectionId::About),
             _ => None,
         }
     }
 
-    pub(super) fn tree_id_for_section(section: SettingsSection) -> &'static str {
+    pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
-            SettingsSection::General => "general",
-            SettingsSection::Keybindings => "keybindings",
-            SettingsSection::Proxies => "proxies",
-            SettingsSection::SshTunnels => "ssh-tunnels",
-            SettingsSection::Services => "services",
-            SettingsSection::Hooks => "hooks",
-            SettingsSection::Drivers => "drivers",
-            SettingsSection::About => "about",
+            SettingsSectionId::General => "general",
+            SettingsSectionId::Keybindings => "keybindings",
+            SettingsSectionId::Proxies => "proxies",
+            SettingsSectionId::SshTunnels => "ssh-tunnels",
+            SettingsSectionId::AuthProfiles => "auth-profiles",
+            SettingsSectionId::Services => "services",
+            SettingsSectionId::Hooks => "hooks",
+            SettingsSectionId::Drivers => "drivers",
+            SettingsSectionId::About => "about",
         }
     }
 
     pub(super) fn focus_sidebar(&mut self) {
         self.focus_area = SettingsFocus::Sidebar;
-        let id = Self::tree_id_for_section(self.active_section);
-        self.sidebar_tree.select_by_id(id);
-    }
-
-    pub(super) fn sync_active_section_from_cursor(&mut self) {
-        if let Some(row) = self.sidebar_tree.cursor_item()
-            && let Some(section) = Self::section_for_tree_id(row.id.as_ref())
-        {
-            self.active_section = section;
-        }
+        self.sidebar_tree
+            .select_by_id(Self::tree_id_for_section(self.active_section));
     }
 
     pub(super) fn persist_collapse_state(&self) {
         let expanded = self.sidebar_tree.expanded();
 
         let state = UiState {
+            settings_collapsed_security: !expanded.contains("security"),
             settings_collapsed_network: !expanded.contains("network"),
             settings_collapsed_connection: !expanded.contains("connection"),
         };
 
         let store = match UiStateStore::new() {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to open UI state store: {}", e);
+            Ok(store) => store,
+            Err(error) => {
+                log::error!("Failed to open UI state store: {}", error);
                 return;
             }
         };
 
-        if let Err(e) = store.save(&state) {
-            log::error!("Failed to persist collapse state: {}", e);
+        if let Err(error) = store.save(&state) {
+            log::error!("Failed to persist collapse state: {}", error);
         }
     }
 }
@@ -122,34 +130,38 @@ mod tests {
     #[test]
     fn section_for_tree_id_known_ids() {
         assert_eq!(
-            SettingsWindow::section_for_tree_id("general"),
-            Some(SettingsSection::General)
+            SettingsCoordinator::section_for_tree_id("general"),
+            Some(SettingsSectionId::General)
         );
         assert_eq!(
-            SettingsWindow::section_for_tree_id("proxies"),
-            Some(SettingsSection::Proxies)
+            SettingsCoordinator::section_for_tree_id("proxies"),
+            Some(SettingsSectionId::Proxies)
         );
     }
 
     #[test]
     fn section_for_tree_id_unknown_returns_none() {
-        assert_eq!(SettingsWindow::section_for_tree_id("nonexistent"), None);
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("nonexistent"),
+            None
+        );
     }
 
     #[test]
     fn tree_id_roundtrip_all_sections() {
         for section in [
-            SettingsSection::General,
-            SettingsSection::Keybindings,
-            SettingsSection::Proxies,
-            SettingsSection::SshTunnels,
-            SettingsSection::Services,
-            SettingsSection::Hooks,
-            SettingsSection::Drivers,
-            SettingsSection::About,
+            SettingsSectionId::General,
+            SettingsSectionId::Keybindings,
+            SettingsSectionId::Proxies,
+            SettingsSectionId::SshTunnels,
+            SettingsSectionId::AuthProfiles,
+            SettingsSectionId::Services,
+            SettingsSectionId::Hooks,
+            SettingsSectionId::Drivers,
+            SettingsSectionId::About,
         ] {
-            let id = SettingsWindow::tree_id_for_section(section);
-            assert_eq!(SettingsWindow::section_for_tree_id(id), Some(section));
+            let id = SettingsCoordinator::tree_id_for_section(section);
+            assert_eq!(SettingsCoordinator::section_for_tree_id(id), Some(section));
         }
     }
 }

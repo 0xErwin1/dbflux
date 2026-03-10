@@ -23,9 +23,13 @@ tree-sitter-sequel = "0.3"
 urlencoding = "2"
 tempfile = "3"
 secrecy = "0.10"
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "time"] }
+futures = "0.3"
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

@@ -15,7 +15,7 @@ pub use task::{
     CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
 };
 pub use traits::{
-    CodeGenScope, CodeGeneratorInfo, Connection, DbDriver, KeyValueApi, NoopCancelHandle,
-    QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,
+    CodeGenScope, CodeGeneratorInfo, Connection, ConnectionOverrides, DbDriver, KeyValueApi,
+    NoopCancelHandle, QueryCancelHandle, SchemaFeatures, SchemaLoadingStrategy,
 };
 pub use value::Value;

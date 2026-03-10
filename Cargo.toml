@@ -16,6 +16,8 @@ members = [
     "crates/dbflux_tunnel_core",
     "crates/dbflux_export",
     "crates/dbflux_driver_host",
+    "crates/dbflux_aws",
+    "crates/dbflux_ssm",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -44,6 +46,8 @@ dbflux_proxy = { path = "crates/dbflux_proxy" }
 dbflux_export = { path = "crates/dbflux_export" }
 dbflux_ipc = { path = "crates/dbflux_ipc" }
 dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
+dbflux_aws = { path = "crates/dbflux_aws" }
+dbflux_ssm = { path = "crates/dbflux_ssm" }
 mysql = "25"
 
 gpui = "0.2.2"

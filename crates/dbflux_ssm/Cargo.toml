@@ -1,0 +1,21 @@
+[package]
+name = "dbflux_ssm"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core = { path = "../dbflux_core" }
+dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
+log = "0.4"
+
+[dev-dependencies]
+env_logger.workspace = true

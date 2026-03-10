@@ -1,15 +1,26 @@
 #![allow(clippy::result_large_err)]
 
+pub mod access;
+pub mod auth;
 mod config;
 mod connection;
 mod core;
 mod data;
 mod driver;
 mod facade;
+pub mod pipeline;
 mod query;
 mod schema;
 mod sql;
 mod storage;
+pub mod values;
+
+pub use access::{AccessHandle, AccessKind, AccessManager};
+
+pub use auth::{
+    AuthProfile, AuthProfileConfig, AuthProfileSummary, AuthProvider, AuthSession,
+    AuthSessionState, DynAuthProvider, ResolvedCredentials,
+};
 
 pub use config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
@@ -19,30 +30,31 @@ pub use config::{
 };
 
 pub use connection::{
-    CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager, ConnectionProfile,
-    ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
-    ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
-    DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
-    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
-    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
-    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
-    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
-    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
-    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, ProcessExecutionError, ProcessExecutor,
-    ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
-    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
-    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
-    SwitchDatabaseResult, detached_process_channel, execute_streaming_process, output_channel,
+    AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
+    ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
+    ConnectionProfile, ConnectionResolutionError, ConnectionTree, ConnectionTreeManager,
+    ConnectionTreeNode, ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig,
+    DbKind, DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender,
+    ExecutionContext, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
+    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
+    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
+    FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
+    HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode, HookKind, HookPhase,
+    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
+    OutputEvent, OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
+    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
+    SwitchDatabaseParams, SwitchDatabaseResult, detached_process_channel,
+    execute_streaming_process, output_channel,
 };
 
 pub use core::{
-    CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter, DbDriver,
-    DbError, DefaultErrorFormatter, ErrorLocation, FormattedError, KeyValueApi, NoopCancelHandle,
-    QueryCancelHandle, QueryErrorFormatter, SchemaFeatures, SchemaLoadingStrategy,
-    ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
-    TaskStatus, TaskTarget, Value, sanitize_uri,
+    CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
+    ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter, ErrorLocation, FormattedError,
+    KeyValueApi, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, SchemaFeatures,
+    SchemaLoadingStrategy, ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager,
+    TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
 };
 
 pub use data::{
@@ -101,14 +113,25 @@ pub use sql::{
     generate_truncate, generate_update_template,
 };
 
+pub use pipeline::{
+    PipelineError, PipelineInput, PipelineOutput, PipelineState, StateSender, StateWatcher,
+    pipeline_state_channel, resolve_profile_values, run_pipeline,
+};
+
+pub use values::{
+    CachedValue, CompositeValueResolver, DynParameterProvider, DynSecretProvider, FieldValue,
+    ParameterProvider, ProviderError, ResolveContext, ResolvedValue, SecretProvider, ValueCache,
+    ValueCacheKey, ValueOrigin, ValueRef,
+};
+
 pub use chrono;
 pub use secrecy;
 pub use storage::{
-    HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore, KeyringSecretStore,
-    NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore, SavedQuery,
-    SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest, SessionStore,
-    SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore, connection_secret_ref,
-    create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
+    AuthProfileStore, HasSecretRef, HistoryEntry, HistoryManager, HistoryStore, JsonStore,
+    KeyringSecretStore, NoopSecretStore, ProfileStore, ProxyStore, RecentFile, RecentFilesStore,
+    SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
+    SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
+    connection_secret_ref, create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
 };
 
 // Backward-compatible public module paths for external crates that use

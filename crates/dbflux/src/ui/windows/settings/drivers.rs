@@ -1,4 +1,4 @@
-use super::{DriverSettingsEntry, SettingsFocus, SettingsWindow};
+use super::drivers_section::{DriverSettingsEntry, DriversSection};
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
@@ -80,7 +80,7 @@ fn bool_override_index(value: Option<bool>) -> usize {
     }
 }
 
-impl SettingsWindow {
+impl DriversSection {
     /// Deterministic dirty check: compare the working driver overrides and
     /// settings (including the currently-open editor) against what is persisted
     /// in AppState.  This avoids false positives from transient UI events.
@@ -258,7 +258,7 @@ impl SettingsWindow {
 
         self.drv_selected_idx = Some(idx);
         self.drv_load_selected_editor(window, cx);
-        self.focus_area = SettingsFocus::Content;
+        self.content_focused = true;
         cx.notify();
     }
 
@@ -624,7 +624,7 @@ impl SettingsWindow {
 
     fn render_driver_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let list_focused = self.focus_area == SettingsFocus::Content;
+        let list_focused = self.content_focused;
 
         div()
             .w(px(300.0))

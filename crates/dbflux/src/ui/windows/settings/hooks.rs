@@ -17,21 +17,10 @@ use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::{SettingsEvent, SettingsWindow};
+use super::SettingsEvent;
+use super::hooks_section::{HookKindSelection, HooksSection, ScriptSourceSelection};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HookKindSelection {
-    Command,
-    Script,
-    Lua,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScriptSourceSelection {
-    File,
-}
-
-impl SettingsWindow {
+impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
         match self.selected_hook_kind(cx) {
             HookKindSelection::Lua => "lua",

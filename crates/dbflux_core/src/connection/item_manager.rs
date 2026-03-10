@@ -1,3 +1,4 @@
+use crate::auth::AuthProfile;
 use crate::{ConnectionProfile, JsonStore, ProxyProfile, SshTunnelProfile};
 use log::{error, info};
 use serde::Serialize;
@@ -106,6 +107,20 @@ impl Identifiable for SshTunnelProfile {
 impl Identifiable for ConnectionProfile {
     fn id(&self) -> Uuid {
         self.id
+    }
+}
+
+impl Identifiable for AuthProfile {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+}
+
+pub type AuthProfileManager = ItemManager<AuthProfile>;
+
+impl DefaultFilename for AuthProfileManager {
+    fn meta() -> (&'static str, &'static str) {
+        ("auth_profiles.json", "auth profiles")
     }
 }
 

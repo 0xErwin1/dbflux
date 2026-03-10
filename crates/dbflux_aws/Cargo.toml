@@ -1,0 +1,37 @@
+[package]
+name = "dbflux_aws"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core = { path = "../dbflux_core" }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-sso = "1"
+aws-sdk-ssooidc = "1"
+aws-sdk-sts = "1"
+aws-sdk-secretsmanager = "1"
+aws-sdk-ssm = "1"
+async-trait = "0.1"
+log = "0.4"
+secrecy = "0.10"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "process", "fs"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+sha1 = "0.10"
+futures-lite = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"

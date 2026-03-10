@@ -23,7 +23,7 @@ impl ConnectionManagerWindow {
         let has_selected_tunnel = selected_tunnel_id.is_some();
 
         let show_focus =
-            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Ssh;
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
         let focus = self.form_focus;
 
         let ring_color = cx.theme().ring;

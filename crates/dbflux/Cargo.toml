@@ -29,6 +29,7 @@ serde_json.workspace = true
 dirs.workspace = true
 rfd.workspace = true
 fuzzy-matcher.workspace = true
+async-trait = "0.1"
 anyhow = "1"
 lsp-types = "0.97"
 bincode = "1"
@@ -58,14 +59,23 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_aws]
+workspace = true
+optional = true
+
+[dependencies.dbflux_ssm]
+workspace = true
+optional = true
+
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "lua"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "lua", "aws"]
 sqlite = ["dbflux_driver_sqlite"]
 postgres = ["dbflux_driver_postgres"]
 mysql = ["dbflux_driver_mysql"]
 mongodb = ["dbflux_driver_mongodb"]
 redis = ["dbflux_driver_redis"]
 lua = ["dbflux_lua"]
+aws = ["dbflux_aws", "dbflux_ssm"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

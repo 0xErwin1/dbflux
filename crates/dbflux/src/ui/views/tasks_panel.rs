@@ -123,6 +123,16 @@ impl TasksPanel {
                 // Soft cancel only — Redis/MongoDB drivers don't support driver-level cancel
             }
 
+            TaskKind::Connect => {
+                if let Some(profile_id) = profile_id {
+                    self.app_state.update(cx, |state, cx| {
+                        state.cancel_running_connect_tasks_for_profile(profile_id);
+                        cx.emit(AppStateChanged);
+                    });
+                    return;
+                }
+            }
+
             _ => {}
         }
 

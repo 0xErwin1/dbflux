@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
+mod access_manager;
 mod app;
 mod assets;
 mod cli;

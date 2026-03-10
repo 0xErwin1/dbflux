@@ -25,6 +25,8 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
+        let password_source_is_literal =
+            self.password_value_source_selector.read(cx).is_literal(cx);
 
         div()
             .flex()
@@ -32,9 +34,26 @@ impl ConnectionManagerWindow {
             .gap_1()
             .child(
                 div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Password"),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Password"),
+                    )
+                    .child(
+                        div()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.begin_inline_editor_interaction(cx);
+                                }),
+                            )
+                            .child(self.password_value_source_selector.clone()),
+                    ),
             )
             .child(
                 div()
@@ -66,7 +85,7 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .when(show_save_checkbox, |d| {
+                    .when(show_save_checkbox && password_source_is_literal, |d| {
                         d.child(
                             div()
                                 .flex()
@@ -150,7 +169,6 @@ impl ConnectionManagerWindow {
         };
 
         let driver_name = driver.display_name().to_string();
-        let supports_ssh = self.supports_ssh();
         let validation_errors = self.validation_errors.clone();
         let test_status = self.test_status;
         let test_error = self.test_error.clone();
@@ -166,18 +184,13 @@ impl ConnectionManagerWindow {
         let test_focused = show_focus && focus == FormFocus::TestConnection;
         let save_focused = show_focus && focus == FormFocus::Save;
 
-        let supports_proxy = self.supports_proxy();
-        let tab_bar = self
-            .render_tab_bar(supports_ssh, supports_proxy, cx)
-            .into_any_element();
+        let tab_bar = self.render_tab_bar(cx).into_any_element();
 
         let tab_content: Vec<AnyElement> = match self.active_tab {
             ActiveTab::Main => self.render_main_tab(cx),
+            ActiveTab::Access if !self.uses_file_form() => self.render_access_tab(cx),
+            ActiveTab::Access => self.render_main_tab(cx),
             ActiveTab::Settings => self.render_settings_tab(cx),
-            ActiveTab::Ssh if supports_ssh => self.render_ssh_tab(cx),
-            ActiveTab::Ssh => self.render_main_tab(cx),
-            ActiveTab::Proxy if supports_proxy => self.render_proxy_tab(cx),
-            ActiveTab::Proxy => self.render_main_tab(cx),
         };
 
         let theme = cx.theme();
@@ -373,6 +386,16 @@ impl ConnectionManagerWindow {
                     return div().into_any_element();
                 };
 
+                let value_source_selector = if !is_ssh_tab && field_def.id == "host" {
+                    Some(self.host_value_source_selector.clone())
+                } else if !is_ssh_tab && field_def.id == "database" {
+                    Some(self.database_value_source_selector.clone())
+                } else if !is_ssh_tab && field_def.id == "user" {
+                    Some(self.user_value_source_selector.clone())
+                } else {
+                    None
+                };
+
                 let field_enabled = self.is_field_enabled(field_def);
 
                 div()
@@ -382,33 +405,61 @@ impl ConnectionManagerWindow {
                     .when(!focused, |d| d.border_color(gpui::transparent_black()))
                     .p(px(2.0))
                     .when(!field_enabled, |d| d.opacity(0.5))
-                    .when(field_enabled, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                if let Some(field) = field_focus {
-                                    this.enter_edit_mode_for_field(field, window, cx);
-                                }
-                            }),
-                        )
-                    })
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap_1()
+                            .justify_between()
+                            .gap_2()
+                            .h(px(28.0))
                             .mb_1()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(field_def.label.clone()),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(field_def.label.clone()),
+                                    )
+                                    .when(field_def.required && field_enabled, |d| {
+                                        d.child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(gpui::rgb(0xEF4444))
+                                                .child("*"),
+                                        )
+                                    }),
                             )
-                            .when(field_def.required && field_enabled, |d| {
-                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                            .when_some(value_source_selector.clone(), |d, selector| {
+                                d.child(
+                                    div()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.begin_inline_editor_interaction(cx);
+                                            }),
+                                        )
+                                        .child(selector),
+                                )
                             }),
                     )
-                    .child(Input::new(input_state).disabled(!field_enabled))
+                    .child(
+                        div()
+                            .when(field_enabled, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, window, cx| {
+                                        if let Some(field) = field_focus {
+                                            this.enter_edit_mode_for_field(field, window, cx);
+                                        }
+                                    }),
+                                )
+                            })
+                            .child(Input::new(input_state).disabled(!field_enabled)),
+                    )
                     .into_any_element()
             }
 
@@ -804,6 +855,9 @@ impl Render for ConnectionManagerWindow {
             }
         }
 
+        self.apply_pending_auth_profile();
+        self.apply_pending_ssm_auth_profile();
+
         if let Some(tunnel_id) = self.pending_ssh_tunnel_selection.take() {
             let tunnel = self
                 .app_state
@@ -819,11 +873,14 @@ impl Render for ConnectionManagerWindow {
         }
 
         let show_password = self.show_password;
+        let password_source_is_literal =
+            self.password_value_source_selector.read(cx).is_literal(cx);
         let show_ssh_passphrase = self.show_ssh_passphrase;
         let show_ssh_password = self.show_ssh_password;
 
         self.input_password.update(cx, |state, cx| {
-            state.set_masked(!show_password, window, cx);
+            let should_mask = password_source_is_literal && !show_password;
+            state.set_masked(should_mask, window, cx);
         });
         self.input_ssh_key_passphrase.update(cx, |state, cx| {
             state.set_masked(!show_ssh_passphrase, window, cx);
