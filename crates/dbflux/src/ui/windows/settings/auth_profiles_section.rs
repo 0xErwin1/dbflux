@@ -18,7 +18,8 @@ use uuid::Uuid;
 use dbflux_aws::CachedAwsConfig;
 #[cfg(feature = "aws")]
 use dbflux_aws::{
-    AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking,
+    AwsSsoAccount, append_aws_shared_credentials_profile, append_aws_sso_profile,
+    list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking,
 };
 
 #[derive(Clone)]
@@ -487,6 +488,60 @@ impl AuthProfilesSection {
         .detach();
     }
 
+    /// Attempts to write the profile's AWS configuration block to `~/.aws/config`.
+    ///
+    /// Called only for newly created profiles, not edits. Failures are logged as
+    /// warnings but do not prevent the profile from being saved to DBFlux's own
+    /// store — the write-back is best-effort.
+    #[cfg(feature = "aws")]
+    fn write_back_aws_profile(&mut self, config: &AuthProfileConfig) {
+        let result = match config {
+            AuthProfileConfig::AwsSso {
+                profile_name,
+                region,
+                sso_start_url,
+                sso_account_id,
+                sso_role_name,
+            } => append_aws_sso_profile(
+                profile_name,
+                sso_start_url,
+                region,
+                sso_account_id,
+                sso_role_name,
+                region,
+            ),
+
+            AuthProfileConfig::AwsSharedCredentials {
+                profile_name,
+                region,
+            } => append_aws_shared_credentials_profile(profile_name, region),
+
+            // Static credentials have no representation in ~/.aws/config.
+            AuthProfileConfig::AwsStaticCredentials { .. } => return,
+        };
+
+        match result {
+            Ok(true) => {
+                log::info!(
+                    "[auth_profiles] wrote profile block to ~/.aws/config"
+                );
+                // Invalidate the mtime cache so the next read picks up the new entry.
+                self.aws_config_cache = CachedAwsConfig::new();
+            }
+            Ok(false) => {
+                log::debug!(
+                    "[auth_profiles] profile already exists in ~/.aws/config — skipped write-back"
+                );
+            }
+            Err(err) => {
+                log::warn!(
+                    "[auth_profiles] failed to write profile to ~/.aws/config: {}",
+                    err
+                );
+            }
+        }
+    }
+
     #[cfg(feature = "aws")]
     fn fetch_sso_accounts(
         &mut self,
@@ -883,13 +938,18 @@ impl AuthProfilesSection {
         let is_edit = self.editing_profile_id.is_some();
         self.app_state.update(cx, |state, cx| {
             if is_edit {
-                state.update_auth_profile(profile);
+                state.update_auth_profile(profile.clone());
             } else {
-                state.add_auth_profile(profile);
+                state.add_auth_profile(profile.clone());
             }
 
             cx.emit(AppStateChanged);
         });
+
+        #[cfg(feature = "aws")]
+        if !is_edit {
+            self.write_back_aws_profile(&profile.config);
+        }
 
         self.selected_profile_id = Some(profile_id);
         self.load_profile_into_form(profile_id, window, cx);
