@@ -15,7 +15,10 @@ pub use auth::{
     AwsAuthProvider, SsoLoginHandle, login_sso_blocking, start_sso_login_blocking,
     wait_for_sso_session_blocking,
 };
-pub use config::{AwsProfileInfo, CachedAwsConfig};
+pub use config::{
+    AwsProfileInfo, CachedAwsConfig, append_aws_shared_credentials_profile,
+    append_aws_sso_profile,
+};
 pub use parameters::AwsSsmParameterProvider;
 pub use secrets::AwsSecretsManagerProvider;
 

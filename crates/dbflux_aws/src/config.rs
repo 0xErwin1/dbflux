@@ -1,9 +1,12 @@
-/// AWS configuration file parsing and profile detection.
+/// AWS configuration file parsing, profile detection, and write-back.
 ///
-/// Reads `~/.aws/config` to discover available AWS profiles and identify
-/// which ones use SSO authentication. Supports mtime-based caching to
-/// avoid re-parsing on every access.
+/// Reads and writes `~/.aws/config` to discover and register AWS profiles.
+/// The parser identifies SSO and shared-credentials profiles; the writer
+/// appends new profile blocks without touching existing entries. Supports
+/// mtime-based caching to avoid re-parsing on every read access.
 use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
+use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -157,6 +160,136 @@ fn flush_section(
     });
 }
 
+/// Appends a new SSO profile block to `~/.aws/config`.
+///
+/// Creates the `~/.aws/` directory and the config file if they do not exist.
+/// If a `[profile <name>]` or `[default]` section with the given name already
+/// exists, the file is left unchanged and the function returns `Ok(false)`.
+/// On a successful write it returns `Ok(true)`.
+///
+/// The generated block uses the modern SSO format (direct keys, no
+/// `sso-session` indirection) compatible with AWS CLI v2 and the AWS SDK.
+pub fn append_aws_sso_profile(
+    name: &str,
+    sso_start_url: &str,
+    sso_region: &str,
+    sso_account_id: &str,
+    sso_role_name: &str,
+    region: &str,
+) -> Result<bool, std::io::Error> {
+    let path = config_file_path();
+    let existing = read_config_or_default(&path)?;
+
+    if profile_section_exists(&existing, name) {
+        return Ok(false);
+    }
+
+    let mut block = String::new();
+    writeln!(block).ok();
+
+    let header = if name == "default" {
+        "[default]".to_string()
+    } else {
+        format!("[profile {name}]")
+    };
+
+    writeln!(block, "{header}").ok();
+    writeln!(block, "sso_start_url = {sso_start_url}").ok();
+    writeln!(block, "sso_region = {sso_region}").ok();
+    writeln!(block, "sso_account_id = {sso_account_id}").ok();
+    writeln!(block, "sso_role_name = {sso_role_name}").ok();
+    writeln!(block, "region = {region}").ok();
+
+    write_config_block(&path, &existing, &block)
+}
+
+/// Appends a new shared-credentials profile block to `~/.aws/config`.
+///
+/// Creates the `~/.aws/` directory and the config file if they do not exist.
+/// If a section with the given name already exists, the file is left unchanged
+/// and the function returns `Ok(false)`. On a successful write it returns
+/// `Ok(true)`.
+///
+/// Shared-credentials profiles carry only a `region` key in `~/.aws/config`;
+/// the actual `aws_access_key_id` / `aws_secret_access_key` live in
+/// `~/.aws/credentials`, which DBFlux does not manage.
+pub fn append_aws_shared_credentials_profile(
+    name: &str,
+    region: &str,
+) -> Result<bool, std::io::Error> {
+    let path = config_file_path();
+    let existing = read_config_or_default(&path)?;
+
+    if profile_section_exists(&existing, name) {
+        return Ok(false);
+    }
+
+    let mut block = String::new();
+    writeln!(block).ok();
+
+    let header = if name == "default" {
+        "[default]".to_string()
+    } else {
+        format!("[profile {name}]")
+    };
+
+    writeln!(block, "{header}").ok();
+    writeln!(block, "region = {region}").ok();
+
+    write_config_block(&path, &existing, &block)
+}
+
+/// Reads the config file content, returning an empty string if the file does
+/// not exist. Returns an error for other I/O failures.
+fn read_config_or_default(path: &std::path::Path) -> Result<String, std::io::Error> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Returns true if a section named `name` already appears in `contents`.
+///
+/// Matches `[default]` when `name == "default"` and `[profile <name>]`
+/// otherwise (case-insensitive).
+fn profile_section_exists(contents: &str, name: &str) -> bool {
+    let needle = if name.eq_ignore_ascii_case("default") {
+        "[default]".to_string()
+    } else {
+        format!("[profile {name}]")
+    };
+
+    contents
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case(&needle))
+}
+
+/// Ensures the `~/.aws/` directory exists, then appends `block` to the config
+/// file (creating it if necessary). Returns `Ok(true)` on success.
+fn write_config_block(
+    path: &std::path::Path,
+    existing: &str,
+    block: &str,
+) -> Result<bool, std::io::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut content = existing.to_string();
+
+    // Ensure the existing content ends with a newline before appending.
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+
+    content.push_str(block);
+
+    fs::write(path, &content)?;
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +407,70 @@ output=json
         let profiles = parse_aws_config_str(config);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].region.as_deref(), Some("us-east-1"));
+    }
+
+    #[test]
+    fn profile_section_exists_matches_named_and_default() {
+        let contents = "[default]\nregion = us-east-1\n\n[profile dev]\nregion = us-west-2\n";
+
+        assert!(profile_section_exists(contents, "default"));
+        assert!(profile_section_exists(contents, "dev"));
+        assert!(!profile_section_exists(contents, "staging"));
+    }
+
+    #[test]
+    fn profile_section_exists_is_case_insensitive() {
+        let contents = "[profile Dev]\nregion = us-west-2\n";
+        assert!(profile_section_exists(contents, "dev"));
+        assert!(profile_section_exists(contents, "DEV"));
+    }
+
+    #[test]
+    fn append_sso_profile_creates_file_and_block() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+
+        // Override write target via the helper (we call write_config_block directly).
+        let existing = "";
+        let mut block = String::new();
+        block.push('\n');
+        block.push_str("[profile new-sso]\n");
+        block.push_str("sso_start_url = https://example.awsapps.com/start\n");
+        block.push_str("sso_region = us-east-1\n");
+        block.push_str("sso_account_id = 123456789012\n");
+        block.push_str("sso_role_name = AdminAccess\n");
+        block.push_str("region = us-east-1\n");
+
+        let written = write_config_block(&path, existing, &block).expect("write");
+        assert!(written);
+
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert!(content.contains("[profile new-sso]"));
+        assert!(content.contains("sso_start_url = https://example.awsapps.com/start"));
+        assert!(content.contains("sso_account_id = 123456789012"));
+    }
+
+    #[test]
+    fn append_sso_profile_skips_existing_section() {
+        let existing = "[profile dev]\nregion = us-east-1\n";
+
+        // profile_section_exists should detect it and prevent the write.
+        assert!(profile_section_exists(existing, "dev"));
+    }
+
+    #[test]
+    fn append_to_non_empty_file_adds_trailing_newline_separator() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+        std::fs::write(&path, "[default]\nregion = us-east-1").expect("seed");
+
+        let existing = std::fs::read_to_string(&path).expect("read existing");
+        let block = "\n[profile staging]\nregion = eu-west-1\n";
+
+        write_config_block(&path, &existing, block).expect("write");
+
+        let content = std::fs::read_to_string(&path).expect("read result");
+        // The existing content had no trailing newline; write_config_block must add one.
+        assert!(content.contains("[default]\nregion = us-east-1\n\n[profile staging]"));
     }
 }
