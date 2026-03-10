@@ -1,3 +1,4 @@
+use crate::auth::AuthProfile;
 use crate::{ConnectionProfile, DbError, ProxyProfile, SshTunnelProfile};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -74,6 +75,14 @@ impl SshTunnelStore {
 impl ProxyStore {
     pub fn proxies() -> Result<Self, DbError> {
         Self::new("proxies.json")
+    }
+}
+
+pub type AuthProfileStore = JsonStore<AuthProfile>;
+
+impl AuthProfileStore {
+    pub fn auth_profiles() -> Result<Self, DbError> {
+        Self::new("auth_profiles.json")
     }
 }
 

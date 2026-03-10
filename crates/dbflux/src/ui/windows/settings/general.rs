@@ -1,3 +1,4 @@
+use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore};
@@ -9,32 +10,60 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 
-use super::{GeneralFormRow, SettingsFocus, SettingsSection, SettingsWindow};
+use super::general_section::{GeneralFormRow, GeneralSection};
 
-impl SettingsWindow {
-    // -- Form row list --
+impl GeneralSection {
+    pub(super) fn has_unsaved_general_changes(&self, cx: &App) -> bool {
+        let saved = self.app_state.read(cx).general_settings();
+
+        if self.gen_settings.theme != saved.theme
+            || self.gen_settings.restore_session_on_startup != saved.restore_session_on_startup
+            || self.gen_settings.reopen_last_connections != saved.reopen_last_connections
+            || self.gen_settings.default_focus_on_startup != saved.default_focus_on_startup
+            || self.gen_settings.default_refresh_policy != saved.default_refresh_policy
+            || self.gen_settings.auto_refresh_pause_on_error != saved.auto_refresh_pause_on_error
+            || self.gen_settings.auto_refresh_only_if_visible != saved.auto_refresh_only_if_visible
+            || self.gen_settings.confirm_dangerous_queries != saved.confirm_dangerous_queries
+            || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
+            || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
+        {
+            return true;
+        }
+
+        if self.input_max_history.read(cx).value().trim() != saved.max_history_entries.to_string() {
+            return true;
+        }
+
+        if self.input_auto_save.read(cx).value().trim() != saved.auto_save_interval_ms.to_string() {
+            return true;
+        }
+
+        if self.input_refresh_interval.read(cx).value().trim()
+            != saved.default_refresh_interval_secs.to_string()
+        {
+            return true;
+        }
+
+        self.input_max_bg_tasks.read(cx).value().trim()
+            != saved.max_concurrent_background_tasks.to_string()
+    }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
         vec![
-            // Appearance
             GeneralFormRow::Theme,
-            // Startup & Session
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
             GeneralFormRow::MaxHistory,
             GeneralFormRow::AutoSaveInterval,
-            // Refresh & Background
             GeneralFormRow::DefaultRefreshPolicy,
             GeneralFormRow::DefaultRefreshInterval,
             GeneralFormRow::MaxBackgroundTasks,
             GeneralFormRow::PauseRefreshOnError,
             GeneralFormRow::RefreshOnlyIfVisible,
-            // Execution Safety
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
-            // Actions
             GeneralFormRow::SaveButton,
         ]
     }
@@ -42,8 +71,6 @@ impl SettingsWindow {
     fn gen_current_row(&self) -> Option<GeneralFormRow> {
         self.gen_form_rows().get(self.gen_form_cursor).copied()
     }
-
-    // -- Navigation --
 
     pub(super) fn gen_move_down(&mut self) {
         let count = self.gen_form_rows().len();
@@ -58,6 +85,14 @@ impl SettingsWindow {
         }
     }
 
+    fn gen_move_first(&mut self) {
+        self.gen_form_cursor = 0;
+    }
+
+    fn gen_move_last(&mut self) {
+        self.gen_form_cursor = self.gen_form_rows().len().saturating_sub(1);
+    }
+
     pub(super) fn gen_activate_current_field(
         &mut self,
         window: &mut Window,
@@ -65,7 +100,8 @@ impl SettingsWindow {
     ) {
         match self.gen_current_row() {
             Some(GeneralFormRow::Theme) => {
-                self.dropdown_theme.update(cx, |dd, cx| dd.toggle_open(cx));
+                self.dropdown_theme
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -80,12 +116,12 @@ impl SettingsWindow {
             }
             Some(GeneralFormRow::DefaultFocus) => {
                 self.dropdown_default_focus
-                    .update(cx, |dd, cx| dd.toggle_open(cx));
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
             Some(GeneralFormRow::DefaultRefreshPolicy) => {
                 self.dropdown_refresh_policy
-                    .update(cx, |dd, cx| dd.toggle_open(cx));
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
             Some(GeneralFormRow::PauseRefreshOnError) => {
@@ -113,18 +149,15 @@ impl SettingsWindow {
                     !self.gen_settings.dangerous_requires_preview;
                 cx.notify();
             }
-
             Some(GeneralFormRow::MaxHistory)
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks) => {
                 self.gen_focus_current_input(window, cx);
             }
-
             Some(GeneralFormRow::SaveButton) => {
                 self.save_general_settings(window, cx);
             }
-
             None => {}
         }
     }
@@ -135,18 +168,19 @@ impl SettingsWindow {
         match self.gen_current_row() {
             Some(GeneralFormRow::MaxHistory) => {
                 self.input_max_history
-                    .update(cx, |s, cx| s.focus(window, cx));
+                    .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::AutoSaveInterval) => {
-                self.input_auto_save.update(cx, |s, cx| s.focus(window, cx));
+                self.input_auto_save
+                    .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::DefaultRefreshInterval) => {
                 self.input_refresh_interval
-                    .update(cx, |s, cx| s.focus(window, cx));
+                    .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::MaxBackgroundTasks) => {
                 self.input_max_bg_tasks
-                    .update(cx, |s, cx| s.focus(window, cx));
+                    .update(cx, |state, cx| state.focus(window, cx));
             }
             _ => {
                 self.gen_editing_field = false;
@@ -154,12 +188,148 @@ impl SettingsWindow {
         }
     }
 
-    // -- Save --
+    pub(super) fn close_open_dropdown(&mut self, cx: &mut Context<Self>) {
+        if let Some(dropdown) = self.current_dropdown() {
+            dropdown.update(cx, |dropdown, cx| {
+                if dropdown.is_open() {
+                    dropdown.close(cx);
+                }
+            });
+        }
+    }
+
+    fn current_dropdown(&self) -> Option<&Entity<Dropdown>> {
+        match self.gen_current_row() {
+            Some(GeneralFormRow::Theme) => Some(&self.dropdown_theme),
+            Some(GeneralFormRow::DefaultFocus) => Some(&self.dropdown_default_focus),
+            Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
+            _ => None,
+        }
+    }
+
+    fn handle_open_dropdown(
+        &mut self,
+        chord: &KeyChord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(dropdown_entity) = self.current_dropdown().cloned() else {
+            return false;
+        };
+
+        if !dropdown_entity.read(cx).is_open() {
+            return false;
+        }
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.select_next_item(cx));
+            }
+            ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.select_prev_item(cx));
+            }
+            ("enter", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.accept_selection(cx));
+            }
+            ("escape", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.close(cx));
+            }
+            ("tab", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.accept_selection(cx));
+                self.gen_move_down();
+                self.gen_focus_current_input(window, cx);
+            }
+            ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.accept_selection(cx));
+                self.gen_move_up();
+                self.gen_focus_current_input(window, cx);
+            }
+            _ => return false,
+        }
+
+        cx.notify();
+        true
+    }
+
+    pub(super) fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let chord = KeyChord::from_gpui(&event.keystroke);
+
+        if self.gen_editing_field {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.gen_editing_field = false;
+                    cx.notify();
+                }
+                ("enter", modifiers) if modifiers == Modifiers::none() => {
+                    self.gen_editing_field = false;
+                    self.gen_move_down();
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::none() => {
+                    self.gen_editing_field = false;
+                    self.gen_move_down();
+                    self.gen_focus_current_input(window, cx);
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                    self.gen_editing_field = false;
+                    self.gen_move_up();
+                    self.gen_focus_current_input(window, cx);
+                    cx.notify();
+                }
+                _ => {}
+            }
+
+            return;
+        }
+
+        if self.handle_open_dropdown(&chord, window, cx) {
+            return;
+        }
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                self.gen_move_down();
+                cx.notify();
+            }
+            ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                self.gen_move_up();
+                cx.notify();
+            }
+            ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
+                if modifiers == Modifiers::none() =>
+            {
+                self.gen_activate_current_field(window, cx);
+            }
+            ("tab", modifiers) if modifiers == Modifiers::none() => {
+                self.gen_move_down();
+                cx.notify();
+            }
+            ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                self.gen_move_up();
+                cx.notify();
+            }
+            ("g", modifiers) if modifiers == Modifiers::none() => {
+                self.gen_move_first();
+                cx.notify();
+            }
+            ("G", modifiers) if modifiers == Modifiers::none() => {
+                self.gen_move_last();
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
 
     pub(super) fn save_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let max_history_str = self.input_max_history.read(cx).value().trim().to_string();
         let max_history = match max_history_str.parse::<usize>() {
-            Ok(v) if v >= 10 => v,
+            Ok(value) if value >= 10 => value,
             _ => {
                 cx.toast_error("Max history entries must be a number >= 10", window);
                 return;
@@ -168,7 +338,7 @@ impl SettingsWindow {
 
         let auto_save_str = self.input_auto_save.read(cx).value().trim().to_string();
         let auto_save_ms = match auto_save_str.parse::<u64>() {
-            Ok(v) if v >= 500 => v,
+            Ok(value) if value >= 500 => value,
             _ => {
                 cx.toast_error("Auto-save interval must be >= 500 ms", window);
                 return;
@@ -182,7 +352,7 @@ impl SettingsWindow {
             .trim()
             .to_string();
         let refresh_interval = match refresh_interval_str.parse::<u32>() {
-            Ok(v) if v >= 1 => v,
+            Ok(value) if value >= 1 => value,
             _ => {
                 cx.toast_error("Refresh interval must be >= 1 second", window);
                 return;
@@ -191,7 +361,7 @@ impl SettingsWindow {
 
         let max_bg_str = self.input_max_bg_tasks.read(cx).value().trim().to_string();
         let max_bg_tasks = match max_bg_str.parse::<usize>() {
-            Ok(v) if v >= 1 => v,
+            Ok(value) if value >= 1 => value,
             _ => {
                 cx.toast_error("Max background tasks must be >= 1", window);
                 return;
@@ -204,26 +374,26 @@ impl SettingsWindow {
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
 
         let store = match AppConfigStore::new() {
-            Ok(s) => s,
-            Err(e) => {
-                cx.toast_error(format!("Cannot save: {}", e), window);
+            Ok(store) => store,
+            Err(error) => {
+                cx.toast_error(format!("Cannot save: {}", error), window);
                 return;
             }
         };
 
         let mut config = match store.load() {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("Failed to load config before save: {}", e);
+            Ok(config) => config,
+            Err(error) => {
+                log::error!("Failed to load config before save: {}", error);
                 AppConfig::default()
             }
         };
 
         config.general = self.gen_settings.clone();
 
-        if let Err(e) = store.save(&config) {
-            log::error!("Failed to save config: {}", e);
-            cx.toast_error(format!("Failed to save: {}", e), window);
+        if let Err(error) = store.save(&config) {
+            log::error!("Failed to save config: {}", error);
+            cx.toast_error(format!("Failed to save: {}", error), window);
             return;
         }
 
@@ -239,15 +409,12 @@ impl SettingsWindow {
         );
     }
 
-    // -- Rendering --
-
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let primary = theme.primary;
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
-        let is_focused = self.focus_area == SettingsFocus::Content
-            && self.active_section == SettingsSection::General;
+        let is_focused = self.content_focused;
         let cursor = self.gen_form_cursor;
         let rows = self.gen_form_rows();
 
@@ -286,22 +453,23 @@ impl SettingsWindow {
                     .flex()
                     .flex_col()
                     .gap_6()
-                    // -- Appearance --
                     .child(self.render_gen_group_header("Appearance", border, muted_fg))
                     .child(self.render_gen_dropdown(
                         "Theme",
                         &self.dropdown_theme,
                         is_at(GeneralFormRow::Theme),
                         primary,
+                        GeneralFormRow::Theme,
+                        cx,
                     ))
-                    // -- Startup & Session --
                     .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
                     .child(self.render_gen_checkbox(
                         "restore-session",
                         "Restore session on startup",
                         self.gen_settings.restore_session_on_startup,
                         is_at(GeneralFormRow::RestoreSession),
-                        |this, val| this.gen_settings.restore_session_on_startup = val,
+                        GeneralFormRow::RestoreSession,
+                        |this, value| this.gen_settings.restore_session_on_startup = value,
                         cx,
                     ))
                     .child(self.render_gen_checkbox(
@@ -309,7 +477,8 @@ impl SettingsWindow {
                         "Reopen last connections",
                         self.gen_settings.reopen_last_connections,
                         is_at(GeneralFormRow::ReopenConnections),
-                        |this, val| this.gen_settings.reopen_last_connections = val,
+                        GeneralFormRow::ReopenConnections,
+                        |this, value| this.gen_settings.reopen_last_connections = value,
                         cx,
                     ))
                     .child(self.render_gen_dropdown(
@@ -317,6 +486,8 @@ impl SettingsWindow {
                         &self.dropdown_default_focus,
                         is_at(GeneralFormRow::DefaultFocus),
                         primary,
+                        GeneralFormRow::DefaultFocus,
+                        cx,
                     ))
                     .child(self.render_gen_input_field(
                         "Max history entries",
@@ -334,13 +505,14 @@ impl SettingsWindow {
                         GeneralFormRow::AutoSaveInterval,
                         cx,
                     ))
-                    // -- Refresh & Background --
                     .child(self.render_gen_group_header("Refresh & Background", border, muted_fg))
                     .child(self.render_gen_dropdown(
                         "Default refresh policy",
                         &self.dropdown_refresh_policy,
                         is_at(GeneralFormRow::DefaultRefreshPolicy),
                         primary,
+                        GeneralFormRow::DefaultRefreshPolicy,
+                        cx,
                     ))
                     .child(self.render_gen_input_field(
                         "Default refresh interval (seconds)",
@@ -363,7 +535,8 @@ impl SettingsWindow {
                         "Pause auto-refresh on error",
                         self.gen_settings.auto_refresh_pause_on_error,
                         is_at(GeneralFormRow::PauseRefreshOnError),
-                        |this, val| this.gen_settings.auto_refresh_pause_on_error = val,
+                        GeneralFormRow::PauseRefreshOnError,
+                        |this, value| this.gen_settings.auto_refresh_pause_on_error = value,
                         cx,
                     ))
                     .child(self.render_gen_checkbox(
@@ -371,17 +544,18 @@ impl SettingsWindow {
                         "Auto-refresh only if tab is visible",
                         self.gen_settings.auto_refresh_only_if_visible,
                         is_at(GeneralFormRow::RefreshOnlyIfVisible),
-                        |this, val| this.gen_settings.auto_refresh_only_if_visible = val,
+                        GeneralFormRow::RefreshOnlyIfVisible,
+                        |this, value| this.gen_settings.auto_refresh_only_if_visible = value,
                         cx,
                     ))
-                    // -- Execution Safety --
                     .child(self.render_gen_group_header("Execution Safety", border, muted_fg))
                     .child(self.render_gen_checkbox(
                         "confirm-dangerous",
                         "Confirm dangerous queries",
                         self.gen_settings.confirm_dangerous_queries,
                         is_at(GeneralFormRow::ConfirmDangerous),
-                        |this, val| this.gen_settings.confirm_dangerous_queries = val,
+                        GeneralFormRow::ConfirmDangerous,
+                        |this, value| this.gen_settings.confirm_dangerous_queries = value,
                         cx,
                     ))
                     .child(self.render_gen_checkbox(
@@ -389,7 +563,8 @@ impl SettingsWindow {
                         "Require WHERE for DELETE/UPDATE",
                         self.gen_settings.dangerous_requires_where,
                         is_at(GeneralFormRow::RequiresWhere),
-                        |this, val| this.gen_settings.dangerous_requires_where = val,
+                        GeneralFormRow::RequiresWhere,
+                        |this, value| this.gen_settings.dangerous_requires_where = value,
                         cx,
                     ))
                     .child(self.render_gen_checkbox(
@@ -397,7 +572,8 @@ impl SettingsWindow {
                         "Always require preview (ignore suppressions)",
                         self.gen_settings.dangerous_requires_preview,
                         is_at(GeneralFormRow::RequiresPreview),
-                        |this, val| this.gen_settings.dangerous_requires_preview = val,
+                        GeneralFormRow::RequiresPreview,
+                        |this, value| this.gen_settings.dangerous_requires_preview = value,
                         cx,
                     )),
             )
@@ -411,6 +587,7 @@ impl SettingsWindow {
                     .justify_end()
                     .child({
                         let is_save_focused = is_at(GeneralFormRow::SaveButton);
+
                         div()
                             .rounded(px(4.0))
                             .border_1()
@@ -425,6 +602,12 @@ impl SettingsWindow {
                                     .small()
                                     .primary()
                                     .on_click(cx.listener(|this, _, window, cx| {
+                                        this.content_focused = true;
+                                        this.gen_form_cursor = this
+                                            .gen_form_rows()
+                                            .iter()
+                                            .position(|row| *row == GeneralFormRow::SaveButton)
+                                            .unwrap_or_default();
                                         this.save_general_settings(window, cx);
                                     })),
                             )
@@ -453,6 +636,7 @@ impl SettingsWindow {
         label: &'static str,
         checked: bool,
         is_focused: bool,
+        row: GeneralFormRow,
         setter: fn(&mut Self, bool),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -471,9 +655,23 @@ impl SettingsWindow {
             } else {
                 gpui::transparent_black()
             })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.content_focused = true;
+                    if let Some(position) = this
+                        .gen_form_rows()
+                        .iter()
+                        .position(|candidate| *candidate == row)
+                    {
+                        this.gen_form_cursor = position;
+                    }
+                    cx.notify();
+                }),
+            )
             .child(Checkbox::new(id).checked(checked).on_click(cx.listener(
-                move |this, val: &bool, _, cx| {
-                    setter(this, *val);
+                move |this, value: &bool, _, cx| {
+                    setter(this, *value);
                     cx.notify();
                 },
             )))
@@ -486,6 +684,8 @@ impl SettingsWindow {
         dropdown: &Entity<Dropdown>,
         is_focused: bool,
         primary: Hsla,
+        row: GeneralFormRow,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -500,6 +700,20 @@ impl SettingsWindow {
             } else {
                 gpui::transparent_black()
             })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.content_focused = true;
+                    if let Some(position) = this
+                        .gen_form_rows()
+                        .iter()
+                        .position(|candidate| *candidate == row)
+                    {
+                        this.gen_form_cursor = position;
+                    }
+                    cx.notify();
+                }),
+            )
             .child(div().text_sm().child(label.to_string()))
             .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
@@ -535,10 +749,13 @@ impl SettingsWindow {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
-                            this.focus_area = SettingsFocus::Content;
-                            let rows = this.gen_form_rows();
-                            if let Some(pos) = rows.iter().position(|r| *r == row) {
-                                this.gen_form_cursor = pos;
+                            this.content_focused = true;
+                            if let Some(position) = this
+                                .gen_form_rows()
+                                .iter()
+                                .position(|candidate| *candidate == row)
+                            {
+                                this.gen_form_cursor = position;
                             }
                             this.gen_focus_current_input(window, cx);
                             cx.notify();

@@ -1,4 +1,6 @@
-use crate::{ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile};
+use crate::{
+    AuthProfile, ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile,
+};
 use log::error;
 use secrecy::SecretString;
 use std::sync::Arc;
@@ -16,6 +18,12 @@ impl HasSecretRef for SshTunnelProfile {
 }
 
 impl HasSecretRef for ProxyProfile {
+    fn secret_ref(&self) -> String {
+        self.secret_ref()
+    }
+}
+
+impl HasSecretRef for AuthProfile {
     fn secret_ref(&self) -> String {
         self.secret_ref()
     }

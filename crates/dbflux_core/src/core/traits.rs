@@ -113,6 +113,25 @@ pub struct CodeGeneratorInfo {
 }
 use std::sync::Arc;
 
+/// Resolved secrets and overrides produced by the connect pipeline.
+///
+/// Passed to `DbDriver::connect_with_overrides()` so drivers receive
+/// pipeline-resolved credentials without storing them in the profile.
+pub struct ConnectionOverrides {
+    /// Password resolved from a ValueRef (secret manager, SSM, SSO credentials).
+    pub password: Option<SecretString>,
+}
+
+impl ConnectionOverrides {
+    pub fn new(password: Option<SecretString>) -> Self {
+        Self { password }
+    }
+
+    pub fn empty() -> Self {
+        Self { password: None }
+    }
+}
+
 /// Handle for cancelling a running query.
 ///
 /// Each database driver implements this trait to provide database-specific
@@ -277,6 +296,21 @@ pub trait DbDriver: Send + Sync {
         password: Option<&SecretString>,
         ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError>;
+
+    /// Create a connection using pipeline-resolved overrides.
+    ///
+    /// Called by the connect pipeline after value resolution. The overrides
+    /// contain the resolved password (from SSO credentials, secret manager,
+    /// or parameter store) that should be used instead of the keyring password.
+    ///
+    /// The default implementation delegates to `connect_with_secrets`.
+    fn connect_with_overrides(
+        &self,
+        profile: &ConnectionProfile,
+        overrides: &ConnectionOverrides,
+    ) -> Result<Box<dyn Connection>, DbError> {
+        self.connect_with_secrets(profile, overrides.password.as_ref(), None)
+    }
 
     /// Test if a connection can be established without keeping it open.
     ///

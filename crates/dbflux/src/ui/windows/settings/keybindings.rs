@@ -6,9 +6,9 @@ use gpui_component::Sizable;
 use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
-use super::{KeybindingsListItem, KeybindingsSelection, SettingsFocus, SettingsWindow};
+use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
 
-impl SettingsWindow {
+impl KeybindingsSection {
     pub(super) fn render_keybindings_section(
         &mut self,
         cx: &mut Context<Self>,
@@ -29,8 +29,7 @@ impl SettingsWindow {
         let secondary = theme.secondary;
 
         let current_selection = self.keybindings_selection;
-        let is_content_focused =
-            self.focus_area == SettingsFocus::Content && !self.keybindings_editing_filter;
+        let is_content_focused = self.content_focused && !self.keybindings_editing_filter;
 
         // Flat list required for scroll_to_item to work correctly
         let mut flat_items: Vec<KeybindingsListItem> = Vec::new();
@@ -183,7 +182,6 @@ impl SettingsWindow {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.keybindings_selection =
                                         KeybindingsSelection::Context(ctx_idx);
-                                    this.focus_area = SettingsFocus::Content;
 
                                     if this.keybindings_expanded.contains(&context) {
                                         this.keybindings_expanded.remove(&context);
@@ -300,7 +298,6 @@ impl SettingsWindow {
             .hover(|d| d.bg(secondary))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, binding_idx);
-                this.focus_area = SettingsFocus::Content;
                 cx.notify();
             }))
             .child(div().w(px(140.0)).child(self.render_key_badge(

@@ -20,7 +20,7 @@ pub use hook::{
     ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource, detached_process_channel,
     execute_streaming_process, output_channel,
 };
-pub use item_manager::{Identifiable, ItemManager};
+pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
     ConnectionManager, ConnectionResolutionError, DatabaseConnection, FetchDatabaseSchemaParams,

@@ -1,3 +1,4 @@
+use crate::connection::item_manager::AuthProfileManager;
 use crate::connection::manager::ConnectionManager;
 use crate::connection::profile_manager::ProfileManager;
 use crate::connection::proxy_manager::ProxyManager;
@@ -84,6 +85,7 @@ pub struct SessionFacade {
     pub secrets: SecretManager,
     pub ssh_tunnels: SshTunnelManager,
     pub proxies: ProxyManager,
+    pub auth_profiles: AuthProfileManager,
     pub history: HistoryManager,
     pub saved_queries: SavedQueryManager,
     pub tree: ConnectionTreeManager,
@@ -101,6 +103,7 @@ impl SessionFacade {
         let profiles = ProfileManager::new();
         let ssh_tunnels = SshTunnelManager::default();
         let proxies = ProxyManager::default();
+        let auth_profiles = AuthProfileManager::default();
         let history = HistoryManager::new();
         let saved_queries = SavedQueryManager::new();
         let mut tree = ConnectionTreeManager::new();
@@ -113,6 +116,7 @@ impl SessionFacade {
             secrets,
             ssh_tunnels,
             proxies,
+            auth_profiles,
             history,
             saved_queries,
             tree,

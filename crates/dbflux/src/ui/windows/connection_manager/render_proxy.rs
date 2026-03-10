@@ -14,7 +14,7 @@ impl ConnectionManagerWindow {
         let selected_proxy_id = self.selected_proxy_id;
 
         let show_focus =
-            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Proxy;
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
         let focus = self.form_focus;
 
         let ring_color = cx.theme().ring;

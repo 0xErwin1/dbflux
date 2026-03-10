@@ -12,6 +12,9 @@ const STATE_FILE: &str = "state.json";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiState {
     #[serde(default)]
+    pub settings_collapsed_security: bool,
+
+    #[serde(default)]
     pub settings_collapsed_network: bool,
 
     #[serde(default)]
@@ -76,6 +79,7 @@ mod tests {
         let store = UiStateStore::from_path(dir.path().join("state.json"));
 
         let state = store.load().unwrap();
+        assert!(!state.settings_collapsed_security);
         assert!(!state.settings_collapsed_network);
         assert!(!state.settings_collapsed_connection);
     }
@@ -86,6 +90,7 @@ mod tests {
         let store = UiStateStore::from_path(dir.path().join("state.json"));
 
         let state = UiState {
+            settings_collapsed_security: true,
             settings_collapsed_network: true,
             settings_collapsed_connection: false,
         };
@@ -93,6 +98,7 @@ mod tests {
         store.save(&state).unwrap();
         let loaded = store.load().unwrap();
 
+        assert!(loaded.settings_collapsed_security);
         assert!(loaded.settings_collapsed_network);
         assert!(!loaded.settings_collapsed_connection);
     }
@@ -110,6 +116,7 @@ mod tests {
         let store = UiStateStore::from_path(path);
         let state = store.load().unwrap();
 
+        assert!(!state.settings_collapsed_security);
         assert!(state.settings_collapsed_network);
         assert!(!state.settings_collapsed_connection);
     }

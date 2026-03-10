@@ -1,12 +1,13 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
-    GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
-    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    AppConfigStore, AuthProfileConfig, CancelToken, Connection, ConnectionHook, ConnectionHooks,
+    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
+    GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore,
+    SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
+    SecretStore, SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
+    TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::{HashMap, HashSet};
@@ -736,6 +737,24 @@ impl AppState {
         self.facade.secrets.delete_proxy_secret(proxy);
     }
 
+    // --- AuthProfileManager ---
+
+    pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        self.facade.auth_profiles.add(profile);
+    }
+
+    pub fn remove_auth_profile(&mut self, idx: usize) -> Option<dbflux_core::AuthProfile> {
+        self.facade.auth_profiles.remove(idx)
+    }
+
+    pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        self.facade.auth_profiles.update(profile);
+    }
+
+    pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
+        &self.facade.auth_profiles.items
+    }
+
     // --- ConnectionTreeManager ---
 
     pub fn save_connection_tree(&self) {
@@ -1107,6 +1126,22 @@ impl AppState {
         }
     }
 
+    pub fn cancel_running_connect_tasks_for_profile(&mut self, profile_id: Uuid) -> usize {
+        let connect_task_ids: Vec<TaskId> = self
+            .facade
+            .tasks
+            .running_tasks()
+            .into_iter()
+            .filter(|task| task.kind == TaskKind::Connect && task.profile_id == Some(profile_id))
+            .map(|task| task.id)
+            .collect();
+
+        connect_task_ids
+            .into_iter()
+            .filter(|task_id| self.facade.tasks.cancel(*task_id))
+            .count()
+    }
+
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {
         &mut self.facade.connections.connections
     }
@@ -1272,6 +1307,133 @@ impl AppState {
 
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
+    }
+
+    /// Build pipeline input and return it with profile name and driver.
+    pub fn prepare_pipeline_input(
+        &self,
+        profile_id: Uuid,
+        cancel: CancelToken,
+    ) -> Result<(dbflux_core::PipelineInput, String, Arc<dyn DbDriver>), String> {
+        let profile = self
+            .facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .ok_or_else(|| format!("Profile {} not found", profile_id))?
+            .clone();
+
+        let driver = self
+            .driver_for_profile(&profile)
+            .ok_or_else(|| format!("Driver '{}' not found", profile.driver_id()))?;
+
+        let profile_name = profile.name.clone();
+        let input = self.build_pipeline_input_for_profile(profile, cancel)?;
+
+        Ok((input, profile_name, driver))
+    }
+
+    pub fn build_pipeline_input_for_profile(
+        &self,
+        profile: ConnectionProfile,
+        cancel: CancelToken,
+    ) -> Result<dbflux_core::PipelineInput, String> {
+        let selected_auth_profile_id = profile
+            .access_kind
+            .as_ref()
+            .and_then(|kind| match kind {
+                dbflux_core::access::AccessKind::Ssm {
+                    auth_profile_id, ..
+                } => *auth_profile_id,
+                _ => None,
+            })
+            .or(profile.auth_profile_id);
+
+        let auth_profile = selected_auth_profile_id.and_then(|auth_id| {
+            self.facade
+                .auth_profiles
+                .items
+                .iter()
+                .find(|p| p.id == auth_id && p.enabled)
+                .cloned()
+        });
+
+        if matches!(
+            profile.access_kind,
+            Some(dbflux_core::access::AccessKind::Ssm { .. })
+        ) && auth_profile.is_none()
+        {
+            return Err(
+                "SSM access requires an auth profile. Select one in Access > SSM Auth Profile."
+                    .to_string(),
+            );
+        }
+
+        let uses_aws_value_sources = profile
+            .value_refs
+            .values()
+            .any(|value_ref| match value_ref {
+                dbflux_core::values::ValueRef::Secret { provider, .. }
+                | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
+                    provider.starts_with("aws")
+                }
+                _ => false,
+            });
+
+        if uses_aws_value_sources && auth_profile.is_none() {
+            return Err(
+                "AWS value sources (Secret/Parameter) require an auth profile. Select one before connecting."
+                    .to_string(),
+            );
+        }
+
+        #[cfg(feature = "aws")]
+        let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> =
+            auth_profile.as_ref().and_then(|profile| {
+                if profile.provider_id.starts_with("aws") {
+                    Some(Box::new(dbflux_aws::AwsAuthProvider::new())
+                        as Box<dyn dbflux_core::auth::DynAuthProvider>)
+                } else {
+                    None
+                }
+            });
+
+        #[cfg(not(feature = "aws"))]
+        let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> = None;
+
+        let cache = Arc::new(dbflux_core::values::ValueCache::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+
+        #[cfg(feature = "aws")]
+        let aws_profile_name = auth_profile
+            .as_ref()
+            .and_then(|profile| match &profile.config {
+                AuthProfileConfig::AwsSso { profile_name, .. }
+                | AuthProfileConfig::AwsSharedCredentials { profile_name, .. } => {
+                    Some(profile_name.clone())
+                }
+                AuthProfileConfig::AwsStaticCredentials { .. } => None,
+            });
+
+        let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
+            Arc::new(crate::access_manager::AppAccessManager::new(
+                #[cfg(feature = "aws")]
+                Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
+                    aws_profile_name,
+                ))),
+            ));
+
+        Ok(dbflux_core::PipelineInput {
+            profile,
+            auth_provider,
+            auth_profile,
+            resolver,
+            access_manager,
+            cancel,
+        })
     }
 }
 

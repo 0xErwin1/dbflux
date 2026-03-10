@@ -53,6 +53,10 @@ pub enum DbError {
     #[error("Invalid profile: {0}")]
     InvalidProfile(String),
 
+    /// A value reference (env var, secret, parameter) could not be resolved.
+    #[error("Value resolution failed: {0}")]
+    ValueResolutionFailed(String),
+
     /// Filesystem or network I/O error.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
@@ -87,6 +91,10 @@ impl DbError {
         Self::ObjectNotFound(FormattedError::new(msg))
     }
 
+    pub fn value_resolution_failed(msg: impl Into<String>) -> Self {
+        Self::ValueResolutionFailed(msg.into())
+    }
+
     /// Access the structured error information, if the variant carries one.
     pub fn formatted(&self) -> Option<&FormattedError> {
         match self {
@@ -101,6 +109,7 @@ impl DbError {
             | Self::Cancelled
             | Self::NotSupported(_)
             | Self::InvalidProfile(_)
+            | Self::ValueResolutionFailed(_)
             | Self::IoError(_) => None,
         }
     }
