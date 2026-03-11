@@ -5,6 +5,10 @@ use dbflux_core::PipelineState;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use std::time::{Duration, Instant};
+
+const SSO_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+const LOGIN_SUCCESS_AUTO_CLOSE_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub enum LoginModalState {
@@ -14,6 +18,7 @@ pub enum LoginModalState {
         profile_name: String,
         verification_url: Option<String>,
         launch_error: Option<String>,
+        started_at: Instant,
     },
     Success,
     Failed {
@@ -22,10 +27,16 @@ pub enum LoginModalState {
     Cancelled,
 }
 
+pub enum LoginModalEvent {
+    OpenSsoWizard,
+}
+
 pub struct LoginModal {
     visible: bool,
     state: LoginModalState,
     focus_handle: FocusHandle,
+    timeout_generation: u64,
+    success_generation: u64,
 }
 
 impl LoginModal {
@@ -34,6 +45,8 @@ impl LoginModal {
             visible: false,
             state: LoginModalState::Idle,
             focus_handle: cx.focus_handle(),
+            timeout_generation: 0,
+            success_generation: 0,
         }
     }
 
@@ -60,8 +73,10 @@ impl LoginModal {
                     profile_name: profile_name.to_string(),
                     verification_url: verification_url.clone(),
                     launch_error: None,
+                    started_at: Instant::now(),
                 };
                 self.focus_handle.focus(window);
+                self.schedule_timeout(cx);
             }
             PipelineState::Failed { stage, error } => {
                 self.visible = true;
@@ -81,7 +96,8 @@ impl LoginModal {
             | PipelineState::FetchingSchema => {
                 if self.visible {
                     self.state = LoginModalState::Success;
-                    self.visible = false;
+                    self.visible = true;
+                    self.schedule_success_close(cx);
                 }
             }
             PipelineState::Idle | PipelineState::Authenticating { .. } => {}
@@ -93,6 +109,79 @@ impl LoginModal {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.state = LoginModalState::Cancelled;
+        cx.notify();
+    }
+
+    fn schedule_timeout(&mut self, cx: &mut Context<Self>) {
+        self.timeout_generation += 1;
+        let generation = self.timeout_generation;
+        let this = cx.entity().clone();
+
+        cx.spawn(async move |_entity, cx| {
+            cx.background_executor().timer(SSO_LOGIN_TIMEOUT).await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    if generation != this.timeout_generation {
+                        return;
+                    }
+
+                    if matches!(this.state, LoginModalState::WaitingForBrowser { .. }) {
+                        this.state = LoginModalState::Failed {
+                            error: "Login timed out after 5 minutes".to_string(),
+                        };
+                        this.visible = true;
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_success_close(&mut self, cx: &mut Context<Self>) {
+        self.success_generation += 1;
+        let generation = self.success_generation;
+        let this = cx.entity().clone();
+
+        cx.spawn(async move |_entity, cx| {
+            cx.background_executor()
+                .timer(LOGIN_SUCCESS_AUTO_CLOSE_DELAY)
+                .await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    if generation != this.success_generation {
+                        return;
+                    }
+
+                    if matches!(this.state, LoginModalState::Success) {
+                        this.close(cx);
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub fn open_manual(
+        &mut self,
+        provider_name: impl Into<String>,
+        profile_name: impl Into<String>,
+        verification_url: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.visible = true;
+        self.state = LoginModalState::WaitingForBrowser {
+            provider_name: provider_name.into(),
+            profile_name: profile_name.into(),
+            verification_url,
+            launch_error: None,
+            started_at: Instant::now(),
+        };
+        self.focus_handle.focus(window);
+        self.schedule_timeout(cx);
         cx.notify();
     }
 
@@ -113,12 +202,17 @@ impl LoginModal {
                 Ok(_) => {
                     *launch_error = None;
                 }
-                Err(error) => {
-                    *launch_error = Some(format!(
-                        "Could not open browser automatically. Open the URL manually. ({})",
-                        error
-                    ));
-                }
+                Err(error) => match open::that_detached(&url) {
+                    Ok(_) => {
+                        *launch_error = None;
+                    }
+                    Err(detached_error) => {
+                        *launch_error = Some(format!(
+                            "Could not open browser automatically. Open the URL manually. ({}; fallback failed: {})",
+                            error, detached_error
+                        ));
+                    }
+                },
             }
 
             cx.notify();
@@ -134,7 +228,13 @@ impl LoginModal {
             cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
         }
     }
+
+    fn open_sso_wizard(&mut self, cx: &mut Context<Self>) {
+        cx.emit(LoginModalEvent::OpenSsoWizard);
+    }
 }
+
+impl EventEmitter<LoginModalEvent> for LoginModal {}
 
 impl Render for LoginModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -161,8 +261,10 @@ impl Render for LoginModal {
                 profile_name,
                 verification_url,
                 launch_error,
+                started_at,
             } => {
                 let has_url = verification_url.is_some();
+                let elapsed = started_at.elapsed().as_secs();
                 let url_display = verification_url
                     .clone()
                     .unwrap_or_else(|| "Login URL not provided by provider".to_string());
@@ -223,7 +325,10 @@ impl Render for LoginModal {
                             div()
                                 .text_size(FontSizes::XS)
                                 .text_color(theme.muted_foreground)
-                                .child("Login can take up to 5 minutes. Keep this window open while completing SSO in your browser."),
+                                .child(format!(
+                                    "Login can take up to 5 minutes. Elapsed: {}s",
+                                    elapsed
+                                )),
                         )
                         .child(
                             div()
@@ -297,7 +402,63 @@ impl Render for LoginModal {
                         ),
                 )
             }
-            LoginModalState::Failed { error } => frame.child(
+            LoginModalState::Failed { error } => frame
+                .child(
+                    div()
+                        .p(Spacing::MD)
+                        .flex()
+                        .flex_col()
+                        .gap(Spacing::MD)
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.warning)
+                                .child("Connection failed"),
+                        )
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .child(error.clone()),
+                        )
+                        .child(
+                            div().flex().justify_end().child(
+                                div()
+                                    .id("sso-failed-close")
+                                    .px(Spacing::MD)
+                                    .py(Spacing::SM)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(theme.secondary)
+                                    .hover(|d| d.bg(theme.muted))
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close(cx);
+                                    }))
+                                    .child("Close"),
+                            ),
+                        ),
+                )
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("sso-open-wizard")
+                            .px(Spacing::MD)
+                            .py(Spacing::SM)
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .bg(theme.secondary)
+                            .hover(|d| d.bg(theme.muted))
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.foreground)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_sso_wizard(cx);
+                            }))
+                            .child("Open AWS SSO Wizard"),
+                    ),
+                ),
+            LoginModalState::Success => frame.child(
                 div()
                     .p(Spacing::MD)
                     .flex()
@@ -306,32 +467,14 @@ impl Render for LoginModal {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .text_color(theme.warning)
-                            .child("Connection failed"),
+                            .text_color(theme.success)
+                            .child("Login completed"),
                     )
                     .child(
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
-                            .child(error.clone()),
-                    )
-                    .child(
-                        div().flex().justify_end().child(
-                            div()
-                                .id("sso-failed-close")
-                                .px(Spacing::MD)
-                                .py(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.secondary)
-                                .hover(|d| d.bg(theme.muted))
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.close(cx);
-                                }))
-                                .child("Close"),
-                        ),
+                            .child("Authentication succeeded. Closing this dialog..."),
                     ),
             ),
             _ => frame,

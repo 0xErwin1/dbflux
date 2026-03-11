@@ -377,7 +377,8 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb") {
+        if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
+        {
             let field_enabled = self.is_field_enabled(field_def);
 
             return div()
@@ -484,12 +485,12 @@ impl ConnectionManagerWindow {
                             .when_some(
                                 field_focus.and_then(|field| field_enabled.then_some(field)),
                                 |d, field| {
-                                d.on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.enter_edit_mode_for_field(field, window, cx);
-                                    }),
-                                )
+                                    d.on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(field, window, cx);
+                                        }),
+                                    )
                                 },
                             )
                             .when(field_enabled && field_focus.is_none(), |d| {

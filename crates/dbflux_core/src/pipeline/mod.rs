@@ -411,6 +411,7 @@ mod tests {
 
     struct MockAuthProvider {
         should_require_login: bool,
+        login_delay_ms: u64,
     }
 
     impl crate::auth::AuthProvider for MockAuthProvider {
@@ -434,6 +435,10 @@ mod tests {
         }
 
         async fn login(&self, profile: &AuthProfile) -> Result<AuthSession, DbError> {
+            if self.login_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.login_delay_ms)).await;
+            }
+
             Ok(AuthSession {
                 provider_id: "mock_auth".to_string(),
                 profile_id: profile.id,
@@ -454,6 +459,8 @@ mod tests {
 
     struct MockAccessManager;
 
+    struct FailingAccessManager;
+
     #[async_trait::async_trait]
     impl AccessManager for MockAccessManager {
         async fn open(
@@ -463,6 +470,18 @@ mod tests {
             _remote_port: u16,
         ) -> Result<AccessHandle, DbError> {
             Ok(AccessHandle::direct())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AccessManager for FailingAccessManager {
+        async fn open(
+            &self,
+            _kind: &AccessKind,
+            _remote_host: &str,
+            _remote_port: u16,
+        ) -> Result<AccessHandle, DbError> {
+            Err(DbError::connection_failed("access open failed"))
         }
     }
 
@@ -566,6 +585,7 @@ mod tests {
             profile,
             auth_provider: Some(Box::new(MockAuthProvider {
                 should_require_login: false,
+                login_delay_ms: 0,
             })),
             auth_profile: Some(auth_profile),
             resolver: test_resolver(),
@@ -629,6 +649,7 @@ mod tests {
             profile,
             auth_provider: Some(Box::new(MockAuthProvider {
                 should_require_login: true,
+                login_delay_ms: 0,
             })),
             auth_profile: Some(auth_profile),
             resolver: test_resolver(),
@@ -647,5 +668,69 @@ mod tests {
             matches!(last, PipelineState::OpeningAccess { .. }),
             "expected OpeningAccess, got: {last}"
         );
+    }
+
+    #[tokio::test]
+    async fn pipeline_login_required_emits_waiting_state() {
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let auth_profile = test_auth_profile();
+        let (state_tx, mut state_rx) = pipeline_state_channel();
+
+        let input = PipelineInput {
+            profile,
+            auth_provider: Some(Box::new(MockAuthProvider {
+                should_require_login: true,
+                login_delay_ms: 100,
+            })),
+            auth_profile: Some(auth_profile),
+            resolver: test_resolver(),
+            access_manager: Arc::new(MockAccessManager),
+            cancel: CancelToken::new(),
+        };
+
+        let task = tokio::spawn(async move { run_pipeline(input, &state_tx).await });
+
+        let wait_result = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state_rx.changed().await.is_err() {
+                    break false;
+                }
+
+                if matches!(&*state_rx.borrow(), PipelineState::WaitingForLogin { .. }) {
+                    break true;
+                }
+            }
+        })
+        .await;
+
+        let saw_waiting = wait_result.unwrap_or(false);
+
+        let output = task.await.expect("pipeline task join should succeed");
+        assert!(output.is_ok(), "pipeline should complete after login");
+        assert!(saw_waiting, "expected to observe WaitingForLogin state");
+    }
+
+    #[tokio::test]
+    async fn pipeline_access_errors_are_tagged_with_access_stage() {
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let (state_tx, _state_rx) = pipeline_state_channel();
+
+        let input = PipelineInput {
+            profile,
+            auth_provider: None,
+            auth_profile: None,
+            resolver: test_resolver(),
+            access_manager: Arc::new(FailingAccessManager),
+            cancel: CancelToken::new(),
+        };
+
+        let result = run_pipeline(input, &state_tx).await;
+        let error = match result {
+            Ok(_) => panic!("pipeline should fail when access opening fails"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.stage, "access");
+        assert!(error.source.to_string().contains("access open failed"));
     }
 }

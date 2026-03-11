@@ -98,6 +98,7 @@ impl Render for Workspace {
         let toast_host = self.toast_host.clone();
         let command_palette = self.command_palette.clone();
         let login_modal = self.login_modal.clone();
+        let sso_wizard = self.sso_wizard.clone();
 
         let tab_bar = self.tab_bar.clone();
         let has_tabs = !self.tab_manager.read(cx).is_empty();
@@ -555,6 +556,7 @@ impl Render for Workspace {
             .child(command_palette)
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
+            .child(sso_wizard)
             .child(
                 div()
                     .absolute()

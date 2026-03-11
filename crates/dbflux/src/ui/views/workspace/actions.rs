@@ -114,6 +114,25 @@ impl Workspace {
         }
     }
 
+    pub(super) fn open_login_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let profile_name = self
+            .app_state
+            .read(cx)
+            .active_connection()
+            .map(|connected| connected.profile.name.clone())
+            .unwrap_or_else(|| "connection".to_string());
+
+        self.login_modal.update(cx, |modal, cx| {
+            modal.open_manual("AWS SSO", profile_name, None, window, cx);
+        });
+    }
+
+    pub(super) fn open_sso_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sso_wizard.update(cx, |wizard, cx| {
+            wizard.open(window, cx);
+        });
+    }
+
     pub(super) fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 

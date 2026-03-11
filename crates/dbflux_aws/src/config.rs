@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -16,6 +17,9 @@ pub struct AwsProfileInfo {
     pub region: Option<String>,
     pub is_sso: bool,
     pub sso_start_url: Option<String>,
+    pub sso_region: Option<String>,
+    pub sso_account_id: Option<String>,
+    pub sso_role_name: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -150,6 +154,9 @@ fn flush_section(
 
     let is_sso = keys.contains_key("sso_start_url") || keys.contains_key("sso_session");
     let sso_start_url = keys.get("sso_start_url").cloned();
+    let sso_region = keys.get("sso_region").cloned();
+    let sso_account_id = keys.get("sso_account_id").cloned();
+    let sso_role_name = keys.get("sso_role_name").cloned();
     let region = keys.get("region").cloned();
 
     profiles.push(AwsProfileInfo {
@@ -157,7 +164,235 @@ fn flush_section(
         region,
         is_sso,
         sso_start_url,
+        sso_region,
+        sso_account_id,
+        sso_role_name,
     });
+}
+
+pub fn write_profile_to_aws_config(profile: &AwsProfileInfo) -> Result<(), io::Error> {
+    let path = config_file_path();
+    write_profile_to_path(profile, &path)
+}
+
+pub fn restore_aws_config_backup() -> Result<(), io::Error> {
+    let path = config_file_path();
+    restore_backup_for_path(&path)
+}
+
+fn write_profile_to_path(
+    profile: &AwsProfileInfo,
+    path: &std::path::Path,
+) -> Result<(), io::Error> {
+    let existing = read_config_or_default(path)?;
+    let updated = upsert_profile_section(&existing, profile);
+
+    if existing == updated {
+        return Ok(());
+    }
+
+    write_atomic_with_backup(path, &updated)
+}
+
+fn profile_section_header(name: &str) -> String {
+    if name.eq_ignore_ascii_case("default") {
+        "[default]".to_string()
+    } else {
+        format!("[profile {}]", name)
+    }
+}
+
+fn profile_entries(profile: &AwsProfileInfo) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    if profile.is_sso {
+        if let Some(value) = profile.sso_start_url.as_ref()
+            && !value.trim().is_empty()
+        {
+            entries.push(("sso_start_url".to_string(), value.clone()));
+        }
+
+        if let Some(value) = profile.sso_region.as_ref()
+            && !value.trim().is_empty()
+        {
+            entries.push(("sso_region".to_string(), value.clone()));
+        }
+
+        if let Some(value) = profile.sso_account_id.as_ref()
+            && !value.trim().is_empty()
+        {
+            entries.push(("sso_account_id".to_string(), value.clone()));
+        }
+
+        if let Some(value) = profile.sso_role_name.as_ref()
+            && !value.trim().is_empty()
+        {
+            entries.push(("sso_role_name".to_string(), value.clone()));
+        }
+    }
+
+    if let Some(value) = profile.region.as_ref()
+        && !value.trim().is_empty()
+    {
+        entries.push(("region".to_string(), value.clone()));
+    }
+
+    entries
+}
+
+fn find_section_bounds(lines: &[String], section_header: &str) -> Option<(usize, usize)> {
+    let start = lines
+        .iter()
+        .position(|line| line.trim().eq_ignore_ascii_case(section_header))?;
+
+    let mut end = lines.len();
+    for (index, line) in lines.iter().enumerate().skip(start + 1) {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            end = index;
+            break;
+        }
+    }
+
+    Some((start, end))
+}
+
+fn upsert_profile_section(contents: &str, profile: &AwsProfileInfo) -> String {
+    let section_header = profile_section_header(&profile.name);
+    let entries = profile_entries(profile);
+
+    let mut lines = contents
+        .lines()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    if let Some((start, end)) = find_section_bounds(&lines, &section_header) {
+        let mut seen = HashMap::<String, bool>::new();
+        for (key, _) in &entries {
+            seen.insert(key.clone(), false);
+        }
+
+        for line in lines.iter_mut().take(end).skip(start + 1) {
+            if let Some((key, _)) = parse_key_value(line.trim())
+                && let Some((_, value)) = entries.iter().find(|(entry_key, _)| *entry_key == key)
+            {
+                *line = format!("{} = {}", key, value);
+                seen.insert(key, true);
+            }
+        }
+
+        let mut insert_index = end;
+        for (key, value) in &entries {
+            if !seen.get(key).copied().unwrap_or(false) {
+                lines.insert(insert_index, format!("{} = {}", key, value));
+                insert_index += 1;
+            }
+        }
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.push(String::new());
+        }
+
+        lines.push(section_header);
+        for (key, value) in entries {
+            lines.push(format!("{} = {}", key, value));
+        }
+    }
+
+    let mut updated = lines.join("\n");
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated
+}
+
+fn write_atomic_with_backup(path: &std::path::Path, content: &str) -> Result<(), io::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let backup_path = create_backup_for_path(path)?;
+    let temp_path = path.with_extension("tmp");
+
+    fs::write(&temp_path, content)?;
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        let _ = fs::copy(&backup_path, path);
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+fn create_backup_for_path(path: &std::path::Path) -> Result<PathBuf, io::Error> {
+    let base = path.with_extension("dbflux-backup");
+    let backup_path = if base.exists() {
+        let timestamp = chrono::Utc::now().timestamp();
+        let file_name = format!("config.dbflux-backup.{}", timestamp);
+        path.with_file_name(file_name)
+    } else {
+        base
+    };
+
+    match fs::copy(path, &backup_path) {
+        Ok(_) => Ok(backup_path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            fs::write(&backup_path, "")?;
+            Ok(backup_path)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn restore_backup_for_path(path: &std::path::Path) -> Result<(), io::Error> {
+    let default_backup = path.with_extension("dbflux-backup");
+
+    if default_backup.exists() {
+        fs::copy(default_backup, path)?;
+        return Ok(());
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "AWS config parent directory missing",
+        )
+    })?;
+
+    let mut latest: Option<(PathBuf, SystemTime)> = None;
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if !name.starts_with("config.dbflux-backup.") {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+
+        let should_replace = latest
+            .as_ref()
+            .map(|(_, current)| modified > *current)
+            .unwrap_or(true);
+
+        if should_replace {
+            latest = Some((entry.path(), modified));
+        }
+    }
+
+    let (backup_path, _) = latest.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "No AWS config backup found for restore",
+        )
+    })?;
+
+    fs::copy(backup_path, path)?;
+    Ok(())
 }
 
 /// Appends a new SSO profile block to `~/.aws/config`.

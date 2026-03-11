@@ -281,10 +281,7 @@ impl Sidebar {
                                     name: collection.name.clone(),
                                     schema: Some(db.name.clone()),
                                     columns: None,
-                                    indexes: collection
-                                        .indexes
-                                        .clone()
-                                        .map(IndexData::Document),
+                                    indexes: collection.indexes.clone().map(IndexData::Document),
                                     foreign_keys: None,
                                     constraints: None,
                                     sample_fields: collection.sample_fields.clone(),

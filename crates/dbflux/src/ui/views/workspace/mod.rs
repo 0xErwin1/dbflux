@@ -16,9 +16,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
-use crate::ui::overlays::login_modal::LoginModal;
+use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
+use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
@@ -73,6 +74,7 @@ pub struct Workspace {
     command_palette: Entity<CommandPalette>,
     sql_preview_modal: Entity<SqlPreviewModal>,
     login_modal: Entity<LoginModal>,
+    sso_wizard: Entity<SsoWizard>,
     shutdown_overlay: Entity<ShutdownOverlay>,
 
     tab_manager: Entity<TabManager>,
@@ -117,6 +119,7 @@ impl Workspace {
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
+        let sso_wizard = cx.new(|cx| SsoWizard::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
@@ -134,6 +137,43 @@ impl Workspace {
             this.needs_focus_restore = true;
             cx.notify();
         })
+        .detach();
+
+        cx.subscribe_in(
+            &login_modal,
+            window,
+            |this, _, event: &LoginModalEvent, window, cx| match event {
+                LoginModalEvent::OpenSsoWizard => {
+                    this.open_sso_wizard(window, cx);
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &sso_wizard,
+            window,
+            |this, _, event: &SsoWizardEvent, _window, cx| match event {
+                SsoWizardEvent::ProfileCreated { profile_id } => {
+                    this.app_state.update(cx, |_state, cx| {
+                        cx.emit(AppStateChanged);
+                    });
+
+                    if this.pipeline_progress.is_some() {
+                        this.login_modal.update(cx, |modal, cx| {
+                            modal.close(cx);
+                        });
+
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile(*profile_id, cx);
+                        });
+                    }
+                }
+            },
+        )
         .detach();
 
         cx.subscribe_in(
@@ -388,6 +428,7 @@ impl Workspace {
             command_palette,
             sql_preview_modal,
             login_modal,
+            sso_wizard,
             shutdown_overlay,
             tab_manager,
             tab_bar,
@@ -477,6 +518,8 @@ impl Workspace {
             PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
             PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
             PaletteCommand::new("open_settings", "Open Settings", "View"),
+            PaletteCommand::new("open_login_modal", "Open Login Modal", "View"),
+            PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
         ]
     }
 
@@ -582,6 +625,9 @@ impl Workspace {
                         this._pipeline_subscription = None;
                         this.login_modal.update(cx, |modal, cx| {
                             modal.close(cx);
+                        });
+                        this.app_state.update(cx, |_state, cx| {
+                            cx.emit(AppStateChanged);
                         });
                         // Toast is handled by the sidebar connect flow
                     }

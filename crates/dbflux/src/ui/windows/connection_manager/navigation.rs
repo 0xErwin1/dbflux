@@ -1,8 +1,10 @@
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::DropdownItem;
+use crate::ui::windows::settings::{SettingsSectionId, SettingsWindow};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::FormFieldKind;
 use gpui::*;
+use gpui_component::Root;
 
 use super::{
     AccessTabMode, ActiveTab, ConnectionManagerWindow, DismissEvent, DriverFocus, EditState,
@@ -1360,6 +1362,52 @@ impl ConnectionManagerWindow {
         }
     }
 
+    pub(super) fn open_settings_section(
+        &mut self,
+        section: SettingsSectionId,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(handle) = self.app_state.read(cx).settings_window {
+            if handle
+                .update(cx, |_root, window, _cx| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+
+            self.app_state.update(cx, |state, _| {
+                state.settings_window = None;
+            });
+        }
+
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
+
+        if let Ok(handle) = cx.open_window(
+            WindowOptions {
+                app_id: Some("dbflux".into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Settings".into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                kind: WindowKind::Floating,
+                focus: true,
+                ..Default::default()
+            },
+            move |window, cx| {
+                let settings = cx.new(|cx| {
+                    SettingsWindow::new_with_section(app_state.clone(), section, window, cx)
+                });
+                cx.new(|cx| Root::new(settings, window, cx))
+            },
+        ) {
+            self.app_state.update(cx, |state, _| {
+                state.settings_window = Some(handle);
+            });
+        }
+    }
+
     pub(super) fn activate_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.form_focus {
             FormFocus::Name => {
@@ -1530,8 +1578,12 @@ impl ConnectionManagerWindow {
                 self.ssh_auth_method = SshAuthSelection::Password;
             }
 
-            FormFocus::SshEditInSettings | FormFocus::ProxyEditInSettings => {
-                // TODO: open Settings window to the selected tunnel/proxy
+            FormFocus::SshEditInSettings => {
+                self.open_settings_section(SettingsSectionId::SshTunnels, cx);
+            }
+
+            FormFocus::ProxyEditInSettings => {
+                self.open_settings_section(SettingsSectionId::Proxies, cx);
             }
 
             FormFocus::TestSsh => {

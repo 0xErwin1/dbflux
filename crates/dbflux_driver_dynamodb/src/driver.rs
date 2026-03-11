@@ -1463,7 +1463,10 @@ fn build_client(config: &DynamoProfileConfig) -> Result<Client, DbError> {
     if let Some(endpoint) = &config.endpoint {
         builder = builder.endpoint_url(endpoint);
 
-        if endpoint_looks_local(endpoint) && config.profile.is_none() && !has_environment_credentials() {
+        if endpoint_looks_local(endpoint)
+            && config.profile.is_none()
+            && !has_environment_credentials()
+        {
             builder = builder.credentials_provider(Credentials::new(
                 "test",
                 "test",
@@ -1491,7 +1494,10 @@ fn endpoint_looks_local(endpoint: &str) -> bool {
     let host_with_port = without_scheme.split('/').next().unwrap_or_default();
     let host = host_with_port.split(':').next().unwrap_or_default();
 
-    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
 }
 
 fn probe_connection(client: &Client, config: &DynamoProfileConfig) -> Result<(), DbError> {

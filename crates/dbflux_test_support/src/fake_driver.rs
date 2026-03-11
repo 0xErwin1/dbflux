@@ -1,15 +1,15 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RedisLanguageService, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlLanguageService, DYNAMODB_FORM, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
+    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM,
+    MYSQL_FORM, POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
+    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlLanguageService,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]

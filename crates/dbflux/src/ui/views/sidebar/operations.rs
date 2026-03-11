@@ -149,6 +149,10 @@ fn pipeline_stage_task_description(state: &PipelineState) -> Option<String> {
     }
 }
 
+fn pipeline_stage_task_detail_line(state: &PipelineState) -> Option<String> {
+    pipeline_stage_task_description(state).map(|description| format!("> {description}"))
+}
+
 fn hook_started_detached_details(
     hook: &ConnectionHook,
     phase: HookPhase,
@@ -1936,13 +1940,19 @@ impl Sidebar {
                         .as_ref()
                         .is_none_or(|(active, _)| active != &description)
                     && let Err(error) = cx.update(|cx| {
-                        app_state_for_stage_tasks.update(cx, |state, cx| {
-                            if let Some((_, stage_task_id)) = current_stage.take() {
-                                state.complete_task(stage_task_id);
+                        let stage_state = state.clone();
+
+                        app_state_for_stage_tasks.update(cx, |app_state, cx| {
+                            if let Some(line) = pipeline_stage_task_detail_line(&stage_state) {
+                                app_state.append_task_details(task_id, format!("{line}\n"));
                             }
 
-                            let (stage_task_id, _stage_cancel_token) =
-                                state.start_task_for_profile(
+                            if let Some((_, stage_task_id)) = current_stage.take() {
+                                app_state.complete_task(stage_task_id);
+                            }
+
+                            let (stage_task_id, _stage_cancel_token) = app_state
+                                .start_task_for_profile(
                                     TaskKind::Connect,
                                     format!("  ↳ {}", description),
                                     Some(profile_id),
@@ -1970,12 +1980,20 @@ impl Sidebar {
                             if let Some((_, stage_task_id)) = current_stage.take() {
                                 match &terminal_state {
                                     PipelineState::Cancelled => {
+                                        app_state
+                                            .append_task_details(task_id, "Pipeline cancelled\n");
                                         app_state.cancel_task(stage_task_id);
                                     }
                                     PipelineState::Failed { error, .. } => {
+                                        app_state.append_task_details(
+                                            task_id,
+                                            format!("Pipeline failed: {error}\n"),
+                                        );
                                         app_state.fail_task(stage_task_id, error.clone());
                                     }
                                     _ => {
+                                        app_state
+                                            .append_task_details(task_id, "Pipeline completed\n");
                                         app_state.complete_task(stage_task_id);
                                     }
                                 }

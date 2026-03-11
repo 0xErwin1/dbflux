@@ -6,7 +6,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::{HashMap, HashSet};
@@ -18,6 +18,10 @@ use uuid::Uuid;
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 
 pub struct AppStateChanged;
+
+pub struct AuthProfileCreated {
+    pub profile_id: Uuid,
+}
 
 #[cfg(feature = "sqlite")]
 use dbflux_driver_sqlite::SqliteDriver;
@@ -1487,6 +1491,7 @@ impl Default for AppState {
 }
 
 impl EventEmitter<AppStateChanged> for AppState {}
+impl EventEmitter<AuthProfileCreated> for AppState {}
 
 #[cfg(test)]
 mod tests {

@@ -5,3 +5,4 @@ pub mod history_modal;
 pub mod login_modal;
 pub mod shutdown_overlay;
 pub mod sql_preview_modal;
+pub mod sso_wizard;

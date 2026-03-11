@@ -4,7 +4,16 @@ use crate::ui::components::tree_nav::TreeNavAction;
 
 impl SettingsCoordinator {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let active_section = SettingsSectionId::General;
+        Self::new_with_section(app_state, SettingsSectionId::General, window, cx)
+    }
+
+    pub fn new_with_section(
+        app_state: Entity<AppState>,
+        initial_section: SettingsSectionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let active_section = initial_section;
         let mut sidebar_tree = Self::build_sidebar_tree();
         sidebar_tree.select_by_id(Self::tree_id_for_section(active_section));
 

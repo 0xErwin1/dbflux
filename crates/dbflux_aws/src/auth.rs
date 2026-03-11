@@ -706,15 +706,18 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             return;
         };
 
-        if let Err(err) = crate::config::append_aws_sso_profile(
-            profile_name,
-            sso_start_url,
-            region,
-            sso_account_id,
-            sso_role_name,
-            region,
-        ) {
-            log::warn!("Failed to append AWS SSO profile to config: {}", err);
+        let profile_info = crate::config::AwsProfileInfo {
+            name: profile_name.clone(),
+            region: Some(region.clone()),
+            is_sso: true,
+            sso_start_url: Some(sso_start_url.clone()),
+            sso_region: Some(region.clone()),
+            sso_account_id: Some(sso_account_id.clone()),
+            sso_role_name: Some(sso_role_name.clone()),
+        };
+
+        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
+            log::warn!("Failed to write AWS SSO profile to config: {}", err);
         }
     }
 }
@@ -779,10 +782,19 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             return;
         };
 
-        if let Err(err) = crate::config::append_aws_shared_credentials_profile(profile_name, region)
-        {
+        let profile_info = crate::config::AwsProfileInfo {
+            name: profile_name.clone(),
+            region: Some(region.clone()),
+            is_sso: false,
+            sso_start_url: None,
+            sso_region: None,
+            sso_account_id: None,
+            sso_role_name: None,
+        };
+
+        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
             log::warn!(
-                "Failed to append AWS shared credentials profile to config: {}",
+                "Failed to write AWS shared credentials profile to config: {}",
                 err
             );
         }
@@ -1223,9 +1235,7 @@ impl std::future::Future for SleepFuture {
                 // Not ready yet — remain pending; the waker will re-poll us.
                 std::task::Poll::Pending
             }
-            SleepState::Done => {
-                std::task::Poll::Ready(())
-            }
+            SleepState::Done => std::task::Poll::Ready(()),
         }
     }
 }

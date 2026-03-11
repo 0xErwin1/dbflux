@@ -14,6 +14,7 @@ pub use auth::{
 };
 pub use config::{
     AwsProfileInfo, CachedAwsConfig, append_aws_shared_credentials_profile, append_aws_sso_profile,
+    restore_aws_config_backup, write_profile_to_aws_config,
 };
 pub use parameters::AwsSsmParameterProvider;
 pub use secrets::AwsSecretsManagerProvider;
