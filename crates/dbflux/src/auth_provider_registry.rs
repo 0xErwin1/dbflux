@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use dbflux_core::DbError;
 use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider, ImportableProfile,
     ResolvedCredentials, UrlCallback,
 };
 use dbflux_core::values::CompositeValueResolver;
-use dbflux_core::DbError;
 use indexmap::IndexMap;
 
 pub struct AuthProviderRegistry {

@@ -74,7 +74,9 @@ impl From<AccessKindWire> for AccessKind {
                 ssh_tunnel_profile_id,
             },
             AccessKindWire::Proxy { proxy_profile_id } => AccessKind::Proxy { proxy_profile_id },
-            AccessKindWire::Managed { provider, params } => AccessKind::Managed { provider, params },
+            AccessKindWire::Managed { provider, params } => {
+                AccessKind::Managed { provider, params }
+            }
             AccessKindWire::Ssm {
                 instance_id,
                 region,
@@ -203,7 +205,10 @@ mod tests {
         let deserialized: AccessKind = serde_json::from_value(serialized).unwrap();
 
         match deserialized {
-            AccessKind::Managed { provider, params: p } => {
+            AccessKind::Managed {
+                provider,
+                params: p,
+            } => {
                 assert_eq!(provider, "aws-ssm");
                 assert_eq!(p, params);
             }

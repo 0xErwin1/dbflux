@@ -268,7 +268,7 @@ impl ConnectionManagerWindow {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
         }
 
         Some(config)
@@ -332,7 +332,7 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_pending_auth_profile();
+        self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
         if !self.validate_form(true, cx) {
@@ -422,8 +422,8 @@ impl ConnectionManagerWindow {
         window.remove_window();
     }
 
-    pub(super) fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_pending_auth_profile();
+    pub(super) fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
         if !self.validate_form(false, cx) {

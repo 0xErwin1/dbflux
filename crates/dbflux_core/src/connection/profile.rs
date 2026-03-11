@@ -19,6 +19,7 @@ pub enum DbKind {
     MariaDB,
     MongoDB,
     Redis,
+    DynamoDB,
 }
 
 impl DbKind {
@@ -30,6 +31,7 @@ impl DbKind {
             DbKind::MariaDB => "MariaDB",
             DbKind::MongoDB => "MongoDB",
             DbKind::Redis => "Redis",
+            DbKind::DynamoDB => "DynamoDB",
         }
     }
 }
@@ -182,6 +184,15 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    DynamoDB {
+        region: String,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        endpoint: Option<String>,
+        #[serde(default)]
+        table: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -202,6 +213,7 @@ impl DbConfig {
             DbConfig::MySQL { .. } => DbKind::MySQL,
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
             DbConfig::Redis { .. } => DbKind::Redis,
+            DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -268,13 +280,22 @@ impl DbConfig {
         }
     }
 
+    pub fn default_dynamodb() -> Self {
+        DbConfig::DynamoDB {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+            table: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
         }
     }
 
@@ -301,7 +322,9 @@ impl DbConfig {
                 ssh_tunnel_profile_id,
                 ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => false,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                false
+            }
         }
     }
 
@@ -312,7 +335,7 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. } => Some((host, *port)),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
         }
     }
 
@@ -347,7 +370,7 @@ impl DbConfig {
                 *port = tunnel_port;
                 *use_uri = false;
             }
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
         }
     }
 
@@ -361,7 +384,9 @@ impl DbConfig {
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                return None;
+            }
         };
 
         if !*use_uri {
@@ -619,6 +644,7 @@ impl ConnectionProfile {
             DbKind::MariaDB => "mariadb",
             DbKind::MongoDB => "mongodb",
             DbKind::Redis => "redis",
+            DbKind::DynamoDB => "dynamodb",
         }
     }
 
@@ -842,6 +868,57 @@ mod tests {
         assert!(profile.connection_settings.is_none());
         assert!(profile.hooks.is_none());
         assert!(profile.hook_bindings.is_none());
+    }
+
+    #[test]
+    fn dynamodb_config_kind_and_driver_id_fallback_work() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000099",
+            "name": "legacy-dynamodb",
+            "config": {
+                "DynamoDB": {
+                    "region": "us-east-1"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile =
+            serde_json::from_str(json).expect("dynamodb profile should deserialize");
+
+        assert_eq!(profile.kind(), DbKind::DynamoDB);
+        assert_eq!(profile.driver_id(), "dynamodb");
+    }
+
+    #[test]
+    fn dynamodb_profile_serde_roundtrip_preserves_optional_fields() {
+        let profile = ConnectionProfile::new(
+            "dynamo",
+            DbConfig::DynamoDB {
+                region: "us-west-2".to_string(),
+                profile: Some("dev".to_string()),
+                endpoint: Some("http://localhost:8000".to_string()),
+                table: Some("users".to_string()),
+            },
+        );
+
+        let json = serde_json::to_string(&profile).expect("serialize should succeed");
+        let restored: ConnectionProfile =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        match restored.config {
+            DbConfig::DynamoDB {
+                region,
+                profile,
+                endpoint,
+                table,
+            } => {
+                assert_eq!(region, "us-west-2");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:8000"));
+                assert_eq!(table.as_deref(), Some("users"));
+            }
+            _ => panic!("expected DynamoDB config variant"),
+        }
     }
 
     #[test]

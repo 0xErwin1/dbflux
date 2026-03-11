@@ -157,6 +157,19 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             }
         }
 
+        DbConfig::DynamoDB {
+            region,
+            profile,
+            endpoint,
+            table,
+        } => match field {
+            "region" => *region = val.to_string(),
+            "profile" => *profile = Some(val.to_string()),
+            "endpoint" => *endpoint = Some(val.to_string()),
+            "table" => *table = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }

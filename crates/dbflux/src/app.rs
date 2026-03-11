@@ -37,6 +37,9 @@ use dbflux_driver_mongodb::MongoDriver;
 #[cfg(feature = "redis")]
 use dbflux_driver_redis::RedisDriver;
 
+#[cfg(feature = "dynamodb")]
+use dbflux_driver_dynamodb::DynamoDriver;
+
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
     FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
@@ -133,39 +136,7 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers() -> BuiltDrivers {
-        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
-
-        #[cfg(feature = "sqlite")]
-        {
-            drivers.insert("sqlite".to_string(), Arc::new(SqliteDriver::new()));
-        }
-
-        #[cfg(feature = "postgres")]
-        {
-            drivers.insert("postgres".to_string(), Arc::new(PostgresDriver::new()));
-        }
-
-        #[cfg(feature = "mysql")]
-        {
-            drivers.insert(
-                "mysql".to_string(),
-                Arc::new(MysqlDriver::new(DbKind::MySQL)),
-            );
-            drivers.insert(
-                "mariadb".to_string(),
-                Arc::new(MysqlDriver::new(DbKind::MariaDB)),
-            );
-        }
-
-        #[cfg(feature = "mongodb")]
-        {
-            drivers.insert("mongodb".to_string(), Arc::new(MongoDriver::new()));
-        }
-
-        #[cfg(feature = "redis")]
-        {
-            drivers.insert("redis".to_string(), Arc::new(RedisDriver::new()));
-        }
+        let mut drivers = Self::build_builtin_drivers();
 
         let app_config = AppConfigStore::new()
             .and_then(|store| store.load())
@@ -253,6 +224,50 @@ impl AppState {
             driver_settings,
             hook_definitions,
         }
+    }
+
+    fn build_builtin_drivers() -> HashMap<String, Arc<dyn DbDriver>> {
+        #[allow(unused_mut)]
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+
+        #[cfg(feature = "sqlite")]
+        {
+            drivers.insert("sqlite".to_string(), Arc::new(SqliteDriver::new()));
+        }
+
+        #[cfg(feature = "postgres")]
+        {
+            drivers.insert("postgres".to_string(), Arc::new(PostgresDriver::new()));
+        }
+
+        #[cfg(feature = "mysql")]
+        {
+            drivers.insert(
+                "mysql".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MySQL)),
+            );
+            drivers.insert(
+                "mariadb".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MariaDB)),
+            );
+        }
+
+        #[cfg(feature = "mongodb")]
+        {
+            drivers.insert("mongodb".to_string(), Arc::new(MongoDriver::new()));
+        }
+
+        #[cfg(feature = "redis")]
+        {
+            drivers.insert("redis".to_string(), Arc::new(RedisDriver::new()));
+        }
+
+        #[cfg(feature = "dynamodb")]
+        {
+            drivers.insert("dynamodb".to_string(), Arc::new(DynamoDriver::new()));
+        }
+
+        drivers
     }
 
     // --- ConnectionManager ---
@@ -1775,5 +1790,31 @@ mod tests {
         };
 
         assert_eq!(error, "Auth provider 'unknown-provider' is not available");
+    }
+
+    #[cfg(feature = "dynamodb")]
+    #[test]
+    fn builtin_driver_registry_includes_dynamodb_when_feature_enabled() {
+        let drivers = AppState::build_builtin_drivers();
+
+        let driver = drivers
+            .get("dynamodb")
+            .expect("dynamodb driver should be registered when feature is enabled");
+
+        assert_eq!(driver.metadata().id, "dynamodb");
+    }
+
+    #[cfg(not(feature = "dynamodb"))]
+    #[test]
+    fn builtin_driver_registry_omits_dynamodb_when_feature_disabled() {
+        let drivers = AppState::build_builtin_drivers();
+
+        assert!(!drivers.contains_key("dynamodb"));
+        assert!(
+            !drivers
+                .values()
+                .any(|driver| driver.metadata().id == "dynamodb"),
+            "no registered builtin driver should expose dynamodb metadata when feature is disabled"
+        );
     }
 }

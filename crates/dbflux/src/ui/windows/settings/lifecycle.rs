@@ -231,10 +231,10 @@ impl SettingsCoordinator {
                     cx.notify();
                 }
             }
-            ("left", modifiers) if modifiers == Modifiers::none() => {
-                if self.cursor_is_expanded_group() {
-                    self.activate_sidebar_cursor(window, cx);
-                }
+            ("left", modifiers)
+                if modifiers == Modifiers::none() && self.cursor_is_expanded_group() =>
+            {
+                self.activate_sidebar_cursor(window, cx);
             }
             _ => {}
         }

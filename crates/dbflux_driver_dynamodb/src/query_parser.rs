@@ -1,0 +1,372 @@
+use dbflux_core::DbError;
+
+pub const DYNAMODB_MVP_COMMANDS: &[&str] = &["scan", "query", "put", "update", "delete"];
+
+#[derive(Debug, Clone)]
+pub enum DynamoCommandEnvelope {
+    Scan {
+        database: Option<String>,
+        table: String,
+        filter: Option<serde_json::Value>,
+        limit: Option<u32>,
+        offset: Option<u64>,
+    },
+    Query {
+        database: Option<String>,
+        table: String,
+        filter: Option<serde_json::Value>,
+        limit: Option<u32>,
+        offset: Option<u64>,
+    },
+    Put {
+        database: Option<String>,
+        table: String,
+        item: serde_json::Value,
+    },
+    Update {
+        database: Option<String>,
+        table: String,
+        key: serde_json::Value,
+        update: serde_json::Value,
+        many: bool,
+        upsert: bool,
+    },
+    Delete {
+        database: Option<String>,
+        table: String,
+        key: serde_json::Value,
+        many: bool,
+    },
+}
+
+pub fn is_supported_command(op: &str) -> bool {
+    DYNAMODB_MVP_COMMANDS.contains(&op)
+}
+
+pub fn unsupported_command_message(op: &str) -> String {
+    format!(
+        "Unsupported DynamoDB operation '{op}'. MVP supports only: {}.",
+        DYNAMODB_MVP_COMMANDS.join(", ")
+    )
+}
+
+pub fn parse_command_envelope(input: &str) -> Result<DynamoCommandEnvelope, DbError> {
+    let json: serde_json::Value = serde_json::from_str(input).map_err(|error| {
+        DbError::syntax_error(format!(
+            "Invalid DynamoDB command envelope JSON: {error}. Expected an object with fields like {{\"op\":\"scan\",\"table\":\"...\"}}"
+        ))
+    })?;
+
+    let object = json
+        .as_object()
+        .ok_or_else(|| DbError::syntax_error("DynamoDB command envelope must be a JSON object"))?;
+
+    let op = required_string(object, "op")?;
+    if !is_supported_command(&op) {
+        return Err(DbError::NotSupported(unsupported_command_message(&op)));
+    }
+
+    match op.as_str() {
+        "scan" => {
+            validate_allowed_fields(
+                object,
+                &["op", "database", "table", "filter", "limit", "offset"],
+            )?;
+
+            Ok(DynamoCommandEnvelope::Scan {
+                database: optional_string(object, "database")?,
+                table: required_string(object, "table")?,
+                filter: optional_object_value(object, "filter")?,
+                limit: optional_u32(object, "limit")?,
+                offset: optional_u64(object, "offset")?,
+            })
+        }
+        "query" => {
+            validate_allowed_fields(
+                object,
+                &["op", "database", "table", "filter", "limit", "offset"],
+            )?;
+
+            Ok(DynamoCommandEnvelope::Query {
+                database: optional_string(object, "database")?,
+                table: required_string(object, "table")?,
+                filter: optional_object_value(object, "filter")?,
+                limit: optional_u32(object, "limit")?,
+                offset: optional_u64(object, "offset")?,
+            })
+        }
+        "put" => {
+            validate_allowed_fields(object, &["op", "database", "table", "item"])?;
+
+            Ok(DynamoCommandEnvelope::Put {
+                database: optional_string(object, "database")?,
+                table: required_string(object, "table")?,
+                item: required_object_value(object, "item")?,
+            })
+        }
+        "update" => {
+            validate_allowed_fields(
+                object,
+                &["op", "database", "table", "key", "update", "many", "upsert"],
+            )?;
+
+            Ok(DynamoCommandEnvelope::Update {
+                database: optional_string(object, "database")?,
+                table: required_string(object, "table")?,
+                key: required_object_value(object, "key")?,
+                update: required_object_value(object, "update")?,
+                many: optional_bool(object, "many")?.unwrap_or(false),
+                upsert: optional_bool(object, "upsert")?.unwrap_or(false),
+            })
+        }
+        "delete" => {
+            validate_allowed_fields(object, &["op", "database", "table", "key", "many"])?;
+
+            Ok(DynamoCommandEnvelope::Delete {
+                database: optional_string(object, "database")?,
+                table: required_string(object, "table")?,
+                key: required_object_value(object, "key")?,
+                many: optional_bool(object, "many")?.unwrap_or(false),
+            })
+        }
+        _ => Err(DbError::NotSupported(unsupported_command_message(&op))),
+    }
+}
+
+fn validate_allowed_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    allowed: &[&str],
+) -> Result<(), DbError> {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(DbError::query_failed(format!(
+                "Unsupported field '{}' for DynamoDB '{}' command envelope",
+                key,
+                object
+                    .get("op")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn required_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, DbError> {
+    let value = object
+        .get(key)
+        .ok_or_else(|| DbError::query_failed(format!("Missing required field '{key}'")))?;
+
+    let string = value
+        .as_str()
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a string")))?
+        .trim()
+        .to_string();
+
+    if string.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "Field '{key}' must not be empty"
+        )));
+    }
+
+    Ok(string)
+}
+
+fn optional_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    let trimmed = value
+        .as_str()
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a string")))?
+        .trim()
+        .to_string();
+
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(trimmed))
+}
+
+fn required_object_value(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<serde_json::Value, DbError> {
+    let value = object
+        .get(key)
+        .ok_or_else(|| DbError::query_failed(format!("Missing required field '{key}'")))?
+        .clone();
+
+    if !value.is_object() {
+        return Err(DbError::query_failed(format!(
+            "Field '{key}' must be a JSON object"
+        )));
+    }
+
+    Ok(value)
+}
+
+fn optional_object_value(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<serde_json::Value>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    if !value.is_object() {
+        return Err(DbError::query_failed(format!(
+            "Field '{key}' must be a JSON object when provided"
+        )));
+    }
+
+    Ok(Some(value.clone()))
+}
+
+fn optional_bool(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<bool>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a boolean")))
+}
+
+fn optional_u32(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<u32>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    value
+        .as_u64()
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a positive integer")))
+        .and_then(|number| {
+            u32::try_from(number).map_err(|_| {
+                DbError::query_failed(format!(
+                    "Field '{key}' exceeds maximum supported integer range"
+                ))
+            })
+        })
+        .map(Some)
+}
+
+fn optional_u64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<u64>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a positive integer")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DynamoCommandEnvelope, parse_command_envelope, unsupported_command_message};
+    use dbflux_core::DbError;
+
+    #[test]
+    fn parse_scan_envelope_with_optional_fields() {
+        let envelope = parse_command_envelope(
+            r#"{"op":"scan","database":"dynamodb","table":"users","filter":{"pk":"A"},"limit":25,"offset":10}"#,
+        )
+        .expect("scan envelope should parse");
+
+        match envelope {
+            DynamoCommandEnvelope::Scan {
+                database,
+                table,
+                filter,
+                limit,
+                offset,
+            } => {
+                assert_eq!(database.as_deref(), Some("dynamodb"));
+                assert_eq!(table, "users");
+                assert!(filter.is_some());
+                assert_eq!(limit, Some(25));
+                assert_eq!(offset, Some(10));
+            }
+            other => panic!("expected scan envelope, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_put_update_delete_envelopes() {
+        let put = parse_command_envelope(
+            r#"{"op":"put","table":"users","item":{"pk":"A","name":"Alice"}}"#,
+        )
+        .expect("put envelope should parse");
+        assert!(matches!(put, DynamoCommandEnvelope::Put { .. }));
+
+        let update = parse_command_envelope(
+            r#"{"op":"update","table":"users","key":{"pk":"A"},"update":{"name":"Bob"}}"#,
+        )
+        .expect("update envelope should parse");
+        assert!(matches!(update, DynamoCommandEnvelope::Update { .. }));
+
+        let delete = parse_command_envelope(r#"{"op":"delete","table":"users","key":{"pk":"A"}}"#)
+            .expect("delete envelope should parse");
+        assert!(matches!(delete, DynamoCommandEnvelope::Delete { .. }));
+    }
+
+    #[test]
+    fn malformed_json_maps_to_syntax_error() {
+        let error = parse_command_envelope("{not-json").expect_err("invalid json must fail");
+        assert!(matches!(error, DbError::SyntaxError(_)));
+    }
+
+    #[test]
+    fn unsupported_op_maps_to_not_supported() {
+        let error = parse_command_envelope(r#"{"op":"batch_write","table":"users"}"#)
+            .expect_err("unsupported op must fail");
+
+        match error {
+            DbError::NotSupported(message) => {
+                assert_eq!(message, unsupported_command_message("batch_write"));
+            }
+            other => panic!("expected NotSupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_or_unknown_fields_map_to_validation_errors() {
+        let missing_table =
+            parse_command_envelope(r#"{"op":"scan"}"#).expect_err("missing field should fail");
+        assert!(matches!(missing_table, DbError::QueryFailed(_)));
+
+        let wrong_limit =
+            parse_command_envelope(r#"{"op":"scan","table":"users","limit":"twenty"}"#)
+                .expect_err("wrong type should fail");
+        assert!(matches!(wrong_limit, DbError::QueryFailed(_)));
+
+        let unknown_field =
+            parse_command_envelope(r#"{"op":"put","table":"users","item":{"pk":"A"},"foo":1}"#)
+                .expect_err("unknown field should fail");
+        assert!(matches!(unknown_field, DbError::QueryFailed(_)));
+    }
+}

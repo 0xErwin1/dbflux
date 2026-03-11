@@ -646,6 +646,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-dynamodb"
+version = "1.107.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561bf86e858a2759c6876b517b13f3f4051a6484abbb0d8a1f4dfc5d902cc85a"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.3.0",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-secretsmanager"
 version = "1.101.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2098,6 +2122,7 @@ dependencies = [
  "bincode",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_dynamodb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
@@ -2177,10 +2202,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_driver_dynamodb"
+version = "0.4.0-dev.7"
+dependencies = [
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "dbflux_core",
+ "dbflux_test_support",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dbflux_driver_host"
 version = "0.4.0-dev.7"
 dependencies = [
  "dbflux_core",
+ "dbflux_driver_dynamodb",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
  "dbflux_driver_postgres",

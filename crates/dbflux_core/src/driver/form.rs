@@ -471,6 +471,39 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
     ],
 });
 
+pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![
+            FormSection {
+                title: "AWS".into(),
+                fields: vec![
+                    field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                    field(
+                        "profile",
+                        "Profile",
+                        FormFieldKind::Text,
+                        "optional AWS profile",
+                    ),
+                ],
+            },
+            FormSection {
+                title: "Target".into(),
+                fields: vec![
+                    field(
+                        "endpoint",
+                        "Endpoint Override",
+                        FormFieldKind::Text,
+                        "http://localhost:8000",
+                    ),
+                    field("table", "Default Table", FormFieldKind::Text, "optional"),
+                ],
+            },
+        ],
+    }],
+});
+
 // ---------------------------------------------------------------------------
 // Impl blocks
 // ---------------------------------------------------------------------------

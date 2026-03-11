@@ -74,6 +74,22 @@ where
     run(url)
 }
 
+pub fn with_dynamodb_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(String) -> Result<T, E>,
+{
+    let docker = Cli::default();
+    let image = GenericImage::new("amazon/dynamodb-local", "latest")
+        .with_exposed_port(8000)
+        .with_wait_for(WaitFor::message_on_stdout("Initializing DynamoDB Local"));
+
+    let container = docker.run(image);
+    let port = container.get_host_port_ipv4(8000);
+    let endpoint = format!("http://127.0.0.1:{port}");
+
+    run(endpoint)
+}
+
 pub fn retry_db_operation<T, E, F>(timeout: Duration, mut operation: F) -> Result<T, E>
 where
     F: FnMut() -> Result<T, E>,

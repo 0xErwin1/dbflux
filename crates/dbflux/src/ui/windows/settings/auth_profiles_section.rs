@@ -16,7 +16,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]
-use dbflux_aws::{AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking};
+use dbflux_aws::{
+    AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking,
+};
 
 pub(super) struct AuthProfilesSection {
     app_state: Entity<AppState>,
@@ -59,7 +61,11 @@ pub(super) struct AuthProfilesSection {
 }
 
 impl AuthProfilesSection {
-    pub(super) fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        app_state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let selected_profile_id = app_state.read(cx).auth_profiles().first().map(|p| p.id);
         let selected_provider_id = app_state
             .read(cx)
@@ -77,10 +83,11 @@ impl AuthProfilesSection {
         let sso_role_dropdown =
             cx.new(|_cx| Dropdown::new("auth-sso-role-dropdown").placeholder("Select role"));
 
-        let app_state_subscription = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
-            this.pending_sync_from_app_state = true;
-            cx.notify();
-        });
+        let app_state_subscription =
+            cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.pending_sync_from_app_state = true;
+                cx.notify();
+            });
 
         #[cfg(feature = "aws")]
         let sso_account_dropdown_sub = cx.subscribe_in(
@@ -114,7 +121,12 @@ impl AuthProfilesSection {
             &sso_role_dropdown,
             window,
             |this, _, event: &DropdownSelectionChanged, window, cx| {
-                this.set_form_value_in_window("sso_role_name", event.item.value.to_string(), window, cx);
+                this.set_form_value_in_window(
+                    "sso_role_name",
+                    event.item.value.to_string(),
+                    window,
+                    cx,
+                );
                 cx.notify();
             },
         );
@@ -205,7 +217,13 @@ impl AuthProfilesSection {
             .iter()
             .flat_map(|tab| tab.sections.iter())
             .flat_map(|section| section.fields.iter())
-            .map(|field| (field.id.clone(), field.placeholder.clone(), field.kind.clone()))
+            .map(|field| {
+                (
+                    field.id.clone(),
+                    field.placeholder.clone(),
+                    field.kind.clone(),
+                )
+            })
             .collect::<Vec<_>>();
 
         let expected_ids = field_defs
@@ -302,7 +320,12 @@ impl AuthProfilesSection {
         }
     }
 
-    fn load_profile_into_form(&mut self, profile_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+    fn load_profile_into_form(
+        &mut self,
+        profile_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let profile = self
             .app_state
             .read(cx)
@@ -575,7 +598,11 @@ impl AuthProfilesSection {
         }
     }
 
-    fn render_import_banner(&self, detected_profiles: &[ImportableProfile], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_import_banner(
+        &self,
+        detected_profiles: &[ImportableProfile],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let names_preview = detected_profiles
             .iter()
@@ -613,7 +640,11 @@ impl AuthProfilesSection {
                                     .child(format!(
                                         "Detected {} importable profile{}",
                                         detected_profiles.len(),
-                                        if detected_profiles.len() == 1 { "" } else { "s" }
+                                        if detected_profiles.len() == 1 {
+                                            ""
+                                        } else {
+                                            "s"
+                                        }
                                     )),
                             )
                             .child(
@@ -640,7 +671,12 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label.to_string()))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label.to_string()),
+            )
             .child(Input::new(input).small())
     }
 
@@ -650,46 +686,67 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(label.to_string()))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label.to_string()),
+            )
             .child(dropdown.clone())
     }
 
-    fn render_provider_selector(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_provider_selector(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let providers = self.provider_entries(cx);
 
-        div().flex().items_center().gap_2().children(providers.into_iter().map(|(provider_id, label)| {
-            let selected = self.selected_provider_id.as_deref() == Some(provider_id.as_str());
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .children(providers.into_iter().map(|(provider_id, label)| {
+                let selected = self.selected_provider_id.as_deref() == Some(provider_id.as_str());
 
-            div()
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(if selected { theme.primary } else { transparent_black() })
-                .child(
-                    Button::new(SharedString::from(format!("auth-provider-{}", provider_id)))
-                        .label(label)
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.selected_provider_id = Some(provider_id.clone());
-                            this.rebuild_form_inputs(window, cx);
+                div()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(if selected {
+                        theme.primary
+                    } else {
+                        transparent_black()
+                    })
+                    .child(
+                        Button::new(SharedString::from(format!("auth-provider-{}", provider_id)))
+                            .label(label)
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.selected_provider_id = Some(provider_id.clone());
+                                this.rebuild_form_inputs(window, cx);
 
-                            for input in this.form_inputs.values() {
-                                input.update(cx, |state, cx| {
-                                    state.set_value("", window, cx);
-                                });
-                            }
+                                for input in this.form_inputs.values() {
+                                    input.update(cx, |state, cx| {
+                                        state.set_value("", window, cx);
+                                    });
+                                }
 
-                            #[cfg(feature = "aws")]
-                            this.reset_sso_listing_state(cx);
+                                #[cfg(feature = "aws")]
+                                this.reset_sso_listing_state(cx);
 
-                            cx.notify();
-                        })),
-                )
-        }))
+                                cx.notify();
+                            })),
+                    )
+            }))
     }
 
-    fn render_profile_list(&self, profiles: &[AuthProfile], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_profile_list(
+        &self,
+        profiles: &[AuthProfile],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
 
         div()
@@ -707,7 +764,12 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Profiles"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Profiles"),
+                    )
                     .child(
                         Button::new("new-auth-profile")
                             .icon(Icon::new(IconName::Plus))
@@ -743,18 +805,35 @@ impl AuthProfilesSection {
                             .rounded(px(4.0))
                             .cursor_pointer()
                             .border_1()
-                            .border_color(if is_selected { theme.primary } else { transparent_black() })
+                            .border_color(if is_selected {
+                                theme.primary
+                            } else {
+                                transparent_black()
+                            })
                             .when(is_selected, |div| div.bg(theme.secondary))
-                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                this.load_profile_into_form(profile_id, window, cx);
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.load_profile_into_form(profile_id, window, cx);
+                                }),
+                            )
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(profile.name.clone()))
-                                    .child(div().text_xs().text_color(theme.muted_foreground).child(provider_label)),
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(profile.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(provider_label),
+                                    ),
                             )
                     })),
             )
@@ -766,7 +845,10 @@ impl AuthProfilesSection {
     }
 
     #[cfg(feature = "aws")]
-    fn sso_listing_context_from_form(&self, cx: &Context<Self>) -> Option<(String, String, String)> {
+    fn sso_listing_context_from_form(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<(String, String, String)> {
         let profile_name = self.form_value("profile_name", cx).trim().to_string();
         let region = self.form_value("region", cx).trim().to_string();
         let start_url = self.form_value("sso_start_url", cx).trim().to_string();
@@ -817,7 +899,10 @@ impl AuthProfilesSection {
     #[cfg(feature = "aws")]
     fn sync_role_dropdown_selection(&self, cx: &mut Context<Self>) {
         let selected = self.form_value("sso_role_name", cx);
-        let selected_index = self.sso_roles.iter().position(|role_name| role_name == &selected);
+        let selected_index = self
+            .sso_roles
+            .iter()
+            .position(|role_name| role_name == &selected);
 
         self.sso_role_dropdown.update(cx, |dropdown, cx| {
             dropdown.set_selected_index(selected_index, cx);
@@ -1114,7 +1199,11 @@ impl AuthProfilesSection {
         .detach();
     }
 
-    fn render_editor_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_editor_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_editing = self.editing_profile_id.is_some();
 
@@ -1136,7 +1225,8 @@ impl AuthProfilesSection {
                     .flat_map(|section| section.fields.iter())
                     .map(|field| {
                         if let Some(input) = self.form_inputs.get(&field.id) {
-                            self.render_input_row(&field.label, input).into_any_element()
+                            self.render_input_row(&field.label, input)
+                                .into_any_element()
                         } else {
                             div().into_any_element()
                         }
@@ -1156,16 +1246,20 @@ impl AuthProfilesSection {
                     .p_4()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().text_base().font_weight(FontWeight::MEDIUM).child(if is_editing {
-                        "Edit Auth Profile"
-                    } else {
-                        "New Auth Profile"
-                    }))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("Reusable authentication profile for access and value resolution"),
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if is_editing {
+                                "Edit Auth Profile"
+                            } else {
+                                "New Auth Profile"
+                            }),
+                    )
+                    .child(
+                        div().text_sm().text_color(theme.muted_foreground).child(
+                            "Reusable authentication profile for access and value resolution",
+                        ),
                     ),
             )
             .child(
@@ -1182,59 +1276,94 @@ impl AuthProfilesSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Provider"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Provider"),
+                            )
                             .child(self.render_provider_selector(window, cx)),
                     )
                     .children(dynamic_fields)
-                    .when(cfg!(feature = "aws") && self.selected_provider_id.as_deref() == Some("aws-sso"), |content| {
-                        #[cfg(feature = "aws")]
-                        {
-                            content
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            Button::new("auth-sso-login")
-                                                .label(if self.sso_login_loading { "Logging in..." } else { "Login" })
-                                                .small()
-                                                .primary()
-                                                .disabled(self.sso_login_loading)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.login_sso_profile(cx);
-                                                })),
-                                        )
-                                        .child(
+                    .when(
+                        cfg!(feature = "aws")
+                            && self.selected_provider_id.as_deref() == Some("aws-sso"),
+                        |content| {
+                            #[cfg(feature = "aws")]
+                            {
+                                content
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("auth-sso-login")
+                                                    .label(if self.sso_login_loading {
+                                                        "Logging in..."
+                                                    } else {
+                                                        "Login"
+                                                    })
+                                                    .small()
+                                                    .primary()
+                                                    .disabled(self.sso_login_loading)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.login_sso_profile(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child("Runs AWS SSO login for this profile"),
+                                            ),
+                                    )
+                                    .child(self.render_dropdown_row(
+                                        "SSO Account ID",
+                                        &self.sso_account_dropdown,
+                                    ))
+                                    .child(self.render_dropdown_row(
+                                        "SSO Role Name",
+                                        &self.sso_role_dropdown,
+                                    ))
+                                    .when_some(
+                                        self.sso_accounts_error.as_ref(),
+                                        |content, error| {
+                                            content.child(
+                                                div().text_xs().text_color(theme.warning).child(
+                                                    format!("Account listing failed: {}", error),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                    .when_some(self.sso_roles_error.as_ref(), |content, error| {
+                                        content.child(
                                             div()
                                                 .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child("Runs AWS SSO login for this profile"),
-                                        ),
-                                )
-                                .child(self.render_dropdown_row("SSO Account ID", &self.sso_account_dropdown))
-                                .child(self.render_dropdown_row("SSO Role Name", &self.sso_role_dropdown))
-                                .when_some(self.sso_accounts_error.as_ref(), |content, error| {
-                                    content.child(div().text_xs().text_color(theme.warning).child(format!("Account listing failed: {}", error)))
-                                })
-                                .when_some(self.sso_roles_error.as_ref(), |content, error| {
-                                    content.child(div().text_xs().text_color(theme.warning).child(format!("Role listing failed: {}", error)))
-                                })
-                                .when_some(self.sso_login_status.as_ref(), |content, status| {
-                                    content.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(if status.1 { theme.success } else { theme.warning })
-                                            .child(status.0.clone()),
-                                    )
-                                })
-                        }
+                                                .text_color(theme.warning)
+                                                .child(format!("Role listing failed: {}", error)),
+                                        )
+                                    })
+                                    .when_some(self.sso_login_status.as_ref(), |content, status| {
+                                        content.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(if status.1 {
+                                                    theme.success
+                                                } else {
+                                                    theme.warning
+                                                })
+                                                .child(status.0.clone()),
+                                        )
+                                    })
+                            }
 
-                        #[cfg(not(feature = "aws"))]
-                        {
-                            content
-                        }
-                    })
+                            #[cfg(not(feature = "aws"))]
+                            {
+                                content
+                            }
+                        },
+                    )
                     .child(
                         div()
                             .flex()

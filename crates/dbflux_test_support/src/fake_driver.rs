@@ -1,15 +1,15 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService,
+    DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RedisLanguageService, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlLanguageService, DYNAMODB_FORM, MONGODB_FORM, MYSQL_FORM,
+    POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -198,6 +198,12 @@ impl DbDriver for FakeDriver {
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
+            DbKind::DynamoDB => DbConfig::DynamoDB {
+                region: get_string(values, "region", "us-east-1"),
+                profile: get_optional_string(values, "profile"),
+                endpoint: get_optional_string(values, "endpoint"),
+                table: get_optional_string(values, "table"),
+            },
         };
 
         Ok(config)
@@ -265,6 +271,17 @@ impl DbDriver for FakeDriver {
                     "database".to_string(),
                     database.map(|value| value.to_string()).unwrap_or_default(),
                 );
+            }
+            DbConfig::DynamoDB {
+                region,
+                profile,
+                endpoint,
+                table,
+            } => {
+                values.insert("region".to_string(), region.clone());
+                values.insert("profile".to_string(), profile.clone().unwrap_or_default());
+                values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
+                values.insert("table".to_string(), table.clone().unwrap_or_default());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -408,6 +425,7 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
+            DbKind::DynamoDB => SchemaLoadingStrategy::SingleDatabase,
         }
     }
 
@@ -430,6 +448,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::MySQL { database, .. } => database.clone(),
         DbConfig::MongoDB { database, .. } => database.clone(),
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
+        DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -442,6 +461,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::MariaDB => &FAKE_MARIADB_METADATA,
         DbKind::MongoDB => &FAKE_MONGODB_METADATA,
         DbKind::Redis => &FAKE_REDIS_METADATA,
+        DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
     }
 }
 
@@ -452,6 +472,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::MySQL | DbKind::MariaDB => &MYSQL_FORM,
         DbKind::MongoDB => &MONGODB_FORM,
         DbKind::Redis => &REDIS_FORM,
+        DbKind::DynamoDB => &DYNAMODB_FORM,
     }
 }
 
@@ -582,6 +603,18 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     default_port: Some(6379),
     uri_scheme: "redis".into(),
     icon: Icon::Redis,
+});
+
+static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-dynamodb".into(),
+    display_name: "Fake DynamoDB".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::Document,
+    query_language: QueryLanguage::Custom("DynamoDB".into()),
+    capabilities: DriverCapabilities::DOCUMENT_BASE,
+    default_port: None,
+    uri_scheme: "dynamodb".into(),
+    icon: Icon::Dynamodb,
 });
 
 #[cfg(test)]
@@ -719,6 +752,7 @@ mod tests {
             (DbKind::SQLite, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::DynamoDB, SchemaLoadingStrategy::SingleDatabase),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -742,6 +776,7 @@ mod tests {
                 },
                 DbKind::MongoDB => DbConfig::default_mongodb(),
                 DbKind::Redis => DbConfig::default_redis(),
+                DbKind::DynamoDB => DbConfig::default_dynamodb(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

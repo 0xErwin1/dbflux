@@ -25,8 +25,8 @@ impl ConnectionManagerWindow {
             dropdown.set_focus_ring(None, cx);
         });
 
-        let mut sections = vec![self
-            .render_section(
+        let mut sections = vec![
+            self.render_section(
                 "Access",
                 div().flex().flex_col().gap_2().child(
                     div()
@@ -47,7 +47,8 @@ impl ConnectionManagerWindow {
                 ),
                 &theme,
             )
-            .into_any_element()];
+            .into_any_element(),
+        ];
 
         match self.access_tab_mode {
             AccessTabMode::Direct => {

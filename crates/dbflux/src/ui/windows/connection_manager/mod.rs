@@ -623,28 +623,27 @@ impl ConnectionManagerWindow {
         }
 
         // Populate SSM fields if access kind is a managed aws-ssm access
-        if let Some(AccessKind::Managed { provider, params }) = &profile.access_kind {
-            if provider == "aws-ssm" {
-                let instance_id = params.get("instance_id").cloned().unwrap_or_default();
-                let region = params.get("region").cloned().unwrap_or_default();
-                let remote_port = params.get("remote_port").cloned().unwrap_or_default();
-                let auth_profile_id: Option<uuid::Uuid> = params
-                    .get("auth_profile_id")
-                    .and_then(|s| s.parse().ok());
+        if let Some(AccessKind::Managed { provider, params }) = &profile.access_kind
+            && provider == "aws-ssm"
+        {
+            let instance_id = params.get("instance_id").cloned().unwrap_or_default();
+            let region = params.get("region").cloned().unwrap_or_default();
+            let remote_port = params.get("remote_port").cloned().unwrap_or_default();
+            let auth_profile_id: Option<uuid::Uuid> =
+                params.get("auth_profile_id").and_then(|s| s.parse().ok());
 
-                instance.input_ssm_instance_id.update(cx, |state, cx| {
-                    state.set_value(instance_id, window, cx);
-                });
-                instance.input_ssm_region.update(cx, |state, cx| {
-                    state.set_value(region, window, cx);
-                });
-                instance.input_ssm_remote_port.update(cx, |state, cx| {
-                    state.set_value(remote_port, window, cx);
-                });
-                instance.selected_ssm_auth_profile_id = auth_profile_id;
-                if instance.selected_auth_profile_id.is_none() {
-                    instance.selected_auth_profile_id = auth_profile_id;
-                }
+            instance.input_ssm_instance_id.update(cx, |state, cx| {
+                state.set_value(instance_id, window, cx);
+            });
+            instance.input_ssm_region.update(cx, |state, cx| {
+                state.set_value(region, window, cx);
+            });
+            instance.input_ssm_remote_port.update(cx, |state, cx| {
+                state.set_value(remote_port, window, cx);
+            });
+            instance.selected_ssm_auth_profile_id = auth_profile_id;
+            if instance.selected_auth_profile_id.is_none() {
+                instance.selected_auth_profile_id = auth_profile_id;
             }
         }
 
@@ -912,11 +911,11 @@ impl ConnectionManagerWindow {
 
         self.host_value_source_selector.update(cx, |selector, cx| {
             let primary = selector.set_value_ref(profile.value_refs.get("host"), window, cx);
-            if !primary.is_empty() {
-                self.driver_inputs.get("host").map(|input| {
-                    input.update(cx, |state, cx| {
-                        state.set_value(primary.clone(), window, cx);
-                    });
+            if !primary.is_empty()
+                && let Some(input) = self.driver_inputs.get("host")
+            {
+                input.update(cx, |state, cx| {
+                    state.set_value(primary.clone(), window, cx);
                 });
             }
         });
@@ -925,22 +924,22 @@ impl ConnectionManagerWindow {
             .update(cx, |selector, cx| {
                 let primary =
                     selector.set_value_ref(profile.value_refs.get("database"), window, cx);
-                if !primary.is_empty() {
-                    self.driver_inputs.get("database").map(|input| {
-                        input.update(cx, |state, cx| {
-                            state.set_value(primary.clone(), window, cx);
-                        });
+                if !primary.is_empty()
+                    && let Some(input) = self.driver_inputs.get("database")
+                {
+                    input.update(cx, |state, cx| {
+                        state.set_value(primary.clone(), window, cx);
                     });
                 }
             });
 
         self.user_value_source_selector.update(cx, |selector, cx| {
             let primary = selector.set_value_ref(profile.value_refs.get("user"), window, cx);
-            if !primary.is_empty() {
-                self.driver_inputs.get("user").map(|input| {
-                    input.update(cx, |state, cx| {
-                        state.set_value(primary.clone(), window, cx);
-                    });
+            if !primary.is_empty()
+                && let Some(input) = self.driver_inputs.get("user")
+            {
+                input.update(cx, |state, cx| {
+                    state.set_value(primary.clone(), window, cx);
                 });
             }
         });
@@ -1043,27 +1042,27 @@ impl ConnectionManagerWindow {
     pub(super) fn has_dynamic_value_ref_for_field(&self, field_id: &str, cx: &App) -> bool {
         match field_id {
             "ssm_instance_id" => {
-                self.ssm_instance_id_value_source_selector
+                !self
+                    .ssm_instance_id_value_source_selector
                     .read(cx)
                     .is_literal(cx)
-                    == false
             }
             "ssm_region" => {
-                self.ssm_region_value_source_selector
+                !self
+                    .ssm_region_value_source_selector
                     .read(cx)
                     .is_literal(cx)
-                    == false
             }
             "ssm_remote_port" => {
-                self.ssm_remote_port_value_source_selector
+                !self
+                    .ssm_remote_port_value_source_selector
                     .read(cx)
                     .is_literal(cx)
-                    == false
             }
-            "host" => self.host_value_source_selector.read(cx).is_literal(cx) == false,
-            "database" => self.database_value_source_selector.read(cx).is_literal(cx) == false,
-            "user" => self.user_value_source_selector.read(cx).is_literal(cx) == false,
-            "password" => self.password_value_source_selector.read(cx).is_literal(cx) == false,
+            "host" => !self.host_value_source_selector.read(cx).is_literal(cx),
+            "database" => !self.database_value_source_selector.read(cx).is_literal(cx),
+            "user" => !self.user_value_source_selector.read(cx).is_literal(cx),
+            "password" => !self.password_value_source_selector.read(cx).is_literal(cx),
             _ => false,
         }
     }
@@ -1106,6 +1105,7 @@ impl ConnectionManagerWindow {
     }
 
     /// Returns true if this driver supports SSH tunneling.
+    #[allow(dead_code)]
     fn supports_ssh(&self) -> bool {
         let Some(driver) = &self.selected_driver else {
             return false;
@@ -1113,6 +1113,7 @@ impl ConnectionManagerWindow {
         driver.form_definition().supports_ssh()
     }
 
+    #[allow(dead_code)]
     fn supports_proxy(&self) -> bool {
         !self.uses_file_form()
     }
@@ -1825,10 +1826,54 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
-    fn apply_pending_auth_profile(&mut self) {
+    fn apply_pending_auth_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(selection) = self.pending_auth_profile_selection.take() {
             self.selected_auth_profile_id = selection;
             self.selected_ssm_auth_profile_id = selection;
+
+            self.sync_dynamodb_fields_from_auth_profile(window, cx);
+        }
+    }
+
+    fn sync_dynamodb_fields_from_auth_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_driver_id() != Some("dynamodb") {
+            return;
+        }
+
+        let Some(auth_profile_id) = self.selected_auth_profile_id else {
+            return;
+        };
+
+        let selected_profile = self
+            .app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .find(|profile| profile.id == auth_profile_id)
+            .cloned();
+
+        let Some(profile) = selected_profile else {
+            return;
+        };
+
+        let profile_name = profile
+            .fields
+            .get("profile_name")
+            .cloned()
+            .unwrap_or_else(|| profile.name.clone());
+
+        if let Some(input) = self.driver_inputs.get("profile").cloned() {
+            input.update(cx, |state, cx| {
+                state.set_value(profile_name, window, cx);
+            });
+        }
+
+        if let Some(region) = profile.fields.get("region").cloned()
+            && let Some(input) = self.driver_inputs.get("region").cloned()
+        {
+            input.update(cx, |state, cx| {
+                state.set_value(region, window, cx);
+            });
         }
     }
 

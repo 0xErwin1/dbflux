@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div};
+use gpui::{div, AnyElement, App, Context, KeyDownEvent, Window};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSectionId {
@@ -14,6 +14,7 @@ pub enum SettingsSectionId {
     About,
 }
 
+#[allow(dead_code)]
 pub trait SettingsSection: 'static {
     fn section_id(&self) -> SettingsSectionId;
 

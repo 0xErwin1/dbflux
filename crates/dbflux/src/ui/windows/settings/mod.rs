@@ -40,6 +40,7 @@ enum SettingsFocus {
     Content,
 }
 
+#[allow(dead_code)]
 struct EmptySettingsSection {
     section_id: SettingsSectionId,
 }

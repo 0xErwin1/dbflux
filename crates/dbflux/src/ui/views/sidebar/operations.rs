@@ -1935,15 +1935,14 @@ impl Sidebar {
                     && current_stage
                         .as_ref()
                         .is_none_or(|(active, _)| active != &description)
-                {
-                    if let Err(error) = cx.update(|cx| {
+                    && let Err(error) = cx.update(|cx| {
                         app_state_for_stage_tasks.update(cx, |state, cx| {
                             if let Some((_, stage_task_id)) = current_stage.take() {
                                 state.complete_task(stage_task_id);
                             }
 
-                            let (stage_task_id, _stage_cancel_token) = state
-                                .start_task_for_profile(
+                            let (stage_task_id, _stage_cancel_token) =
+                                state.start_task_for_profile(
                                     TaskKind::Connect,
                                     format!("  ↳ {}", description),
                                     Some(profile_id),
@@ -1952,10 +1951,10 @@ impl Sidebar {
 
                             cx.emit(AppStateChanged);
                         });
-                    }) {
-                        log::warn!("Failed to update pipeline stage subtask: {:?}", error);
-                        break;
-                    }
+                    })
+                {
+                    log::warn!("Failed to update pipeline stage subtask: {:?}", error);
+                    break;
                 }
 
                 if matches!(
@@ -2108,9 +2107,9 @@ impl Sidebar {
 
             let pipeline_result = cx
                 .background_executor()
-                .spawn(async move {
-                    dbflux_core::run_pipeline(input, &state_tx_for_pipeline).await
-                })
+                .spawn(
+                    async move { dbflux_core::run_pipeline(input, &state_tx_for_pipeline).await },
+                )
                 .await;
 
             let output = match pipeline_result {

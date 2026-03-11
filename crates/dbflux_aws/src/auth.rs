@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 /// AWS authentication provider implementing `AuthProvider` for SSO,
 /// shared credentials, and static credentials.
 ///
@@ -299,10 +301,10 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
                 // Check for abort signal before each read.
                 if abort_flag_for_drain.load(std::sync::atomic::Ordering::Acquire) {
                     log::debug!("[aws sso login drain] abort signalled, killing process");
-                    if let Ok(mut guard) = child_for_drain.lock() {
-                        if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
-                        }
+                    if let Ok(mut guard) = child_for_drain.lock()
+                        && let Some(mut child) = guard.take()
+                    {
+                        let _ = child.kill();
                     }
                     return;
                 }
@@ -498,7 +500,11 @@ fn build_aws_static_credentials_form() -> AuthFormDef {
     }
 }
 
-fn non_expiring_login(profile: &AuthProfile, provider_id: &str, url_callback: UrlCallback) -> AuthSession {
+fn non_expiring_login(
+    profile: &AuthProfile,
+    provider_id: &str,
+    url_callback: UrlCallback,
+) -> AuthSession {
     url_callback(None);
 
     AuthSession {
@@ -737,7 +743,11 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         profile: &AuthProfile,
         url_callback: UrlCallback,
     ) -> Result<AuthSession, DbError> {
-        Ok(non_expiring_login(profile, self.provider_id(), url_callback))
+        Ok(non_expiring_login(
+            profile,
+            self.provider_id(),
+            url_callback,
+        ))
     }
 
     async fn resolve_credentials(
@@ -803,7 +813,11 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
         profile: &AuthProfile,
         url_callback: UrlCallback,
     ) -> Result<AuthSession, DbError> {
-        Ok(non_expiring_login(profile, self.provider_id(), url_callback))
+        Ok(non_expiring_login(
+            profile,
+            self.provider_id(),
+            url_callback,
+        ))
     }
 
     async fn resolve_credentials(
@@ -976,7 +990,10 @@ fn resolve_aws_credentials_blocking(
             })?;
 
         let mut fields = std::collections::HashMap::new();
-        fields.insert("access_key_id".to_string(), creds.access_key_id().to_string());
+        fields.insert(
+            "access_key_id".to_string(),
+            creds.access_key_id().to_string(),
+        );
         fields.insert("region".to_string(), region);
 
         let mut secret_fields = std::collections::HashMap::new();
@@ -1064,11 +1081,11 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
             Err(_) => continue,
         };
 
-        if let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str()) {
-            if url.trim_end_matches('/') == normalized_url {
-                log::debug!("SSO cache hit (startUrl scan): {}", path.display());
-                return Some(contents);
-            }
+        if let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str())
+            && url.trim_end_matches('/') == normalized_url
+        {
+            log::debug!("SSO cache hit (startUrl scan): {}", path.display());
+            return Some(contents);
         }
     }
 
@@ -1182,33 +1199,32 @@ impl std::future::Future for SleepFuture {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<()> {
-        loop {
-            match &self.state {
-                SleepState::NotStarted => {
-                    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
-                    let waker = cx.waker().clone();
-                    let duration = self.duration;
+        match &self.state {
+            SleepState::NotStarted => {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+                let waker = cx.waker().clone();
+                let duration = self.duration;
 
-                    std::thread::spawn(move || {
-                        std::thread::sleep(duration);
-                        let _ = tx.send(());
-                        waker.wake();
-                    });
+                std::thread::spawn(move || {
+                    std::thread::sleep(duration);
+                    let _ = tx.send(());
+                    waker.wake();
+                });
 
-                    self.state = SleepState::Sleeping(rx);
-                    return std::task::Poll::Pending;
-                }
-                SleepState::Sleeping(rx) => {
-                    if rx.try_recv().is_ok() {
-                        self.state = SleepState::Done;
-                        return std::task::Poll::Ready(());
-                    }
-                    // Not ready yet — remain pending; the waker will re-poll us.
-                    return std::task::Poll::Pending;
-                }
-                SleepState::Done => {
+                self.state = SleepState::Sleeping(rx);
+                std::task::Poll::Pending
+            }
+            SleepState::Sleeping(rx) => {
+                if rx.try_recv().is_ok() {
+                    self.state = SleepState::Done;
                     return std::task::Poll::Ready(());
                 }
+
+                // Not ready yet — remain pending; the waker will re-poll us.
+                std::task::Poll::Pending
+            }
+            SleepState::Done => {
+                std::task::Poll::Ready(())
             }
         }
     }
@@ -1333,11 +1349,7 @@ mod tests {
         fields.insert("profile_name".to_string(), "default".to_string());
         fields.insert("region".to_string(), "us-east-1".to_string());
 
-        let profile = AuthProfile::new(
-            "test-shared",
-            "aws-shared-credentials",
-            fields,
-        );
+        let profile = AuthProfile::new("test-shared", "aws-shared-credentials", fields);
 
         let provider = AwsSharedCredentialsAuthProvider::new();
         let rt = tokio::runtime::Builder::new_current_thread()

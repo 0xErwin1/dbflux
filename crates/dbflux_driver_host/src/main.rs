@@ -324,7 +324,7 @@ fn parse_args() -> Args {
                 eprintln!();
                 eprintln!("Options:");
                 eprintln!(
-                    "  --driver <name>  Driver to host (sqlite, postgres, mysql, mariadb, mongodb, redis)"
+                    "  --driver <name>  Driver to host (sqlite, postgres, mysql, mariadb, mongodb, redis, dynamodb)"
                 );
                 eprintln!("  --socket <name>  Socket name to bind");
                 process::exit(0);
@@ -363,6 +363,9 @@ fn create_driver(name: &str) -> Result<Arc<dyn DbDriver>, String> {
         #[cfg(feature = "redis")]
         "redis" => Ok(Arc::new(dbflux_driver_redis::RedisDriver)),
 
+        #[cfg(feature = "dynamodb")]
+        "dynamodb" => Ok(Arc::new(dbflux_driver_dynamodb::DynamoDriver::new())),
+
         _ => {
             #[allow(unused_mut)]
             let mut available: Vec<&str> = Vec::new();
@@ -379,9 +382,11 @@ fn create_driver(name: &str) -> Result<Arc<dyn DbDriver>, String> {
             available.push("mongodb");
             #[cfg(feature = "redis")]
             available.push("redis");
+            #[cfg(feature = "dynamodb")]
+            available.push("dynamodb");
 
             if available.is_empty() {
-                Err("No drivers compiled into this binary. Enable features: sqlite, postgres, mysql, mongodb, redis".to_string())
+                Err("No drivers compiled into this binary. Enable features: sqlite, postgres, mysql, mongodb, redis, dynamodb".to_string())
             } else {
                 Err(format!(
                     "Unknown driver '{name}'. Available: {}",
@@ -395,4 +400,34 @@ fn create_driver(name: &str) -> Result<Arc<dyn DbDriver>, String> {
 fn fatal(message: &str) -> ! {
     eprintln!("Error: {message}");
     process::exit(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_driver;
+
+    #[cfg(feature = "dynamodb")]
+    #[test]
+    fn create_driver_returns_dynamodb_when_feature_enabled() {
+        let driver = create_driver("dynamodb").expect("dynamodb driver should be registered");
+        assert_eq!(driver.metadata().id, "dynamodb");
+    }
+
+    #[cfg(not(feature = "dynamodb"))]
+    #[test]
+    fn create_driver_rejects_dynamodb_when_feature_disabled() {
+        let error = match create_driver("dynamodb") {
+            Ok(_) => panic!("dynamodb should be unavailable"),
+            Err(error) => error,
+        };
+
+        if let Some(available) = error.split("Available: ").nth(1) {
+            assert!(!available.contains("dynamodb"));
+        } else {
+            assert!(
+                error.contains("No drivers compiled into this binary"),
+                "unexpected error when dynamodb feature is disabled: {error}"
+            );
+        }
+    }
 }

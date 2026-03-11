@@ -64,7 +64,10 @@ impl AppAccessManager {
             #[cfg(feature = "aws")]
             "aws-ssm" => {
                 let instance_id = params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = params.get("region").map(String::as_str).unwrap_or("us-east-1");
+                let region = params
+                    .get("region")
+                    .map(String::as_str)
+                    .unwrap_or("us-east-1");
                 let remote_port: u16 = params
                     .get("remote_port")
                     .and_then(|s| s.parse().ok())

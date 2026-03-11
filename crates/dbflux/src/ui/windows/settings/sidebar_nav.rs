@@ -94,6 +94,7 @@ impl SettingsCoordinator {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn focus_sidebar(&mut self) {
         self.focus_area = SettingsFocus::Sidebar;
         self.sidebar_tree

@@ -377,6 +377,38 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb") {
+            let field_enabled = self.is_field_enabled(field_def);
+
+            return div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(!field_enabled, |d| d.opacity(0.5))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(field_def.label.clone()),
+                )
+                .child(
+                    div()
+                        .when(field_enabled, |d| {
+                            d.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.begin_inline_editor_interaction(cx);
+                                    this.auth_profile_dropdown.update(cx, |dropdown, cx| {
+                                        dropdown.open(cx);
+                                    });
+                                }),
+                            )
+                        })
+                        .child(self.auth_profile_dropdown.clone()),
+                )
+                .into_any_element();
+        }
+
         let field_focus = Self::field_id_to_focus(&field_def.id, is_ssh_tab);
         let focused = show_focus && field_focus == Some(self.form_focus);
 
@@ -397,6 +429,7 @@ impl ConnectionManagerWindow {
                 };
 
                 let field_enabled = self.is_field_enabled(field_def);
+                let fallback_input_focus = input_state.clone();
 
                 div()
                     .rounded(px(4.0))
@@ -448,13 +481,26 @@ impl ConnectionManagerWindow {
                     )
                     .child(
                         div()
-                            .when(field_enabled, |d| {
+                            .when_some(
+                                field_focus.and_then(|field| field_enabled.then_some(field)),
+                                |d, field| {
                                 d.on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, window, cx| {
-                                        if let Some(field) = field_focus {
-                                            this.enter_edit_mode_for_field(field, window, cx);
-                                        }
+                                        this.enter_edit_mode_for_field(field, window, cx);
+                                    }),
+                                )
+                                },
+                            )
+                            .when(field_enabled && field_focus.is_none(), |d| {
+                                let fallback_input_focus = fallback_input_focus.clone();
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.begin_inline_editor_interaction(cx);
+                                        fallback_input_focus.update(cx, |state, cx| {
+                                            state.focus(window, cx);
+                                        });
                                     }),
                                 )
                             })
@@ -855,7 +901,7 @@ impl Render for ConnectionManagerWindow {
             }
         }
 
-        self.apply_pending_auth_profile();
+        self.apply_pending_auth_profile(window, cx);
         self.apply_pending_ssm_auth_profile();
 
         if let Some(tunnel_id) = self.pending_ssh_tunnel_selection.take() {

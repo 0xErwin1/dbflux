@@ -245,7 +245,9 @@ impl SecretManager {
                 ssh_tunnel_profile_id,
                 ..
             } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                return None;
+            }
         };
 
         if let Some(tunnel_profile_id) = ssh_tunnel_profile_id {
