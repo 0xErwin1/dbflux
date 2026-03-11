@@ -6,10 +6,12 @@ use aws_sdk_dynamodb::types::{
     ScalarAttributeType,
 };
 use dbflux_core::{
-    CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig, DbDriver, DbError,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
+    DbDriver, DbError, Pagination, QueryRequest,
 };
 use dbflux_driver_dynamodb::DynamoDriver;
 use dbflux_test_support::containers;
+use serde_json::json;
 use std::time::Duration;
 
 fn dynamo_client(endpoint: &str) -> Result<Client, DbError> {
@@ -123,6 +125,36 @@ fn seed_items(endpoint: &str, table_name: &str, count: usize) -> Result<(), DbEr
     Ok(())
 }
 
+fn seed_filter_fixture_items(endpoint: &str, table_name: &str) -> Result<(), DbError> {
+    let client = dynamo_client(endpoint)?;
+    let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+        DbError::connection_failed(format!("Tokio runtime setup failed: {error}"))
+    })?;
+
+    let fixture = [
+        ("user#1", "active", 12),
+        ("user#2", "inactive", 4),
+        ("user#3", "pending", 11),
+        ("user#4", "active", 7),
+    ];
+
+    for (pk, status, score) in fixture {
+        runtime
+            .block_on(
+                client
+                    .put_item()
+                    .table_name(table_name)
+                    .item("pk", AttributeValue::S(pk.to_string()))
+                    .item("status", AttributeValue::S(status.to_string()))
+                    .item("score", AttributeValue::N(score.to_string()))
+                    .send(),
+            )
+            .map_err(|error| DbError::query_failed(format!("Seed item failed: {error}")))?;
+    }
+
+    Ok(())
+}
+
 fn connect_dynamodb(endpoint: &str) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
     let driver = DynamoDriver::new();
     let profile = ConnectionProfile::new_with_driver(
@@ -187,4 +219,158 @@ fn dynamodb_local_endpoint_failures_are_actionable() {
         text.contains("endpoint") || text.contains("connection") || text.contains("timed out"),
         "unexpected failure text: {text}"
     );
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn logical_filter_browse_and_count_are_consistent() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_phase4_filter_fixture";
+
+        create_table(&endpoint, table_name)?;
+        seed_filter_fixture_items(&endpoint, table_name)?;
+
+        let connection = connect_dynamodb(&endpoint)?;
+        let collection = CollectionRef::new("dynamodb", table_name);
+        let filter = json!({
+            "$and": [
+                {"score": {"$gte": 10}},
+                {"$or": [{"status": "active"}, {"status": "pending"}]}
+            ]
+        });
+
+        let browse_request = CollectionBrowseRequest::new(collection.clone())
+            .with_pagination(Pagination::Offset {
+                limit: 50,
+                offset: 0,
+            })
+            .with_filter(filter.clone());
+
+        let browsed = connection.browse_collection(&browse_request)?;
+        assert_eq!(browsed.row_count(), 2);
+
+        let count_request = CollectionCountRequest::new(collection).with_filter(filter);
+        let count = connection.count_collection(&count_request)?;
+        assert_eq!(count, 2);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn update_many_and_delete_many_apply_to_all_matches() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_phase4_many_mutation_fixture";
+
+        create_table(&endpoint, table_name)?;
+        seed_filter_fixture_items(&endpoint, table_name)?;
+
+        let connection = connect_dynamodb(&endpoint)?;
+
+        let update_many = QueryRequest::new(
+            json!({
+                "op": "update",
+                "table": table_name,
+                "key": { "status": "active" },
+                "update": { "$set": { "status": "archived" } },
+                "many": true
+            })
+            .to_string(),
+        );
+
+        let updated = connection.execute(&update_many)?;
+        assert_eq!(updated.affected_rows, Some(2));
+
+        let archived_count = connection.count_collection(
+            &CollectionCountRequest::new(CollectionRef::new("dynamodb", table_name))
+                .with_filter(json!({"status": "archived"})),
+        )?;
+        assert_eq!(archived_count, 2);
+
+        let delete_many = QueryRequest::new(
+            json!({
+                "op": "delete",
+                "table": table_name,
+                "key": { "status": "archived" },
+                "many": true
+            })
+            .to_string(),
+        );
+
+        let deleted = connection.execute(&delete_many)?;
+        assert_eq!(deleted.affected_rows, Some(2));
+
+        let remaining_archived_count = connection.count_collection(
+            &CollectionCountRequest::new(CollectionRef::new("dynamodb", table_name))
+                .with_filter(json!({"status": "archived"})),
+        )?;
+        assert_eq!(remaining_archived_count, 0);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn upsert_updates_existing_and_inserts_missing_items() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_phase4_upsert_fixture";
+
+        create_table(&endpoint, table_name)?;
+
+        let client = dynamo_client(&endpoint)?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+            DbError::connection_failed(format!("Tokio runtime setup failed: {error}"))
+        })?;
+
+        runtime
+            .block_on(
+                client
+                    .put_item()
+                    .table_name(table_name)
+                    .item("pk", AttributeValue::S("user#1".to_string()))
+                    .item("status", AttributeValue::S("active".to_string()))
+                    .send(),
+            )
+            .map_err(|error| DbError::query_failed(format!("Seed item failed: {error}")))?;
+
+        let connection = connect_dynamodb(&endpoint)?;
+
+        let upsert_existing = QueryRequest::new(
+            json!({
+                "op": "update",
+                "table": table_name,
+                "key": { "pk": "user#1" },
+                "update": { "$set": { "status": "updated" } },
+                "upsert": true
+            })
+            .to_string(),
+        );
+
+        let existing_result = connection.execute(&upsert_existing)?;
+        assert_eq!(existing_result.affected_rows, Some(1));
+
+        let upsert_missing = QueryRequest::new(
+            json!({
+                "op": "update",
+                "table": table_name,
+                "key": { "pk": "user#2" },
+                "update": { "$set": { "status": "created" } },
+                "upsert": true
+            })
+            .to_string(),
+        );
+
+        let missing_result = connection.execute(&upsert_missing)?;
+        assert_eq!(missing_result.affected_rows, Some(1));
+
+        let created_count = connection.count_collection(
+            &CollectionCountRequest::new(CollectionRef::new("dynamodb", table_name))
+                .with_filter(json!({"status": "created"})),
+        )?;
+        assert_eq!(created_count, 1);
+
+        Ok(())
+    })
 }

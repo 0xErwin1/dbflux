@@ -21,7 +21,7 @@ pub enum DynamoCommandEnvelope {
     Put {
         database: Option<String>,
         table: String,
-        item: serde_json::Value,
+        items: Vec<serde_json::Value>,
     },
     Update {
         database: Option<String>,
@@ -96,12 +96,36 @@ pub fn parse_command_envelope(input: &str) -> Result<DynamoCommandEnvelope, DbEr
             })
         }
         "put" => {
-            validate_allowed_fields(object, &["op", "database", "table", "item"])?;
+            validate_allowed_fields(object, &["op", "database", "table", "item", "items"])?;
+
+            let single_item = optional_object_value(object, "item")?;
+            let many_items = optional_object_array_value(object, "items")?;
+
+            let items = match (single_item, many_items) {
+                (Some(_), Some(_)) => {
+                    return Err(DbError::query_failed(
+                        "DynamoDB put envelope accepts either 'item' or 'items', not both",
+                    ));
+                }
+                (Some(item), None) => vec![item],
+                (None, Some(items)) => items,
+                (None, None) => {
+                    return Err(DbError::query_failed(
+                        "DynamoDB put envelope requires 'item' or 'items'",
+                    ));
+                }
+            };
+
+            if items.is_empty() {
+                return Err(DbError::query_failed(
+                    "DynamoDB put envelope requires at least one item",
+                ));
+            }
 
             Ok(DynamoCommandEnvelope::Put {
                 database: optional_string(object, "database")?,
                 table: required_string(object, "table")?,
-                item: required_object_value(object, "item")?,
+                items,
             })
         }
         "update" => {
@@ -236,6 +260,36 @@ fn optional_object_value(
     Ok(Some(value.clone()))
 }
 
+fn optional_object_array_value(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<Vec<serde_json::Value>>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let items = value
+        .as_array()
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a JSON array")))?;
+
+    let mut parsed_items = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        if !item.is_object() {
+            return Err(DbError::query_failed(format!(
+                "Field '{key}[{index}]' must be a JSON object"
+            )));
+        }
+
+        parsed_items.push(item.clone());
+    }
+
+    Ok(Some(parsed_items))
+}
+
 fn optional_bool(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -321,7 +375,19 @@ mod tests {
             r#"{"op":"put","table":"users","item":{"pk":"A","name":"Alice"}}"#,
         )
         .expect("put envelope should parse");
-        assert!(matches!(put, DynamoCommandEnvelope::Put { .. }));
+        assert!(matches!(
+            put,
+            DynamoCommandEnvelope::Put { ref items, .. } if items.len() == 1
+        ));
+
+        let put_many = parse_command_envelope(
+            r#"{"op":"put","table":"users","items":[{"pk":"A"},{"pk":"B"}]}"#,
+        )
+        .expect("put-many envelope should parse");
+        assert!(matches!(
+            put_many,
+            DynamoCommandEnvelope::Put { ref items, .. } if items.len() == 2
+        ));
 
         let update = parse_command_envelope(
             r#"{"op":"update","table":"users","key":{"pk":"A"},"update":{"name":"Bob"}}"#,
@@ -368,5 +434,11 @@ mod tests {
             parse_command_envelope(r#"{"op":"put","table":"users","item":{"pk":"A"},"foo":1}"#)
                 .expect_err("unknown field should fail");
         assert!(matches!(unknown_field, DbError::QueryFailed(_)));
+
+        let conflicting_put_payload = parse_command_envelope(
+            r#"{"op":"put","table":"users","item":{"pk":"A"},"items":[{"pk":"B"}]}"#,
+        )
+        .expect_err("item and items cannot be combined");
+        assert!(matches!(conflicting_put_payload, DbError::QueryFailed(_)));
     }
 }
