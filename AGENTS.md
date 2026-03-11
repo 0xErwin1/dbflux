@@ -20,6 +20,9 @@ crates/
 ├── dbflux_driver_mysql/       # MySQL/MariaDB driver
 ├── dbflux_driver_mongodb/     # MongoDB driver
 ├── dbflux_driver_redis/       # Redis driver
+├── dbflux_driver_dynamodb/    # DynamoDB driver
+├── dbflux_aws/                # AWS auth providers + AWS value providers
+├── dbflux_ssm/                # AWS SSM managed tunnel factory
 ├── dbflux_lua/                # Embedded Lua runtime for in-process hooks
 ├── dbflux_tunnel_core/        # Shared RAII tunnel infrastructure (proxy + SSH)
 ├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
@@ -32,9 +35,9 @@ crates/
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws    # Run app
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
@@ -259,6 +262,8 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
 - `dbflux_driver_host`: Standalone RPC host binary that serves drivers over local sockets
 - `dbflux_driver_*`: Implement `DbDriver`, `Connection`, `ErrorFormatter`, and optionally `QueryGenerator` traits
+- `dbflux_aws`: AWS auth providers (SSO/shared/static), AWS account discovery, and AWS value providers
+- `dbflux_ssm`: Managed AWS SSM port-forward tunnel factory used by `AccessManager`
 - `dbflux_tunnel_core`: RAII `Tunnel`, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, adaptive sleep
 - `dbflux_proxy`: SOCKS5/HTTP CONNECT proxy via `TunnelConnector` impl
 - `dbflux_ssh`: SSH tunnel via `TunnelConnector` impl (all SSH ops serialized to one thread for libssh2 safety)
@@ -282,6 +287,15 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - Internal driver keys for external services are `rpc:<socket_id>`
 - Use `DbConfig::External { kind, values }` for external driver profile configs
 - Only managed hosts started by DBFlux are shut down automatically
+
+### Auth, Access, and Connect Pipeline
+
+- Auth providers are runtime-registered in `AuthProviderRegistry` (`crates/dbflux/src/auth_provider_registry.rs`) instead of hardcoded through provider enums
+- `AuthProfile` is provider-agnostic (`provider_id` + `fields`) and includes compatibility migration from legacy AWS-only payloads
+- Access method supports provider-agnostic managed mode via `AccessKind::Managed { provider, params }`
+- Legacy SSM access JSON (`method = "ssm"`) is migrated transparently to managed access at deserialization time
+- Connect execution runs through `dbflux_core::pipeline::run_pipeline` with staged progress (`Authenticating`, `ResolvingValues`, `OpeningAccess`)
+- App-level access dispatch is centralized in `AppAccessManager` (`crates/dbflux/src/access_manager.rs`) and currently handles managed provider `aws-ssm`
 
 ### Driver/UI Decoupling
 
@@ -325,7 +339,7 @@ Key abstractions for UI adaptation:
 
 **`ItemManager<T>`**: CRUD manager with auto-save, backed by `JsonStore<T>`. Uses `Identifiable` trait for ID access and `DefaultFilename` trait for `Default` on type aliases. `ProxyManager` and `SshTunnelManager` are type aliases. `ProfileManager` stays separate (has extra methods like `find_by_id`, `profile_ids`).
 
-**`HasSecretRef`**: Unifies secret operations for types with keyring references (`SshTunnelProfile`, `ProxyProfile`). `SecretManager` generic methods (`get_secret`, `save_secret`, `delete_secret`) delegate through this trait.
+**`HasSecretRef`**: Unifies secret operations for types with keyring references (`SshTunnelProfile`, `ProxyProfile`, `AuthProfile`). `SecretManager` generic methods (`get_secret`, `save_secret`, `delete_secret`) delegate through this trait.
 
 **`FormGridNav<F>`**: 2D grid navigation for settings forms. Takes `&[Vec<F>]` rows as input to each method (not stored), so callers compute dynamic grids from their own state. Used by proxy and SSH tunnel settings forms.
 
@@ -388,6 +402,8 @@ Documents follow a consistent pattern for tab-based UI:
 | File                                                              | Purpose                                             |
 | ----------------------------------------------------------------- | --------------------------------------------------- |
 | `crates/dbflux/src/app.rs`                                        | AppState, driver registry                           |
+| `crates/dbflux/src/access_manager.rs`                             | App AccessManager for direct/managed access         |
+| `crates/dbflux/src/auth_provider_registry.rs`                     | Runtime auth provider registry                      |
 | `crates/dbflux/src/main.rs`                                       | App entry point, logging, window setup              |
 | `crates/dbflux/src/cli.rs`                                        | CLI arg parsing, single-instance IPC client         |
 | `crates/dbflux/src/ipc_server.rs`                                 | App-control IPC server (Focus, OpenScript)          |
@@ -412,20 +428,28 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux/src/ui/components/document_tree/state.rs`          | Document tree state (cursor, search, expansion)     |
 | `crates/dbflux/src/ui/components/tree_nav/mod.rs`                 | Reusable tree navigation (cursor, expand, select)   |
 | `crates/dbflux/src/ui/windows/settings/form_nav.rs`               | Generic 2D grid navigation for settings forms       |
+| `crates/dbflux/src/ui/windows/settings/auth_profiles_section.rs`  | Provider-driven auth profile CRUD UI                |
 | `crates/dbflux/src/ui/windows/settings/proxies.rs`                | Proxy CRUD form in Settings                         |
 | `crates/dbflux/src/ui/windows/settings/hooks.rs`                  | Hook definitions CRUD in Settings                   |
 | `crates/dbflux/src/ui/windows/settings/drivers.rs`                | Per-driver settings overrides UI                    |
 | `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs`    | Per-profile hook bindings                           |
+| `crates/dbflux/src/ui/windows/connection_manager/access_tab.rs`   | Unified access editor (Direct/SSH/Proxy/SSM)        |
 | `crates/dbflux/src/keymap/defaults.rs`                            | Key bindings per context                            |
 | `crates/dbflux/src/keymap/command.rs`                             | Command enum and dispatch                           |
 | `crates/dbflux/src/keymap/focus.rs`                               | FocusTarget (Document/Sidebar/BackgroundTasks)      |
 | `crates/dbflux_core/src/core/traits.rs`                           | `DbDriver`, `Connection` traits                     |
 | `crates/dbflux_core/src/driver/capabilities.rs`                   | DatabaseCategory, QueryLanguage, DriverCapabilities |
 | `crates/dbflux_core/src/config/app.rs`                            | External RPC service runtime config (`config.json`) |
+| `crates/dbflux_core/src/access/mod.rs`                            | AccessKind + AccessManager contracts                |
+| `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                             |
+| `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
 | `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
 | `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, MutationRequest routing       |
 | `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |
 | `crates/dbflux_core/src/query/language_service.rs`                | Dangerous query detection (SQL, MongoDB, Redis)     |
+| `crates/dbflux_core/src/pipeline/mod.rs`                          | Provider-agnostic connect pipeline orchestration    |
+| `crates/dbflux_core/src/pipeline/resolve.rs`                      | ValueRef patching into DbConfig and managed access  |
+| `crates/dbflux_core/src/values/resolver.rs`                       | Composite secret/parameter/auth value resolver      |
 | `crates/dbflux_core/src/schema/types.rs`                          | Schema types with lazy loading support              |
 | `crates/dbflux_core/src/data/crud.rs`                             | CRUD mutation types for all database paradigms      |
 | `crates/dbflux_core/src/data/key_value.rs`                        | Key-value operation types (Hash, Set, List, ZSet)   |
@@ -443,6 +467,12 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_driver_mongodb/src/query_generator.rs`             | MongoDB shell query generator                       |
 | `crates/dbflux_driver_redis/src/driver.rs`                        | Redis driver implementation                         |
 | `crates/dbflux_driver_redis/src/command_generator.rs`             | Redis command generator                             |
+| `crates/dbflux_driver_dynamodb/src/driver.rs`                     | DynamoDB driver implementation                      |
+| `crates/dbflux_driver_dynamodb/src/query_parser.rs`               | DynamoDB command envelope parser                    |
+| `crates/dbflux_driver_dynamodb/src/query_generator.rs`            | DynamoDB mutation envelope generator                |
+| `crates/dbflux_aws/src/auth.rs`                                   | AWS auth providers + SSO login flow                |
+| `crates/dbflux_aws/src/config.rs`                                 | AWS config parser/cache + profile write-back       |
+| `crates/dbflux_aws/src/accounts.rs`                               | AWS SSO account/role discovery                     |
 | `crates/dbflux_ipc/src/driver_protocol.rs`                        | Driver RPC protocol schema and DTOs                 |
 | `crates/dbflux_ipc/src/auth.rs`                                   | IPC auth token management                           |
 | `crates/dbflux_driver_ipc/src/driver.rs`                          | IpcDriver and managed host lifecycle                |

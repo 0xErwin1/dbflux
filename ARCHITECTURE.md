@@ -4,13 +4,14 @@
 
 - DBFlux is a keyboard-first database client built with Rust and GPUI, focused on fast workflows and a clean desktop UI (README.md).
 - The repo is a Rust workspace with a UI app crate plus shared core types, driver implementations, and supporting libraries (Cargo.toml, crates/).
-- Supports multiple database paradigms: relational (SQL), document (MongoDB), key-value, graph, time-series, and wide-column stores.
+- Supports multiple database paradigms: relational (SQL), document (MongoDB, DynamoDB), key-value, graph, time-series, and wide-column stores.
 
 ## Tech Stack
 
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis) (Cargo.toml).
+- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB) (Cargo.toml).
+- AWS auth/integration: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
 - IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
@@ -25,6 +26,8 @@ crates/
     src/main.rs             # Application entry point
     src/app.rs              # Global state, drivers, profiles, history
     src/assets.rs           # GPUI AssetSource impl for embedded SVG icons
+    src/access_manager.rs   # App AccessManager (direct + managed access providers)
+    src/auth_provider_registry.rs # Runtime registry for DynAuthProvider implementations
     src/cli.rs              # CLI argument parsing and single-instance IPC client
     src/hook_executor.rs    # Composite hook executor routing (process + Lua)
     src/ipc_server.rs       # App-control IPC server (single-instance, OpenScript)
@@ -158,6 +161,7 @@ crates/
           form_nav.rs       # FormGridNav<F> generic 2D grid navigation
           general.rs        # General settings (theme, safety toggles)
           keybindings.rs    # Keybindings settings section
+          auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
           proxies.rs        # Proxy CRUD form with FormGridNav
           ssh_tunnels.rs    # SSH tunnel CRUD form with FormGridNav
           hooks.rs          # Hook definitions CRUD
@@ -165,6 +169,7 @@ crates/
           rpc_services.rs   # External RPC service management
         connection_manager/ # Connection manager window
           mod.rs
+          access_tab.rs     # Unified access mode editor (Direct/SSH/Proxy/SSM)
           form.rs           # Connection form state and field management
           navigation.rs     # Keyboard navigation within connection manager
           render.rs         # Top-level connection manager rendering
@@ -176,6 +181,11 @@ crates/
           proxy.rs          # Proxy tab (selector, details, clear)
           ssh.rs            # SSH tunnel settings tab
   dbflux_core/              # Traits, core types, storage, errors
+    src/access/             # AccessKind, AccessManager, and managed-access serialization
+      mod.rs
+    src/auth/               # AuthProfile + DynAuthProvider contracts
+      mod.rs
+      types.rs
     src/core/               # Fundamental types and traits
       traits.rs             # DbDriver + Connection traits
       error.rs              # DbError type
@@ -233,6 +243,11 @@ crates/
       app.rs                # Runtime config for external RPC services (`config.json`)
       refresh_policy.rs     # Schema refresh policy
       scripts_directory.rs  # Scripts folder tree (file/folder CRUD)
+    src/pipeline/           # Pre-connect pipeline (auth/value/access stages)
+      mod.rs
+      resolve.rs
+    src/values/             # ValueRef resolution + provider registry + cache
+      resolver.rs
     src/facade/             # Session facade
       session.rs            # Session facade for connection management
   dbflux_ipc/               # Versioned IPC contracts and framing
@@ -259,6 +274,16 @@ crates/
   dbflux_driver_redis/      # Redis driver implementation
     src/driver.rs           # Connection, key-value API, schema discovery
     src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
+  dbflux_driver_dynamodb/   # DynamoDB driver implementation
+    src/driver.rs           # Connection, schema discovery, scan/query/put/update/delete
+    src/query_parser.rs     # JSON command envelope parser for DynamoDB operations
+    src/query_generator.rs  # Mutation -> DynamoDB command envelope generator
+    tests/live_integration.rs # Docker-backed integration tests (DynamoDB Local)
+  dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
+    src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
+    src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
+    src/accounts.rs         # AWS SSO account and role discovery
+  dbflux_ssm/               # AWS SSM tunnel factory for managed access
   dbflux_lua/               # Embedded Lua runtime for in-process hooks
     src/executor.rs         # Lua HookExecutor implementation
     src/engine.rs           # Lua VM creation and shared runtime state
@@ -277,7 +302,7 @@ crates/
     src/json.rs             # JSON pretty/compact exporter
     src/text.rs             # Text table exporter
   dbflux_test_support/      # Docker containers and fixtures for integration tests
-    src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis)
+    src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
     src/fake_driver.rs      # FakeDriver for unit tests
 ```
@@ -329,9 +354,18 @@ crates/
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
 - Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
-- **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`). The UI accesses generators through `Connection::query_generator()`.
+- **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` trait with `supported_categories()` and `generate_mutation(&MutationRequest)`. Each driver crate implements its own generator (SQL via `SqlMutationGenerator`, MongoDB via `MongoShellGenerator`, Redis via `RedisCommandGenerator`, DynamoDB via `DynamoQueryGenerator`). The UI accesses generators through `Connection::query_generator()`.
 - Driver forms: `crates/dbflux_core/src/driver/form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
 - **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
+
+### Auth & Access Pipeline
+
+- `crates/dbflux/src/auth_provider_registry.rs` maintains runtime `DynAuthProvider` registration in the app crate and avoids hardcoding AWS provider logic in connection UI flows.
+- `crates/dbflux_core/src/auth/` defines provider contracts (`AuthFormDef`, `DynAuthProvider`, `ImportableProfile`, `after_profile_saved`) and serializable auth profile/session types.
+- `AuthProfile` storage migrated from provider-specific nested `config` payloads to provider-agnostic `fields`, with compatibility deserialization for legacy entries.
+- `crates/dbflux_core/src/access/mod.rs` introduces provider-agnostic `AccessKind::Managed { provider, params }` with transparent migration from legacy `method = "ssm"` profile JSON.
+- `crates/dbflux_core/src/pipeline/mod.rs` runs pre-connect stages (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) and publishes `PipelineState` updates to UI watchers.
+- `crates/dbflux/src/access_manager.rs` provides the app-side `AccessManager` implementation for direct and managed access providers (currently `aws-ssm`).
 
 ### Tunnel Infrastructure
 
@@ -357,9 +391,10 @@ crates/
 
 ### Settings Window
 
-- Settings is organized into 7 sections: General, Keybindings, Proxies, SSH Tunnels, Services, Hooks, Drivers.
+- Settings is organized into 8 sections: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers.
 - Sidebar uses `TreeNav` component with collapsible Network/Connection categories.
 - `UiStateStore` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
+- Auth Profiles section is provider-driven (`DynAuthProvider::form_def`) and supports importing provider-discovered profiles (for AWS, from `~/.aws/config`).
 - Proxy and SSH tunnel forms use `FormGridNav<F>` for keyboard-driven 2D grid navigation.
 - Drivers section shows per-driver settings overrides filtered by `DatabaseCategory`.
 
@@ -389,9 +424,9 @@ crates/
 
 ### Storage & Configuration
 
-- Profiles + secrets: `crates/dbflux_core/src/connection/profile.rs` and `crates/dbflux_core/src/storage/secrets.rs` define connection/SSH/proxy profiles and keyring integration.
+- Profiles + secrets: `crates/dbflux_core/src/connection/profile.rs` and `crates/dbflux_core/src/storage/secrets.rs` define connection/SSH/proxy/auth profiles and keyring integration.
 - Generic stores: `crates/dbflux_core/src/storage/json_store.rs` provides `JsonStore<T>` with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). `ItemManager<T>` in `connection/item_manager.rs` adds CRUD + auto-save; `ProxyManager` and `SshTunnelManager` are type aliases.
-- Secret management: `SecretManager` uses `HasSecretRef` trait for generic keyring operations across SSH tunnels and proxy profiles.
+- Secret management: `SecretManager` uses `HasSecretRef` trait for generic keyring operations across SSH tunnels, proxy profiles, and auth profiles.
 - Storage: `crates/dbflux_core/src/storage/history.rs` and `crates/dbflux_core/src/storage/saved_query.rs` persist JSON data in the config dir.
 - Session persistence: `crates/dbflux_core/src/storage/session.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
 - UI state: `crates/dbflux_core/src/storage/ui_state.rs` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
@@ -417,6 +452,12 @@ crates/
   - Keyspace (database index) support
   - Key scanning, TTL management, rename, type discovery
   - Command generator (`RedisCommandGenerator`) for all key-value mutation types
+- **DynamoDB**: `crates/dbflux_driver_dynamodb/` — `aws-sdk-dynamodb` driver with:
+  - Native table discovery (`ListTables`, `DescribeTable`) mapped to DBFlux document schema abstractions
+  - Read path strategy (`Scan` vs `Query`) based on available key predicates in filters
+  - Single-item CRUD support (`PutItem`, `UpdateItem`, `DeleteItem`) with key validation and explicit MVP guardrails for unsupported batch/transaction flows
+  - JSON command-envelope parser for execute mode (`scan`, `query`, `put`, `update`, `delete`)
+  - Mutation query generator (`DynamoQueryGenerator`) used by "Copy as Query"
 
 ### Supporting Components
 
@@ -425,17 +466,17 @@ crates/
 - Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
 - Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`).
-- Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers.
+- Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
 - Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets loaded via `assets.rs`.
 
 ## Data Flow
 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/views/workspace/).
 - External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
-- Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which optionally creates a proxy tunnel, then connects and fetches schema (crates/dbflux/src/app.rs). Supports form-based configuration, direct URI input, optional proxy tunneling, and SSH tunneling (mutually exclusive). Connection hooks run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
+- Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
-- View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB, key-value view for Redis. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
+- View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
 - Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) operates in dual mode—SQL mode with regeneration and options panel, or generic mode for non-SQL languages (MongoDB, Redis) with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/views/workspace/).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
@@ -458,6 +499,8 @@ crates/
 - SQLite: `rusqlite` file-based connections with lazy schema loading (crates/dbflux_driver_sqlite/src/driver.rs).
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, and shell query generation (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
+- DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
+- AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and external driver communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
 - SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
@@ -467,10 +510,10 @@ crates/
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `lua`, and `aws` (enabled by default in this branch).
 - Runtime data (config dir via `dirs::config_dir`):
   - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/config/app.rs).
-  - `profiles.json`, `ssh_tunnels.json`, and `proxies.json` (crates/dbflux_core/src/storage/json_store.rs).
+  - `profiles.json`, `ssh_tunnels.json`, `proxies.json`, and `auth_profiles.json` (crates/dbflux_core/src/storage/json_store.rs).
   - `history.json` for query history (crates/dbflux_core/src/storage/history.rs).
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/storage/saved_query.rs).
 - Session data (data dir via `dirs::data_dir`):
@@ -482,8 +525,8 @@ crates/
 
 ## Build & Deploy
 
-- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis` or `--release` (AGENTS.md).
-- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis` (AGENTS.md).
+- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` or `--release` (AGENTS.md).
+- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
 - Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
 - Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.
