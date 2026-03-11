@@ -1996,8 +1996,7 @@ impl ConnectionManagerWindow {
         }
 
         self.pending_wizard_auth_profile_selection = false;
-        self.auth_profile_action_message =
-            Some("Selected profile created by wizard.".to_string());
+        self.auth_profile_action_message = Some("Selected profile created by wizard.".to_string());
 
         self.populate_auth_profile_dropdown(cx);
         self.refresh_auth_profile_sessions(cx);
