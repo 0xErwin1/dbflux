@@ -1,10 +1,10 @@
 use aws_config::{BehaviorVersion, Region};
-use aws_sdk_dynamodb::Client;
 use aws_sdk_dynamodb::config::Credentials;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
     ScalarAttributeType,
 };
+use aws_sdk_dynamodb::Client;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
     DbDriver, DbError, Pagination, QueryRequest,
@@ -223,7 +223,7 @@ fn dynamodb_local_endpoint_failures_are_actionable() {
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn logical_filter_browse_and_count_are_consistent() -> Result<(), DbError> {
+fn dynamodb_logical_filter_browse_and_count_are_consistent() -> Result<(), DbError> {
     containers::with_dynamodb_endpoint(|endpoint| {
         let table_name = "dbflux_phase4_filter_fixture";
 
@@ -259,7 +259,7 @@ fn logical_filter_browse_and_count_are_consistent() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn update_many_and_delete_many_apply_to_all_matches() -> Result<(), DbError> {
+fn dynamodb_update_many_and_delete_many_apply_to_all_matches() -> Result<(), DbError> {
     containers::with_dynamodb_endpoint(|endpoint| {
         let table_name = "dbflux_phase4_many_mutation_fixture";
 
@@ -313,7 +313,7 @@ fn update_many_and_delete_many_apply_to_all_matches() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn upsert_updates_existing_and_inserts_missing_items() -> Result<(), DbError> {
+fn dynamodb_upsert_updates_existing_and_inserts_missing_items() -> Result<(), DbError> {
     containers::with_dynamodb_endpoint(|endpoint| {
         let table_name = "dbflux_phase4_upsert_fixture";
 

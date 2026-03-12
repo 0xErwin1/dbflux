@@ -43,6 +43,7 @@ cargo clippy --workspace -- -D warnings  # Lint
 cargo test --workspace               # All tests
 cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
+cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored  # Docker-backed live tests
 
 # Nix
 nix develop                          # Enter dev shell
@@ -376,6 +377,12 @@ Drivers declare their capabilities via `DriverMetadata`:
 - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
+
+### Driver README documentation
+
+- Every driver crate under `crates/dbflux_driver_*/` must include a `README.md`.
+- Keep each driver README focused on two sections: **Features** and **Limitations**.
+- Update driver README files whenever capabilities, supported operations, or known limits change.
 
 ### Document System Pattern
 

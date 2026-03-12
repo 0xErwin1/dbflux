@@ -174,12 +174,8 @@ crates/
           navigation.rs     # Keyboard navigation within connection manager
           render.rs         # Top-level connection manager rendering
           render_driver_select.rs
-          render_proxy.rs
-          render_ssh.rs
           render_tabs.rs
           hooks_tab.rs      # Per-profile hook bindings
-          proxy.rs          # Proxy tab (selector, details, clear)
-          ssh.rs            # SSH tunnel settings tab
   dbflux_core/              # Traits, core types, storage, errors
     src/access/             # AccessKind, AccessManager, and managed-access serialization
       mod.rs
@@ -453,11 +449,16 @@ crates/
   - Key scanning, TTL management, rename, type discovery
   - Command generator (`RedisCommandGenerator`) for all key-value mutation types
 - **DynamoDB**: `crates/dbflux_driver_dynamodb/` — `aws-sdk-dynamodb` driver with:
-  - Native table discovery (`ListTables`, `DescribeTable`) mapped to DBFlux document schema abstractions
-  - Read path strategy (`Scan` vs `Query`) based on available key predicates in filters
-  - Single-item CRUD support (`PutItem`, `UpdateItem`, `DeleteItem`) with key validation and explicit MVP guardrails for unsupported batch/transaction flows
-  - JSON command-envelope parser for execute mode (`scan`, `query`, `put`, `update`, `delete`)
-  - Mutation query generator (`DynamoQueryGenerator`) used by "Copy as Query"
+  - Native table discovery (`ListTables`, `DescribeTable`) with PK/SK + GSI/LSI key metadata mapped to DBFlux document abstractions
+  - Read path planning (`Scan` vs `Query`) with read options (`index`, `consistent_read`) and server-filter translation/fallback controls
+  - Mutation support for single and multi-item paths (`put`, `update`, `delete`), with single-item upsert and bounded retry handling for unprocessed batch writes
+  - JSON command-envelope parser for execute mode (`scan`, `query`, `put`, `update`, `delete`) and mutation query generation (`DynamoQueryGenerator`)
+  - Current limits: no query cancellation, no PartiQL/transaction API surface, and no `update many + upsert` combination
+
+### Driver README policy
+
+- Each driver crate (`crates/dbflux_driver_*/`) has a `README.md` that documents current features and limitations.
+- Keep those README files aligned with `DriverMetadata` capabilities and actual runtime behavior after any driver change.
 
 ### Supporting Components
 
