@@ -10,6 +10,7 @@ pub enum DynamoCommandEnvelope {
         filter: Option<serde_json::Value>,
         limit: Option<u32>,
         offset: Option<u64>,
+        read_options: DynamoReadOptions,
     },
     Query {
         database: Option<String>,
@@ -17,6 +18,7 @@ pub enum DynamoCommandEnvelope {
         filter: Option<serde_json::Value>,
         limit: Option<u32>,
         offset: Option<u64>,
+        read_options: DynamoReadOptions,
     },
     Put {
         database: Option<String>,
@@ -37,6 +39,29 @@ pub enum DynamoCommandEnvelope {
         key: serde_json::Value,
         many: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamoFilterFallback {
+    ClientSide,
+    Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DynamoReadOptions {
+    pub index_name: Option<String>,
+    pub consistent_read: bool,
+    pub filter_fallback: DynamoFilterFallback,
+}
+
+impl Default for DynamoReadOptions {
+    fn default() -> Self {
+        Self {
+            index_name: None,
+            consistent_read: false,
+            filter_fallback: DynamoFilterFallback::ClientSide,
+        }
+    }
 }
 
 pub fn is_supported_command(op: &str) -> bool {
@@ -70,29 +95,59 @@ pub fn parse_command_envelope(input: &str) -> Result<DynamoCommandEnvelope, DbEr
         "scan" => {
             validate_allowed_fields(
                 object,
-                &["op", "database", "table", "filter", "limit", "offset"],
+                &[
+                    "op",
+                    "database",
+                    "table",
+                    "filter",
+                    "limit",
+                    "offset",
+                    "index",
+                    "consistent_read",
+                    "allow_filter_fallback",
+                    "require_server_filter",
+                ],
             )?;
+
+            let filter = optional_object_value(object, "filter")?;
+            let read_options = parse_read_options(object, "scan", filter.is_some())?;
 
             Ok(DynamoCommandEnvelope::Scan {
                 database: optional_string(object, "database")?,
                 table: required_string(object, "table")?,
-                filter: optional_object_value(object, "filter")?,
+                filter,
                 limit: optional_u32(object, "limit")?,
                 offset: optional_u64(object, "offset")?,
+                read_options,
             })
         }
         "query" => {
             validate_allowed_fields(
                 object,
-                &["op", "database", "table", "filter", "limit", "offset"],
+                &[
+                    "op",
+                    "database",
+                    "table",
+                    "filter",
+                    "limit",
+                    "offset",
+                    "index",
+                    "consistent_read",
+                    "allow_filter_fallback",
+                    "require_server_filter",
+                ],
             )?;
+
+            let filter = optional_object_value(object, "filter")?;
+            let read_options = parse_read_options(object, "query", filter.is_some())?;
 
             Ok(DynamoCommandEnvelope::Query {
                 database: optional_string(object, "database")?,
                 table: required_string(object, "table")?,
-                filter: optional_object_value(object, "filter")?,
+                filter,
                 limit: optional_u32(object, "limit")?,
                 offset: optional_u64(object, "offset")?,
+                read_options,
             })
         }
         "put" => {
@@ -304,6 +359,63 @@ fn optional_bool(
         .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a boolean")))
 }
 
+fn parse_read_options(
+    object: &serde_json::Map<String, serde_json::Value>,
+    op: &str,
+    has_filter: bool,
+) -> Result<DynamoReadOptions, DbError> {
+    let index_name = optional_non_empty_string(object, "index")?;
+    let consistent_read = optional_bool(object, "consistent_read")?.unwrap_or(false);
+    let allow_filter_fallback = optional_bool(object, "allow_filter_fallback")?.unwrap_or(true);
+    let require_server_filter = optional_bool(object, "require_server_filter")?.unwrap_or(false);
+
+    if allow_filter_fallback && require_server_filter {
+        return Err(DbError::query_failed(format!(
+            "DynamoDB '{op}' envelope cannot set both 'allow_filter_fallback' and 'require_server_filter' to true"
+        )));
+    }
+
+    if require_server_filter && !has_filter {
+        return Err(DbError::query_failed(format!(
+            "DynamoDB '{op}' envelope requires a 'filter' when 'require_server_filter' is true"
+        )));
+    }
+
+    let filter_fallback = if allow_filter_fallback {
+        DynamoFilterFallback::ClientSide
+    } else {
+        DynamoFilterFallback::Reject
+    };
+
+    Ok(DynamoReadOptions {
+        index_name,
+        consistent_read,
+        filter_fallback,
+    })
+}
+
+fn optional_non_empty_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, DbError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+
+    let trimmed = value
+        .as_str()
+        .ok_or_else(|| DbError::query_failed(format!("Field '{key}' must be a string")))?
+        .trim();
+
+    if trimmed.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "Field '{key}' must not be empty when provided"
+        )));
+    }
+
+    Ok(Some(trimmed.to_string()))
+}
+
 fn optional_u32(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -341,7 +453,10 @@ fn optional_u64(
 
 #[cfg(test)]
 mod tests {
-    use super::{DynamoCommandEnvelope, parse_command_envelope, unsupported_command_message};
+    use super::{
+        DynamoCommandEnvelope, DynamoFilterFallback, parse_command_envelope,
+        unsupported_command_message,
+    };
     use dbflux_core::DbError;
 
     #[test]
@@ -358,12 +473,19 @@ mod tests {
                 filter,
                 limit,
                 offset,
+                read_options,
             } => {
                 assert_eq!(database.as_deref(), Some("dynamodb"));
                 assert_eq!(table, "users");
                 assert!(filter.is_some());
                 assert_eq!(limit, Some(25));
                 assert_eq!(offset, Some(10));
+                assert_eq!(read_options.index_name, None);
+                assert!(!read_options.consistent_read);
+                assert_eq!(
+                    read_options.filter_fallback,
+                    DynamoFilterFallback::ClientSide
+                );
             }
             other => panic!("expected scan envelope, got {other:?}"),
         }
@@ -440,5 +562,56 @@ mod tests {
         )
         .expect_err("item and items cannot be combined");
         assert!(matches!(conflicting_put_payload, DbError::QueryFailed(_)));
+    }
+
+    #[test]
+    fn parse_query_envelope_with_read_options() {
+        let envelope = parse_command_envelope(
+            r#"{"op":"query","table":"users","filter":{"pk":"USER#1"},"index":"gsi_users_by_status","consistent_read":true,"allow_filter_fallback":false}"#,
+        )
+        .expect("query envelope with read options should parse");
+
+        match envelope {
+            DynamoCommandEnvelope::Query { read_options, .. } => {
+                assert_eq!(
+                    read_options.index_name.as_deref(),
+                    Some("gsi_users_by_status")
+                );
+                assert!(read_options.consistent_read);
+                assert_eq!(read_options.filter_fallback, DynamoFilterFallback::Reject);
+            }
+            other => panic!("expected query envelope, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_option_types_are_validated() {
+        let wrong_index_type = parse_command_envelope(r#"{"op":"scan","table":"users","index":1}"#)
+            .expect_err("non-string index must fail");
+        assert!(matches!(wrong_index_type, DbError::QueryFailed(_)));
+
+        let wrong_consistent_type =
+            parse_command_envelope(r#"{"op":"scan","table":"users","consistent_read":"yes"}"#)
+                .expect_err("non-bool consistent_read must fail");
+        assert!(matches!(wrong_consistent_type, DbError::QueryFailed(_)));
+
+        let wrong_fallback_type =
+            parse_command_envelope(r#"{"op":"scan","table":"users","allow_filter_fallback":"no"}"#)
+                .expect_err("non-bool allow_filter_fallback must fail");
+        assert!(matches!(wrong_fallback_type, DbError::QueryFailed(_)));
+    }
+
+    #[test]
+    fn mutually_exclusive_or_unsupported_read_options_are_rejected() {
+        let mutually_exclusive = parse_command_envelope(
+            r#"{"op":"query","table":"users","filter":{"pk":"A"},"allow_filter_fallback":true,"require_server_filter":true}"#,
+        )
+        .expect_err("conflicting fallback options must fail");
+        assert!(matches!(mutually_exclusive, DbError::QueryFailed(_)));
+
+        let missing_filter =
+            parse_command_envelope(r#"{"op":"scan","table":"users","require_server_filter":true}"#)
+                .expect_err("require_server_filter without filter must fail");
+        assert!(matches!(missing_filter, DbError::QueryFailed(_)));
     }
 }

@@ -30,10 +30,14 @@ use dbflux_core::{
 };
 
 use crate::query_generator::DynamoQueryGenerator;
-use crate::query_parser::{DynamoCommandEnvelope, parse_command_envelope};
+use crate::query_parser::{
+    DynamoCommandEnvelope, DynamoFilterFallback, DynamoReadOptions, parse_command_envelope,
+};
 
 const DYNAMODB_DEFAULT_DATABASE: &str = "dynamodb";
 const DYNAMODB_BATCH_WRITE_WINDOW: usize = 25;
+const DYNAMODB_BATCH_WRITE_MAX_ATTEMPTS: u32 = 5;
+const DYNAMODB_BATCH_WRITE_BASE_BACKOFF_MS: u64 = 50;
 
 pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "dynamodb".into(),
@@ -233,6 +237,7 @@ impl Connection for DynamoConnection {
                 filter,
                 limit,
                 offset,
+                read_options,
             }
             | DynamoCommandEnvelope::Query {
                 database,
@@ -240,6 +245,7 @@ impl Connection for DynamoConnection {
                 filter,
                 limit,
                 offset,
+                read_options,
             } => {
                 let resolved_database = database
                     .or_else(|| req.database.clone())
@@ -256,7 +262,7 @@ impl Connection for DynamoConnection {
                     filter,
                 };
 
-                self.browse_collection(&request)?
+                self.browse_collection_with_read_options(&request, &read_options)?
             }
             DynamoCommandEnvelope::Put {
                 database,
@@ -432,60 +438,13 @@ impl Connection for DynamoConnection {
     }
 
     fn browse_collection(&self, request: &CollectionBrowseRequest) -> Result<QueryResult, DbError> {
-        if request.collection.database != DYNAMODB_DEFAULT_DATABASE {
-            return Err(DbError::object_not_found(format!(
-                "Database '{}' is not available for DynamoDB",
-                request.collection.database
-            )));
-        }
-
-        let config = DynamoProfileConfig {
-            region: self.default_region.clone(),
-            profile: None,
-            endpoint: None,
-            table: self.default_table.clone(),
-        };
-
-        let key_schema = self.fetch_table_key_schema(&request.collection.name)?;
-        let read_strategy = decide_read_strategy(request.filter.as_ref(), &key_schema)?;
-
-        let page = self.read_items_page(
-            &request.collection.name,
-            &read_strategy,
-            request.filter.as_ref(),
-            request.pagination.offset(),
-            request.pagination.limit() as u64,
-            &config,
-        )?;
-
-        let _ = page.has_more;
-        Ok(items_to_query_result(&page.items))
+        let read_options = DynamoReadOptions::default();
+        self.browse_collection_with_read_options(request, &read_options)
     }
 
     fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
-        if request.collection.database != DYNAMODB_DEFAULT_DATABASE {
-            return Err(DbError::object_not_found(format!(
-                "Database '{}' is not available for DynamoDB",
-                request.collection.database
-            )));
-        }
-
-        let config = DynamoProfileConfig {
-            region: self.default_region.clone(),
-            profile: None,
-            endpoint: None,
-            table: self.default_table.clone(),
-        };
-
-        let key_schema = self.fetch_table_key_schema(&request.collection.name)?;
-        let read_strategy = decide_read_strategy(request.filter.as_ref(), &key_schema)?;
-
-        self.count_items(
-            &request.collection.name,
-            &read_strategy,
-            request.filter.as_ref(),
-            &config,
-        )
+        let read_options = DynamoReadOptions::default();
+        self.count_collection_with_read_options(request, &read_options)
     }
 
     fn insert_document(&self, insert: &DocumentInsert) -> Result<dbflux_core::CrudResult, DbError> {
@@ -530,30 +489,13 @@ impl Connection for DynamoConnection {
 
         for item_batch in &plan.item_batches {
             let write_requests = build_batch_put_write_requests(item_batch)?;
-            let request_items = HashMap::from([(plan.table.clone(), write_requests)]);
-
-            let output = runtime
-                .block_on(
-                    self.client
-                        .batch_write_item()
-                        .set_request_items(Some(request_items))
-                        .send(),
-                )
-                .map_err(|error| {
-                    let formatted =
-                        DYNAMO_ERROR_FORMATTER.format_batch_write_error(&error, &config);
-                    classify_query_error(formatted)
-                })?;
-
-            let unprocessed_items = output.unprocessed_items();
-            let unprocessed_count = count_write_requests(unprocessed_items);
-
-            if unprocessed_count > 0 {
-                return Err(DbError::query_failed(format!(
-                    "DynamoDB batch write returned {unprocessed_count} unprocessed item(s) for table '{}'",
-                    plan.table
-                )));
-            }
+            execute_batch_write_with_retries(
+                &self.client,
+                &plan.table,
+                write_requests,
+                &runtime,
+                &config,
+            )?;
         }
 
         Ok(crud_result_with_affected_rows(plan.total_items))
@@ -777,6 +719,68 @@ impl Connection for DynamoConnection {
 }
 
 impl DynamoConnection {
+    fn browse_collection_with_read_options(
+        &self,
+        request: &CollectionBrowseRequest,
+        read_options: &DynamoReadOptions,
+    ) -> Result<QueryResult, DbError> {
+        if request.collection.database != DYNAMODB_DEFAULT_DATABASE {
+            return Err(DbError::object_not_found(format!(
+                "Database '{}' is not available for DynamoDB",
+                request.collection.database
+            )));
+        }
+
+        let config = DynamoProfileConfig {
+            region: self.default_region.clone(),
+            profile: None,
+            endpoint: None,
+            table: self.default_table.clone(),
+        };
+
+        let key_schema = self.fetch_table_key_schema(&request.collection.name)?;
+        validate_read_options(&request.collection.name, &key_schema, read_options)?;
+        let read_strategy =
+            decide_read_strategy(request.filter.as_ref(), &key_schema, read_options)?;
+
+        let page = self.read_items_page(
+            &request.collection.name,
+            &read_strategy,
+            request.pagination.offset(),
+            request.pagination.limit() as u64,
+            &config,
+        )?;
+
+        let _ = page.has_more;
+        Ok(items_to_query_result(&page.items))
+    }
+
+    fn count_collection_with_read_options(
+        &self,
+        request: &CollectionCountRequest,
+        read_options: &DynamoReadOptions,
+    ) -> Result<u64, DbError> {
+        if request.collection.database != DYNAMODB_DEFAULT_DATABASE {
+            return Err(DbError::object_not_found(format!(
+                "Database '{}' is not available for DynamoDB",
+                request.collection.database
+            )));
+        }
+
+        let config = DynamoProfileConfig {
+            region: self.default_region.clone(),
+            profile: None,
+            endpoint: None,
+            table: self.default_table.clone(),
+        };
+
+        let key_schema = self.fetch_table_key_schema(&request.collection.name)?;
+        validate_read_options(&request.collection.name, &key_schema, read_options)?;
+        let read_strategy =
+            decide_read_strategy(request.filter.as_ref(), &key_schema, read_options)?;
+
+        self.count_items(&request.collection.name, &read_strategy, &config)
+    }
     fn fetch_table_names(&self) -> Result<Vec<String>, DbError> {
         let config = DynamoProfileConfig {
             region: self.default_region.clone(),
@@ -843,6 +847,7 @@ impl DynamoConnection {
             description.key_schema(),
             description.attribute_definitions(),
         );
+        let index_kinds = extract_table_index_kinds(description);
 
         let partition_key = keys
             .iter()
@@ -857,6 +862,7 @@ impl DynamoConnection {
         Ok(DynamoTableKeySchema {
             partition_key,
             sort_key,
+            index_kinds,
         })
     }
 
@@ -864,7 +870,6 @@ impl DynamoConnection {
         &self,
         table: &str,
         strategy: &DynamoReadStrategy,
-        filter: Option<&serde_json::Value>,
         offset: u64,
         limit: u64,
         config: &DynamoProfileConfig,
@@ -874,6 +879,14 @@ impl DynamoConnection {
                 items: Vec::new(),
                 has_more: false,
             });
+        }
+
+        if strategy.client_filter().is_some()
+            && strategy.filter_fallback_policy() == DynamoFilterFallbackPolicy::Reject
+        {
+            return Err(DbError::query_failed(
+                "DynamoDB read strategy is invalid: client filter cannot be used when fallback is disabled",
+            ));
         }
 
         let runtime = runtime()?;
@@ -914,7 +927,7 @@ impl DynamoConnection {
                 continue;
             }
 
-            let filtered_page_items = apply_item_filter(&page.items, filter)?;
+            let filtered_page_items = apply_item_filter(&page.items, strategy.client_filter())?;
 
             let page_has_more = append_window_items(
                 &filtered_page_items,
@@ -945,14 +958,21 @@ impl DynamoConnection {
         &self,
         table: &str,
         strategy: &DynamoReadStrategy,
-        filter: Option<&serde_json::Value>,
         config: &DynamoProfileConfig,
     ) -> Result<u64, DbError> {
+        if strategy.client_filter().is_some()
+            && strategy.filter_fallback_policy() == DynamoFilterFallbackPolicy::Reject
+        {
+            return Err(DbError::query_failed(
+                "DynamoDB count strategy is invalid: client filter cannot be used when fallback is disabled",
+            ));
+        }
+
         let runtime = runtime()?;
         let mut total: u64 = 0;
         let mut cursor: Option<HashMap<String, AttributeValue>> = None;
 
-        if filter.is_none() {
+        if strategy.client_filter().is_none() {
             loop {
                 let page = fetch_count_page(
                     &self.client,
@@ -985,7 +1005,7 @@ impl DynamoConnection {
                 config,
             )?;
 
-            let matching_items = apply_item_filter(&page.items, filter)?;
+            let matching_items = apply_item_filter(&page.items, strategy.client_filter())?;
             total = total.saturating_add(matching_items.len() as u64);
             cursor = page.last_evaluated_key;
 
@@ -1043,13 +1063,11 @@ impl DynamoConnection {
         ensure_default_database(update.database.as_deref())?;
 
         let key_schema = self.fetch_table_key_schema(&update.collection)?;
-        let read_strategy = decide_read_strategy(Some(&update.filter.filter), &key_schema)?;
-        let key_maps = self.collect_matching_key_maps(
-            &update.collection,
-            &read_strategy,
-            Some(&update.filter.filter),
-            &key_schema,
-        )?;
+        let read_options = DynamoReadOptions::default();
+        let read_strategy =
+            decide_read_strategy(Some(&update.filter.filter), &key_schema, &read_options)?;
+        let key_maps =
+            self.collect_matching_key_maps(&update.collection, &read_strategy, &key_schema)?;
 
         let (update_expression, expression_attribute_names, expression_attribute_values) =
             build_update_expression_from_json(&update.update, &key_schema)?;
@@ -1110,13 +1128,11 @@ impl DynamoConnection {
         ensure_default_database(delete.database.as_deref())?;
 
         let key_schema = self.fetch_table_key_schema(&delete.collection)?;
-        let read_strategy = decide_read_strategy(Some(&delete.filter.filter), &key_schema)?;
-        let key_maps = self.collect_matching_key_maps(
-            &delete.collection,
-            &read_strategy,
-            Some(&delete.filter.filter),
-            &key_schema,
-        )?;
+        let read_options = DynamoReadOptions::default();
+        let read_strategy =
+            decide_read_strategy(Some(&delete.filter.filter), &key_schema, &read_options)?;
+        let key_maps =
+            self.collect_matching_key_maps(&delete.collection, &read_strategy, &key_schema)?;
 
         Ok(DynamoDeleteManyPlan {
             table: delete.collection.clone(),
@@ -1128,7 +1144,6 @@ impl DynamoConnection {
         &self,
         table: &str,
         strategy: &DynamoReadStrategy,
-        filter: Option<&serde_json::Value>,
         key_schema: &DynamoTableKeySchema,
     ) -> Result<Vec<HashMap<String, AttributeValue>>, DbError> {
         const READ_PAGE_LIMIT: i32 = 100;
@@ -1155,7 +1170,7 @@ impl DynamoConnection {
                 &config,
             )?;
 
-            let filtered_items = apply_item_filter(&page.items, filter)?;
+            let filtered_items = apply_item_filter(&page.items, strategy.client_filter())?;
 
             for item in &filtered_items {
                 let key_map = extract_key_map_from_item(item, key_schema)?;
@@ -1563,10 +1578,59 @@ fn build_batch_put_write_requests(
     Ok(requests)
 }
 
-fn count_write_requests(items: Option<&HashMap<String, Vec<WriteRequest>>>) -> usize {
-    items
-        .map(|item_map| item_map.values().map(Vec::len).sum())
-        .unwrap_or(0)
+fn execute_batch_write_with_retries(
+    client: &Client,
+    table: &str,
+    write_requests: Vec<WriteRequest>,
+    runtime: &tokio::runtime::Runtime,
+    config: &DynamoProfileConfig,
+) -> Result<(), DbError> {
+    let mut pending = write_requests;
+
+    for attempt in 1..=DYNAMODB_BATCH_WRITE_MAX_ATTEMPTS {
+        let request_items = HashMap::from([(table.to_string(), pending)]);
+
+        let output = runtime
+            .block_on(
+                client
+                    .batch_write_item()
+                    .set_request_items(Some(request_items))
+                    .send(),
+            )
+            .map_err(|error| {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_batch_write_error(&error, config);
+                classify_query_error(formatted)
+            })?;
+
+        let mut next_pending = output
+            .unprocessed_items()
+            .and_then(|items| items.get(table))
+            .cloned()
+            .unwrap_or_default();
+
+        if next_pending.is_empty() {
+            return Ok(());
+        }
+
+        if attempt == DYNAMODB_BATCH_WRITE_MAX_ATTEMPTS {
+            return Err(DbError::query_failed(format!(
+                "DynamoDB batch write left {} unprocessed item(s) for table '{}' after {} attempt(s)",
+                next_pending.len(),
+                table,
+                DYNAMODB_BATCH_WRITE_MAX_ATTEMPTS
+            )));
+        }
+
+        let backoff_ms = DYNAMODB_BATCH_WRITE_BASE_BACKOFF_MS
+            .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)));
+        std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+
+        pending = std::mem::take(&mut next_pending);
+    }
+
+    Err(DbError::query_failed(
+        "DynamoDB batch write retry loop exhausted unexpectedly",
+    ))
 }
 
 fn crud_result_with_affected_rows(affected_rows: usize) -> dbflux_core::CrudResult {
@@ -1598,19 +1662,66 @@ struct DynamoKeyComponent {
 struct DynamoTableKeySchema {
     partition_key: Option<String>,
     sort_key: Option<String>,
+    index_kinds: HashMap<String, DynamoIndexKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamoIndexKind {
+    LocalSecondary,
+    GlobalSecondary,
 }
 
 #[derive(Debug, Clone)]
 enum DynamoReadStrategy {
-    Scan,
+    Scan(DynamoScanPlan),
     Query(DynamoQueryPlan),
 }
 
 #[derive(Debug, Clone)]
+struct DynamoScanPlan {
+    index_name: Option<String>,
+    consistent_read: bool,
+    server_filter_expression: Option<String>,
+    server_filter_attribute_names: HashMap<String, String>,
+    server_filter_attribute_values: HashMap<String, AttributeValue>,
+    client_filter: Option<serde_json::Value>,
+    filter_fallback_policy: DynamoFilterFallbackPolicy,
+}
+
+#[derive(Debug, Clone)]
 struct DynamoQueryPlan {
+    index_name: Option<String>,
+    consistent_read: bool,
     key_condition_expression: String,
-    expression_attribute_names: HashMap<String, String>,
-    expression_attribute_values: HashMap<String, AttributeValue>,
+    key_expression_attribute_names: HashMap<String, String>,
+    key_expression_attribute_values: HashMap<String, AttributeValue>,
+    server_filter_expression: Option<String>,
+    server_filter_attribute_names: HashMap<String, String>,
+    server_filter_attribute_values: HashMap<String, AttributeValue>,
+    client_filter: Option<serde_json::Value>,
+    filter_fallback_policy: DynamoFilterFallbackPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamoFilterFallbackPolicy {
+    ClientSide,
+    Reject,
+}
+
+impl DynamoReadStrategy {
+    fn filter_fallback_policy(&self) -> DynamoFilterFallbackPolicy {
+        match self {
+            Self::Scan(plan) => plan.filter_fallback_policy,
+            Self::Query(plan) => plan.filter_fallback_policy,
+        }
+    }
+
+    fn client_filter(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Scan(plan) => plan.client_filter.as_ref(),
+            Self::Query(plan) => plan.client_filter.as_ref(),
+        }
+    }
 }
 
 type DynamoUpdateExpressionParts = (
@@ -1729,49 +1840,365 @@ fn profile_config(config: &DbConfig) -> Result<DynamoProfileConfig, DbError> {
 fn decide_read_strategy(
     filter: Option<&serde_json::Value>,
     key_schema: &DynamoTableKeySchema,
+    read_options: &DynamoReadOptions,
 ) -> Result<DynamoReadStrategy, DbError> {
-    let Some(partition_key) = key_schema.partition_key.as_ref() else {
-        return Ok(DynamoReadStrategy::Scan);
-    };
+    let filter_fallback_policy = map_filter_fallback_policy(read_options.filter_fallback);
 
-    let Some(filter_obj) = filter.and_then(serde_json::Value::as_object) else {
-        return Ok(DynamoReadStrategy::Scan);
-    };
-
-    let Some(partition_filter_value) = filter_obj.get(partition_key) else {
-        return Ok(DynamoReadStrategy::Scan);
-    };
-
-    let Some(partition_value_json) = extract_eq_filter_value(partition_filter_value) else {
-        return Ok(DynamoReadStrategy::Scan);
-    };
-
-    let mut expression_attribute_names = HashMap::new();
-    let mut expression_attribute_values = HashMap::new();
-
-    expression_attribute_names.insert("#pk".to_string(), partition_key.clone());
-    expression_attribute_values.insert(
-        ":pk".to_string(),
-        json_value_to_attribute_value(partition_value_json)?,
-    );
-
-    let mut key_condition_expression = "#pk = :pk".to_string();
-
-    if let Some(sort_key) = key_schema.sort_key.as_ref()
-        && let Some(sort_filter_value) = filter_obj.get(sort_key)
-        && let Some((condition_suffix, token, sort_value_json)) =
-            build_sort_key_condition(sort_filter_value)
+    if let Some(partition_key) = key_schema.partition_key.as_ref()
+        && let Some(filter_obj) = filter.and_then(serde_json::Value::as_object)
+        && let Some(partition_filter_value) = filter_obj.get(partition_key)
+        && let Some(partition_value_json) = extract_eq_filter_value(partition_filter_value)
     {
-        expression_attribute_names.insert("#sk".to_string(), sort_key.clone());
-        expression_attribute_values.insert(token, json_value_to_attribute_value(sort_value_json)?);
-        key_condition_expression.push_str(&condition_suffix);
+        let mut key_expression_attribute_names = HashMap::new();
+        let mut key_expression_attribute_values = HashMap::new();
+
+        key_expression_attribute_names.insert("#pk".to_string(), partition_key.clone());
+        key_expression_attribute_values.insert(
+            ":pk".to_string(),
+            json_value_to_attribute_value(partition_value_json)?,
+        );
+
+        let mut key_condition_expression = "#pk = :pk".to_string();
+        let mut consumed_filter_fields = vec![partition_key.clone()];
+
+        if let Some(sort_key) = key_schema.sort_key.as_ref()
+            && let Some(sort_filter_value) = filter_obj.get(sort_key)
+            && let Some((condition_suffix, token, sort_value_json)) =
+                build_sort_key_condition(sort_filter_value)
+        {
+            key_expression_attribute_names.insert("#sk".to_string(), sort_key.clone());
+            key_expression_attribute_values
+                .insert(token, json_value_to_attribute_value(sort_value_json)?);
+            key_condition_expression.push_str(&condition_suffix);
+            consumed_filter_fields.push(sort_key.clone());
+        }
+
+        let residual_filter = residual_filter(filter, &consumed_filter_fields)?;
+        let filter_execution =
+            resolve_filter_execution(residual_filter.as_ref(), filter_fallback_policy, "query")?;
+
+        return Ok(DynamoReadStrategy::Query(DynamoQueryPlan {
+            index_name: read_options.index_name.clone(),
+            consistent_read: read_options.consistent_read,
+            key_condition_expression,
+            key_expression_attribute_names,
+            key_expression_attribute_values,
+            server_filter_expression: filter_execution.server_filter_expression,
+            server_filter_attribute_names: filter_execution.server_filter_attribute_names,
+            server_filter_attribute_values: filter_execution.server_filter_attribute_values,
+            client_filter: filter_execution.client_filter,
+            filter_fallback_policy,
+        }));
     }
 
-    Ok(DynamoReadStrategy::Query(DynamoQueryPlan {
-        key_condition_expression,
-        expression_attribute_names,
-        expression_attribute_values,
+    let residual_filter = residual_filter(filter, &[])?;
+    let filter_execution =
+        resolve_filter_execution(residual_filter.as_ref(), filter_fallback_policy, "scan")?;
+
+    Ok(DynamoReadStrategy::Scan(DynamoScanPlan {
+        index_name: read_options.index_name.clone(),
+        consistent_read: read_options.consistent_read,
+        server_filter_expression: filter_execution.server_filter_expression,
+        server_filter_attribute_names: filter_execution.server_filter_attribute_names,
+        server_filter_attribute_values: filter_execution.server_filter_attribute_values,
+        client_filter: filter_execution.client_filter,
+        filter_fallback_policy,
     }))
+}
+
+fn map_filter_fallback_policy(fallback: DynamoFilterFallback) -> DynamoFilterFallbackPolicy {
+    match fallback {
+        DynamoFilterFallback::ClientSide => DynamoFilterFallbackPolicy::ClientSide,
+        DynamoFilterFallback::Reject => DynamoFilterFallbackPolicy::Reject,
+    }
+}
+
+#[derive(Debug)]
+struct DynamoFilterExecution {
+    server_filter_expression: Option<String>,
+    server_filter_attribute_names: HashMap<String, String>,
+    server_filter_attribute_values: HashMap<String, AttributeValue>,
+    client_filter: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+enum DynamoFilterTranslationError {
+    Unsupported(String),
+    Invalid(String),
+}
+
+#[derive(Debug, Default)]
+struct DynamoFilterTranslationState {
+    next_name_token: usize,
+    next_value_token: usize,
+    name_token_by_segment: HashMap<String, String>,
+    attribute_names: HashMap<String, String>,
+    attribute_values: HashMap<String, AttributeValue>,
+}
+
+fn residual_filter(
+    filter: Option<&serde_json::Value>,
+    consumed_fields: &[String],
+) -> Result<Option<serde_json::Value>, DbError> {
+    let Some(filter_value) = filter else {
+        return Ok(None);
+    };
+
+    let mut filter_object = filter_value
+        .as_object()
+        .ok_or_else(|| DbError::query_failed("DynamoDB filter must be a JSON object"))?
+        .clone();
+
+    for field in consumed_fields {
+        filter_object.remove(field);
+    }
+
+    if filter_object.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::Value::Object(filter_object)))
+}
+
+fn resolve_filter_execution(
+    filter: Option<&serde_json::Value>,
+    fallback_policy: DynamoFilterFallbackPolicy,
+    operation: &str,
+) -> Result<DynamoFilterExecution, DbError> {
+    let Some(filter_value) = filter else {
+        return Ok(DynamoFilterExecution {
+            server_filter_expression: None,
+            server_filter_attribute_names: HashMap::new(),
+            server_filter_attribute_values: HashMap::new(),
+            client_filter: None,
+        });
+    };
+
+    let mut state = DynamoFilterTranslationState::default();
+
+    match translate_filter_object(filter_value, &mut state) {
+        Ok(server_filter_expression) => Ok(DynamoFilterExecution {
+            server_filter_expression: Some(server_filter_expression),
+            server_filter_attribute_names: state.attribute_names,
+            server_filter_attribute_values: state.attribute_values,
+            client_filter: None,
+        }),
+        Err(DynamoFilterTranslationError::Unsupported(reason)) => match fallback_policy {
+            DynamoFilterFallbackPolicy::ClientSide => Ok(DynamoFilterExecution {
+                server_filter_expression: None,
+                server_filter_attribute_names: HashMap::new(),
+                server_filter_attribute_values: HashMap::new(),
+                client_filter: Some(filter_value.clone()),
+            }),
+            DynamoFilterFallbackPolicy::Reject => Err(DbError::query_failed(format!(
+                "DynamoDB {operation} filter translation failed: {reason}"
+            ))),
+        },
+        Err(DynamoFilterTranslationError::Invalid(reason)) => Err(DbError::query_failed(reason)),
+    }
+}
+
+fn translate_filter_object(
+    filter: &serde_json::Value,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    let filter_object = filter.as_object().ok_or_else(|| {
+        DynamoFilterTranslationError::Invalid("DynamoDB filter must be a JSON object".to_string())
+    })?;
+
+    if filter_object.is_empty() {
+        return Err(DynamoFilterTranslationError::Unsupported(
+            "empty filter object is not translatable".to_string(),
+        ));
+    }
+
+    let mut clauses = Vec::new();
+
+    for (field, expected_value) in filter_object {
+        if field == "$and" {
+            let and_clause = translate_logical_filter("AND", expected_value, state)?;
+            clauses.push(and_clause);
+            continue;
+        }
+
+        if field == "$or" {
+            let or_clause = translate_logical_filter("OR", expected_value, state)?;
+            clauses.push(or_clause);
+            continue;
+        }
+
+        if field.starts_with('$') {
+            return Err(DynamoFilterTranslationError::Unsupported(format!(
+                "top-level operator '{field}' is not supported for server-side translation"
+            )));
+        }
+
+        clauses.push(translate_field_filter(field, expected_value, state)?);
+    }
+
+    Ok(clauses.join(" AND "))
+}
+
+fn translate_logical_filter(
+    join_operator: &str,
+    value: &serde_json::Value,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    let clauses = value.as_array().ok_or_else(|| {
+        DynamoFilterTranslationError::Invalid(format!(
+            "${} requires an array of filter objects",
+            join_operator.to_ascii_lowercase()
+        ))
+    })?;
+
+    if clauses.is_empty() {
+        return Err(DynamoFilterTranslationError::Invalid(format!(
+            "${} requires at least one filter object",
+            join_operator.to_ascii_lowercase()
+        )));
+    }
+
+    let mut translated = Vec::with_capacity(clauses.len());
+
+    for clause in clauses {
+        translated.push(translate_filter_object(clause, state)?);
+    }
+
+    if translated.len() == 1 {
+        return Ok(translated.remove(0));
+    }
+
+    Ok(format!(
+        "({})",
+        translated.join(&format!(" {join_operator} "))
+    ))
+}
+
+fn translate_field_filter(
+    field: &str,
+    expected_value: &serde_json::Value,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    let path_expression = bind_attribute_path(field, state)?;
+
+    if let Some(expected_object) = expected_value.as_object()
+        && expected_object.keys().any(|key| key.starts_with('$'))
+    {
+        let mut clauses = Vec::new();
+
+        for (operator, value) in expected_object {
+            clauses.push(translate_field_operator(
+                &path_expression,
+                operator,
+                value,
+                state,
+            )?);
+        }
+
+        return Ok(clauses.join(" AND "));
+    }
+
+    let value_token = bind_attribute_value(expected_value, state)?;
+    Ok(format!("{path_expression} = {value_token}"))
+}
+
+fn translate_field_operator(
+    path_expression: &str,
+    operator: &str,
+    value: &serde_json::Value,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    match operator {
+        "$eq" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} = {value_token}"))
+        }
+        "$ne" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} <> {value_token}"))
+        }
+        "$gt" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} > {value_token}"))
+        }
+        "$gte" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} >= {value_token}"))
+        }
+        "$lt" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} < {value_token}"))
+        }
+        "$lte" => {
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("{path_expression} <= {value_token}"))
+        }
+        "$begins_with" => {
+            if !value.is_string() {
+                return Err(DynamoFilterTranslationError::Invalid(
+                    "$begins_with requires a string comparison value".to_string(),
+                ));
+            }
+
+            let value_token = bind_attribute_value(value, state)?;
+            Ok(format!("begins_with({path_expression}, {value_token})"))
+        }
+        _ => Err(DynamoFilterTranslationError::Unsupported(format!(
+            "operator '{operator}' is not translatable"
+        ))),
+    }
+}
+
+fn bind_attribute_path(
+    path: &str,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    let mut tokens = Vec::new();
+
+    for segment in path.split('.') {
+        if segment.trim().is_empty() {
+            return Err(DynamoFilterTranslationError::Unsupported(format!(
+                "attribute path '{path}' is invalid"
+            )));
+        }
+
+        if let Some(existing_token) = state.name_token_by_segment.get(segment) {
+            tokens.push(existing_token.clone());
+            continue;
+        }
+
+        let token = format!("#n{}", state.next_name_token);
+        state.next_name_token += 1;
+
+        state
+            .name_token_by_segment
+            .insert(segment.to_string(), token.clone());
+        state
+            .attribute_names
+            .insert(token.clone(), segment.to_string());
+        tokens.push(token);
+    }
+
+    Ok(tokens.join("."))
+}
+
+fn bind_attribute_value(
+    value: &serde_json::Value,
+    state: &mut DynamoFilterTranslationState,
+) -> Result<String, DynamoFilterTranslationError> {
+    let token = format!(":v{}", state.next_value_token);
+    state.next_value_token += 1;
+
+    let attribute_value = json_value_to_attribute_value(value).map_err(|error| {
+        DynamoFilterTranslationError::Invalid(format!(
+            "DynamoDB filter value cannot be represented as AttributeValue: {error}"
+        ))
+    })?;
+
+    state
+        .attribute_values
+        .insert(token.clone(), attribute_value);
+    Ok(token)
 }
 
 fn extract_eq_filter_value(filter_value: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -1844,20 +2271,35 @@ fn fetch_read_page(
     config: &DynamoProfileConfig,
 ) -> Result<DynamoFetchedPage, DbError> {
     match strategy {
-        DynamoReadStrategy::Scan => {
-            let output = runtime
-                .block_on(
-                    client
-                        .scan()
-                        .table_name(table)
-                        .limit(limit)
-                        .set_exclusive_start_key(start_key)
-                        .send(),
-                )
-                .map_err(|error| {
-                    let formatted = DYNAMO_ERROR_FORMATTER.format_scan_error(&error, config);
-                    classify_query_error(formatted)
-                })?;
+        DynamoReadStrategy::Scan(plan) => {
+            let mut request = client
+                .scan()
+                .table_name(table)
+                .set_index_name(plan.index_name.clone())
+                .consistent_read(plan.consistent_read)
+                .limit(limit)
+                .set_exclusive_start_key(start_key)
+                .set_expression_attribute_names(if plan.server_filter_attribute_names.is_empty() {
+                    None
+                } else {
+                    Some(plan.server_filter_attribute_names.clone())
+                })
+                .set_expression_attribute_values(
+                    if plan.server_filter_attribute_values.is_empty() {
+                        None
+                    } else {
+                        Some(plan.server_filter_attribute_values.clone())
+                    },
+                );
+
+            if let Some(filter_expression) = plan.server_filter_expression.as_ref() {
+                request = request.filter_expression(filter_expression);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_scan_error(&error, config);
+                classify_query_error(formatted)
+            })?;
 
             Ok(DynamoFetchedPage {
                 items: output.items().to_vec(),
@@ -1865,26 +2307,31 @@ fn fetch_read_page(
             })
         }
         DynamoReadStrategy::Query(plan) => {
-            let output = runtime
-                .block_on(
-                    client
-                        .query()
-                        .table_name(table)
-                        .key_condition_expression(&plan.key_condition_expression)
-                        .set_expression_attribute_names(Some(
-                            plan.expression_attribute_names.clone(),
-                        ))
-                        .set_expression_attribute_values(Some(
-                            plan.expression_attribute_values.clone(),
-                        ))
-                        .limit(limit)
-                        .set_exclusive_start_key(start_key)
-                        .send(),
-                )
-                .map_err(|error| {
-                    let formatted = DYNAMO_ERROR_FORMATTER.format_query_op_error(&error, config);
-                    classify_query_error(formatted)
-                })?;
+            let mut expression_attribute_names = plan.key_expression_attribute_names.clone();
+            expression_attribute_names.extend(plan.server_filter_attribute_names.clone());
+
+            let mut expression_attribute_values = plan.key_expression_attribute_values.clone();
+            expression_attribute_values.extend(plan.server_filter_attribute_values.clone());
+
+            let mut request = client
+                .query()
+                .table_name(table)
+                .set_index_name(plan.index_name.clone())
+                .consistent_read(plan.consistent_read)
+                .key_condition_expression(&plan.key_condition_expression)
+                .set_expression_attribute_names(Some(expression_attribute_names))
+                .set_expression_attribute_values(Some(expression_attribute_values))
+                .limit(limit)
+                .set_exclusive_start_key(start_key);
+
+            if let Some(filter_expression) = plan.server_filter_expression.as_ref() {
+                request = request.filter_expression(filter_expression);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_query_op_error(&error, config);
+                classify_query_error(formatted)
+            })?;
 
             Ok(DynamoFetchedPage {
                 items: output.items().to_vec(),
@@ -1903,20 +2350,35 @@ fn fetch_count_page(
     config: &DynamoProfileConfig,
 ) -> Result<DynamoCountPage, DbError> {
     match strategy {
-        DynamoReadStrategy::Scan => {
-            let output = runtime
-                .block_on(
-                    client
-                        .scan()
-                        .table_name(table)
-                        .select(Select::Count)
-                        .set_exclusive_start_key(start_key)
-                        .send(),
-                )
-                .map_err(|error| {
-                    let formatted = DYNAMO_ERROR_FORMATTER.format_scan_error(&error, config);
-                    classify_query_error(formatted)
-                })?;
+        DynamoReadStrategy::Scan(plan) => {
+            let mut request = client
+                .scan()
+                .table_name(table)
+                .set_index_name(plan.index_name.clone())
+                .consistent_read(plan.consistent_read)
+                .select(Select::Count)
+                .set_exclusive_start_key(start_key)
+                .set_expression_attribute_names(if plan.server_filter_attribute_names.is_empty() {
+                    None
+                } else {
+                    Some(plan.server_filter_attribute_names.clone())
+                })
+                .set_expression_attribute_values(
+                    if plan.server_filter_attribute_values.is_empty() {
+                        None
+                    } else {
+                        Some(plan.server_filter_attribute_values.clone())
+                    },
+                );
+
+            if let Some(filter_expression) = plan.server_filter_expression.as_ref() {
+                request = request.filter_expression(filter_expression);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_scan_error(&error, config);
+                classify_query_error(formatted)
+            })?;
 
             Ok(DynamoCountPage {
                 count: output.count(),
@@ -1924,26 +2386,31 @@ fn fetch_count_page(
             })
         }
         DynamoReadStrategy::Query(plan) => {
-            let output = runtime
-                .block_on(
-                    client
-                        .query()
-                        .table_name(table)
-                        .key_condition_expression(&plan.key_condition_expression)
-                        .set_expression_attribute_names(Some(
-                            plan.expression_attribute_names.clone(),
-                        ))
-                        .set_expression_attribute_values(Some(
-                            plan.expression_attribute_values.clone(),
-                        ))
-                        .select(Select::Count)
-                        .set_exclusive_start_key(start_key)
-                        .send(),
-                )
-                .map_err(|error| {
-                    let formatted = DYNAMO_ERROR_FORMATTER.format_query_op_error(&error, config);
-                    classify_query_error(formatted)
-                })?;
+            let mut expression_attribute_names = plan.key_expression_attribute_names.clone();
+            expression_attribute_names.extend(plan.server_filter_attribute_names.clone());
+
+            let mut expression_attribute_values = plan.key_expression_attribute_values.clone();
+            expression_attribute_values.extend(plan.server_filter_attribute_values.clone());
+
+            let mut request = client
+                .query()
+                .table_name(table)
+                .set_index_name(plan.index_name.clone())
+                .consistent_read(plan.consistent_read)
+                .key_condition_expression(&plan.key_condition_expression)
+                .set_expression_attribute_names(Some(expression_attribute_names))
+                .set_expression_attribute_values(Some(expression_attribute_values))
+                .select(Select::Count)
+                .set_exclusive_start_key(start_key);
+
+            if let Some(filter_expression) = plan.server_filter_expression.as_ref() {
+                request = request.filter_expression(filter_expression);
+            }
+
+            let output = runtime.block_on(request.send()).map_err(|error| {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_query_op_error(&error, config);
+                classify_query_error(formatted)
+            })?;
 
             Ok(DynamoCountPage {
                 count: output.count(),
@@ -2533,7 +3000,7 @@ fn build_table_info_from_description(
     );
 
     let sample_fields = key_components_to_fields(&key_components);
-    let indexes = key_components_to_indexes(&key_components);
+    let indexes = table_description_to_indexes(description, &key_components);
 
     TableInfo {
         name: table_name.to_string(),
@@ -2543,6 +3010,47 @@ fn build_table_info_from_description(
         foreign_keys: None,
         constraints: None,
         sample_fields,
+    }
+}
+
+fn table_description_to_indexes(
+    description: &TableDescription,
+    primary_components: &[DynamoKeyComponent],
+) -> Option<IndexData> {
+    let mut indexes = Vec::new();
+
+    if let Some(primary_index) = key_components_to_index_info("PRIMARY", primary_components, true) {
+        indexes.push(primary_index);
+    }
+
+    for index in description.local_secondary_indexes() {
+        let Some(index_name) = index.index_name() else {
+            continue;
+        };
+
+        let components =
+            extract_key_components(index.key_schema(), description.attribute_definitions());
+        if let Some(index_info) = key_components_to_index_info(index_name, &components, false) {
+            indexes.push(index_info);
+        }
+    }
+
+    for index in description.global_secondary_indexes() {
+        let Some(index_name) = index.index_name() else {
+            continue;
+        };
+
+        let components =
+            extract_key_components(index.key_schema(), description.attribute_definitions());
+        if let Some(index_info) = key_components_to_index_info(index_name, &components, false) {
+            indexes.push(index_info);
+        }
+    }
+
+    if indexes.is_empty() {
+        None
+    } else {
+        Some(IndexData::Document(indexes))
     }
 }
 
@@ -2585,6 +3093,58 @@ fn extract_key_components(
     components
 }
 
+fn extract_table_index_kinds(description: &TableDescription) -> HashMap<String, DynamoIndexKind> {
+    let mut index_kinds = HashMap::new();
+
+    for index in description.local_secondary_indexes() {
+        if let Some(index_name) = index.index_name() {
+            index_kinds.insert(index_name.to_string(), DynamoIndexKind::LocalSecondary);
+        }
+    }
+
+    for index in description.global_secondary_indexes() {
+        if let Some(index_name) = index.index_name() {
+            index_kinds.insert(index_name.to_string(), DynamoIndexKind::GlobalSecondary);
+        }
+    }
+
+    index_kinds
+}
+
+fn validate_read_options(
+    table: &str,
+    key_schema: &DynamoTableKeySchema,
+    read_options: &DynamoReadOptions,
+) -> Result<(), DbError> {
+    let Some(index_name) = read_options.index_name.as_ref() else {
+        return Ok(());
+    };
+
+    let Some(index_kind) = key_schema.index_kinds.get(index_name) else {
+        let mut available_indexes: Vec<&str> =
+            key_schema.index_kinds.keys().map(String::as_str).collect();
+        available_indexes.sort();
+
+        let available_text = if available_indexes.is_empty() {
+            "none".to_string()
+        } else {
+            available_indexes.join(", ")
+        };
+
+        return Err(DbError::query_failed(format!(
+            "DynamoDB table '{table}' does not define index '{index_name}' (available indexes: {available_text})"
+        )));
+    };
+
+    if *index_kind == DynamoIndexKind::GlobalSecondary && read_options.consistent_read {
+        return Err(DbError::query_failed(format!(
+            "DynamoDB global secondary index '{index_name}' on table '{table}' cannot be used with 'consistent_read=true'"
+        )));
+    }
+
+    Ok(())
+}
+
 fn key_components_to_fields(key_components: &[DynamoKeyComponent]) -> Option<Vec<FieldInfo>> {
     if key_components.is_empty() {
         return None;
@@ -2610,7 +3170,17 @@ fn key_components_to_fields(key_components: &[DynamoKeyComponent]) -> Option<Vec
     Some(fields)
 }
 
+#[cfg(test)]
 fn key_components_to_indexes(key_components: &[DynamoKeyComponent]) -> Option<IndexData> {
+    key_components_to_index_info("PRIMARY", key_components, true)
+        .map(|index| IndexData::Document(vec![index]))
+}
+
+fn key_components_to_index_info(
+    name: &str,
+    key_components: &[DynamoKeyComponent],
+    is_primary: bool,
+) -> Option<CollectionIndexInfo> {
     if key_components.is_empty() {
         return None;
     }
@@ -2620,13 +3190,13 @@ fn key_components_to_indexes(key_components: &[DynamoKeyComponent]) -> Option<In
         .map(|component| (component.name.clone(), IndexDirection::Ascending))
         .collect();
 
-    Some(IndexData::Document(vec![CollectionIndexInfo {
-        name: "PRIMARY".to_string(),
+    Some(CollectionIndexInfo {
+        name: name.to_string(),
         keys,
-        is_unique: true,
+        is_unique: is_primary,
         is_sparse: false,
         expire_after_seconds: None,
-    }]))
+    })
 }
 
 struct DynamoErrorFormatter;
@@ -2974,16 +3544,17 @@ pub fn unsupported_mvp_message(flow: &str) -> String {
 mod tests {
     use super::{
         DYNAMODB_DEFAULT_DATABASE, DYNAMODB_METADATA, DynamoDriver, DynamoErrorFormatter,
-        DynamoKeyComponent, DynamoKeyRole, DynamoLanguageService, DynamoProfileConfig,
-        DynamoReadStrategy, DynamoTableKeySchema, append_window_items, apply_item_filter,
-        attribute_value_to_value, build_item_batches, build_table_info_from_description,
-        build_update_expression_from_json, classify_connection_error, classify_query_error,
-        decide_read_strategy, ensure_default_database, ensure_item_contains_required_keys,
-        extract_key_map_from_filter, extract_non_key_update_attributes,
-        json_value_to_attribute_value, key_components_to_fields, key_components_to_indexes,
-        normalize_table_names, resolve_upsert_key_map, strip_key_fields_from_update_payload,
-        unsupported_operation,
+        DynamoFilterFallbackPolicy, DynamoIndexKind, DynamoKeyComponent, DynamoKeyRole,
+        DynamoLanguageService, DynamoProfileConfig, DynamoReadStrategy, DynamoTableKeySchema,
+        append_window_items, apply_item_filter, attribute_value_to_value, build_item_batches,
+        build_table_info_from_description, build_update_expression_from_json,
+        classify_connection_error, classify_query_error, decide_read_strategy,
+        ensure_default_database, ensure_item_contains_required_keys, extract_key_map_from_filter,
+        extract_non_key_update_attributes, json_value_to_attribute_value, key_components_to_fields,
+        key_components_to_indexes, normalize_table_names, resolve_upsert_key_map,
+        strip_key_fields_from_update_payload, unsupported_operation, validate_read_options,
     };
+    use crate::query_parser::{DynamoFilterFallback, DynamoReadOptions};
     use aws_sdk_dynamodb::types::{
         AttributeDefinition, AttributeValue, KeySchemaElement, KeyType, ScalarAttributeType,
         TableDescription,
@@ -3391,15 +3962,225 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: Some("sk".to_string()),
+            ..Default::default()
         };
 
-        let query_strategy = decide_read_strategy(Some(&json!({"pk":"A","sk":1})), &key_schema)
-            .expect("strategy decision should succeed");
+        let read_options = DynamoReadOptions::default();
+
+        let query_strategy =
+            decide_read_strategy(Some(&json!({"pk":"A","sk":1})), &key_schema, &read_options)
+                .expect("strategy decision should succeed");
         assert!(matches!(query_strategy, DynamoReadStrategy::Query(_)));
 
-        let scan_strategy = decide_read_strategy(Some(&json!({"other":"A"})), &key_schema)
-            .expect("strategy decision should succeed");
-        assert!(matches!(scan_strategy, DynamoReadStrategy::Scan));
+        let scan_strategy =
+            decide_read_strategy(Some(&json!({"other":"A"})), &key_schema, &read_options)
+                .expect("strategy decision should succeed");
+        assert!(matches!(scan_strategy, DynamoReadStrategy::Scan(_)));
+    }
+
+    #[test]
+    fn read_strategy_carries_read_options_and_fallback_policy() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            ..Default::default()
+        };
+
+        let read_options = DynamoReadOptions {
+            index_name: Some("gsi_users_by_status".to_string()),
+            consistent_read: true,
+            filter_fallback: DynamoFilterFallback::Reject,
+        };
+
+        let strategy =
+            decide_read_strategy(Some(&json!({"pk":"USER#1"})), &key_schema, &read_options)
+                .expect("strategy decision should succeed");
+
+        match strategy {
+            DynamoReadStrategy::Query(plan) => {
+                assert_eq!(plan.index_name.as_deref(), Some("gsi_users_by_status"));
+                assert!(plan.consistent_read);
+                assert_eq!(
+                    plan.filter_fallback_policy,
+                    DynamoFilterFallbackPolicy::Reject
+                );
+                assert!(plan.server_filter_expression.is_none());
+                assert!(plan.server_filter_attribute_names.is_empty());
+                assert!(plan.server_filter_attribute_values.is_empty());
+            }
+            DynamoReadStrategy::Scan(_) => panic!("expected query strategy"),
+        }
+    }
+
+    #[test]
+    fn scan_strategy_carries_fallback_policy_without_key_plan() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            ..Default::default()
+        };
+
+        let read_options = DynamoReadOptions {
+            index_name: Some("gsi_users_by_status".to_string()),
+            consistent_read: false,
+            filter_fallback: DynamoFilterFallback::Reject,
+        };
+
+        let strategy = decide_read_strategy(
+            Some(&json!({"status":"active"})),
+            &key_schema,
+            &read_options,
+        )
+        .expect("strategy decision should succeed");
+
+        match strategy {
+            DynamoReadStrategy::Scan(plan) => {
+                assert_eq!(plan.index_name.as_deref(), Some("gsi_users_by_status"));
+                assert!(!plan.consistent_read);
+                assert_eq!(
+                    plan.filter_fallback_policy,
+                    DynamoFilterFallbackPolicy::Reject
+                );
+            }
+            DynamoReadStrategy::Query(_) => panic!("expected scan strategy"),
+        }
+    }
+
+    #[test]
+    fn query_strategy_pushes_non_key_filter_server_side() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: Some("sk".to_string()),
+            ..Default::default()
+        };
+
+        let read_options = DynamoReadOptions::default();
+        let strategy = decide_read_strategy(
+            Some(&json!({"pk":"USER#1","status":"active","score":{"$gte":10}})),
+            &key_schema,
+            &read_options,
+        )
+        .expect("strategy decision should succeed");
+
+        match strategy {
+            DynamoReadStrategy::Query(plan) => {
+                assert!(plan.server_filter_expression.is_some());
+                assert!(plan.client_filter.is_none());
+
+                let filter_expression = plan.server_filter_expression.unwrap_or_default();
+                assert!(filter_expression.contains("#n0"));
+                assert!(filter_expression.contains("#n1"));
+            }
+            DynamoReadStrategy::Scan(_) => panic!("expected query strategy"),
+        }
+    }
+
+    #[test]
+    fn query_strategy_rejects_untranslatable_filter_when_fallback_disabled() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            ..Default::default()
+        };
+
+        let read_options = DynamoReadOptions {
+            index_name: None,
+            consistent_read: false,
+            filter_fallback: DynamoFilterFallback::Reject,
+        };
+
+        let error = decide_read_strategy(
+            Some(&json!({"pk":"USER#1","meta..flag":true})),
+            &key_schema,
+            &read_options,
+        )
+        .expect_err("untranslatable filter should fail when fallback is disabled");
+
+        assert!(error.to_string().contains("filter translation failed"));
+    }
+
+    #[test]
+    fn query_strategy_fallback_uses_client_filter_without_reapplying_key_predicate() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            ..Default::default()
+        };
+
+        let read_options = DynamoReadOptions::default();
+        let strategy = decide_read_strategy(
+            Some(&json!({"pk":"USER#1","meta..flag":true})),
+            &key_schema,
+            &read_options,
+        )
+        .expect("fallback-enabled strategy should be constructed");
+
+        match strategy {
+            DynamoReadStrategy::Query(plan) => {
+                assert!(plan.server_filter_expression.is_none());
+
+                let client_filter = plan
+                    .client_filter
+                    .expect("client fallback filter must exist");
+                let client_filter_object = client_filter
+                    .as_object()
+                    .expect("client fallback filter should be an object");
+
+                assert!(!client_filter_object.contains_key("pk"));
+                assert!(client_filter_object.contains_key("meta..flag"));
+            }
+            DynamoReadStrategy::Scan(_) => panic!("expected query strategy"),
+        }
+    }
+
+    #[test]
+    fn validate_read_options_rejects_unknown_index_name() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            index_kinds: HashMap::from([(
+                "gsi_users_by_status".to_string(),
+                DynamoIndexKind::GlobalSecondary,
+            )]),
+        };
+
+        let read_options = DynamoReadOptions {
+            index_name: Some("missing_index".to_string()),
+            consistent_read: false,
+            filter_fallback: DynamoFilterFallback::ClientSide,
+        };
+
+        let error = validate_read_options("users", &key_schema, &read_options)
+            .expect_err("unknown index should fail validation");
+
+        assert!(error.to_string().contains("does not define index"));
+    }
+
+    #[test]
+    fn validate_read_options_rejects_consistent_reads_on_gsi() {
+        let key_schema = DynamoTableKeySchema {
+            partition_key: Some("pk".to_string()),
+            sort_key: None,
+            index_kinds: HashMap::from([(
+                "gsi_users_by_status".to_string(),
+                DynamoIndexKind::GlobalSecondary,
+            )]),
+        };
+
+        let read_options = DynamoReadOptions {
+            index_name: Some("gsi_users_by_status".to_string()),
+            consistent_read: true,
+            filter_fallback: DynamoFilterFallback::ClientSide,
+        };
+
+        let error = validate_read_options("users", &key_schema, &read_options)
+            .expect_err("consistent reads against GSI should fail validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot be used with 'consistent_read=true'")
+        );
     }
 
     #[test]
@@ -3462,6 +4243,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: None,
+            ..Default::default()
         };
 
         let item = HashMap::from([("other".to_string(), AttributeValue::S("x".to_string()))]);
@@ -3481,6 +4263,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: Some("sk".to_string()),
+            ..Default::default()
         };
 
         let error = extract_key_map_from_filter(&json!({"pk":"A"}), &key_schema)
@@ -3494,6 +4277,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: None,
+            ..Default::default()
         };
 
         let update = DocumentUpdate {
@@ -3519,6 +4303,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: None,
+            ..Default::default()
         };
 
         let sanitized = strip_key_fields_from_update_payload(
@@ -3535,6 +4320,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: Some("sk".to_string()),
+            ..Default::default()
         };
 
         let attributes = extract_non_key_update_attributes(
@@ -3614,16 +4400,23 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: Some("sk".to_string()),
+            ..Default::default()
         };
 
-        let strategy = decide_read_strategy(Some(&json!({"pk":"A","sk":{"$gte":5}})), &key_schema)
-            .expect("strategy resolution should succeed");
+        let read_options = DynamoReadOptions::default();
+
+        let strategy = decide_read_strategy(
+            Some(&json!({"pk":"A","sk":{"$gte":5}})),
+            &key_schema,
+            &read_options,
+        )
+        .expect("strategy resolution should succeed");
 
         match strategy {
             DynamoReadStrategy::Query(plan) => {
                 assert!(plan.key_condition_expression.contains("#sk >= :sk_gte"));
             }
-            DynamoReadStrategy::Scan => panic!("expected query strategy"),
+            DynamoReadStrategy::Scan(_) => panic!("expected query strategy"),
         }
     }
 
@@ -3684,6 +4477,7 @@ mod tests {
         let key_schema = DynamoTableKeySchema {
             partition_key: Some("pk".to_string()),
             sort_key: None,
+            ..Default::default()
         };
 
         let error = build_update_expression_from_json(&json!({"$set":{"pk":"new"}}), &key_schema)
