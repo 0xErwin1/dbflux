@@ -9,7 +9,7 @@ pub(super) struct TreeRenderParams {
     pub multi_selection: HashSet<String>,
     pub pending_delete: Option<String>,
     pub drop_target: Option<DropTarget>,
-    pub scripts_drop_target: Option<String>,
+    pub scripts_drop_target: Option<DropTarget>,
     pub editing_id: Option<Uuid>,
     pub editing_script_path: Option<std::path::PathBuf>,
     pub rename_input: Entity<InputState>,
@@ -232,9 +232,16 @@ pub(super) fn render_tree_item(
                         cx.stop_propagation();
                         let click_count = event.click_count();
                         let with_ctrl = event.modifiers().platform || event.modifiers().control;
+                        let with_shift = event.modifiers().shift;
 
                         sidebar_click.update(cx, |this, cx| {
-                            this.handle_item_click(&item_id_click, click_count, with_ctrl, cx);
+                            this.handle_item_click(
+                                &item_id_click,
+                                click_count,
+                                with_ctrl,
+                                with_shift,
+                                cx,
+                            );
                         });
                     })
                 })
@@ -339,20 +346,30 @@ pub(super) fn render_tree_item(
                             let drag_label = item.label.to_string();
                             let is_folder = node_kind == SchemaNodeKind::ConnectionFolder;
 
-                            // Collect additional nodes from multi-selection
+                            // Drag from selected item => drag whole selected set.
+                            // Drag from non-selected item => drag only this item.
                             let current_item_id = item_id.to_string();
-                            let additional_nodes: Vec<Uuid> = params
-                                .multi_selection
-                                .iter()
-                                .filter(|id| *id != &current_item_id)
-                                .filter_map(|id| match parse_node_id(id) {
-                                    Some(SchemaNodeId::Profile { profile_id }) => Some(profile_id),
-                                    Some(SchemaNodeId::ConnectionFolder { node_id }) => {
-                                        Some(node_id)
-                                    }
-                                    _ => None,
-                                })
-                                .collect();
+                            let include_selected_set =
+                                params.multi_selection.contains(&current_item_id);
+
+                            let additional_nodes: Vec<Uuid> = if include_selected_set {
+                                params
+                                    .multi_selection
+                                    .iter()
+                                    .filter(|id| *id != &current_item_id)
+                                    .filter_map(|id| match parse_node_id(id) {
+                                        Some(SchemaNodeId::Profile { profile_id }) => {
+                                            Some(profile_id)
+                                        }
+                                        Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+                                            Some(node_id)
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
 
                             let total_count = 1 + additional_nodes.len();
                             let preview_label = if total_count > 1 {
@@ -379,13 +396,27 @@ pub(super) fn render_tree_item(
                         }
                     },
                 )
-                // Drop indicator for "After" position
+                // Drop indicator
                 .when(
                     matches!(
                         node_kind,
                         SchemaNodeKind::Profile | SchemaNodeKind::ConnectionFolder
                     ),
                     |el| {
+                        let is_drop_into = current_drop_target
+                            .as_ref()
+                            .map(|t| {
+                                t.item_id == item_id.as_ref() && t.position == DropPosition::Into
+                            })
+                            .unwrap_or(false);
+
+                        let is_drop_before = current_drop_target
+                            .as_ref()
+                            .map(|t| {
+                                t.item_id == item_id.as_ref() && t.position == DropPosition::Before
+                            })
+                            .unwrap_or(false);
+
                         let is_drop_after = current_drop_target
                             .as_ref()
                             .map(|t| {
@@ -393,7 +424,11 @@ pub(super) fn render_tree_item(
                             })
                             .unwrap_or(false);
 
-                        if is_drop_after {
+                        if is_drop_into {
+                            el.bg(theme.drop_target)
+                        } else if is_drop_before {
+                            el.border_t_2().border_color(drop_indicator_color)
+                        } else if is_drop_after {
                             el.border_b_2().border_color(drop_indicator_color)
                         } else {
                             el
@@ -435,49 +470,93 @@ pub(super) fn render_tree_item(
                         });
                     })
                 })
-                // Folder drop handling (insert into)
+                // Folder drop handling (before/into/after zones)
                 .when(node_kind == SchemaNodeKind::ConnectionFolder, |el| {
                     let item_id_for_drop = item_id.to_string();
                     let item_id_for_move = item_id.to_string();
                     let sidebar_for_drop = sidebar_entity.clone();
                     let sidebar_for_move = sidebar_entity.clone();
-                    let drop_target_bg = theme.drop_target;
                     let item_ix = ix;
 
                     if let Some(folder_id) = parse_node_id(&item_id).and_then(|n| match n {
                         SchemaNodeId::ConnectionFolder { node_id } => Some(node_id),
                         _ => None,
                     }) {
-                        el.drag_over::<SidebarDragState>(move |style, state, _, cx| {
-                            if state.node_id != folder_id {
+                        el.drag_over::<SidebarDragState>(move |style, _, _, _| style)
+                            .on_drag_move::<SidebarDragState>(move |event, _, cx| {
+                                let drag_state = event.drag(cx);
+                                if drag_state.all_node_ids().contains(&folder_id) {
+                                    sidebar_for_move.update(cx, |this, cx| {
+                                        this.clear_drop_target(cx);
+                                        this.clear_drag_hover_folder(cx);
+                                    });
+                                    return;
+                                }
+
+                                let top = event.bounds.origin.y;
+                                let height = event.bounds.size.height;
+                                let zone_top = top + (height / 3.0);
+                                let zone_bottom = top + (height * (2.0 / 3.0));
+
+                                let drop_position = if event.event.position.y < zone_top {
+                                    DropPosition::Before
+                                } else if event.event.position.y > zone_bottom {
+                                    DropPosition::After
+                                } else {
+                                    DropPosition::Into
+                                };
+
                                 sidebar_for_move.update(cx, |this, cx| {
                                     this.set_drop_target(
                                         item_id_for_move.clone(),
-                                        DropPosition::Into,
+                                        drop_position,
                                         cx,
                                     );
-                                    this.start_drag_hover_folder(folder_id, cx);
+
+                                    if drop_position == DropPosition::Into {
+                                        this.start_drag_hover_folder(folder_id, cx);
+                                    } else {
+                                        this.clear_drag_hover_folder(cx);
+                                    }
+
                                     this.check_auto_scroll(item_ix, cx);
                                 });
-                                style.bg(drop_target_bg)
-                            } else {
-                                style
-                            }
-                        })
-                        .on_drop(
-                            move |state: &SidebarDragState, _, cx| {
+                            })
+                            .on_drop(move |state: &SidebarDragState, _, cx| {
                                 sidebar_for_drop.update(cx, |this, cx| {
                                     this.stop_auto_scroll(cx);
                                     this.clear_drag_hover_folder(cx);
-                                    this.set_drop_target(
-                                        item_id_for_drop.clone(),
-                                        DropPosition::Into,
-                                        cx,
-                                    );
+
+                                    let dropping_onto_self = parse_node_id(&item_id_for_drop)
+                                        .and_then(|n| match n {
+                                            SchemaNodeId::ConnectionFolder { node_id } => {
+                                                Some(node_id)
+                                            }
+                                            _ => None,
+                                        })
+                                        .is_some_and(|id| state.all_node_ids().contains(&id));
+
+                                    if dropping_onto_self {
+                                        this.clear_drop_target(cx);
+                                        return;
+                                    }
+
+                                    let target_matches_row = this
+                                        .drop_target
+                                        .as_ref()
+                                        .is_some_and(|t| t.item_id == item_id_for_drop);
+
+                                    if !target_matches_row {
+                                        this.set_drop_target(
+                                            item_id_for_drop.clone(),
+                                            DropPosition::Into,
+                                            cx,
+                                        );
+                                    }
+
                                     this.handle_drop_with_position(state, cx);
                                 });
-                            },
-                        )
+                            })
                     } else {
                         el
                     }
@@ -501,14 +580,46 @@ pub(super) fn render_tree_item(
 
                         if let Some(path) = drag_path {
                             let label = item.label.to_string();
+                            let current_item_id = item_id.to_string();
+                            let include_selected_set =
+                                params.multi_selection.contains(&current_item_id);
+
+                            let additional_paths: Vec<std::path::PathBuf> = if include_selected_set
+                            {
+                                params
+                                    .multi_selection
+                                    .iter()
+                                    .filter(|id| *id != &current_item_id)
+                                    .filter_map(|id| match parse_node_id(id) {
+                                        Some(SchemaNodeId::ScriptFile { path }) => {
+                                            Some(std::path::PathBuf::from(path))
+                                        }
+                                        Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                                            Some(std::path::PathBuf::from(p))
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+
+                            let total_count = 1 + additional_paths.len();
+                            let preview_label = if total_count > 1 {
+                                format!("{} (+{} more)", label, total_count - 1)
+                            } else {
+                                label.clone()
+                            };
+
                             el.on_drag(
                                 ScriptsDragState {
                                     path,
-                                    name: label.clone(),
+                                    additional_paths,
+                                    label: preview_label,
                                 },
                                 |state, _, _, cx| {
                                     cx.new(|_| ScriptsDragPreview {
-                                        label: state.name.clone(),
+                                        label: state.label.clone(),
                                     })
                                 },
                             )
@@ -517,60 +628,115 @@ pub(super) fn render_tree_item(
                         }
                     },
                 )
-                // Scripts folder drop target (move into)
+                // Scripts folder drop target (before/into/after zones)
                 .when(node_kind == SchemaNodeKind::ScriptsFolder, |el| {
                     let sidebar_for_drop = sidebar_entity.clone();
                     let sidebar_for_move = sidebar_entity.clone();
                     let item_id_for_drop = item_id.to_string();
                     let item_id_for_move = item_id.to_string();
+                    let item_id_for_move_drag_move = item_id_for_move.clone();
                     let drop_target_bg = theme.drop_target;
 
-                    let is_scripts_drop = params
-                        .scripts_drop_target
-                        .as_ref()
-                        .is_some_and(|t| t == item_id.as_ref());
+                    let scripts_drop_target = params.scripts_drop_target.as_ref();
+                    let is_scripts_drop_into = scripts_drop_target.is_some_and(|t| {
+                        t.item_id == item_id.as_ref() && t.position == DropPosition::Into
+                    });
+                    let is_scripts_drop_before = scripts_drop_target.is_some_and(|t| {
+                        t.item_id == item_id.as_ref() && t.position == DropPosition::Before
+                    });
+                    let is_scripts_drop_after = scripts_drop_target.is_some_and(|t| {
+                        t.item_id == item_id.as_ref() && t.position == DropPosition::After
+                    });
 
-                    let el = if is_scripts_drop {
+                    let el = if is_scripts_drop_into {
                         el.bg(drop_target_bg)
                     } else {
                         el
                     };
 
-                    el.drag_over::<ScriptsDragState>(move |style, state, _, cx| {
-                        // Don't allow dropping onto itself
-                        let target_path = match parse_node_id(&item_id_for_move) {
-                            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
-                                Some(std::path::PathBuf::from(p))
+                    let el = if is_scripts_drop_before {
+                        el.border_t_2().border_color(theme.accent)
+                    } else if is_scripts_drop_after {
+                        el.border_b_2().border_color(theme.accent)
+                    } else {
+                        el
+                    };
+
+                    el.drag_over::<ScriptsDragState>(move |style, _, _, _| style)
+                        .on_drag_move::<ScriptsDragState>(move |event, _, cx| {
+                            let target_id = parse_node_id(&item_id_for_move_drag_move);
+                            let is_root_target = matches!(
+                                target_id,
+                                Some(SchemaNodeId::ScriptsFolder { path: None })
+                            );
+
+                            let target_path = match target_id.as_ref() {
+                                Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                                    Some(std::path::PathBuf::from(p))
+                                }
+                                Some(SchemaNodeId::ScriptsFolder { path: None }) => {
+                                    dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
+                                }
+                                _ => None,
+                            };
+
+                            let source_paths = event.drag(cx).all_paths();
+                            let invalid_target = target_path.as_ref().is_some_and(|target| {
+                                source_paths
+                                    .iter()
+                                    .any(|source| *target == *source || target.starts_with(source))
+                            });
+
+                            if invalid_target {
+                                sidebar_for_move.update(cx, |this, cx| {
+                                    if this.scripts_drop_target.is_some() {
+                                        this.scripts_drop_target = None;
+                                        cx.notify();
+                                    }
+                                });
+                                return;
                             }
-                            Some(SchemaNodeId::ScriptsFolder { path: None }) => {
-                                dirs::data_dir().map(|d| d.join("dbflux").join("scripts"))
-                            }
-                            _ => None,
-                        };
 
-                        let is_same = target_path.as_ref().is_some_and(|t| state.path == *t);
+                            let top = event.bounds.origin.y;
+                            let height = event.bounds.size.height;
+                            let zone_top = top + (height / 3.0);
+                            let zone_bottom = top + (height * (2.0 / 3.0));
 
-                        let is_self_or_child = state.path.is_dir()
-                            && target_path
-                                .as_ref()
-                                .is_some_and(|t| t.starts_with(&state.path));
+                            let drop_position = if is_root_target {
+                                DropPosition::Into
+                            } else if event.event.position.y < zone_top {
+                                DropPosition::Before
+                            } else if event.event.position.y > zone_bottom {
+                                DropPosition::After
+                            } else {
+                                DropPosition::Into
+                            };
 
-                        if !is_same && !is_self_or_child {
                             sidebar_for_move.update(cx, |this, cx| {
-                                this.scripts_drop_target = Some(item_id_for_move.clone());
+                                this.scripts_drop_target = Some(DropTarget {
+                                    item_id: item_id_for_move_drag_move.clone(),
+                                    position: drop_position,
+                                });
                                 cx.notify();
                             });
-                            style.bg(drop_target_bg)
-                        } else {
-                            style
-                        }
-                    })
-                    .on_drop(move |state: &ScriptsDragState, _, cx| {
-                        sidebar_for_drop.update(cx, |this, cx| {
-                            this.scripts_drop_target = None;
-                            this.handle_script_drop(state, &item_id_for_drop, cx);
-                        });
-                    })
+                        })
+                        .on_drop(move |state: &ScriptsDragState, _, cx| {
+                            sidebar_for_drop.update(cx, |this, cx| {
+                                let target_matches_row = this
+                                    .scripts_drop_target
+                                    .as_ref()
+                                    .is_some_and(|t| t.item_id == item_id_for_drop);
+
+                                if !target_matches_row {
+                                    this.scripts_drop_target = Some(DropTarget {
+                                        item_id: item_id_for_drop.clone(),
+                                        position: DropPosition::Into,
+                                    });
+                                }
+
+                                this.handle_script_drop_with_position(state, cx);
+                            });
+                        })
                 })
                 // Menu button for items that have context menus
                 .when(

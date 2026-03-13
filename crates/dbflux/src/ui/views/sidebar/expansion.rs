@@ -176,6 +176,7 @@ impl Sidebar {
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
 
@@ -198,6 +199,7 @@ impl Sidebar {
         self.cleanup_stale_overrides(cx);
 
         let items = self.build_tree_items_with_overrides(cx);
+        self.prune_connection_selection(&items);
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
 

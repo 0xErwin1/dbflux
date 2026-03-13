@@ -249,7 +249,16 @@ impl SidebarDragState {
 #[derive(Clone)]
 struct ScriptsDragState {
     path: std::path::PathBuf,
-    name: String,
+    additional_paths: Vec<std::path::PathBuf>,
+    label: String,
+}
+
+impl ScriptsDragState {
+    fn all_paths(&self) -> Vec<std::path::PathBuf> {
+        let mut paths = vec![self.path.clone()];
+        paths.extend(self.additional_paths.iter().cloned());
+        paths
+    }
 }
 
 struct ScriptsDragPreview {
@@ -498,13 +507,19 @@ pub struct Sidebar {
     auto_scroll_direction: i32,
     /// Multi-selected items (item IDs) for bulk operations
     multi_selection: HashSet<String>,
+    /// Multi-selected script items (item IDs) for bulk operations
+    scripts_multi_selection: HashSet<String>,
+    /// Range-selection anchor for connections tab
+    selection_anchor: Option<String>,
+    /// Range-selection anchor for scripts tab
+    scripts_selection_anchor: Option<String>,
     /// Item ID pending delete confirmation (for keyboard x shortcut)
     pending_delete_item: Option<String>,
     /// Delete confirmation modal state (for context menu delete)
     delete_confirm_modal: Option<DeleteConfirmState>,
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
-    scripts_drop_target: Option<String>,
+    scripts_drop_target: Option<DropTarget>,
     gutter_metadata: HashMap<String, GutterInfo>,
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
 }
@@ -629,6 +644,9 @@ impl Sidebar {
             drag_hover_start: None,
             auto_scroll_direction: 0,
             multi_selection: HashSet::new(),
+            scripts_multi_selection: HashSet::new(),
+            selection_anchor: None,
+            scripts_selection_anchor: None,
             pending_delete_item: None,
             delete_confirm_modal: None,
             add_menu_open: false,
@@ -680,6 +698,7 @@ impl Sidebar {
 
         let items = Self::build_scripts_tree_items(&entries);
         self.scripts_gutter_metadata = compute_gutter_map(&items);
+        self.prune_scripts_selection(&items);
         self.scripts_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
         });
@@ -771,18 +790,38 @@ impl Sidebar {
         item_id: &str,
         click_count: usize,
         with_ctrl: bool,
+        with_shift: bool,
         cx: &mut Context<Self>,
     ) {
         cx.emit(SidebarEvent::RequestFocus);
 
-        // Ctrl+Click: toggle item in multi-selection (connections tab only)
-        if with_ctrl && click_count == 1 && self.active_tab == SidebarTab::Connections {
-            self.toggle_selection(item_id, cx);
+        // Shift+Click: select visible range from anchor in active tab.
+        if with_shift && click_count == 1 {
+            self.select_range_to_item(item_id, cx);
+
             if let Some(idx) = self.find_item_index(item_id, cx) {
-                self.tree_state.update(cx, |state, cx| {
+                let tree = self.active_tree_state().clone();
+                tree.update(cx, |state, cx| {
                     state.set_selected_index(Some(idx), cx);
                 });
             }
+
+            cx.notify();
+            return;
+        }
+
+        // Ctrl/Cmd+Click: toggle item in active tab multi-selection.
+        if with_ctrl && click_count == 1 {
+            self.toggle_selection(item_id, cx);
+
+            if let Some(idx) = self.find_item_index(item_id, cx) {
+                let tree = self.active_tree_state().clone();
+                tree.update(cx, |state, cx| {
+                    state.set_selected_index(Some(idx), cx);
+                });
+            }
+
+            self.set_selection_anchor(item_id);
             cx.notify();
             return;
         }
@@ -796,6 +835,8 @@ impl Sidebar {
                 state.set_selected_index(Some(idx), cx);
             });
         }
+
+        self.set_selection_anchor(item_id);
 
         let node_kind = parse_node_kind(item_id);
 

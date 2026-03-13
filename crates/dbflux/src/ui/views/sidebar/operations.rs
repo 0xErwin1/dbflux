@@ -2822,27 +2822,23 @@ impl Sidebar {
         .detach();
     }
 
-    pub(super) fn handle_script_drop(
+    pub(super) fn handle_script_drop_with_position(
         &mut self,
         state: &ScriptsDragState,
-        target_item_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let target_dir = match parse_node_id(target_item_id) {
-            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => std::path::PathBuf::from(p),
-            Some(SchemaNodeId::ScriptsFolder { path: None }) => {
-                match dirs::data_dir().map(|d| d.join("dbflux").join("scripts")) {
-                    Some(p) => p,
-                    None => return,
-                }
-            }
-            _ => return,
+        let Some(drop_target) = self.scripts_drop_target.take() else {
+            return;
         };
 
-        self.move_script(&state.path, &target_dir, cx);
+        let Some(target_dir) = self.resolve_script_drop_target_dir(&drop_target, cx) else {
+            return;
+        };
+
+        self.move_scripts(&state.all_paths(), &target_dir, cx);
     }
 
-    pub(super) fn handle_script_drop_to_root(
+    pub(super) fn handle_script_drop_to_root_with_position(
         &mut self,
         state: &ScriptsDragState,
         cx: &mut Context<Self>,
@@ -2852,28 +2848,206 @@ impl Sidebar {
             None => return,
         };
 
-        self.move_script(&state.path, &root, cx);
+        self.scripts_drop_target = None;
+        self.move_scripts(&state.all_paths(), &root, cx);
     }
 
-    fn move_script(
+    pub(super) fn move_selected_scripts_to_selected_folder(
         &mut self,
-        source: &std::path::Path,
-        target_dir: &std::path::Path,
         cx: &mut Context<Self>,
-    ) {
-        let result = self.app_state.update(cx, |state, _cx| {
-            state
-                .scripts_directory_mut()?
-                .move_entry(source, target_dir)
-                .ok()
+    ) -> bool {
+        if self.scripts_multi_selection.is_empty() {
+            return false;
+        }
+
+        let selected_entry = self.scripts_tree_state.read(cx).selected_entry().cloned();
+        let Some(selected_entry) = selected_entry else {
+            return false;
+        };
+
+        if !selected_entry.is_expanded() {
+            return false;
+        }
+
+        let selected_item_id = selected_entry.item().id.to_string();
+        let target_dir = self.resolve_script_drop_target_dir(
+            &DropTarget {
+                item_id: selected_item_id.clone(),
+                position: DropPosition::Into,
+            },
+            cx,
+        );
+
+        let Some(target_dir) = target_dir else {
+            return false;
+        };
+
+        let sources: Vec<std::path::PathBuf> = self
+            .scripts_multi_selection
+            .iter()
+            .filter(|item_id| item_id.as_str() != selected_item_id)
+            .filter_map(|item_id| match parse_node_id(item_id) {
+                Some(SchemaNodeId::ScriptFile { path }) => Some(std::path::PathBuf::from(path)),
+                Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                    Some(std::path::PathBuf::from(p))
+                }
+                _ => None,
+            })
+            .collect();
+
+        if sources.is_empty() {
+            return false;
+        }
+
+        self.move_scripts(&sources, &target_dir, cx)
+    }
+
+    pub(super) fn move_selected_scripts_out_of_folder(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.scripts_multi_selection.is_empty() {
+            return false;
+        }
+
+        let mut sources: Vec<std::path::PathBuf> = self
+            .scripts_multi_selection
+            .iter()
+            .filter_map(|item_id| match parse_node_id(item_id) {
+                Some(SchemaNodeId::ScriptFile { path }) => Some(std::path::PathBuf::from(path)),
+                Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                    Some(std::path::PathBuf::from(p))
+                }
+                _ => None,
+            })
+            .collect();
+
+        if sources.is_empty() {
+            return false;
+        }
+
+        sources.sort();
+        sources.dedup();
+
+        let all_sources = sources.clone();
+        sources.retain(|source| {
+            !all_sources
+                .iter()
+                .any(|candidate| candidate != source && source.starts_with(candidate))
         });
 
-        if result.is_some() {
+        let mut parent_dirs: Vec<std::path::PathBuf> = sources
+            .iter()
+            .filter_map(|source| source.parent().map(std::path::Path::to_path_buf))
+            .collect();
+
+        parent_dirs.sort();
+        parent_dirs.dedup();
+
+        if parent_dirs.len() != 1 {
+            return false;
+        }
+
+        let current_parent = match parent_dirs.pop() {
+            Some(path) => path,
+            None => return false,
+        };
+
+        let root = match self.app_state.read(cx).scripts_directory() {
+            Some(dir) => dir.root_path().to_path_buf(),
+            None => return false,
+        };
+
+        if current_parent == root {
+            return false;
+        }
+
+        let target_dir = current_parent
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(root);
+
+        self.move_scripts(&sources, &target_dir, cx)
+    }
+
+    fn resolve_script_drop_target_dir(
+        &self,
+        drop_target: &DropTarget,
+        cx: &Context<Self>,
+    ) -> Option<std::path::PathBuf> {
+        let root = self
+            .app_state
+            .read(cx)
+            .scripts_directory()
+            .map(|dir| dir.root_path().to_path_buf());
+
+        let target_path = match parse_node_id(&drop_target.item_id) {
+            Some(SchemaNodeId::ScriptFile { path }) => Some(std::path::PathBuf::from(path)),
+            Some(SchemaNodeId::ScriptsFolder { path: Some(p) }) => {
+                Some(std::path::PathBuf::from(p))
+            }
+            Some(SchemaNodeId::ScriptsFolder { path: None }) => root.clone(),
+            _ => None,
+        }?;
+
+        match drop_target.position {
+            DropPosition::Into => {
+                if target_path.is_dir() {
+                    Some(target_path)
+                } else {
+                    target_path.parent().map(std::path::Path::to_path_buf)
+                }
+            }
+            DropPosition::Before | DropPosition::After => target_path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .or(root.clone()),
+        }
+    }
+
+    fn move_scripts(
+        &mut self,
+        sources: &[std::path::PathBuf],
+        target_dir: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut normalized_sources = sources.to_vec();
+        normalized_sources.sort();
+        normalized_sources.dedup();
+
+        let all_sources = normalized_sources.clone();
+        normalized_sources.retain(|source| {
+            !all_sources
+                .iter()
+                .any(|candidate| candidate != source && source.starts_with(candidate))
+        });
+
+        let mut moved_any = false;
+        self.app_state.update(cx, |state, _cx| {
+            let Some(dir) = state.scripts_directory_mut() else {
+                return;
+            };
+
+            for source in &normalized_sources {
+                if source == target_dir {
+                    continue;
+                }
+
+                if source.parent() == Some(target_dir) {
+                    continue;
+                }
+
+                if dir.move_entry(source, target_dir).is_ok() {
+                    moved_any = true;
+                }
+            }
+        });
+
+        if moved_any {
             self.app_state.update(cx, |state, _cx| {
                 state.refresh_scripts();
             });
             self.refresh_scripts_tree(cx);
         }
+
+        moved_any
     }
 
     pub(super) fn delete_script(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {

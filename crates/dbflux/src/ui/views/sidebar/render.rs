@@ -234,7 +234,7 @@ impl Sidebar {
             profile_icons: HashMap::new(),
             active_databases: HashMap::new(),
             sidebar_entity: sidebar_entity.clone(),
-            multi_selection: HashSet::new(),
+            multi_selection: self.scripts_multi_selection.clone(),
             pending_delete: self.pending_delete_item.clone(),
             drop_target: None,
             scripts_drop_target: self.scripts_drop_target.clone(),
@@ -281,7 +281,7 @@ impl Sidebar {
                         .on_drop(move |state: &ScriptsDragState, _, cx| {
                             sidebar_for_root_drop.update(cx, |this, cx| {
                                 this.scripts_drop_target = None;
-                                this.handle_script_drop_to_root(state, cx);
+                                this.handle_script_drop_to_root_with_position(state, cx);
                             });
                         })
                         .on_drag_move::<ScriptsDragState>(move |_, _, cx| {

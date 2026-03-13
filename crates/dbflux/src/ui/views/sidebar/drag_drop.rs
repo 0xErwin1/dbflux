@@ -7,25 +7,7 @@ impl Sidebar {
         target_parent_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
-        // Collect all node IDs to move (primary + additional from multi-selection)
-        let all_node_ids = drag_state.all_node_ids();
-
-        let tree_node_ids: Vec<Uuid> = {
-            let state = self.app_state.read(cx);
-            all_node_ids
-                .iter()
-                .filter_map(|&node_id| {
-                    if state.connection_tree().find_by_id(node_id).is_some() {
-                        Some(node_id)
-                    } else {
-                        state
-                            .connection_tree()
-                            .find_by_profile(node_id)
-                            .map(|n| n.id)
-                    }
-                })
-                .collect()
-        };
+        let tree_node_ids = self.resolve_connection_drag_nodes(drag_state, cx);
 
         let mut moved = false;
         for tree_node_id in tree_node_ids {
@@ -64,25 +46,7 @@ impl Sidebar {
             return;
         };
 
-        // Collect all node IDs to move (primary + additional from multi-selection)
-        let all_node_ids = drag_state.all_node_ids();
-
-        let tree_node_ids: Vec<Uuid> = {
-            let state = self.app_state.read(cx);
-            all_node_ids
-                .iter()
-                .filter_map(|&node_id| {
-                    if state.connection_tree().find_by_id(node_id).is_some() {
-                        Some(node_id)
-                    } else {
-                        state
-                            .connection_tree()
-                            .find_by_profile(node_id)
-                            .map(|n| n.id)
-                    }
-                })
-                .collect()
-        };
+        let tree_node_ids = self.resolve_connection_drag_nodes(drag_state, cx);
 
         if tree_node_ids.is_empty() {
             return;
@@ -120,6 +84,81 @@ impl Sidebar {
             self.clear_selection(cx);
             self.refresh_tree(cx);
         }
+    }
+
+    fn resolve_connection_drag_nodes(
+        &self,
+        drag_state: &SidebarDragState,
+        cx: &Context<Self>,
+    ) -> Vec<Uuid> {
+        let state = self.app_state.read(cx);
+        let tree = state.connection_tree();
+
+        let mut node_ids: Vec<Uuid> = drag_state
+            .all_node_ids()
+            .into_iter()
+            .filter_map(|node_id| {
+                if tree.find_by_id(node_id).is_some() {
+                    Some(node_id)
+                } else {
+                    tree.find_by_profile(node_id).map(|n| n.id)
+                }
+            })
+            .collect();
+
+        node_ids.sort_unstable();
+        node_ids.dedup();
+
+        let node_set: HashSet<Uuid> = node_ids.iter().copied().collect();
+
+        let mut filtered: Vec<Uuid> = node_ids
+            .into_iter()
+            .filter(|node_id| !Self::has_ancestor_in_set(*node_id, &node_set, tree))
+            .collect();
+
+        let order = Self::flatten_connection_tree_order(tree);
+        let order_map: HashMap<Uuid, usize> =
+            order.iter().enumerate().map(|(ix, id)| (*id, ix)).collect();
+
+        filtered.sort_by_key(|id| order_map.get(id).copied().unwrap_or(usize::MAX));
+        filtered
+    }
+
+    fn has_ancestor_in_set(
+        node_id: Uuid,
+        node_set: &HashSet<Uuid>,
+        tree: &dbflux_core::ConnectionTree,
+    ) -> bool {
+        let mut current = tree.find_by_id(node_id).and_then(|n| n.parent_id);
+
+        while let Some(parent_id) = current {
+            if node_set.contains(&parent_id) {
+                return true;
+            }
+
+            current = tree.find_by_id(parent_id).and_then(|n| n.parent_id);
+        }
+
+        false
+    }
+
+    fn flatten_connection_tree_order(tree: &dbflux_core::ConnectionTree) -> Vec<Uuid> {
+        fn walk(tree: &dbflux_core::ConnectionTree, parent: Option<Uuid>, out: &mut Vec<Uuid>) {
+            let nodes = if let Some(parent_id) = parent {
+                tree.children_of(parent_id)
+            } else {
+                tree.root_nodes()
+            };
+
+            for node in nodes {
+                out.push(node.id);
+                walk(tree, Some(node.id), out);
+            }
+        }
+
+        let mut out = Vec::new();
+        walk(tree, None, &mut out);
+        out
     }
 
     /// Resolves a drop target to (parent_id, after_id) for positioning.
