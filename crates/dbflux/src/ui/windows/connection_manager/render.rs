@@ -17,16 +17,21 @@ use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus
 impl ConnectionManagerWindow {
     pub(super) fn render_password_field(
         &self,
-        password_focused: bool,
-        checkbox_focused: bool,
+        show_focus: bool,
         show_save_checkbox: bool,
         save_password: bool,
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
+        let focus = self.form_focus;
         let password_source_is_literal =
             self.password_value_source_selector.read(cx).is_literal(cx);
+
+        let selector_focused = show_focus && focus == FormFocus::PasswordValueSource;
+        let password_focused = show_focus && focus == FormFocus::Password;
+        let toggle_focused = show_focus && focus == FormFocus::PasswordToggle;
+        let checkbox_focused = show_focus && focus == FormFocus::PasswordSave;
 
         div()
             .flex()
@@ -34,32 +39,37 @@ impl ConnectionManagerWindow {
             .gap_1()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Password"),
-                    )
-                    .child(
-                        div()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.begin_inline_editor_interaction(cx);
-                                }),
-                            )
-                            .child(self.password_value_source_selector.clone()),
-                    ),
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Password"),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(
+                        div()
+                            .w(px(170.0))
+                            .rounded(px(4.0))
+                            .border_2()
+                            .when(selector_focused, |d| d.border_color(ring_color))
+                            .when(!selector_focused, |d| {
+                                d.border_color(gpui::transparent_black())
+                            })
+                            .p(px(2.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::PasswordValueSource,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .child(self.password_value_source_selector.clone()),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -78,13 +88,30 @@ impl ConnectionManagerWindow {
                             )
                             .child(Input::new(&self.input_password)),
                     )
-                    .child(
-                        Self::render_password_toggle(self.show_password, "toggle-password", &theme)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.show_password = !this.show_password;
-                                cx.notify();
-                            })),
-                    )
+                    .when(password_source_is_literal, |d| {
+                        d.child(
+                            div()
+                                .rounded(px(4.0))
+                                .border_2()
+                                .when(toggle_focused, |dd| dd.border_color(ring_color))
+                                .when(!toggle_focused, |dd| {
+                                    dd.border_color(gpui::transparent_black())
+                                })
+                                .child(
+                                    Self::render_password_toggle(
+                                        self.show_password,
+                                        "toggle-password",
+                                        &theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.show_password = !this.show_password;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        )
+                    })
                     .when(show_save_checkbox && password_source_is_literal, |d| {
                         d.child(
                             div()
@@ -419,17 +446,105 @@ impl ConnectionManagerWindow {
                     return div().into_any_element();
                 };
 
-                let value_source_selector = if !is_ssh_tab && field_def.id == "host" {
-                    Some(self.host_value_source_selector.clone())
-                } else if !is_ssh_tab && field_def.id == "database" {
-                    Some(self.database_value_source_selector.clone())
-                } else if !is_ssh_tab && field_def.id == "user" {
-                    Some(self.user_value_source_selector.clone())
-                } else {
-                    None
-                };
-
                 let field_enabled = self.is_field_enabled(field_def);
+
+                if !is_ssh_tab && (field_def.id == "database" || field_def.id == "user") {
+                    let (selector, selector_focus, input_focus) = if field_def.id == "database" {
+                        (
+                            self.database_value_source_selector.clone(),
+                            FormFocus::DatabaseValueSource,
+                            FormFocus::Database,
+                        )
+                    } else {
+                        (
+                            self.user_value_source_selector.clone(),
+                            FormFocus::UserValueSource,
+                            FormFocus::User,
+                        )
+                    };
+
+                    let selector_focused = show_focus && self.form_focus == selector_focus;
+                    let input_focused = show_focus && self.form_focus == input_focus;
+
+                    return div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(!field_enabled, |d| d.opacity(0.5))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(field_def.label.clone()),
+                                )
+                                .when(field_def.required && field_enabled, |d| {
+                                    d.child(
+                                        div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .w(px(170.0))
+                                        .rounded(px(4.0))
+                                        .border_2()
+                                        .when(selector_focused, |d| d.border_color(ring_color))
+                                        .when(!selector_focused, |d| {
+                                            d.border_color(gpui::transparent_black())
+                                        })
+                                        .p(px(2.0))
+                                        .when(field_enabled, |d| {
+                                            d.on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        selector_focus,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                        })
+                                        .child(selector),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .rounded(px(4.0))
+                                        .border_2()
+                                        .when(input_focused, |d| d.border_color(ring_color))
+                                        .when(!input_focused, |d| {
+                                            d.border_color(gpui::transparent_black())
+                                        })
+                                        .p(px(2.0))
+                                        .when(field_enabled, |d| {
+                                            d.on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        input_focus,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                        })
+                                        .child(Input::new(input_state).disabled(!field_enabled)),
+                                ),
+                        )
+                        .into_any_element();
+                }
+
                 let fallback_input_focus = input_state.clone();
 
                 div()
@@ -466,19 +581,7 @@ impl ConnectionManagerWindow {
                                                 .child("*"),
                                         )
                                     }),
-                            )
-                            .when_some(value_source_selector.clone(), |d, selector| {
-                                d.child(
-                                    div()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.begin_inline_editor_interaction(cx);
-                                            }),
-                                        )
-                                        .child(selector),
-                                )
-                            }),
+                            ),
                     )
                     .child(
                         div()
@@ -719,23 +822,27 @@ impl ConnectionManagerWindow {
             while i < fields.len() {
                 let field = fields[i];
 
+                if field.id == "uri"
+                    && i + 2 < fields.len()
+                    && fields[i + 1].id == "host"
+                    && fields[i + 2].id == "port"
+                {
+                    i += 1;
+                    continue;
+                }
+
                 if field.id == "host" && i + 1 < fields.len() && fields[i + 1].id == "port" {
                     let port_field = fields[i + 1];
-                    let host_element = self
-                        .render_form_field(field, is_ssh_tab, show_focus, ring_color, cx)
-                        .into_any_element();
-                    let port_element = self
-                        .render_form_field(port_field, is_ssh_tab, show_focus, ring_color, cx)
-                        .into_any_element();
 
-                    field_elements.push(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(div().flex_1().child(host_element))
-                            .child(div().w(px(100.0)).child(port_element))
-                            .into_any_element(),
-                    );
+                    let uri_field = if i > 0 && fields[i - 1].id == "uri" {
+                        Some(fields[i - 1])
+                    } else {
+                        None
+                    };
+
+                    field_elements.push(self.render_host_port_row(
+                        field, port_field, uri_field, show_focus, ring_color, cx,
+                    ));
                     i += 2;
                 } else {
                     field_elements.push(
@@ -764,6 +871,160 @@ impl ConnectionManagerWindow {
         }
 
         sections
+    }
+
+    fn render_host_port_row(
+        &self,
+        host_field: &FormFieldDef,
+        port_field: &FormFieldDef,
+        uri_field: Option<&FormFieldDef>,
+        show_focus: bool,
+        ring_color: Hsla,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(host_input) = self.input_state_for_field("host") else {
+            return div().into_any_element();
+        };
+
+        let Some(port_input) = self.input_state_for_field("port") else {
+            return div().into_any_element();
+        };
+
+        let uri_mode_active = self
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+
+        let using_uri = uri_mode_active && uri_field.is_some();
+
+        let (primary_label, primary_required, primary_enabled, primary_input) = if using_uri {
+            let Some(uri_field) = uri_field else {
+                return div().into_any_element();
+            };
+
+            let Some(uri_input) = self.input_state_for_field("uri") else {
+                return div().into_any_element();
+            };
+
+            (
+                uri_field.label.clone(),
+                uri_field.required,
+                self.is_field_enabled(uri_field),
+                uri_input,
+            )
+        } else {
+            (
+                host_field.label.clone(),
+                host_field.required,
+                self.is_field_enabled(host_field),
+                host_input,
+            )
+        };
+
+        let port_enabled = !using_uri && self.is_field_enabled(port_field);
+
+        let selector_focused = show_focus && self.form_focus == FormFocus::HostValueSource;
+        let input_focused = show_focus && self.form_focus == FormFocus::Host;
+        let port_focused = show_focus && self.form_focus == FormFocus::Port;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when(!primary_enabled, |d| d.opacity(0.5))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(primary_label),
+                    )
+                    .when(primary_required && primary_enabled, |d| {
+                        d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(170.0))
+                            .rounded(px(4.0))
+                            .border_2()
+                            .when(selector_focused, |d| d.border_color(ring_color))
+                            .when(!selector_focused, |d| {
+                                d.border_color(gpui::transparent_black())
+                            })
+                            .p(px(2.0))
+                            .when(primary_enabled, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.enter_edit_mode_for_field(
+                                            FormFocus::HostValueSource,
+                                            window,
+                                            cx,
+                                        );
+                                    }),
+                                )
+                            })
+                            .child(self.host_value_source_selector.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .rounded(px(4.0))
+                            .border_2()
+                            .when(input_focused, |d| d.border_color(ring_color))
+                            .when(!input_focused, |d| {
+                                d.border_color(gpui::transparent_black())
+                            })
+                            .p(px(2.0))
+                            .when(primary_enabled, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.enter_edit_mode_for_field(FormFocus::Host, window, cx);
+                                    }),
+                                )
+                            })
+                            .child(Input::new(primary_input).disabled(!primary_enabled)),
+                    )
+                    .when(!using_uri, |d| {
+                        d.child(
+                            div()
+                                .w(px(110.0))
+                                .rounded(px(4.0))
+                                .border_2()
+                                .when(port_focused, |dd| dd.border_color(ring_color))
+                                .when(!port_focused, |dd| {
+                                    dd.border_color(gpui::transparent_black())
+                                })
+                                .p(px(2.0))
+                                .when(port_enabled, |dd| {
+                                    dd.on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::Port,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    )
+                                })
+                                .child(Input::new(port_input).disabled(!port_enabled)),
+                        )
+                    }),
+            )
+            .into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -917,6 +1178,10 @@ impl Render for ConnectionManagerWindow {
                 let secret = self.app_state.read(cx).get_ssh_tunnel_secret(&tunnel);
                 self.apply_ssh_tunnel(&tunnel, secret, window, cx);
             }
+        }
+
+        if self.normalize_focus_for_state(cx) {
+            cx.notify();
         }
 
         let show_password = self.show_password;

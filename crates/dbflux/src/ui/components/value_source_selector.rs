@@ -152,6 +152,52 @@ impl ValueSourceSelector {
         self.selected_source(cx) == ValueSourceKind::Literal
     }
 
+    pub fn is_source_dropdown_open(&self, cx: &App) -> bool {
+        self.source_dropdown.read(cx).is_open()
+    }
+
+    pub fn open_source_dropdown(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.open(cx);
+        });
+    }
+
+    pub fn close_source_dropdown(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.close(cx);
+        });
+    }
+
+    pub fn source_dropdown_next(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.select_next_item(cx);
+        });
+    }
+
+    pub fn source_dropdown_prev(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.select_prev_item(cx);
+        });
+    }
+
+    pub fn source_dropdown_next_page(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.select_next_page(cx);
+        });
+    }
+
+    pub fn source_dropdown_prev_page(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.select_prev_page(cx);
+        });
+    }
+
+    pub fn source_dropdown_accept(&mut self, cx: &mut Context<Self>) {
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.accept_selection(cx);
+        });
+    }
+
     fn selected_source(&self, cx: &App) -> ValueSourceKind {
         let selected_value = self
             .source_dropdown

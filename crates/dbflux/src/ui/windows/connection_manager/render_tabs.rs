@@ -141,7 +141,6 @@ impl ConnectionManagerWindow {
 
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
-        let focus = self.form_focus;
 
         let ring_color = cx.theme().ring;
 
@@ -157,8 +156,7 @@ impl ConnectionManagerWindow {
 
         if requires_password {
             let password_field = self.render_password_field(
-                show_focus && focus == FormFocus::Password,
-                show_focus && focus == FormFocus::PasswordSave,
+                show_focus,
                 keyring_available,
                 save_password,
                 ring_color,
