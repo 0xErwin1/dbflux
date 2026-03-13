@@ -1,10 +1,10 @@
 use aws_config::{BehaviorVersion, Region};
+use aws_sdk_dynamodb::Client;
 use aws_sdk_dynamodb::config::Credentials;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
     ScalarAttributeType,
 };
-use aws_sdk_dynamodb::Client;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
     DbDriver, DbError, Pagination, QueryRequest,
