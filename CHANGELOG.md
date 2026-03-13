@@ -2,6 +2,28 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.8] – 2026-03-12
+
+### Added
+
+* Built-in DynamoDB driver with end-to-end app integration, including schema browse and mutation/query support
+* In-app AWS SSO login flow and auth profile wizard, integrated across workspace overlays, Connection Manager, and Settings
+* Provider-agnostic dynamic value source flow for managed access fields (SSM, Secrets Manager, and Parameter Store references)
+* Language-specific script icons in the sidebar for Lua, Python, Bash, JavaScript, and InfluxDB files
+
+### Changed
+
+* Auth and managed access orchestration is now provider-driven via a runtime auth provider registry and generic pipeline stages
+* Saving SSO/shared AWS auth profiles now writes compatible `[profile ...]` entries to `~/.aws/config` with idempotent updates
+* Nix development builds now statically link OpenSSL for better portability outside Nix environments
+* Driver crates now include dedicated README files documenting current features and limitations
+
+### Fixed
+
+* DynamoDB filter expression generation no longer emits redundant logical wrapping that could trigger `ValidationException` errors
+
+---
+
 ## [0.4.0-dev.7] – 2026-03-07
 
 ### Added
