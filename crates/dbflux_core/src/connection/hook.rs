@@ -482,6 +482,7 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             Some(*port),
             database.map(|db| db.to_string()),
         ),
+        DbConfig::DynamoDB { region, table, .. } => (Some(region.clone()), None, table.clone()),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

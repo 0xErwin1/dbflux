@@ -269,16 +269,50 @@ impl Sidebar {
                             Vec::new()
                         }
                     } else if db.is_current {
-                        Self::build_schema_children(
-                            profile_id,
-                            &db.name,
-                            Some(&db.name),
-                            schema,
-                            &connected.table_details,
-                            &connected.schema_types,
-                            &connected.schema_indexes,
-                            &connected.schema_foreign_keys,
-                        )
+                        if is_document_db {
+                            let tables = schema
+                                .collections()
+                                .iter()
+                                .filter(|collection| {
+                                    collection.database.as_deref().is_none()
+                                        || collection.database.as_deref() == Some(db.name.as_str())
+                                })
+                                .map(|collection| TableInfo {
+                                    name: collection.name.clone(),
+                                    schema: Some(db.name.clone()),
+                                    columns: None,
+                                    indexes: collection.indexes.clone().map(IndexData::Document),
+                                    foreign_keys: None,
+                                    constraints: None,
+                                    sample_fields: collection.sample_fields.clone(),
+                                })
+                                .collect::<Vec<_>>();
+
+                            let db_schema = dbflux_core::DbSchemaInfo {
+                                name: db.name.clone(),
+                                tables,
+                                views: Vec::new(),
+                                custom_types: None,
+                            };
+
+                            Self::build_document_db_content(
+                                profile_id,
+                                &db.name,
+                                &db_schema,
+                                &connected.table_details,
+                            )
+                        } else {
+                            Self::build_schema_children(
+                                profile_id,
+                                &db.name,
+                                Some(&db.name),
+                                schema,
+                                &connected.table_details,
+                                &connected.schema_types,
+                                &connected.schema_indexes,
+                                &connected.schema_foreign_keys,
+                            )
+                        }
                     } else if is_pending {
                         vec![TreeItem::new(
                             SchemaNodeId::Loading {

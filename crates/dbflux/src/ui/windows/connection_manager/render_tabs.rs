@@ -11,21 +11,16 @@ use gpui_component::input::Input;
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus};
 
 impl ConnectionManagerWindow {
-    pub(super) fn render_tab_bar(
-        &self,
-        supports_ssh: bool,
-        supports_proxy: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active_tab = self.active_tab;
+        let show_access_tab = !self.uses_file_form();
 
         div()
             .flex()
             .items_center()
             .border_b_1()
             .border_color(theme.border)
-            // Main tab
             .child(
                 div()
                     .id("tab-main")
@@ -60,7 +55,45 @@ impl ConnectionManagerWindow {
                             .child(div().text_sm().child("Main")),
                     ),
             )
-            // Settings tab
+            .when(show_access_tab, |d| {
+                d.child(
+                    div()
+                        .id("tab-access")
+                        .px_4()
+                        .py_2()
+                        .cursor_pointer()
+                        .border_b_2()
+                        .when(active_tab == ActiveTab::Access, |dd| {
+                            dd.border_color(theme.primary).text_color(theme.foreground)
+                        })
+                        .when(active_tab != ActiveTab::Access, |dd| {
+                            dd.border_color(gpui::transparent_black())
+                                .text_color(theme.muted_foreground)
+                        })
+                        .hover(|dd| dd.bg(theme.secondary))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.active_tab = ActiveTab::Access;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    svg()
+                                        .path(AppIcon::FingerprintPattern.path())
+                                        .size_4()
+                                        .text_color(if active_tab == ActiveTab::Access {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                )
+                                .child(div().text_sm().child("Access")),
+                        ),
+                )
+            })
             .child(
                 div()
                     .id("tab-settings")
@@ -95,101 +128,6 @@ impl ConnectionManagerWindow {
                             .child(div().text_sm().child("Settings")),
                     ),
             )
-            // SSH tab
-            .when(supports_ssh, |d| {
-                d.child(
-                    div()
-                        .id("tab-ssh")
-                        .px_4()
-                        .py_2()
-                        .cursor_pointer()
-                        .border_b_2()
-                        .when(active_tab == ActiveTab::Ssh, |dd| {
-                            dd.border_color(theme.primary).text_color(theme.foreground)
-                        })
-                        .when(active_tab != ActiveTab::Ssh, |dd| {
-                            dd.border_color(gpui::transparent_black())
-                                .text_color(theme.muted_foreground)
-                        })
-                        .hover(|dd| dd.bg(theme.secondary))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.active_tab = ActiveTab::Ssh;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    svg()
-                                        .path(AppIcon::FingerprintPattern.path())
-                                        .size_4()
-                                        .text_color(if active_tab == ActiveTab::Ssh {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                )
-                                .child(div().text_sm().child("SSH"))
-                                .when(self.ssh_enabled, |dd| {
-                                    dd.child(
-                                        div()
-                                            .w(px(6.0))
-                                            .h(px(6.0))
-                                            .rounded_full()
-                                            .bg(gpui::rgb(0x22C55E)),
-                                    )
-                                }),
-                        ),
-                )
-            })
-            // Proxy tab
-            .when(supports_proxy, |d| {
-                d.child(
-                    div()
-                        .id("tab-proxy")
-                        .px_4()
-                        .py_2()
-                        .cursor_pointer()
-                        .border_b_2()
-                        .when(active_tab == ActiveTab::Proxy, |dd| {
-                            dd.border_color(theme.primary).text_color(theme.foreground)
-                        })
-                        .when(active_tab != ActiveTab::Proxy, |dd| {
-                            dd.border_color(gpui::transparent_black())
-                                .text_color(theme.muted_foreground)
-                        })
-                        .hover(|dd| dd.bg(theme.secondary))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.active_tab = ActiveTab::Proxy;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(svg().path(AppIcon::Server.path()).size_4().text_color(
-                                    if active_tab == ActiveTab::Proxy {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    },
-                                ))
-                                .child(div().text_sm().child("Proxy"))
-                                .when(self.selected_proxy_id.is_some(), |dd| {
-                                    dd.child(
-                                        div()
-                                            .w(px(6.0))
-                                            .h(px(6.0))
-                                            .rounded_full()
-                                            .bg(gpui::rgb(0x22C55E)),
-                                    )
-                                }),
-                        ),
-                )
-            })
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -212,7 +150,10 @@ impl ConnectionManagerWindow {
             return Vec::new();
         };
 
-        let mut sections = self.render_form_tab(&main_tab, false, show_focus, ring_color, cx);
+        let mut sections = Vec::new();
+
+        // Driver-specific form fields
+        sections.extend(self.render_form_tab(&main_tab, false, show_focus, ring_color, cx));
 
         if requires_password {
             let password_field = self.render_password_field(

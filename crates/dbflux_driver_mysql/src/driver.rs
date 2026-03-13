@@ -794,7 +794,13 @@ impl MysqlErrorFormatter {
         if source.contains("Connection refused") {
             format!("Connection refused at {}:{}. Is MySQL running?", host, port)
         } else if source.contains("Access denied") {
-            "Access denied for user. Check username and password.".to_string()
+            format!(
+                "Access denied at {}:{}.
+MySQL says: {}
+
+If you are using SSM, verify the tunnel target host/port and that the DB user is valid for that target.",
+                host, port, source
+            )
         } else if source.contains("Unknown database") {
             "Database does not exist.".to_string()
         } else if source.contains("caching_sha2_password")

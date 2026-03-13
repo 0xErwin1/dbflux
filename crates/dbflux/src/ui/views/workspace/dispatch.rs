@@ -55,6 +55,14 @@ impl CommandDispatcher for Workspace {
                 self.open_connection_manager(cx);
                 true
             }
+            Command::OpenLoginModal => {
+                self.open_login_modal(window, cx);
+                true
+            }
+            Command::OpenSsoWizard => {
+                self.open_sso_wizard(window, cx);
+                true
+            }
             Command::Disconnect => {
                 self.disconnect_active(window, cx);
                 true

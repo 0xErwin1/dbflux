@@ -87,6 +87,17 @@ impl CancelToken {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
+
+    /// Returns `Err(PipelineError::cancelled())` if cancellation was requested.
+    ///
+    /// Insert between pipeline stages to allow early exit.
+    pub fn check_pipeline(&self) -> Result<(), crate::pipeline::PipelineError> {
+        if self.is_cancelled() {
+            Err(crate::pipeline::PipelineError::cancelled())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Default for CancelToken {

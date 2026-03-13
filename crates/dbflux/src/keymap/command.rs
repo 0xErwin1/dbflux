@@ -97,6 +97,8 @@ pub enum Command {
     ToggleTasks,
     ToggleSidebar,
     OpenSettings,
+    OpenLoginModal,
+    OpenSsoWizard,
 }
 
 impl Command {
@@ -125,6 +127,8 @@ impl Command {
             "toggle_results" => Some(Command::ToggleResults),
             "toggle_tasks" => Some(Command::ToggleTasks),
             "open_settings" => Some(Command::OpenSettings),
+            "open_login_modal" => Some(Command::OpenLoginModal),
+            "open_sso_wizard" => Some(Command::OpenSsoWizard),
             "open_script_file" => Some(Command::OpenScriptFile),
             "save_file_as" => Some(Command::SaveFileAs),
             "open_tab_menu" => Some(Command::OpenTabMenu),
@@ -216,6 +220,8 @@ impl Command {
             Command::ToggleTasks => "Toggle Tasks Panel",
             Command::ToggleSidebar => "Toggle Sidebar",
             Command::OpenSettings => "Open Settings",
+            Command::OpenLoginModal => "Open Login Modal",
+            Command::OpenSsoWizard => "Open AWS SSO Wizard",
         }
     }
 
@@ -300,7 +306,9 @@ impl Command {
             | Command::ToggleTasks
             | Command::ToggleSidebar
             | Command::TogglePanel
-            | Command::OpenSettings => "View",
+            | Command::OpenSettings
+            | Command::OpenLoginModal
+            | Command::OpenSsoWizard => "View",
         }
     }
 
@@ -332,6 +340,8 @@ impl Command {
                 | Command::ToggleResults
                 | Command::ToggleTasks
                 | Command::ToggleSidebar
+                | Command::OpenLoginModal
+                | Command::OpenSsoWizard
         )
     }
 }

@@ -1,0 +1,23 @@
+[package]
+name = "dbflux_driver_dynamodb"
+version.workspace = true
+edition.workspace = true
+publish = false
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core.workspace = true
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-dynamodb = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+serde_json = "1"
+
+[dev-dependencies]
+dbflux_test_support.workspace = true

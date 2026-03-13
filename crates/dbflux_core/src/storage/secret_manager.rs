@@ -1,4 +1,6 @@
-use crate::{ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile};
+use crate::{
+    AuthProfile, ConnectionProfile, DbConfig, ProxyProfile, SecretStore, SshTunnelProfile,
+};
 use log::error;
 use secrecy::SecretString;
 use std::sync::Arc;
@@ -16,6 +18,12 @@ impl HasSecretRef for SshTunnelProfile {
 }
 
 impl HasSecretRef for ProxyProfile {
+    fn secret_ref(&self) -> String {
+        self.secret_ref()
+    }
+}
+
+impl HasSecretRef for AuthProfile {
     fn secret_ref(&self) -> String {
         self.secret_ref()
     }
@@ -237,7 +245,9 @@ impl SecretManager {
                 ssh_tunnel_profile_id,
                 ..
             } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                return None;
+            }
         };
 
         if let Some(tunnel_profile_id) = ssh_tunnel_profile_id {

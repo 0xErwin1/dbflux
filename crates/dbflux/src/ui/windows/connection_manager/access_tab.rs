@@ -10,9 +10,507 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
-use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
+use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
 
 impl ConnectionManagerWindow {
+    pub(super) fn render_access_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+        let ring_color = theme.ring;
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
+
+        self.access_method_dropdown.update(cx, |dropdown, cx| {
+            let focus_color = if show_focus && self.form_focus == FormFocus::AccessMethod {
+                Some(ring_color)
+            } else {
+                None
+            };
+
+            dropdown.set_focus_ring(focus_color, cx);
+        });
+
+        self.auth_profile_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_focus_ring(None, cx);
+        });
+
+        let login_enabled =
+            !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx);
+        let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
+
+        let mut sections = vec![
+            self.render_section(
+                "Access",
+                div().flex().flex_col().gap_2().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("Access Method"),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(240.0))
+                                .child(self.access_method_dropdown.clone()),
+                        ),
+                ),
+                &theme,
+            )
+            .into_any_element(),
+        ];
+
+        match self.access_tab_mode {
+            AccessTabMode::Direct => {
+                sections.push(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("Direct connections use the database fields from the Main tab."),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child("Auth Profile (optional)"),
+                                )
+                                .child(
+                                    div()
+                                        .min_w(px(280.0))
+                                        .child(self.auth_profile_dropdown.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Button::new("auth-open-settings")
+                                                .ghost()
+                                                .small()
+                                                .label("Manage")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_auth_profiles_settings(cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("auth-login-selected")
+                                                .ghost()
+                                                .small()
+                                                .label("Login")
+                                                .disabled(!login_enabled)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.login_selected_auth_profile(cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("auth-refresh-session")
+                                                .ghost()
+                                                .small()
+                                                .label("Refresh")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.refresh_auth_profile_statuses(cx);
+                                                })),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Used for resolving Secret/Parameter/Auth value sources in Direct mode."),
+                                ),
+                        )
+                        .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
+                            d.child(div().text_xs().text_color(theme.muted_foreground).child(status))
+                        })
+                        .when(auth_profile_is_valid, |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(gpui::rgb(0x16A34A))
+                                    .child("Auth profile session is valid"),
+                            )
+                        })
+                        .when_some(self.auth_profile_action_message.as_ref(), |d, message| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(message.clone()),
+                            )
+                        })
+                        .into_any_element(),
+                );
+            }
+            AccessTabMode::Ssh => sections.extend(self.render_ssh_tab(cx)),
+            AccessTabMode::Proxy => sections.extend(self.render_proxy_tab(cx)),
+            AccessTabMode::ManagedSsm => sections.push(self.render_ssm_access_section(cx)),
+        }
+
+        sections
+    }
+
+    fn render_ssm_access_section(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let ring_color = theme.ring;
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
+        let login_enabled =
+            !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx);
+        let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
+
+        self.render_section(
+            "SSM Port Forwarding",
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(self.render_ssm_value_field(
+                    "Instance ID",
+                    &self.input_ssm_instance_id,
+                    self.ssm_instance_id_value_source_selector.clone(),
+                    true,
+                    show_focus && self.form_focus == FormFocus::SsmInstanceId,
+                    ring_color,
+                    FormFocus::SsmInstanceId,
+                    cx,
+                ))
+                .child(self.render_ssm_value_field(
+                    "Region",
+                    &self.input_ssm_region,
+                    self.ssm_region_value_source_selector.clone(),
+                    true,
+                    show_focus && self.form_focus == FormFocus::SsmRegion,
+                    ring_color,
+                    FormFocus::SsmRegion,
+                    cx,
+                ))
+                .child(self.render_ssm_value_field(
+                    "Remote Port",
+                    &self.input_ssm_remote_port,
+                    self.ssm_remote_port_value_source_selector.clone(),
+                    false,
+                    show_focus && self.form_focus == FormFocus::SsmRemotePort,
+                    ring_color,
+                    FormFocus::SsmRemotePort,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("Auth Profile"),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(280.0))
+                                .child(self.auth_profile_dropdown.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Button::new("ssm-auth-open-settings")
+                                        .ghost()
+                                        .small()
+                                        .label("Manage")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_auth_profiles_settings(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("ssm-auth-login-selected")
+                                        .ghost()
+                                        .small()
+                                        .label("Login")
+                                        .disabled(!login_enabled)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.login_selected_auth_profile(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("ssm-auth-refresh-session")
+                                        .ghost()
+                                        .small()
+                                        .label("Refresh")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.refresh_auth_profile_statuses(cx);
+                                        })),
+                                ),
+                        )
+                        .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
+                            d.child(div().text_xs().text_color(theme.muted_foreground).child(status))
+                        })
+                        .when(auth_profile_is_valid, |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(gpui::rgb(0x16A34A))
+                                    .child("Auth profile session is valid"),
+                            )
+                        }),
+                ),
+            &theme,
+        )
+        .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_ssm_value_field(
+        &self,
+        label: &str,
+        input: &Entity<gpui_component::input::InputState>,
+        selector: Entity<crate::ui::components::value_source_selector::ValueSourceSelector>,
+        required: bool,
+        focused: bool,
+        ring_color: gpui::Hsla,
+        field: FormFocus,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .rounded(px(4.0))
+            .border_2()
+            .when(focused, |d| d.border_color(ring_color))
+            .when(!focused, |d| d.border_color(gpui::transparent_black()))
+            .p(px(2.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .h(px(28.0))
+                    .mb_1()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(label.to_string()),
+                            )
+                            .when(required, |d| {
+                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.begin_inline_editor_interaction(cx);
+                                }),
+                            )
+                            .child(selector),
+                    ),
+            )
+            .child(
+                div()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.enter_edit_mode_for_field(field, window, cx);
+                        }),
+                    )
+                    .child(gpui_component::input::Input::new(input)),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_proxy_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let proxies = self.app_state.read(cx).proxies().to_vec();
+        let selected_proxy_id = self.selected_proxy_id;
+
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
+        let focus = self.form_focus;
+
+        let ring_color = cx.theme().ring;
+        let theme = cx.theme().clone();
+        let muted_fg = theme.muted_foreground;
+
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        if proxies.is_empty() {
+            sections.push(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(muted_fg)
+                                    .child("No proxy profiles configured"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("Add proxies in Settings > Proxies"),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+            return sections;
+        }
+
+        let proxy_items: Vec<DropdownItem> = proxies
+            .iter()
+            .map(|p| {
+                let label = if p.enabled {
+                    p.name.clone()
+                } else {
+                    format!("{} (disabled)", p.name)
+                };
+
+                DropdownItem::with_value(&label, p.id.to_string())
+            })
+            .collect();
+        self.proxy_uuids = proxies.iter().map(|p| p.id).collect();
+
+        let selected_proxy_index =
+            selected_proxy_id.and_then(|id| proxies.iter().position(|p| p.id == id));
+
+        let proxy_selector_focused = show_focus && focus == FormFocus::ProxySelector;
+        let proxy_clear_focused = show_focus && focus == FormFocus::ProxyClear;
+        self.proxy_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(proxy_items, cx);
+            dropdown.set_selected_index(selected_proxy_index, cx);
+
+            let focus_color = if proxy_selector_focused {
+                Some(ring_color)
+            } else {
+                None
+            };
+            dropdown.set_focus_ring(focus_color, cx);
+        });
+
+        let has_selection = selected_proxy_id.is_some();
+
+        let selector_row = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted_fg)
+                    .child("Select Proxy"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().child(self.proxy_dropdown.clone()))
+                    .when(has_selection, |d| {
+                        d.child(
+                            div()
+                                .rounded(px(4.0))
+                                .border_2()
+                                .when(proxy_clear_focused, |dd| dd.border_color(ring_color))
+                                .when(!proxy_clear_focused, |dd| {
+                                    dd.border_color(gpui::transparent_black())
+                                })
+                                .child(
+                                    Button::new("clear-proxy")
+                                        .label("Clear")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.clear_proxy_selection(cx);
+                                        })),
+                                ),
+                        )
+                    }),
+            );
+
+        sections.push(selector_row.into_any_element());
+
+        if let Some(proxy) = selected_proxy_id
+            .and_then(|id| proxies.iter().find(|p| p.id == id))
+            .cloned()
+        {
+            let kind_label = format!("{:?}", proxy.kind);
+            let host_port = format!("{}:{}", proxy.host, proxy.port);
+            let auth_label = format!("{:?}", proxy.auth);
+            let enabled_label = if proxy.enabled { "Yes" } else { "No" };
+            let no_proxy_label = proxy.no_proxy.as_deref().unwrap_or("(none)").to_string();
+
+            let edit_focused = show_focus && focus == FormFocus::ProxyEditInSettings;
+
+            let details = self.render_section(
+                "Proxy Details",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.render_readonly_row("Type", &kind_label, &theme))
+                    .child(self.render_readonly_row("Host", &host_port, &theme))
+                    .child(self.render_readonly_row("Auth", &auth_label, &theme))
+                    .child(self.render_readonly_row("Enabled", enabled_label, &theme))
+                    .child(self.render_readonly_row("No Proxy", &no_proxy_label, &theme))
+                    .child(
+                        div()
+                            .mt_1()
+                            .rounded(px(4.0))
+                            .border_2()
+                            .when(edit_focused, |d| d.border_color(ring_color))
+                            .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
+                            .child(
+                                Button::new("proxy-edit-in-settings")
+                                    .label("Edit in Settings")
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(IconName::ExternalLink)),
+                            ),
+                    ),
+                &theme,
+            );
+
+            sections.push(details.into_any_element());
+        }
+
+        sections
+    }
+
     pub(super) fn render_ssh_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let ssh_enabled = self.ssh_enabled;
         let ssh_auth_method = self.ssh_auth_method;
@@ -23,7 +521,7 @@ impl ConnectionManagerWindow {
         let has_selected_tunnel = selected_tunnel_id.is_some();
 
         let show_focus =
-            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Ssh;
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
         let focus = self.form_focus;
 
         let ring_color = cx.theme().ring;
@@ -132,7 +630,6 @@ impl ConnectionManagerWindow {
         let theme = cx.theme().clone();
         let muted_fg = theme.muted_foreground;
 
-        // When a saved tunnel is selected, show read-only summary + Edit in Settings button
         let (auth_selector, auth_inputs, ssh_server_section) = if ssh_enabled && has_selected_tunnel
         {
             let selected_tunnel = selected_tunnel_id
@@ -674,7 +1171,6 @@ impl ConnectionManagerWindow {
                         ),
                 )
                 .into_any_element(),
-
             SshAuthSelection::Password => div()
                 .flex()
                 .flex_col()

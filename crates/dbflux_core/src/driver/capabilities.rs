@@ -14,6 +14,7 @@ pub enum Icon {
     Sqlite,
     Mongodb,
     Redis,
+    Dynamodb,
 
     // Generic database icon (fallback)
     Database,

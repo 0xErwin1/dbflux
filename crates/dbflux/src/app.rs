@@ -15,7 +15,13 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
+use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+
 pub struct AppStateChanged;
+
+pub struct AuthProfileCreated {
+    pub profile_id: Uuid,
+}
 
 #[cfg(feature = "sqlite")]
 use dbflux_driver_sqlite::SqliteDriver;
@@ -34,6 +40,9 @@ use dbflux_driver_mongodb::MongoDriver;
 
 #[cfg(feature = "redis")]
 use dbflux_driver_redis::RedisDriver;
+
+#[cfg(feature = "dynamodb")]
+use dbflux_driver_dynamodb::DynamoDriver;
 
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
@@ -61,6 +70,7 @@ pub struct AppState {
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
+    auth_provider_registry: AuthProviderRegistry,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -103,6 +113,16 @@ impl AppState {
             .history
             .set_max_entries(general_settings.max_history_entries);
 
+        let mut auth_provider_registry = AuthProviderRegistry::new();
+        #[cfg(feature = "aws")]
+        {
+            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
+            auth_provider_registry
+                .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
+            auth_provider_registry
+                .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
+        }
+
         Self {
             facade,
             settings_window: None,
@@ -111,6 +131,7 @@ impl AppState {
             driver_settings,
             hook_definitions,
             detached_hook_tasks: HashMap::new(),
+            auth_provider_registry,
             recent_files,
             scripts_directory,
             session_store,
@@ -119,39 +140,7 @@ impl AppState {
 
     #[allow(clippy::result_large_err)]
     fn build_default_drivers() -> BuiltDrivers {
-        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
-
-        #[cfg(feature = "sqlite")]
-        {
-            drivers.insert("sqlite".to_string(), Arc::new(SqliteDriver::new()));
-        }
-
-        #[cfg(feature = "postgres")]
-        {
-            drivers.insert("postgres".to_string(), Arc::new(PostgresDriver::new()));
-        }
-
-        #[cfg(feature = "mysql")]
-        {
-            drivers.insert(
-                "mysql".to_string(),
-                Arc::new(MysqlDriver::new(DbKind::MySQL)),
-            );
-            drivers.insert(
-                "mariadb".to_string(),
-                Arc::new(MysqlDriver::new(DbKind::MariaDB)),
-            );
-        }
-
-        #[cfg(feature = "mongodb")]
-        {
-            drivers.insert("mongodb".to_string(), Arc::new(MongoDriver::new()));
-        }
-
-        #[cfg(feature = "redis")]
-        {
-            drivers.insert("redis".to_string(), Arc::new(RedisDriver::new()));
-        }
+        let mut drivers = Self::build_builtin_drivers();
 
         let app_config = AppConfigStore::new()
             .and_then(|store| store.load())
@@ -239,6 +228,50 @@ impl AppState {
             driver_settings,
             hook_definitions,
         }
+    }
+
+    fn build_builtin_drivers() -> HashMap<String, Arc<dyn DbDriver>> {
+        #[allow(unused_mut)]
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+
+        #[cfg(feature = "sqlite")]
+        {
+            drivers.insert("sqlite".to_string(), Arc::new(SqliteDriver::new()));
+        }
+
+        #[cfg(feature = "postgres")]
+        {
+            drivers.insert("postgres".to_string(), Arc::new(PostgresDriver::new()));
+        }
+
+        #[cfg(feature = "mysql")]
+        {
+            drivers.insert(
+                "mysql".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MySQL)),
+            );
+            drivers.insert(
+                "mariadb".to_string(),
+                Arc::new(MysqlDriver::new(DbKind::MariaDB)),
+            );
+        }
+
+        #[cfg(feature = "mongodb")]
+        {
+            drivers.insert("mongodb".to_string(), Arc::new(MongoDriver::new()));
+        }
+
+        #[cfg(feature = "redis")]
+        {
+            drivers.insert("redis".to_string(), Arc::new(RedisDriver::new()));
+        }
+
+        #[cfg(feature = "dynamodb")]
+        {
+            drivers.insert("dynamodb".to_string(), Arc::new(DynamoDriver::new()));
+        }
+
+        drivers
     }
 
     // --- ConnectionManager ---
@@ -736,6 +769,24 @@ impl AppState {
         self.facade.secrets.delete_proxy_secret(proxy);
     }
 
+    // --- AuthProfileManager ---
+
+    pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        self.facade.auth_profiles.add(profile);
+    }
+
+    pub fn remove_auth_profile(&mut self, idx: usize) -> Option<dbflux_core::AuthProfile> {
+        self.facade.auth_profiles.remove(idx)
+    }
+
+    pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        self.facade.auth_profiles.update(profile);
+    }
+
+    pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
+        &self.facade.auth_profiles.items
+    }
+
     // --- ConnectionTreeManager ---
 
     pub fn save_connection_tree(&self) {
@@ -1107,6 +1158,22 @@ impl AppState {
         }
     }
 
+    pub fn cancel_running_connect_tasks_for_profile(&mut self, profile_id: Uuid) -> usize {
+        let connect_task_ids: Vec<TaskId> = self
+            .facade
+            .tasks
+            .running_tasks()
+            .into_iter()
+            .filter(|task| task.kind == TaskKind::Connect && task.profile_id == Some(profile_id))
+            .map(|task| task.id)
+            .collect();
+
+        connect_task_ids
+            .into_iter()
+            .filter(|task_id| self.facade.tasks.cancel(*task_id))
+            .count()
+    }
+
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {
         &mut self.facade.connections.connections
     }
@@ -1270,8 +1337,150 @@ impl AppState {
         self.hook_definitions = definitions;
     }
 
+    pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
+        &self.auth_provider_registry
+    }
+
+    pub fn auth_provider_by_id(
+        &self,
+        provider_id: &str,
+    ) -> Option<Arc<dyn dbflux_core::DynAuthProvider>> {
+        self.auth_provider_registry.get(provider_id)
+    }
+
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
+    }
+
+    /// Build pipeline input and return it with profile name and driver.
+    pub fn prepare_pipeline_input(
+        &self,
+        profile_id: Uuid,
+        cancel: CancelToken,
+    ) -> Result<(dbflux_core::PipelineInput, String, Arc<dyn DbDriver>), String> {
+        let profile = self
+            .facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .ok_or_else(|| format!("Profile {} not found", profile_id))?
+            .clone();
+
+        let driver = self
+            .driver_for_profile(&profile)
+            .ok_or_else(|| format!("Driver '{}' not found", profile.driver_id()))?;
+
+        let profile_name = profile.name.clone();
+        let input = self.build_pipeline_input_for_profile(profile, cancel)?;
+
+        Ok((input, profile_name, driver))
+    }
+
+    pub fn build_pipeline_input_for_profile(
+        &self,
+        profile: ConnectionProfile,
+        cancel: CancelToken,
+    ) -> Result<dbflux_core::PipelineInput, String> {
+        let selected_auth_profile_id = profile
+            .access_kind
+            .as_ref()
+            .and_then(|kind| match kind {
+                dbflux_core::access::AccessKind::Managed { params, .. } => {
+                    params.get("auth_profile_id").and_then(|s| s.parse().ok())
+                }
+                _ => None,
+            })
+            .or(profile.auth_profile_id);
+
+        let auth_profile = selected_auth_profile_id.and_then(|auth_id| {
+            self.facade
+                .auth_profiles
+                .items
+                .iter()
+                .find(|p| p.id == auth_id && p.enabled)
+                .cloned()
+        });
+
+        let uses_managed_access = matches!(
+            profile.access_kind,
+            Some(dbflux_core::access::AccessKind::Managed { .. })
+        );
+        if uses_managed_access && auth_profile.is_none() {
+            return Err(
+                "Managed access requires an auth profile. Select one in Access > SSM Auth Profile."
+                    .to_string(),
+            );
+        }
+
+        let registered_auth_provider_ids: HashSet<&str> = self
+            .auth_provider_registry
+            .providers()
+            .map(|provider| provider.provider_id())
+            .collect();
+
+        let uses_registered_auth_value_sources =
+            profile
+                .value_refs
+                .values()
+                .any(|value_ref| match value_ref {
+                    dbflux_core::values::ValueRef::Secret { provider, .. }
+                    | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
+                        registered_auth_provider_ids.contains(provider.as_str())
+                    }
+                    _ => false,
+                });
+
+        if uses_registered_auth_value_sources && auth_profile.is_none() {
+            return Err(
+                "Value sources requiring auth providers need an auth profile. Select one before connecting."
+                    .to_string(),
+            );
+        }
+
+        let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> =
+            if let Some(auth_profile) = auth_profile.as_ref() {
+                let provider = self
+                    .auth_provider_registry
+                    .get(&auth_profile.provider_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Auth provider '{}' is not available",
+                            auth_profile.provider_id
+                        )
+                    })?;
+
+                Some(RegistryAuthProviderWrapper::boxed(provider))
+            } else {
+                None
+            };
+
+        let cache = Arc::new(dbflux_core::values::ValueCache::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+
+        #[cfg(feature = "aws")]
+        let aws_profile_name = auth_profile
+            .as_ref()
+            .and_then(|p| p.fields.get("profile_name").cloned());
+
+        let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
+            Arc::new(crate::access_manager::AppAccessManager::new(
+                #[cfg(feature = "aws")]
+                Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
+                    aws_profile_name,
+                ))),
+            ));
+
+        Ok(dbflux_core::PipelineInput {
+            profile,
+            auth_provider,
+            auth_profile,
+            resolver,
+            access_manager,
+            cancel,
+        })
     }
 }
 
@@ -1282,14 +1491,19 @@ impl Default for AppState {
 }
 
 impl EventEmitter<AppStateChanged> for AppState {}
+impl EventEmitter<AuthProfileCreated> for AppState {}
 
 #[cfg(test)]
 mod tests {
     use super::AppState;
-    use dbflux_core::{DbDriver, DbKind, FormValues, GeneralSettings, RefreshPolicySetting};
+    use dbflux_core::{
+        AuthProfile, CancelToken, DbDriver, DbKind, FormValues, GeneralSettings,
+        RefreshPolicySetting,
+    };
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn test_state(general_settings: GeneralSettings) -> AppState {
         let fake = FakeDriver::new(DbKind::SQLite);
@@ -1557,5 +1771,55 @@ mod tests {
 
         assert!(!state.driver_overrides().contains_key("builtin:redis"));
         assert!(!state.driver_settings().contains_key("builtin:redis"));
+    }
+
+    #[test]
+    fn build_pipeline_input_fails_for_unknown_auth_provider() {
+        let mut state = test_state(GeneralSettings::default());
+
+        let auth_profile_id = Uuid::new_v4();
+        state.add_auth_profile(AuthProfile {
+            id: auth_profile_id,
+            name: "Unknown Provider Profile".to_string(),
+            provider_id: "unknown-provider".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+        });
+
+        let mut profile = fake_profile(&state);
+        profile.auth_profile_id = Some(auth_profile_id);
+
+        let error = match state.build_pipeline_input_for_profile(profile, CancelToken::new()) {
+            Ok(_) => panic!("unknown provider must fail before pipeline start"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "Auth provider 'unknown-provider' is not available");
+    }
+
+    #[cfg(feature = "dynamodb")]
+    #[test]
+    fn builtin_driver_registry_includes_dynamodb_when_feature_enabled() {
+        let drivers = AppState::build_builtin_drivers();
+
+        let driver = drivers
+            .get("dynamodb")
+            .expect("dynamodb driver should be registered when feature is enabled");
+
+        assert_eq!(driver.metadata().id, "dynamodb");
+    }
+
+    #[cfg(not(feature = "dynamodb"))]
+    #[test]
+    fn builtin_driver_registry_omits_dynamodb_when_feature_disabled() {
+        let drivers = AppState::build_builtin_drivers();
+
+        assert!(!drivers.contains_key("dynamodb"));
+        assert!(
+            !drivers
+                .values()
+                .any(|driver| driver.metadata().id == "dynamodb"),
+            "no registered builtin driver should expose dynamodb metadata when feature is disabled"
+        );
     }
 }

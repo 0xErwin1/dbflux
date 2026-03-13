@@ -336,6 +336,7 @@ impl AppIcon {
             Icon::Sqlite => Self::BrandSqlite,
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
+            Icon::Dynamodb => Self::Database,
             Icon::Database => Self::Database,
         }
     }

@@ -1,9 +1,14 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::access::AccessKind;
 use crate::config::app::GlobalOverrides;
 use crate::connection::hook::{ConnectionHookBindings, ConnectionHooks};
 use crate::driver::form::FormValues;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use uuid::Uuid;
+use crate::values::ValueRef;
 
 /// Supported database types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -14,6 +19,7 @@ pub enum DbKind {
     MariaDB,
     MongoDB,
     Redis,
+    DynamoDB,
 }
 
 impl DbKind {
@@ -25,6 +31,7 @@ impl DbKind {
             DbKind::MariaDB => "MariaDB",
             DbKind::MongoDB => "MongoDB",
             DbKind::Redis => "Redis",
+            DbKind::DynamoDB => "DynamoDB",
         }
     }
 }
@@ -177,6 +184,15 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    DynamoDB {
+        region: String,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        endpoint: Option<String>,
+        #[serde(default)]
+        table: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -197,6 +213,7 @@ impl DbConfig {
             DbConfig::MySQL { .. } => DbKind::MySQL,
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
             DbConfig::Redis { .. } => DbKind::Redis,
+            DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -263,13 +280,22 @@ impl DbConfig {
         }
     }
 
+    pub fn default_dynamodb() -> Self {
+        DbConfig::DynamoDB {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+            table: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
         }
     }
 
@@ -296,7 +322,9 @@ impl DbConfig {
                 ssh_tunnel_profile_id,
                 ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => false,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                false
+            }
         }
     }
 
@@ -307,7 +335,7 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. } => Some((host, *port)),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
         }
     }
 
@@ -342,7 +370,7 @@ impl DbConfig {
                 *port = tunnel_port;
                 *use_uri = false;
             }
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
         }
     }
 
@@ -356,7 +384,9 @@ impl DbConfig {
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
-            DbConfig::SQLite { .. } | DbConfig::External { .. } => return None,
+            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+                return None;
+            }
         };
 
         if !*use_uri {
@@ -488,6 +518,19 @@ pub struct ConnectionProfile {
     /// Optional reference to a saved proxy profile for this connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_profile_id: Option<Uuid>,
+
+    /// Optional reference to a global auth profile for SSO/cloud authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_profile_id: Option<Uuid>,
+
+    /// Dynamic value references that override driver config fields at connect time.
+    /// Keys are driver field names (e.g., "host", "password"), values are ValueRef.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub value_refs: HashMap<String, ValueRef>,
+
+    /// Unified access method (replaces proxy_profile_id + ssh_tunnel_profile_id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_kind: Option<AccessKind>,
 }
 
 impl ConnectionProfile {
@@ -505,6 +548,9 @@ impl ConnectionProfile {
             hooks: None,
             hook_bindings: None,
             proxy_profile_id: None,
+            auth_profile_id: None,
+            value_refs: HashMap::new(),
+            access_kind: None,
         }
     }
 
@@ -525,6 +571,9 @@ impl ConnectionProfile {
             hooks: None,
             hook_bindings: None,
             proxy_profile_id: None,
+            auth_profile_id: None,
+            value_refs: HashMap::new(),
+            access_kind: None,
         }
     }
 
@@ -547,6 +596,9 @@ impl ConnectionProfile {
             hooks: None,
             hook_bindings: None,
             proxy_profile_id: None,
+            auth_profile_id: None,
+            value_refs: HashMap::new(),
+            access_kind: None,
         }
     }
 
@@ -592,6 +644,7 @@ impl ConnectionProfile {
             DbKind::MariaDB => "mariadb",
             DbKind::MongoDB => "mongodb",
             DbKind::Redis => "redis",
+            DbKind::DynamoDB => "dynamodb",
         }
     }
 
@@ -602,6 +655,44 @@ impl ConnectionProfile {
     pub fn ssh_secret_ref(&self) -> String {
         crate::storage::secrets::ssh_secret_ref(&self.id)
     }
+
+    /// Returns true if this profile uses the new connect pipeline
+    /// (has auth profile, value refs, or unified access method).
+    pub fn uses_pipeline(&self) -> bool {
+        self.auth_profile_id.is_some() || !self.value_refs.is_empty() || self.access_kind.is_some()
+    }
+
+    /// Derives an AccessKind from legacy fields (proxy_profile_id, ssh_tunnel_profile_id)
+    /// for backward compatibility.
+    pub fn legacy_access_kind(&self) -> AccessKind {
+        if let Some(proxy_id) = self.proxy_profile_id {
+            return AccessKind::Proxy {
+                proxy_profile_id: proxy_id,
+            };
+        }
+
+        match &self.config {
+            DbConfig::Postgres {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::MySQL {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            } => AccessKind::Ssh {
+                ssh_tunnel_profile_id: *id,
+            },
+            _ => AccessKind::Direct,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -610,6 +701,7 @@ mod tests {
     use crate::RefreshPolicySetting;
     use crate::config::app::GlobalOverrides;
     use crate::driver::form::FormValues;
+    use crate::values::ValueRef;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
@@ -640,6 +732,10 @@ mod tests {
         assert!(profile.driver_id.is_none());
         assert!(profile.hooks.is_none());
         assert!(profile.hook_bindings.is_none());
+        assert!(profile.auth_profile_id.is_none());
+        assert!(profile.value_refs.is_empty());
+        assert!(profile.access_kind.is_none());
+        assert!(!profile.uses_pipeline());
     }
 
     #[test]
@@ -775,6 +871,57 @@ mod tests {
     }
 
     #[test]
+    fn dynamodb_config_kind_and_driver_id_fallback_work() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000099",
+            "name": "legacy-dynamodb",
+            "config": {
+                "DynamoDB": {
+                    "region": "us-east-1"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile =
+            serde_json::from_str(json).expect("dynamodb profile should deserialize");
+
+        assert_eq!(profile.kind(), DbKind::DynamoDB);
+        assert_eq!(profile.driver_id(), "dynamodb");
+    }
+
+    #[test]
+    fn dynamodb_profile_serde_roundtrip_preserves_optional_fields() {
+        let profile = ConnectionProfile::new(
+            "dynamo",
+            DbConfig::DynamoDB {
+                region: "us-west-2".to_string(),
+                profile: Some("dev".to_string()),
+                endpoint: Some("http://localhost:8000".to_string()),
+                table: Some("users".to_string()),
+            },
+        );
+
+        let json = serde_json::to_string(&profile).expect("serialize should succeed");
+        let restored: ConnectionProfile =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        match restored.config {
+            DbConfig::DynamoDB {
+                region,
+                profile,
+                endpoint,
+                table,
+            } => {
+                assert_eq!(region, "us-west-2");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:8000"));
+                assert_eq!(table.as_deref(), Some("users"));
+            }
+            _ => panic!("expected DynamoDB config variant"),
+        }
+    }
+
+    #[test]
     fn ssl_mode_defaults_to_prefer() {
         assert_eq!(SslMode::default(), SslMode::Prefer);
     }
@@ -823,5 +970,24 @@ mod tests {
                 uri: Some(ref uri), ..
             } if uri == "redis://localhost:6379/0"
         ));
+    }
+
+    #[test]
+    fn uses_pipeline_returns_true_with_auth_profile() {
+        let mut profile = sqlite_profile();
+        assert!(!profile.uses_pipeline());
+
+        profile.auth_profile_id = Some(Uuid::new_v4());
+        assert!(profile.uses_pipeline());
+    }
+
+    #[test]
+    fn uses_pipeline_returns_true_with_value_refs() {
+        let mut profile = sqlite_profile();
+
+        profile
+            .value_refs
+            .insert("password".to_string(), ValueRef::env("DB_PASS"));
+        assert!(profile.uses_pipeline());
     }
 }

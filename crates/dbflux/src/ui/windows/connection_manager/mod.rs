@@ -1,29 +1,32 @@
+mod access_tab;
 mod form;
 mod hooks_tab;
 mod navigation;
-mod proxy;
 mod render;
 mod render_driver_select;
-mod render_proxy;
-mod render_ssh;
 mod render_tabs;
-mod ssh;
 
-use crate::app::AppState;
+use crate::app::{AppState, AuthProfileCreated};
 use crate::keymap::KeymapStack;
 use crate::ui::components::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::{self, FormRendererState};
+use crate::ui::components::value_source_selector::ValueSourceSelector;
+use crate::ui::overlays::sso_wizard::SsoWizard;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
-use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::access::AccessKind;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ConnectionHookBindings, DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind,
-    GlobalOverrides,
+    AuthProfile, AuthSessionState, ConnectionHookBindings, DbDriver, DbKind, DriverFormDef,
+    FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod, SshTunnelProfile, ValueRef,
 };
 use gpui::*;
+use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
+
+const AUTH_PROFILE_NONE_INDEX: usize = 0;
 
 /// Focus state for driver selection screen
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -48,6 +51,7 @@ impl DriverFocus {
 enum FormFocus {
     // Main tab fields
     Name,
+    AccessMethod,
     UseUri,
     Host,
     Port,
@@ -77,6 +81,9 @@ enum FormFocus {
     ProxySelector,
     ProxyClear,
     ProxyEditInSettings,
+    SsmInstanceId,
+    SsmRegion,
+    SsmRemotePort,
     // Settings tab fields
     SettingsRefreshPolicy,
     SettingsRefreshInterval,
@@ -102,9 +109,17 @@ enum View {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ActiveTab {
     Main,
+    Access,
     Settings,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum AccessTabMode {
+    #[default]
+    Direct,
     Ssh,
     Proxy,
+    ManagedSsm,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -139,6 +154,10 @@ pub struct ConnectionManagerWindow {
     driver_inputs: HashMap<String, Entity<InputState>>,
     /// Password is separate due to visibility toggle and save checkbox UI.
     input_password: Entity<InputState>,
+    host_value_source_selector: Entity<ValueSourceSelector>,
+    database_value_source_selector: Entity<ValueSourceSelector>,
+    user_value_source_selector: Entity<ValueSourceSelector>,
+    password_value_source_selector: Entity<ValueSourceSelector>,
 
     selected_proxy_id: Option<Uuid>,
     proxy_dropdown: Entity<Dropdown>,
@@ -190,6 +209,34 @@ pub struct ConnectionManagerWindow {
 
     syncing_uri: bool,
 
+    // Auth profile dropdown (T-7.1)
+    auth_profile_dropdown: Entity<Dropdown>,
+    auth_profile_uuids: Vec<Uuid>,
+    selected_auth_profile_id: Option<Uuid>,
+    pending_auth_profile_selection: Option<Option<Uuid>>,
+    auth_profile_session_states: HashMap<Uuid, AuthSessionState>,
+    auth_profile_login_in_progress: bool,
+    auth_profile_action_message: Option<String>,
+    pending_wizard_auth_profile_selection: bool,
+    known_auth_profile_ids: HashSet<Uuid>,
+
+    // Access method dropdown (T-7.2)
+    access_method_dropdown: Entity<Dropdown>,
+    access_kind: Option<AccessKind>,
+    access_tab_mode: AccessTabMode,
+
+    // SSM inline fields (T-7.3)
+    input_ssm_instance_id: Entity<InputState>,
+    ssm_instance_id_value_source_selector: Entity<ValueSourceSelector>,
+    input_ssm_region: Entity<InputState>,
+    ssm_region_value_source_selector: Entity<ValueSourceSelector>,
+    input_ssm_remote_port: Entity<InputState>,
+    ssm_remote_port_value_source_selector: Entity<ValueSourceSelector>,
+    ssm_auth_profile_dropdown: Entity<Dropdown>,
+    ssm_auth_profile_uuids: Vec<Uuid>,
+    selected_ssm_auth_profile_id: Option<Uuid>,
+    pending_ssm_auth_profile_selection: Option<Option<Uuid>>,
+
     // Settings tab state
     conn_override_refresh_policy: bool,
     conn_override_refresh_interval: bool,
@@ -231,6 +278,14 @@ impl ConnectionManagerWindow {
                 .placeholder("Password")
                 .masked(true)
         });
+        let host_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-host", window, cx));
+        let database_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-database", window, cx));
+        let user_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-user", window, cx));
+        let password_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-password", window, cx));
 
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
@@ -257,6 +312,29 @@ impl ConnectionManagerWindow {
             cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
         let proxy_dropdown =
             cx.new(|_cx| Dropdown::new("proxy-dropdown").placeholder("Select Proxy"));
+
+        let auth_profile_dropdown =
+            cx.new(|_cx| Dropdown::new("auth-profile-dropdown").placeholder("None"));
+        let access_method_dropdown =
+            cx.new(|_cx| Dropdown::new("access-method-dropdown").placeholder("Direct"));
+
+        let input_ssm_instance_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder("i-0123456789abcdef0"));
+        let ssm_instance_id_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-ssm-instance-id", window, cx));
+        let input_ssm_region = cx.new(|cx| InputState::new(window, cx).placeholder("us-east-1"));
+        let ssm_region_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-ssm-region", window, cx));
+        let input_ssm_remote_port = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("5432")
+                .default_value("5432")
+        });
+        let ssm_remote_port_value_source_selector =
+            cx.new(|cx| ValueSourceSelector::new("cm-ssm-remote-port", window, cx));
+        let ssm_auth_profile_dropdown = cx.new(|_cx| {
+            Dropdown::new("ssm-auth-profile-dropdown").placeholder("Use Connection Auth Profile")
+        });
 
         let conn_refresh_policy_dropdown =
             cx.new(|_cx| Dropdown::new("conn-refresh-policy").placeholder("Use Driver Default"));
@@ -302,6 +380,39 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let auth_profile_dropdown_sub = cx.subscribe(
+            &auth_profile_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_auth_profile_dropdown_selection(event, cx);
+            },
+        );
+
+        let access_method_dropdown_sub = cx.subscribe(
+            &access_method_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_access_method_dropdown_selection(event, cx);
+            },
+        );
+
+        let ssm_auth_profile_dropdown_sub = cx.subscribe(
+            &ssm_auth_profile_dropdown,
+            |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                this.handle_ssm_auth_profile_dropdown_selection(event, cx);
+            },
+        );
+
+        let app_state_changed_sub = cx.subscribe(
+            &app_state,
+            |this, _, _: &crate::app::AppStateChanged, cx| {
+                this.handle_app_state_changed(cx);
+            },
+        );
+
+        let auth_profile_created_sub =
+            cx.subscribe(&app_state, |this, _, event: &AuthProfileCreated, cx| {
+                this.handle_auth_profile_created(event.profile_id, cx);
+            });
+
         // Helper to create input subscriptions for handling Enter/Blur
         fn subscribe_input(
             cx: &mut Context<ConnectionManagerWindow>,
@@ -317,7 +428,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode(window, cx);
+                        this.exit_edit_mode_on_blur(cx);
                     }
                     _ => {}
                 },
@@ -333,7 +444,7 @@ impl ConnectionManagerWindow {
                     this.focus_down(cx);
                 }
                 InputEvent::Blur => {
-                    this.exit_edit_mode(window, cx);
+                    this.exit_edit_mode_on_blur(cx);
                 }
                 InputEvent::Change => {
                     this.handle_field_change("password", window, cx);
@@ -345,6 +456,11 @@ impl ConnectionManagerWindow {
         let subscriptions = vec![
             dropdown_subscription,
             proxy_dropdown_subscription,
+            auth_profile_dropdown_sub,
+            access_method_dropdown_sub,
+            ssm_auth_profile_dropdown_sub,
+            app_state_changed_sub,
+            auth_profile_created_sub,
             subscribe_input(cx, window, &input_name),
             password_change_sub,
             subscribe_input(cx, window, &input_ssh_host),
@@ -353,13 +469,16 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssh_key_path),
             subscribe_input(cx, window, &input_ssh_key_passphrase),
             subscribe_input(cx, window, &input_ssh_password),
+            subscribe_input(cx, window, &input_ssm_instance_id),
+            subscribe_input(cx, window, &input_ssm_region),
+            subscribe_input(cx, window, &input_ssm_remote_port),
         ];
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
 
         Self {
-            app_state,
+            app_state: app_state.clone(),
             view: View::DriverSelect,
             active_tab: ActiveTab::Main,
             available_drivers,
@@ -371,6 +490,10 @@ impl ConnectionManagerWindow {
             input_name,
             driver_inputs: HashMap::new(),
             input_password,
+            host_value_source_selector,
+            database_value_source_selector,
+            user_value_source_selector,
+            password_value_source_selector,
             selected_proxy_id: None,
             proxy_dropdown,
             proxy_uuids: Vec::new(),
@@ -408,6 +531,36 @@ impl ConnectionManagerWindow {
             _subscriptions: subscriptions,
             target_folder_id: None,
             syncing_uri: false,
+
+            auth_profile_dropdown,
+            auth_profile_uuids: Vec::new(),
+            selected_auth_profile_id: None,
+            pending_auth_profile_selection: None,
+            auth_profile_session_states: HashMap::new(),
+            auth_profile_login_in_progress: false,
+            auth_profile_action_message: None,
+            pending_wizard_auth_profile_selection: false,
+            known_auth_profile_ids: app_state
+                .read(cx)
+                .auth_profiles()
+                .iter()
+                .map(|profile| profile.id)
+                .collect(),
+
+            access_method_dropdown,
+            access_kind: None,
+            access_tab_mode: AccessTabMode::Direct,
+
+            input_ssm_instance_id,
+            ssm_instance_id_value_source_selector,
+            input_ssm_region,
+            ssm_region_value_source_selector,
+            input_ssm_remote_port,
+            ssm_remote_port_value_source_selector,
+            ssm_auth_profile_dropdown,
+            ssm_auth_profile_uuids: Vec::new(),
+            selected_ssm_auth_profile_id: None,
+            pending_ssm_auth_profile_selection: None,
 
             conn_override_refresh_policy: false,
             conn_override_refresh_interval: false,
@@ -483,7 +636,48 @@ impl ConnectionManagerWindow {
         );
 
         instance.selected_proxy_id = profile.proxy_profile_id;
+        instance.selected_auth_profile_id = profile.auth_profile_id;
+        instance.selected_ssm_auth_profile_id = None;
+        instance.access_kind = profile.access_kind.clone();
 
+        if let Some(AccessKind::Proxy { proxy_profile_id }) = &profile.access_kind {
+            instance.selected_proxy_id.get_or_insert(*proxy_profile_id);
+        }
+
+        if let Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id,
+        }) = &profile.access_kind
+        {
+            instance.selected_ssh_tunnel_id = Some(*ssh_tunnel_profile_id);
+        }
+
+        // Populate SSM fields if access kind is a managed aws-ssm access
+        if let Some(AccessKind::Managed { provider, params }) = &profile.access_kind
+            && provider == "aws-ssm"
+        {
+            let instance_id = params.get("instance_id").cloned().unwrap_or_default();
+            let region = params.get("region").cloned().unwrap_or_default();
+            let remote_port = params.get("remote_port").cloned().unwrap_or_default();
+            let auth_profile_id: Option<uuid::Uuid> =
+                params.get("auth_profile_id").and_then(|s| s.parse().ok());
+
+            instance.input_ssm_instance_id.update(cx, |state, cx| {
+                state.set_value(instance_id, window, cx);
+            });
+            instance.input_ssm_region.update(cx, |state, cx| {
+                state.set_value(region, window, cx);
+            });
+            instance.input_ssm_remote_port.update(cx, |state, cx| {
+                state.set_value(remote_port, window, cx);
+            });
+            instance.selected_ssm_auth_profile_id = auth_profile_id;
+            if instance.selected_auth_profile_id.is_none() {
+                instance.selected_auth_profile_id = auth_profile_id;
+            }
+        }
+
+        instance.populate_auth_profile_dropdown(cx);
+        instance.refresh_auth_profile_sessions(cx);
         if let Some(ssh) = profile.config.ssh_tunnel() {
             instance.ssh_enabled = true;
             instance.input_ssh_host.update(cx, |state, cx| {
@@ -529,6 +723,10 @@ impl ConnectionManagerWindow {
             }
         }
 
+        instance.load_value_source_selectors(profile, window, cx);
+        instance.sync_access_tab_mode_from_state();
+        instance.populate_access_method_dropdown(cx);
+
         instance
     }
 
@@ -545,6 +743,11 @@ impl ConnectionManagerWindow {
         self.test_status = TestStatus::None;
         self.test_error = None;
 
+        self.selected_auth_profile_id = None;
+        self.selected_ssm_auth_profile_id = None;
+        self.access_kind = None;
+        self.access_tab_mode = AccessTabMode::Direct;
+
         self.input_name.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
@@ -553,7 +756,12 @@ impl ConnectionManagerWindow {
             self.create_driver_inputs(driver.form_definition(), window, cx);
         }
 
+        self.reset_value_source_selectors(window, cx);
+
         self.load_settings_tab(None, None, None, window, cx);
+        self.populate_auth_profile_dropdown(cx);
+        self.refresh_auth_profile_sessions(cx);
+        self.populate_access_method_dropdown(cx);
 
         self.view = View::EditForm;
         self.edit_state = EditState::Navigating;
@@ -606,7 +814,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode(window, cx);
+                        this.exit_edit_mode_on_blur(cx);
                     }
                     InputEvent::Change => {
                         this.handle_field_change(&field_id, window, cx);
@@ -664,6 +872,226 @@ impl ConnectionManagerWindow {
         )
     }
 
+    fn reset_value_source_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.host_value_source_selector.update(cx, |selector, cx| {
+            let _ = selector.set_value_ref(None, window, cx);
+        });
+        self.ssm_instance_id_value_source_selector
+            .update(cx, |selector, cx| {
+                let _ = selector.set_value_ref(None, window, cx);
+            });
+        self.ssm_region_value_source_selector
+            .update(cx, |selector, cx| {
+                let _ = selector.set_value_ref(None, window, cx);
+            });
+        self.ssm_remote_port_value_source_selector
+            .update(cx, |selector, cx| {
+                let _ = selector.set_value_ref(None, window, cx);
+            });
+        self.database_value_source_selector
+            .update(cx, |selector, cx| {
+                let _ = selector.set_value_ref(None, window, cx);
+            });
+        self.user_value_source_selector.update(cx, |selector, cx| {
+            let _ = selector.set_value_ref(None, window, cx);
+        });
+        self.password_value_source_selector
+            .update(cx, |selector, cx| {
+                let _ = selector.set_value_ref(None, window, cx);
+            });
+    }
+
+    fn load_value_source_selectors(
+        &mut self,
+        profile: &dbflux_core::ConnectionProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssm_instance_id_value_source_selector
+            .update(cx, |selector, cx| {
+                let primary =
+                    selector.set_value_ref(profile.value_refs.get("ssm_instance_id"), window, cx);
+                if !primary.is_empty() {
+                    self.input_ssm_instance_id.update(cx, |state, cx| {
+                        state.set_value(primary.clone(), window, cx);
+                    });
+                }
+            });
+
+        self.ssm_region_value_source_selector
+            .update(cx, |selector, cx| {
+                let primary =
+                    selector.set_value_ref(profile.value_refs.get("ssm_region"), window, cx);
+                if !primary.is_empty() {
+                    self.input_ssm_region.update(cx, |state, cx| {
+                        state.set_value(primary.clone(), window, cx);
+                    });
+                }
+            });
+
+        self.ssm_remote_port_value_source_selector
+            .update(cx, |selector, cx| {
+                let primary =
+                    selector.set_value_ref(profile.value_refs.get("ssm_remote_port"), window, cx);
+                if !primary.is_empty() {
+                    self.input_ssm_remote_port.update(cx, |state, cx| {
+                        state.set_value(primary.clone(), window, cx);
+                    });
+                }
+            });
+
+        self.host_value_source_selector.update(cx, |selector, cx| {
+            let primary = selector.set_value_ref(profile.value_refs.get("host"), window, cx);
+            if !primary.is_empty()
+                && let Some(input) = self.driver_inputs.get("host")
+            {
+                input.update(cx, |state, cx| {
+                    state.set_value(primary.clone(), window, cx);
+                });
+            }
+        });
+
+        self.database_value_source_selector
+            .update(cx, |selector, cx| {
+                let primary =
+                    selector.set_value_ref(profile.value_refs.get("database"), window, cx);
+                if !primary.is_empty()
+                    && let Some(input) = self.driver_inputs.get("database")
+                {
+                    input.update(cx, |state, cx| {
+                        state.set_value(primary.clone(), window, cx);
+                    });
+                }
+            });
+
+        self.user_value_source_selector.update(cx, |selector, cx| {
+            let primary = selector.set_value_ref(profile.value_refs.get("user"), window, cx);
+            if !primary.is_empty()
+                && let Some(input) = self.driver_inputs.get("user")
+            {
+                input.update(cx, |state, cx| {
+                    state.set_value(primary.clone(), window, cx);
+                });
+            }
+        });
+
+        self.password_value_source_selector
+            .update(cx, |selector, cx| {
+                let primary =
+                    selector.set_value_ref(profile.value_refs.get("password"), window, cx);
+                if !primary.is_empty() {
+                    self.input_password.update(cx, |state, cx| {
+                        state.set_value(primary, window, cx);
+                    });
+                }
+            });
+
+        self.sync_fields_to_uri(window, cx);
+    }
+
+    pub(super) fn collect_value_refs(&self, cx: &App) -> HashMap<String, ValueRef> {
+        let mut refs = HashMap::new();
+
+        let ssm_instance_id = self.input_ssm_instance_id.read(cx).value().to_string();
+        if let Some(value_ref) = self
+            .ssm_instance_id_value_source_selector
+            .read(cx)
+            .value_ref(&ssm_instance_id, cx)
+        {
+            refs.insert("ssm_instance_id".to_string(), value_ref);
+        }
+
+        let ssm_region = self.input_ssm_region.read(cx).value().to_string();
+        if let Some(value_ref) = self
+            .ssm_region_value_source_selector
+            .read(cx)
+            .value_ref(&ssm_region, cx)
+        {
+            refs.insert("ssm_region".to_string(), value_ref);
+        }
+
+        let ssm_remote_port = self.input_ssm_remote_port.read(cx).value().to_string();
+        if let Some(value_ref) = self
+            .ssm_remote_port_value_source_selector
+            .read(cx)
+            .value_ref(&ssm_remote_port, cx)
+        {
+            refs.insert("ssm_remote_port".to_string(), value_ref);
+        }
+
+        let host_value = self
+            .driver_inputs
+            .get("host")
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        if let Some(value_ref) = self
+            .host_value_source_selector
+            .read(cx)
+            .value_ref(&host_value, cx)
+        {
+            refs.insert("host".to_string(), value_ref);
+        }
+
+        let database_value = self
+            .driver_inputs
+            .get("database")
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        if let Some(value_ref) = self
+            .database_value_source_selector
+            .read(cx)
+            .value_ref(&database_value, cx)
+        {
+            refs.insert("database".to_string(), value_ref);
+        }
+
+        let user_value = self
+            .driver_inputs
+            .get("user")
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        if let Some(value_ref) = self
+            .user_value_source_selector
+            .read(cx)
+            .value_ref(&user_value, cx)
+        {
+            refs.insert("user".to_string(), value_ref);
+        }
+
+        let password_value = self.input_password.read(cx).value().to_string();
+        if let Some(value_ref) = self
+            .password_value_source_selector
+            .read(cx)
+            .value_ref(&password_value, cx)
+        {
+            refs.insert("password".to_string(), value_ref);
+        }
+
+        refs
+    }
+
+    pub(super) fn has_dynamic_value_ref_for_field(&self, field_id: &str, cx: &App) -> bool {
+        match field_id {
+            "ssm_instance_id" => !self
+                .ssm_instance_id_value_source_selector
+                .read(cx)
+                .is_literal(cx),
+            "ssm_region" => !self
+                .ssm_region_value_source_selector
+                .read(cx)
+                .is_literal(cx),
+            "ssm_remote_port" => !self
+                .ssm_remote_port_value_source_selector
+                .read(cx)
+                .is_literal(cx),
+            "host" => !self.host_value_source_selector.read(cx).is_literal(cx),
+            "database" => !self.database_value_source_selector.read(cx).is_literal(cx),
+            "user" => !self.user_value_source_selector.read(cx).is_literal(cx),
+            "password" => !self.password_value_source_selector.read(cx).is_literal(cx),
+            _ => false,
+        }
+    }
+
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
         self.view = View::DriverSelect;
@@ -702,6 +1130,7 @@ impl ConnectionManagerWindow {
     }
 
     /// Returns true if this driver supports SSH tunneling.
+    #[allow(dead_code)]
     fn supports_ssh(&self) -> bool {
         let Some(driver) = &self.selected_driver else {
             return false;
@@ -709,6 +1138,7 @@ impl ConnectionManagerWindow {
         driver.form_definition().supports_ssh()
     }
 
+    #[allow(dead_code)]
     fn supports_proxy(&self) -> bool {
         !self.uses_file_form()
     }
@@ -781,6 +1211,9 @@ impl ConnectionManagerWindow {
             SshKeyPath => Some("ssh_key_path"),
             SshPassphrase => Some("ssh_passphrase"),
             SshPassword => Some("ssh_password"),
+            SsmInstanceId => Some("ssm_instance_id"),
+            SsmRegion => Some("ssm_region"),
+            SsmRemotePort => Some("ssm_remote_port"),
             _ => None,
         }
     }
@@ -1262,6 +1695,25 @@ impl ConnectionManagerWindow {
             return;
         };
 
+        let has_dynamic_refs = self.has_dynamic_value_ref_for_field("host", cx)
+            || self.has_dynamic_value_ref_for_field("database", cx)
+            || self.has_dynamic_value_ref_for_field("user", cx)
+            || self.has_dynamic_value_ref_for_field("password", cx);
+
+        if has_dynamic_refs {
+            if let Some(uri_input) = self.driver_inputs.get("uri") {
+                let current = uri_input.read(cx).value().to_string();
+                if !current.is_empty() {
+                    self.syncing_uri = true;
+                    uri_input.update(cx, |state, cx| {
+                        state.set_value("", window, cx);
+                    });
+                    self.syncing_uri = false;
+                }
+            }
+            return;
+        }
+
         let form = driver.form_definition();
         let values = self.collect_form_values(form, cx);
         let password = self.input_password.read(cx).value().to_string();
@@ -1314,6 +1766,907 @@ impl ConnectionManagerWindow {
         }
 
         self.syncing_uri = false;
+    }
+
+    // -----------------------------------------------------------------
+    // Auth profile dropdown (T-7.1)
+    // -----------------------------------------------------------------
+
+    /// Populate the auth profile dropdown from the current list of saved profiles.
+    fn populate_auth_profile_dropdown(&mut self, cx: &mut Context<Self>) {
+        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
+
+        let mut auth_items = vec![crate::ui::components::dropdown::DropdownItem::with_value(
+            "None", "",
+        )];
+        let mut ssm_items = vec![crate::ui::components::dropdown::DropdownItem::with_value(
+            "Use Connection Auth Profile",
+            "",
+        )];
+
+        self.auth_profile_uuids.clear();
+        self.ssm_auth_profile_uuids.clear();
+
+        for profile in &profiles {
+            if !profile.enabled {
+                continue;
+            }
+            let session_status = match self.auth_profile_session_states.get(&profile.id) {
+                Some(AuthSessionState::Valid { .. }) => "valid",
+                Some(AuthSessionState::Expired) => "expired",
+                Some(AuthSessionState::LoginRequired) => "login required",
+                None => "checking",
+            };
+            let label = format!(
+                "{} — {} [{}]",
+                profile.provider_id, profile.name, session_status
+            );
+            auth_items.push(crate::ui::components::dropdown::DropdownItem::with_value(
+                label,
+                profile.id.to_string(),
+            ));
+            let ssm_label = format!("{} [{}]", profile.name, session_status);
+            ssm_items.push(crate::ui::components::dropdown::DropdownItem::with_value(
+                ssm_label,
+                profile.id.to_string(),
+            ));
+            self.auth_profile_uuids.push(profile.id);
+            self.ssm_auth_profile_uuids.push(profile.id);
+        }
+
+        auth_items.push(crate::ui::components::dropdown::DropdownItem::with_value(
+            "New Auth Profile...",
+            "__new_auth_profile__",
+        ));
+
+        ssm_items.push(crate::ui::components::dropdown::DropdownItem::with_value(
+            "New Auth Profile...",
+            "__new_auth_profile__",
+        ));
+
+        let selected_index = self
+            .selected_auth_profile_id
+            .and_then(|id| {
+                self.auth_profile_uuids
+                    .iter()
+                    .position(|uid| *uid == id)
+                    .map(|pos| pos + 1)
+            })
+            .unwrap_or(0);
+
+        self.auth_profile_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(auth_items, cx);
+            dropdown.set_selected_index(Some(selected_index), cx);
+        });
+
+        let ssm_selected_index = self
+            .selected_ssm_auth_profile_id
+            .and_then(|id| {
+                self.ssm_auth_profile_uuids
+                    .iter()
+                    .position(|uid| *uid == id)
+                    .map(|pos| pos + 1)
+            })
+            .unwrap_or(0);
+
+        self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(ssm_items, cx);
+            dropdown.set_selected_index(Some(ssm_selected_index), cx);
+        });
+    }
+
+    fn selected_auth_profile(&self, cx: &App) -> Option<AuthProfile> {
+        let selected_id = self.selected_auth_profile_id?;
+
+        self.app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .find(|profile| profile.id == selected_id && profile.enabled)
+            .cloned()
+    }
+
+    fn refresh_auth_profile_sessions(&mut self, cx: &mut Context<Self>) {
+        let profiles = self
+            .app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .filter(|profile| profile.enabled)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let this = cx.entity().clone();
+        cx.spawn(async move |_entity, cx| {
+            for profile in profiles {
+                let provider = match cx.update(|cx| {
+                    this.read(cx)
+                        .app_state
+                        .read(cx)
+                        .auth_provider_by_id(&profile.provider_id)
+                }) {
+                    Ok(Some(provider)) => provider,
+                    Ok(None) => continue,
+                    Err(_) => continue,
+                };
+
+                let status = provider
+                    .validate_session(&profile)
+                    .await
+                    .unwrap_or(AuthSessionState::LoginRequired);
+
+                if cx
+                    .update(|cx| {
+                        this.update(cx, |this, cx| {
+                            this.auth_profile_session_states.insert(profile.id, status);
+                            this.populate_auth_profile_dropdown(cx);
+                        });
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn open_auth_profiles_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings_section(
+            crate::ui::windows::settings::SettingsSectionId::AuthProfiles,
+            cx,
+        );
+    }
+
+    fn open_sso_wizard(&mut self, cx: &mut Context<Self>) {
+        self.pending_wizard_auth_profile_selection = true;
+        self.known_auth_profile_ids = self
+            .app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .map(|profile| profile.id)
+            .collect();
+
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(720.0), px(620.0)), cx);
+
+        let _ = cx.open_window(
+            WindowOptions {
+                app_id: Some("dbflux".into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("AWS SSO Wizard".into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                kind: WindowKind::Floating,
+                focus: true,
+                ..Default::default()
+            },
+            move |window, cx| {
+                let wizard = cx.new(|cx| {
+                    let mut wizard = SsoWizard::new(app_state.clone(), window, cx);
+                    wizard.open(window, cx);
+                    wizard
+                });
+                cx.new(|cx| Root::new(wizard, window, cx))
+            },
+        );
+    }
+
+    fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
+        let current_profiles = self.app_state.read(cx).auth_profiles().to_vec();
+        let current_ids = current_profiles
+            .iter()
+            .map(|profile| profile.id)
+            .collect::<HashSet<_>>();
+
+        if self.pending_wizard_auth_profile_selection {
+            let newest = current_profiles
+                .iter()
+                .rev()
+                .find(|profile| !self.known_auth_profile_ids.contains(&profile.id))
+                .map(|profile| profile.id);
+
+            if let Some(profile_id) = newest {
+                self.selected_auth_profile_id = Some(profile_id);
+
+                if self.selected_ssm_auth_profile_id.is_none() {
+                    self.selected_ssm_auth_profile_id = Some(profile_id);
+                }
+
+                self.auth_profile_action_message =
+                    Some("Selected profile created by AWS SSO wizard.".to_string());
+            }
+
+            self.pending_wizard_auth_profile_selection = false;
+        }
+
+        self.known_auth_profile_ids = current_ids;
+        self.populate_auth_profile_dropdown(cx);
+        self.refresh_auth_profile_sessions(cx);
+        cx.notify();
+    }
+
+    fn handle_auth_profile_created(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        self.selected_auth_profile_id = Some(profile_id);
+
+        if self.selected_ssm_auth_profile_id.is_none() {
+            self.selected_ssm_auth_profile_id = Some(profile_id);
+        }
+
+        self.pending_wizard_auth_profile_selection = false;
+        self.auth_profile_action_message = Some("Selected profile created by wizard.".to_string());
+
+        self.populate_auth_profile_dropdown(cx);
+        self.refresh_auth_profile_sessions(cx);
+        cx.notify();
+    }
+
+    fn refresh_auth_profile_statuses(&mut self, cx: &mut Context<Self>) {
+        self.auth_profile_action_message = Some("Refreshing auth profile sessions...".to_string());
+        self.refresh_auth_profile_sessions(cx);
+        cx.notify();
+    }
+
+    fn login_selected_auth_profile(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_auth_profile(cx) else {
+            self.auth_profile_action_message =
+                Some("Select an auth profile before logging in.".to_string());
+            cx.notify();
+            return;
+        };
+
+        if profile.provider_id != "aws-sso" {
+            self.auth_profile_action_message =
+                Some("Login is available only for AWS SSO profiles.".to_string());
+            cx.notify();
+            return;
+        }
+
+        #[cfg(feature = "aws")]
+        {
+            let profile_name = profile
+                .fields
+                .get("profile_name")
+                .cloned()
+                .unwrap_or_else(|| profile.name.clone());
+            let region = profile.fields.get("region").cloned().unwrap_or_default();
+            let start_url = profile
+                .fields
+                .get("sso_start_url")
+                .cloned()
+                .unwrap_or_default();
+            let account_id = profile
+                .fields
+                .get("sso_account_id")
+                .cloned()
+                .unwrap_or_default();
+            let role_name = profile
+                .fields
+                .get("sso_role_name")
+                .cloned()
+                .unwrap_or_default();
+
+            if region.is_empty() || start_url.is_empty() {
+                self.auth_profile_action_message =
+                    Some("Selected AWS SSO profile is missing region or start URL.".to_string());
+                cx.notify();
+                return;
+            }
+
+            self.auth_profile_login_in_progress = true;
+            self.auth_profile_action_message =
+                Some(format!("Starting AWS SSO login for '{}'...", profile_name));
+            cx.notify();
+
+            let this = cx.entity().clone();
+            let task = cx.background_executor().spawn(async move {
+                dbflux_aws::login_sso_blocking(
+                    profile.id,
+                    &profile_name,
+                    &start_url,
+                    &region,
+                    &account_id,
+                    &role_name,
+                )
+            });
+
+            cx.spawn(async move |_entity, cx| {
+                let result = task.await;
+
+                if cx
+                    .update(|cx| {
+                        this.update(cx, |this, cx| {
+                            this.auth_profile_login_in_progress = false;
+
+                            this.auth_profile_action_message = Some(match result {
+                                Ok(_) => "AWS SSO login completed.".to_string(),
+                                Err(error) => format!("AWS SSO login failed: {}", error),
+                            });
+
+                            this.refresh_auth_profile_sessions(cx);
+                        });
+                    })
+                    .is_err()
+                {
+                    // Window may have closed before async completion.
+                }
+            })
+            .detach();
+        }
+
+        #[cfg(not(feature = "aws"))]
+        {
+            self.auth_profile_action_message =
+                Some("AWS support is disabled in this build.".to_string());
+            cx.notify();
+        }
+    }
+
+    fn selected_auth_profile_status_text(&self, cx: &App) -> Option<String> {
+        let profile = self.selected_auth_profile(cx)?;
+
+        let status = self.auth_profile_session_states.get(&profile.id)?;
+        let text = match status {
+            AuthSessionState::Valid { expires_at } => {
+                if let Some(expires_at) = expires_at {
+                    return Some(format!("Session status: valid (expires at {})", expires_at));
+                }
+
+                "Session status: valid"
+            }
+            AuthSessionState::Expired => "Session status: expired",
+            AuthSessionState::LoginRequired => "Session status: login required",
+        };
+
+        Some(text.to_string())
+    }
+
+    fn selected_auth_profile_is_valid(&self, cx: &App) -> bool {
+        let Some(profile) = self.selected_auth_profile(cx) else {
+            return false;
+        };
+
+        matches!(
+            self.auth_profile_session_states.get(&profile.id),
+            Some(AuthSessionState::Valid { .. })
+        )
+    }
+
+    fn selected_auth_profile_needs_login(&self, cx: &App) -> bool {
+        let Some(profile) = self.selected_auth_profile(cx) else {
+            return false;
+        };
+
+        if profile.provider_id != "aws-sso" {
+            return false;
+        }
+
+        matches!(
+            self.auth_profile_session_states.get(&profile.id),
+            Some(AuthSessionState::Expired) | Some(AuthSessionState::LoginRequired)
+        )
+    }
+
+    fn handle_auth_profile_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        if event.index == AUTH_PROFILE_NONE_INDEX {
+            self.pending_auth_profile_selection = Some(None);
+        } else if event.item.value.as_ref() == "__new_auth_profile__" {
+            self.open_sso_wizard(cx);
+
+            let selected_index = self
+                .selected_auth_profile_id
+                .and_then(|id| {
+                    self.auth_profile_uuids
+                        .iter()
+                        .position(|uid| *uid == id)
+                        .map(|pos| pos + 1)
+                })
+                .unwrap_or(AUTH_PROFILE_NONE_INDEX);
+
+            self.auth_profile_dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_selected_index(Some(selected_index), cx);
+            });
+        } else {
+            let uuid_index = event.index - 1;
+            if let Some(&id) = self.auth_profile_uuids.get(uuid_index) {
+                self.pending_auth_profile_selection = Some(Some(id));
+            }
+        }
+        cx.notify();
+    }
+
+    fn apply_pending_auth_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(selection) = self.pending_auth_profile_selection.take() {
+            self.selected_auth_profile_id = selection;
+            self.selected_ssm_auth_profile_id = selection;
+
+            self.sync_dynamodb_fields_from_auth_profile(window, cx);
+        }
+    }
+
+    fn sync_dynamodb_fields_from_auth_profile(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_driver_id() != Some("dynamodb") {
+            return;
+        }
+
+        let Some(auth_profile_id) = self.selected_auth_profile_id else {
+            return;
+        };
+
+        let selected_profile = self
+            .app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .find(|profile| profile.id == auth_profile_id)
+            .cloned();
+
+        let Some(profile) = selected_profile else {
+            return;
+        };
+
+        let profile_name = profile
+            .fields
+            .get("profile_name")
+            .cloned()
+            .unwrap_or_else(|| profile.name.clone());
+
+        if let Some(input) = self.driver_inputs.get("profile").cloned() {
+            input.update(cx, |state, cx| {
+                state.set_value(profile_name, window, cx);
+            });
+        }
+
+        if let Some(region) = profile.fields.get("region").cloned()
+            && let Some(input) = self.driver_inputs.get("region").cloned()
+        {
+            input.update(cx, |state, cx| {
+                state.set_value(region, window, cx);
+            });
+        }
+    }
+
+    fn handle_ssm_auth_profile_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        if event.index == 0 {
+            self.pending_ssm_auth_profile_selection = Some(None);
+        } else if event.item.value.as_ref() == "__new_auth_profile__" {
+            self.open_sso_wizard(cx);
+
+            let selected_index = self
+                .selected_ssm_auth_profile_id
+                .and_then(|id| {
+                    self.ssm_auth_profile_uuids
+                        .iter()
+                        .position(|uid| *uid == id)
+                        .map(|pos| pos + 1)
+                })
+                .unwrap_or(0);
+
+            self.ssm_auth_profile_dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_selected_index(Some(selected_index), cx);
+            });
+        } else {
+            let uuid_index = event.index - 1;
+            if let Some(&id) = self.ssm_auth_profile_uuids.get(uuid_index) {
+                self.pending_ssm_auth_profile_selection = Some(Some(id));
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn apply_pending_ssm_auth_profile(&mut self) {
+        if let Some(selection) = self.pending_ssm_auth_profile_selection.take() {
+            self.selected_ssm_auth_profile_id = selection;
+        }
+    }
+
+    pub(super) fn handle_proxy_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(uuid) = self.proxy_uuids.get(event.index).copied() {
+            self.pending_proxy_selection = Some(uuid);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn apply_proxy(
+        &mut self,
+        proxy: &dbflux_core::ProxyProfile,
+        _cx: &mut Context<Self>,
+    ) {
+        self.selected_proxy_id = Some(proxy.id);
+    }
+
+    pub(super) fn clear_proxy_selection(&mut self, cx: &mut Context<Self>) {
+        self.selected_proxy_id = None;
+        cx.notify();
+    }
+
+    pub(super) fn handle_ssh_tunnel_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(uuid) = self.ssh_tunnel_uuids.get(event.index).copied() {
+            self.pending_ssh_tunnel_selection = Some(uuid);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn apply_ssh_tunnel(
+        &mut self,
+        tunnel: &SshTunnelProfile,
+        secret: Option<SecretString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_ssh_tunnel_id = Some(tunnel.id);
+        self.ssh_enabled = true;
+
+        self.input_ssh_host.update(cx, |state, cx| {
+            state.set_value(&tunnel.config.host, window, cx);
+        });
+        self.input_ssh_port.update(cx, |state, cx| {
+            state.set_value(tunnel.config.port.to_string(), window, cx);
+        });
+        self.input_ssh_user.update(cx, |state, cx| {
+            state.set_value(&tunnel.config.user, window, cx);
+        });
+
+        match &tunnel.config.auth_method {
+            SshAuthMethod::PrivateKey { key_path } => {
+                self.ssh_auth_method = SshAuthSelection::PrivateKey;
+                if let Some(path) = key_path {
+                    self.input_ssh_key_path.update(cx, |state, cx| {
+                        state.set_value(path.to_string_lossy().to_string(), window, cx);
+                    });
+                }
+                if let Some(ref passphrase) = secret {
+                    let passphrase = passphrase.expose_secret().to_string();
+                    self.input_ssh_key_passphrase.update(cx, |state, cx| {
+                        state.set_value(passphrase.clone(), window, cx);
+                    });
+                }
+            }
+            SshAuthMethod::Password => {
+                self.ssh_auth_method = SshAuthSelection::Password;
+                if let Some(ref password) = secret {
+                    let password = password.expose_secret().to_string();
+                    self.input_ssh_password.update(cx, |state, cx| {
+                        state.set_value(password.clone(), window, cx);
+                    });
+                }
+            }
+        }
+
+        self.form_save_ssh_secret = tunnel.save_secret && secret.is_some();
+        self.ssh_test_status = TestStatus::None;
+        self.ssh_test_error = None;
+        cx.notify();
+    }
+
+    pub(super) fn clear_ssh_tunnel_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_ssh_tunnel_id = None;
+
+        self.input_ssh_host.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.input_ssh_port.update(cx, |state, cx| {
+            state.set_value("22", window, cx);
+        });
+        self.input_ssh_user.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.input_ssh_key_path.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.input_ssh_key_passphrase.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.input_ssh_password.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+
+        self.ssh_auth_method = SshAuthSelection::PrivateKey;
+        self.form_save_ssh_secret = true;
+        self.ssh_test_status = TestStatus::None;
+        self.ssh_test_error = None;
+        cx.notify();
+    }
+
+    pub(super) fn save_current_ssh_as_tunnel(&mut self, cx: &mut Context<Self>) {
+        let Some(config) = self.build_ssh_config(cx) else {
+            return;
+        };
+
+        let name = format!("{}@{}", config.user, config.host);
+        let secret = self.get_ssh_secret(cx);
+
+        let tunnel = SshTunnelProfile {
+            id: Uuid::new_v4(),
+            name,
+            config,
+            save_secret: self.form_save_ssh_secret,
+        };
+
+        self.app_state.update(cx, |state, cx| {
+            if tunnel.save_secret
+                && let Some(ref secret) = secret
+            {
+                state.save_ssh_tunnel_secret(&tunnel, &SecretString::from(secret.clone()));
+            }
+            state.add_ssh_tunnel(tunnel.clone());
+            cx.emit(crate::app::AppStateChanged);
+        });
+
+        self.selected_ssh_tunnel_id = Some(tunnel.id);
+        cx.notify();
+    }
+
+    pub(super) fn test_ssh_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ssh_enabled {
+            return;
+        }
+
+        self.ssh_test_status = TestStatus::Testing;
+        self.ssh_test_error = None;
+        cx.notify();
+
+        let Some(ssh_config) = self.build_ssh_config(cx) else {
+            self.ssh_test_status = TestStatus::Failed;
+            self.ssh_test_error = Some("SSH configuration incomplete".to_string());
+            cx.notify();
+            return;
+        };
+
+        let ssh_secret = self.get_ssh_secret(cx);
+
+        let this = cx.entity().clone();
+
+        let task = cx.background_executor().spawn(async move {
+            match dbflux_ssh::establish_session(&ssh_config, ssh_secret.as_deref()) {
+                Ok(_session) => Ok(()),
+                Err(e) => Err(format!("{:?}", e)),
+            }
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    match result {
+                        Ok(()) => {
+                            this.ssh_test_status = TestStatus::Success;
+                            this.ssh_test_error = None;
+                        }
+                        Err(e) => {
+                            this.ssh_test_status = TestStatus::Failed;
+                            this.ssh_test_error = Some(e);
+                        }
+                    }
+                    cx.notify();
+                });
+            }) {
+                log::warn!("Failed to apply SSH test result to UI state: {:?}", error);
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().clone();
+
+        let start_dir = dirs::home_dir().map(|h| h.join(".ssh")).unwrap_or_default();
+
+        let task = cx.background_executor().spawn(async move {
+            let dialog = rfd::FileDialog::new()
+                .set_title("Select SSH Private Key")
+                .set_directory(&start_dir);
+
+            dialog.pick_file()
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let path = task.await;
+
+            if let Some(path) = path
+                && let Err(error) = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        this.pending_ssh_key_path = Some(path.to_string_lossy().to_string());
+                        cx.notify();
+                    });
+                })
+            {
+                log::warn!(
+                    "Failed to apply selected SSH key path to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn browse_file_path(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().clone();
+
+        let current_value = self
+            .driver_inputs
+            .get("path")
+            .map(|input| input.read(cx).value().to_string());
+
+        let start_dir = current_value
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .and_then(|v| {
+                let path = std::path::Path::new(v);
+                path.parent().map(|p| p.to_path_buf())
+            })
+            .or_else(dirs::home_dir)
+            .unwrap_or_default();
+
+        let task = cx.background_executor().spawn(async move {
+            let dialog = rfd::FileDialog::new()
+                .set_title("Select Database File")
+                .set_directory(&start_dir);
+            dialog.pick_file()
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let path = task.await;
+
+            if let Some(path) = path
+                && let Err(error) = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        this.pending_file_path = Some(path.to_string_lossy().to_string());
+                        cx.notify();
+                    });
+                })
+            {
+                log::warn!(
+                    "Failed to apply selected file path to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+
+    // -----------------------------------------------------------------
+    // Access method dropdown (T-7.2)
+    // -----------------------------------------------------------------
+
+    fn sync_access_tab_mode_from_state(&mut self) {
+        self.access_tab_mode = if matches!(self.access_kind, Some(AccessKind::Managed { .. })) {
+            AccessTabMode::ManagedSsm
+        } else if self.selected_proxy_id.is_some()
+            || matches!(self.access_kind, Some(AccessKind::Proxy { .. }))
+        {
+            AccessTabMode::Proxy
+        } else if self.ssh_enabled
+            || self.selected_ssh_tunnel_id.is_some()
+            || matches!(self.access_kind, Some(AccessKind::Ssh { .. }))
+        {
+            AccessTabMode::Ssh
+        } else {
+            AccessTabMode::Direct
+        };
+    }
+
+    /// Populate the access method dropdown with the unified access modes.
+    fn populate_access_method_dropdown(&mut self, cx: &mut Context<Self>) {
+        let items = vec![
+            crate::ui::components::dropdown::DropdownItem::with_value("Direct", "direct"),
+            crate::ui::components::dropdown::DropdownItem::with_value("SSH Tunnel", "ssh"),
+            crate::ui::components::dropdown::DropdownItem::with_value("Proxy", "proxy"),
+            crate::ui::components::dropdown::DropdownItem::with_value("SSM Port Forwarding", "ssm"),
+        ];
+
+        let selected_index = self.access_tab_mode_to_dropdown_index();
+
+        self.access_method_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(items, cx);
+            dropdown.set_selected_index(Some(selected_index), cx);
+        });
+    }
+
+    fn access_tab_mode_to_dropdown_index(&self) -> usize {
+        match self.access_tab_mode {
+            AccessTabMode::Direct => 0,
+            AccessTabMode::Ssh => 1,
+            AccessTabMode::Proxy => 2,
+            AccessTabMode::ManagedSsm => 3,
+        }
+    }
+
+    fn handle_access_method_dropdown_selection(
+        &mut self,
+        event: &DropdownSelectionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        self.access_tab_mode = match event.index {
+            1 => AccessTabMode::Ssh,
+            2 => AccessTabMode::Proxy,
+            3 => AccessTabMode::ManagedSsm,
+            _ => AccessTabMode::Direct,
+        };
+
+        match self.access_tab_mode {
+            AccessTabMode::Direct => {
+                self.ssh_enabled = false;
+                self.selected_ssh_tunnel_id = None;
+                self.selected_proxy_id = None;
+                self.access_kind = None;
+            }
+            AccessTabMode::Ssh => {
+                self.ssh_enabled = true;
+                self.selected_proxy_id = None;
+                self.access_kind = None;
+            }
+            AccessTabMode::Proxy => {
+                self.ssh_enabled = false;
+                self.selected_ssh_tunnel_id = None;
+                self.access_kind = None;
+            }
+            AccessTabMode::ManagedSsm => {
+                self.ssh_enabled = false;
+                self.selected_ssh_tunnel_id = None;
+                self.selected_proxy_id = None;
+                self.access_kind = Some(self.collect_managed_access_kind(cx));
+            }
+        }
+
+        cx.notify();
+    }
+
+    /// Returns true when SSM Tunnel is the currently selected access method.
+    fn is_ssm_selected(&self) -> bool {
+        self.access_tab_mode == AccessTabMode::ManagedSsm
+    }
+
+    /// Collect the current managed (aws-ssm) AccessKind from the inline fields.
+    fn collect_managed_access_kind(&self, cx: &Context<Self>) -> AccessKind {
+        let instance_id = self.input_ssm_instance_id.read(cx).value().to_string();
+        let region = self.input_ssm_region.read(cx).value().to_string();
+        let remote_port = self.input_ssm_remote_port.read(cx).value().to_string();
+
+        let auth_profile_id = self
+            .selected_ssm_auth_profile_id
+            .or(self.selected_auth_profile_id);
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("instance_id".to_string(), instance_id);
+        params.insert("region".to_string(), region);
+        params.insert("remote_port".to_string(), remote_port);
+        if let Some(id) = auth_profile_id {
+            params.insert("auth_profile_id".to_string(), id.to_string());
+        }
+
+        AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params,
+        }
     }
 }
 

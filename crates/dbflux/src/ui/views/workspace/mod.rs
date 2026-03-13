@@ -1,5 +1,6 @@
 mod actions;
 mod dispatch;
+pub mod pipeline;
 mod render;
 
 use crate::app::{AppState, AppStateChanged};
@@ -15,8 +16,10 @@ use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
 };
+use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
+use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
@@ -70,6 +73,8 @@ pub struct Workspace {
     toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
     sql_preview_modal: Entity<SqlPreviewModal>,
+    login_modal: Entity<LoginModal>,
+    sso_wizard: Entity<SsoWizard>,
     shutdown_overlay: Entity<ShutdownOverlay>,
 
     tab_manager: Entity<TabManager>,
@@ -81,6 +86,10 @@ pub struct Workspace {
     pending_focus: Option<FocusTarget>,
     pending_open_script: Option<PendingOpenScript>,
     needs_focus_restore: bool,
+
+    /// Active pipeline progress watcher for pipeline-enabled connects.
+    pipeline_progress: Option<Entity<pipeline::PipelineProgress>>,
+    _pipeline_subscription: Option<Subscription>,
 
     focus_target: FocusTarget,
     keymap: &'static KeymapStack,
@@ -109,6 +118,8 @@ impl Workspace {
         });
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
+        let login_modal = cx.new(|cx| LoginModal::new(window, cx));
+        let sso_wizard = cx.new(|cx| SsoWizard::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
@@ -126,6 +137,43 @@ impl Workspace {
             this.needs_focus_restore = true;
             cx.notify();
         })
+        .detach();
+
+        cx.subscribe_in(
+            &login_modal,
+            window,
+            |this, _, event: &LoginModalEvent, window, cx| match event {
+                LoginModalEvent::OpenSsoWizard => {
+                    this.open_sso_wizard(window, cx);
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &sso_wizard,
+            window,
+            |this, _, event: &SsoWizardEvent, _window, cx| match event {
+                SsoWizardEvent::ProfileCreated { profile_id } => {
+                    this.app_state.update(cx, |_state, cx| {
+                        cx.emit(AppStateChanged);
+                    });
+
+                    if this.pipeline_progress.is_some() {
+                        this.login_modal.update(cx, |modal, cx| {
+                            modal.close(cx);
+                        });
+
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile(*profile_id, cx);
+                        });
+                    }
+                }
+            },
+        )
         .detach();
 
         cx.subscribe_in(
@@ -202,6 +250,12 @@ impl Workspace {
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
                         cx.toast_warning(format!("Unsupported file type: {}", name), window);
                     }
+                }
+                SidebarEvent::PipelineStarted {
+                    profile_name,
+                    watcher,
+                } => {
+                    this.start_pipeline_progress(profile_name.clone(), watcher.clone(), window, cx);
                 }
             },
         )
@@ -373,6 +427,8 @@ impl Workspace {
             toast_host,
             command_palette,
             sql_preview_modal,
+            login_modal,
+            sso_wizard,
             shutdown_overlay,
             tab_manager,
             tab_bar,
@@ -382,6 +438,8 @@ impl Workspace {
             pending_focus: None,
             pending_open_script: None,
             needs_focus_restore: false,
+            pipeline_progress: None,
+            _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
@@ -460,6 +518,8 @@ impl Workspace {
             PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
             PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
             PaletteCommand::new("open_settings", "Open Settings", "View"),
+            PaletteCommand::new("open_login_modal", "Open Login Modal", "View"),
+            PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
         ]
     }
 
@@ -537,6 +597,74 @@ impl Workspace {
 
     fn is_sidebar_collapsed(&self, cx: &Context<Self>) -> bool {
         self.sidebar_dock.read(cx).is_collapsed()
+    }
+
+    fn start_pipeline_progress(
+        &mut self,
+        profile_name: String,
+        watcher: dbflux_core::StateWatcher,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let progress = cx.new(|cx| pipeline::PipelineProgress::new(profile_name, watcher, cx));
+
+        let pipeline_profile_name = progress.read(cx).profile_name().to_string();
+
+        let subscription = cx.subscribe_in(
+            &progress,
+            window,
+            move |this, _, event: &pipeline::PipelineProgressEvent, window, cx| {
+                match event {
+                    pipeline::PipelineProgressEvent::StateChanged(state) => {
+                        this.login_modal.update(cx, |modal, cx| {
+                            modal.apply_pipeline_state(&pipeline_profile_name, state, window, cx);
+                        });
+                    }
+                    pipeline::PipelineProgressEvent::Completed => {
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+                        this.login_modal.update(cx, |modal, cx| {
+                            modal.close(cx);
+                        });
+                        this.app_state.update(cx, |_state, cx| {
+                            cx.emit(AppStateChanged);
+                        });
+                        // Toast is handled by the sidebar connect flow
+                    }
+                    pipeline::PipelineProgressEvent::Failed { stage, error } => {
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+                        log::warn!("Pipeline failed at {}: {}", stage, error);
+                    }
+                    pipeline::PipelineProgressEvent::Cancelled => {
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+                        this.login_modal.update(cx, |modal, cx| {
+                            modal.close(cx);
+                        });
+                    }
+                    pipeline::PipelineProgressEvent::WatchClosed { last_state } => {
+                        if !matches!(last_state, dbflux_core::PipelineState::Connected) {
+                            this.login_modal.update(cx, |modal, cx| {
+                                modal.apply_pipeline_state(
+                                    &pipeline_profile_name,
+                                    last_state,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
+                        this.pipeline_progress = None;
+                        this._pipeline_subscription = None;
+                    }
+                }
+                cx.notify();
+            },
+        );
+
+        self.pipeline_progress = Some(progress);
+        self._pipeline_subscription = Some(subscription);
+        cx.notify();
     }
 
     /// Get next focus target, skipping sidebar if collapsed

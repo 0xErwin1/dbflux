@@ -1,12 +1,88 @@
 use crate::ui::components::toast::ToastExt;
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::{Heights, Radii};
 use dbflux_core::{AppConfig, AppConfigStore, ServiceConfig};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::InputState;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Input, InputState};
+use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 
-use super::{ServiceFocus, ServiceFormRow, SettingsWindow};
+use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
 
-impl SettingsWindow {
+impl ServicesSection {
+    pub(super) fn has_unsaved_svc_changes(&self, cx: &App) -> bool {
+        if let Some(idx) = self.editing_svc_idx {
+            let Some(saved) = self.svc_services.get(idx) else {
+                return true;
+            };
+
+            let socket_id = self.input_socket_id.read(cx).value().trim().to_string();
+            let command = self.input_svc_command.read(cx).value().trim().to_string();
+            let timeout = self.input_svc_timeout.read(cx).value().trim().to_string();
+
+            let saved_command = saved.command.as_deref().unwrap_or("").to_string();
+            let saved_timeout = saved
+                .startup_timeout_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+
+            if socket_id != saved.socket_id
+                || command != saved_command
+                || timeout != saved_timeout
+                || self.svc_enabled != saved.enabled
+            {
+                return true;
+            }
+
+            let form_args: Vec<String> = self
+                .svc_arg_inputs
+                .iter()
+                .map(|input| input.read(cx).value().trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+            if form_args != saved.args {
+                return true;
+            }
+
+            let mut form_env: Vec<(String, String)> = self
+                .svc_env_key_inputs
+                .iter()
+                .zip(self.svc_env_value_inputs.iter())
+                .filter_map(|(key_input, value_input)| {
+                    let key = key_input.read(cx).value().trim().to_string();
+                    if key.is_empty() {
+                        return None;
+                    }
+
+                    Some((key, value_input.read(cx).value().to_string()))
+                })
+                .collect();
+            form_env.sort_by(|left, right| left.0.cmp(&right.0));
+
+            let mut saved_env: Vec<(String, String)> = saved
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            saved_env.sort_by(|left, right| left.0.cmp(&right.0));
+
+            return form_env != saved_env;
+        }
+
+        !self.input_socket_id.read(cx).value().trim().is_empty()
+            || !self.input_svc_command.read(cx).value().trim().is_empty()
+            || !self.input_svc_timeout.read(cx).value().trim().is_empty()
+            || !self.svc_arg_inputs.is_empty()
+            || !self.svc_env_key_inputs.is_empty()
+            || !self.svc_env_value_inputs.is_empty()
+            || !self.svc_enabled
+    }
+
     pub(super) fn load_services(&mut self) {
         let store = match AppConfigStore::new() {
             Ok(s) => s,
@@ -224,7 +300,6 @@ impl SettingsWindow {
     // --- Delete flow ---
 
     pub(super) fn request_delete_service(&mut self, idx: usize, cx: &mut Context<Self>) {
-        self.pending_delete_tunnel_id = None;
         self.pending_delete_svc_idx = Some(idx);
         cx.notify();
     }
@@ -397,9 +472,9 @@ impl SettingsWindow {
     }
 
     pub(super) fn svc_exit_form(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        let _ = window;
         self.svc_focus = ServiceFocus::List;
         self.svc_editing_field = false;
-        self.focus_handle.focus(window);
     }
 
     // --- Form navigation (linear cursor) ---
@@ -626,5 +701,690 @@ impl SettingsWindow {
             self.svc_form_cursor = count - 1;
         }
         self.svc_env_col = 0;
+    }
+}
+
+impl ServicesSection {
+    pub(super) fn render_services_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let services = &self.svc_services;
+        let editing_idx = self.editing_svc_idx;
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Services"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Manage external driver services. Changes require restart."),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .overflow_hidden()
+                    .child(self.render_service_list(services, editing_idx, cx))
+                    .child(self.render_service_form(editing_idx, cx)),
+            )
+    }
+
+    fn render_service_list(
+        &self,
+        services: &[ServiceConfig],
+        editing_idx: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let is_list_focused = self.content_focused && self.svc_focus == ServiceFocus::List;
+        let is_new_button_focused = is_list_focused && self.svc_selected_idx.is_none();
+
+        div()
+            .w(px(250.0))
+            .h_full()
+            .border_r_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .child(
+                div().p_2().border_b_1().border_color(theme.border).child(
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_new_button_focused {
+                            theme.primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            Button::new("new-service")
+                                .icon(Icon::new(IconName::Plus))
+                                .label("New Service")
+                                .small()
+                                .w_full()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.svc_selected_idx = None;
+                                    this.clear_svc_form(window, cx);
+                                })),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(services.is_empty(), |container: Div| {
+                        container.child(
+                            div()
+                                .p_4()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("No services configured"),
+                        )
+                    })
+                    .children(services.iter().enumerate().map(|(idx, service)| {
+                        let is_selected = editing_idx == Some(idx);
+                        let is_focused = is_list_focused && self.svc_selected_idx == Some(idx);
+                        let is_disabled = !service.enabled;
+
+                        let subtitle = service
+                            .command
+                            .as_deref()
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("(default)");
+
+                        div()
+                            .id(SharedString::from(format!("svc-item-{}", idx)))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_focused && !is_selected {
+                                theme.primary
+                            } else {
+                                transparent_black()
+                            })
+                            .when(is_selected, |div| div.bg(theme.secondary))
+                            .hover(|div| div.bg(theme.secondary))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.svc_selected_idx = Some(idx);
+                                this.edit_service(idx, window, cx);
+                            }))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::Plug.path())
+                                            .size_4()
+                                            .text_color(theme.muted_foreground)
+                                            .mt(px(2.0)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .when(is_disabled, |div| {
+                                                                div.text_color(
+                                                                    theme.muted_foreground,
+                                                                )
+                                                            })
+                                                            .child(service.socket_id.clone()),
+                                                    )
+                                                    .when(is_disabled, |container| {
+                                                        container.child(
+                                                            div()
+                                                                .text_xs()
+                                                                .px_1()
+                                                                .rounded(px(3.0))
+                                                                .bg(theme.secondary)
+                                                                .text_color(theme.muted_foreground)
+                                                                .child("Disabled"),
+                                                        )
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(subtitle.to_string()),
+                                            ),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
+    fn render_service_form(
+        &self,
+        editing_idx: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let primary = theme.primary;
+        let border = theme.border;
+
+        let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
+        let cursor = self.svc_form_cursor;
+        let rows = self.svc_form_rows();
+
+        let title = if editing_idx.is_some() {
+            "Edit Service"
+        } else {
+            "New Service"
+        };
+
+        let is_row_focused = |row: ServiceFormRow| -> bool {
+            is_form_focused && rows.get(cursor).copied() == Some(row)
+        };
+
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div().p_4().border_b_1().border_color(border).child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_y_hidden()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.render_svc_input_field(
+                        "Socket ID",
+                        &self.input_socket_id,
+                        is_row_focused(ServiceFormRow::SocketId),
+                        primary,
+                        ServiceFormRow::SocketId,
+                        cx,
+                    ))
+                    .child(self.render_svc_input_field(
+                        "Command",
+                        &self.input_svc_command,
+                        is_row_focused(ServiceFormRow::Command),
+                        primary,
+                        ServiceFormRow::Command,
+                        cx,
+                    ))
+                    .child(self.render_svc_input_field(
+                        "Startup Timeout (ms)",
+                        &self.input_svc_timeout,
+                        is_row_focused(ServiceFormRow::Timeout),
+                        primary,
+                        ServiceFormRow::Timeout,
+                        cx,
+                    ))
+                    .child(self.render_svc_enabled_checkbox(
+                        is_row_focused(ServiceFormRow::Enabled),
+                        primary,
+                        cx,
+                    ))
+                    .child(self.render_svc_args_section(
+                        is_form_focused,
+                        cursor,
+                        &rows,
+                        primary,
+                        cx,
+                    ))
+                    .child(self.render_svc_env_section(
+                        is_form_focused,
+                        cursor,
+                        &rows,
+                        primary,
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(border)
+                    .flex()
+                    .gap_2()
+                    .justify_end()
+                    .when(editing_idx.is_some(), |container| {
+                        let is_delete_focused = is_row_focused(ServiceFormRow::DeleteButton);
+                        container.child(
+                            div()
+                                .rounded(px(4.0))
+                                .border_1()
+                                .border_color(if is_delete_focused {
+                                    primary
+                                } else {
+                                    transparent_black()
+                                })
+                                .child(
+                                    Button::new("delete-service")
+                                        .label("Delete")
+                                        .small()
+                                        .danger()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(idx) = this.editing_svc_idx {
+                                                this.request_delete_service(idx, cx);
+                                            }
+                                        })),
+                                ),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .child({
+                        let is_save_focused = is_row_focused(ServiceFormRow::SaveButton);
+                        div()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if is_save_focused {
+                                primary
+                            } else {
+                                transparent_black()
+                            })
+                            .child(
+                                Button::new("save-service")
+                                    .label(if editing_idx.is_some() {
+                                        "Update"
+                                    } else {
+                                        "Create"
+                                    })
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_service(window, cx);
+                                    })),
+                            )
+                    }),
+            )
+    }
+
+    fn render_svc_input_field(
+        &self,
+        label: &str,
+        input: &Entity<InputState>,
+        is_focused: bool,
+        primary: Hsla,
+        row: ServiceFormRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_focused {
+                        primary
+                    } else {
+                        transparent_black()
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.svc_focus = ServiceFocus::Form;
+                            let rows = this.svc_form_rows();
+                            if let Some(pos) = rows.iter().position(|candidate| *candidate == row) {
+                                this.svc_form_cursor = pos;
+                                this.svc_env_col = 0;
+                            }
+                            this.svc_focus_current_field(window, cx);
+                            cx.notify();
+                        }),
+                    )
+                    .child(Input::new(input).small()),
+            )
+    }
+
+    fn render_svc_enabled_checkbox(
+        &self,
+        is_focused: bool,
+        primary: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(if is_focused {
+                primary
+            } else {
+                transparent_black()
+            })
+            .child(
+                Checkbox::new("svc-enabled")
+                    .checked(self.svc_enabled)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.svc_enabled = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_sm().child("Enable this service"))
+    }
+
+    fn render_svc_args_section(
+        &self,
+        is_form_focused: bool,
+        cursor: usize,
+        rows: &[ServiceFormRow],
+        primary: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        let is_add_focused =
+            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::AddArg);
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Arguments"),
+            )
+            .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
+                let is_row_at_cursor =
+                    is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Arg(idx));
+                let input_focused = is_row_at_cursor && self.svc_env_col == 0;
+                let remove_focused = is_row_at_cursor && self.svc_env_col == 1;
+
+                div()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if input_focused {
+                                primary
+                            } else {
+                                transparent_black()
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.svc_focus = ServiceFocus::Form;
+                                    let rows = this.svc_form_rows();
+                                    if let Some(pos) = rows.iter().position(|candidate| {
+                                        *candidate == ServiceFormRow::Arg(idx)
+                                    }) {
+                                        this.svc_form_cursor = pos;
+                                        this.svc_env_col = 0;
+                                    }
+                                    this.svc_focus_current_field(window, cx);
+                                    cx.notify();
+                                }),
+                            )
+                            .child(Input::new(input).small()),
+                    )
+                    .child(
+                        div()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if remove_focused {
+                                primary
+                            } else {
+                                transparent_black()
+                            })
+                            .child(
+                                Button::new(SharedString::from(format!("rm-arg-{}", idx)))
+                                    .label("x")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.remove_arg_row(idx, window, cx);
+                                    })),
+                            ),
+                    )
+            }))
+            .child(
+                div().flex().justify_center().child(
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_add_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            div()
+                                .id("add-arg")
+                                .w(Heights::ICON_LG)
+                                .h(Heights::ICON_LG)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .bg(theme.primary)
+                                .hover(|div| div.opacity(0.8))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.add_arg_row(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path(AppIcon::Plus.path())
+                                        .size(Heights::ICON_SM)
+                                        .text_color(theme.primary_foreground),
+                                ),
+                        ),
+                ),
+            )
+    }
+
+    fn render_svc_env_section(
+        &self,
+        is_form_focused: bool,
+        cursor: usize,
+        rows: &[ServiceFormRow],
+        primary: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        let is_add_focused =
+            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::AddEnv);
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Environment Variables"),
+            )
+            .children(
+                self.svc_env_key_inputs
+                    .iter()
+                    .zip(self.svc_env_value_inputs.iter())
+                    .enumerate()
+                    .map(|(idx, (key_input, value_input))| {
+                        let is_row_at_cursor = is_form_focused
+                            && rows.get(cursor).copied() == Some(ServiceFormRow::EnvKey(idx));
+                        let key_focused = is_row_at_cursor && self.svc_env_col == 0;
+                        let value_focused = is_row_at_cursor && self.svc_env_col == 1;
+                        let remove_focused = is_row_at_cursor && self.svc_env_col == 2;
+
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(if key_focused {
+                                        primary
+                                    } else {
+                                        transparent_black()
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.svc_focus = ServiceFocus::Form;
+                                            let rows = this.svc_form_rows();
+                                            if let Some(pos) = rows.iter().position(|candidate| {
+                                                *candidate == ServiceFormRow::EnvKey(idx)
+                                            }) {
+                                                this.svc_form_cursor = pos;
+                                                this.svc_env_col = 0;
+                                            }
+                                            this.svc_focus_current_field(window, cx);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(Input::new(key_input).small()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child("="),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(if value_focused {
+                                        primary
+                                    } else {
+                                        transparent_black()
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.svc_focus = ServiceFocus::Form;
+                                            let rows = this.svc_form_rows();
+                                            if let Some(pos) = rows.iter().position(|candidate| {
+                                                *candidate == ServiceFormRow::EnvKey(idx)
+                                            }) {
+                                                this.svc_form_cursor = pos;
+                                                this.svc_env_col = 1;
+                                            }
+                                            this.svc_focus_current_field(window, cx);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(Input::new(value_input).small()),
+                            )
+                            .child(
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(if remove_focused {
+                                        primary
+                                    } else {
+                                        transparent_black()
+                                    })
+                                    .child(
+                                        Button::new(SharedString::from(format!("rm-env-{}", idx)))
+                                            .label("x")
+                                            .small()
+                                            .ghost()
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.remove_env_row(idx, window, cx);
+                                            })),
+                                    ),
+                            )
+                    }),
+            )
+            .child(
+                div().flex().justify_center().child(
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_add_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            div()
+                                .id("add-env")
+                                .w(Heights::ICON_LG)
+                                .h(Heights::ICON_LG)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .bg(theme.primary)
+                                .hover(|div| div.opacity(0.8))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.add_env_row(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path(AppIcon::Plus.path())
+                                        .size(Heights::ICON_SM)
+                                        .text_color(theme.primary_foreground),
+                                ),
+                        ),
+                ),
+            )
     }
 }

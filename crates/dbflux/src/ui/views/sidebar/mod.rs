@@ -74,6 +74,11 @@ pub enum SidebarEvent {
     OpenScript {
         path: std::path::PathBuf,
     },
+    /// Pipeline connect started.
+    PipelineStarted {
+        profile_name: String,
+        watcher: dbflux_core::StateWatcher,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -529,10 +534,13 @@ impl Sidebar {
 
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
-        let app_state_subscription = cx.subscribe(&app_state, |this, _app_state, _event, cx| {
-            this.refresh_tree(cx);
-            this.refresh_scripts_tree(cx);
-        });
+        let app_state_subscription = cx.subscribe(
+            &app_state,
+            |this, _app_state, _event: &AppStateChanged, cx| {
+                this.refresh_tree(cx);
+                this.refresh_scripts_tree(cx);
+            },
+        );
 
         let rename_subscription = cx.subscribe_in(
             &rename_input,
