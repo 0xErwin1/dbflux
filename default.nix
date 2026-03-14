@@ -108,10 +108,8 @@ let
   buildWithCrane =
     craneLib:
     let
-      cargoSrc = craneLib.cleanCargoSource fullSrc;
-
       commonArgs = {
-        src = cargoSrc;
+        src = fullSrc;
         inherit buildInputs nativeBuildInputs;
         strictDeps = true;
         ZSTD_SYS_USE_PKG_CONFIG = "1";
@@ -130,7 +128,7 @@ let
       // {
         pname = "dbflux";
         inherit version cargoArtifacts;
-        cargoExtraArgs = "-p dbflux --features sqlite,postgres,mysql,mongodb,redis";
+        cargoExtraArgs = "-p dbflux";
         postInstall = postInstallScript;
       }
     );
@@ -150,13 +148,6 @@ let
 
     ZSTD_SYS_USE_PKG_CONFIG = "1";
 
-    buildFeatures = [
-      "sqlite"
-      "postgres"
-      "mysql"
-      "mongodb"
-      "redis"
-    ];
     cargoBuildFlags = [
       "-p"
       "dbflux"
