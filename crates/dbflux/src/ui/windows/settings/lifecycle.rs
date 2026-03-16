@@ -1,6 +1,7 @@
 use super::*;
 use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::tree_nav::TreeNavAction;
+use section_trait::SectionFocusEvent;
 
 impl SettingsCoordinator {
     pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -33,7 +34,12 @@ impl SettingsCoordinator {
             active_section_entity,
             active_section_view,
             pending_section_confirm: None,
-            _section_subscription: section_subscription,
+            pending_focus_return: false,
+            sidebar_width: SETTINGS_SIDEBAR_DEFAULT_WIDTH,
+            sidebar_is_resizing: false,
+            sidebar_resize_start_x: None,
+            sidebar_resize_start_width: None,
+            _subscriptions: section_subscription,
         }
     }
 
@@ -42,41 +48,60 @@ impl SettingsCoordinator {
         app_state: Entity<AppState>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (ActiveSettingsSection, Option<Subscription>) {
+    ) -> (ActiveSettingsSection, Vec<Subscription>) {
         match section_id {
-            SettingsSectionId::General => (
-                ActiveSettingsSection::General(
-                    cx.new(|cx| GeneralSection::new(app_state, window, cx)),
-                ),
-                None,
-            ),
+            SettingsSectionId::General => {
+                let section = cx.new(|cx| GeneralSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::General(section), vec![focus_sub])
+            }
             SettingsSectionId::Keybindings => (
                 ActiveSettingsSection::Keybindings(
                     cx.new(|cx| KeybindingsSection::new(window, cx)),
                 ),
-                None,
+                vec![],
             ),
-            SettingsSectionId::Proxies => (
-                ActiveSettingsSection::Proxies(
-                    cx.new(|cx| ProxiesSection::new(app_state, window, cx)),
-                ),
-                None,
-            ),
-            SettingsSectionId::AuthProfiles => (
-                ActiveSettingsSection::AuthProfiles(
-                    cx.new(|cx| AuthProfilesSection::new(app_state, window, cx)),
-                ),
-                None,
-            ),
-            SettingsSectionId::SshTunnels => (
-                ActiveSettingsSection::SshTunnels(
-                    cx.new(|cx| SshTunnelsSection::new(app_state, window, cx)),
-                ),
-                None,
-            ),
+            SettingsSectionId::Proxies => {
+                let section = cx.new(|cx| ProxiesSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Proxies(section), vec![focus_sub])
+            }
+            SettingsSectionId::AuthProfiles => {
+                let section = cx.new(|cx| AuthProfilesSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (
+                    ActiveSettingsSection::AuthProfiles(section),
+                    vec![focus_sub],
+                )
+            }
+            SettingsSectionId::SshTunnels => {
+                let section = cx.new(|cx| SshTunnelsSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::SshTunnels(section), vec![focus_sub])
+            }
             SettingsSectionId::Services => (
                 ActiveSettingsSection::Services(cx.new(|cx| ServicesSection::new(window, cx))),
-                None,
+                vec![],
             ),
             SettingsSectionId::Hooks => {
                 let section = cx.new(|cx| HooksSection::new(app_state, window, cx));
@@ -85,17 +110,30 @@ impl SettingsCoordinator {
                     this.focus_area = SettingsFocus::Content;
                     cx.notify();
                 });
-                (ActiveSettingsSection::Hooks(section), Some(subscription))
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (
+                    ActiveSettingsSection::Hooks(section),
+                    vec![subscription, focus_sub],
+                )
             }
-            SettingsSectionId::Drivers => (
-                ActiveSettingsSection::Drivers(
-                    cx.new(|cx| DriversSection::new(app_state, window, cx)),
-                ),
-                None,
-            ),
-            _ => (
-                ActiveSettingsSection::Empty(cx.new(|_cx| EmptySettingsSection::new(section_id))),
-                None,
+            SettingsSectionId::Drivers => {
+                let section = cx.new(|cx| DriversSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Drivers(section), vec![focus_sub])
+            }
+            SettingsSectionId::About => (
+                ActiveSettingsSection::About(cx.new(AboutSection::new)),
+                vec![],
             ),
         }
     }
@@ -116,7 +154,7 @@ impl SettingsCoordinator {
             Self::new_section_entity(section, self.app_state.clone(), window, cx);
         self.active_section_entity = next_section_entity;
         self.active_section_view = self.active_section_entity.as_view();
-        self._section_subscription = section_subscription;
+        self._subscriptions = section_subscription;
 
         if self.focus_area == SettingsFocus::Content {
             self.active_section_entity.focus_in(window, cx);
@@ -189,25 +227,30 @@ impl SettingsCoordinator {
         let chord = KeyChord::from_gpui(&event.keystroke);
 
         match (chord.key.as_str(), chord.modifiers) {
-            ("escape", modifiers) if modifiers == Modifiers::none() => {
+            ("w", modifiers) if modifiers == Modifiers::ctrl() => {
                 self.try_close(window);
                 return;
             }
-            ("tab", modifiers)
-                if modifiers == Modifiers::none() || modifiers == Modifiers::shift() =>
-            {
-                self.focus_area = match self.focus_area {
-                    SettingsFocus::Sidebar => SettingsFocus::Content,
-                    SettingsFocus::Content => SettingsFocus::Sidebar,
-                };
-
+            ("q", modifiers) if modifiers == Modifiers::ctrl() => {
+                self.try_close(window);
+                return;
+            }
+            ("h", modifiers) if modifiers == Modifiers::ctrl() => {
                 if self.focus_area == SettingsFocus::Content {
-                    self.active_section_entity.focus_in(window, cx);
-                } else {
+                    self.focus_area = SettingsFocus::Sidebar;
                     self.active_section_entity.focus_out(window, cx);
+                    self.sidebar_tree
+                        .select_by_id(Self::tree_id_for_section(self.active_section));
+                    cx.notify();
                 }
-
-                cx.notify();
+                return;
+            }
+            ("l", modifiers) if modifiers == Modifiers::ctrl() => {
+                if self.focus_area == SettingsFocus::Sidebar {
+                    self.focus_area = SettingsFocus::Content;
+                    self.active_section_entity.focus_in(window, cx);
+                    cx.notify();
+                }
                 return;
             }
             _ => {}
@@ -231,48 +274,28 @@ impl SettingsCoordinator {
             ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
                 self.activate_sidebar_cursor(window, cx);
             }
-            ("right", modifiers) if modifiers == Modifiers::none() => {
-                if self.cursor_is_collapsed_group() {
-                    self.activate_sidebar_cursor(window, cx);
-                } else {
-                    self.focus_area = SettingsFocus::Content;
-                    self.active_section_entity.focus_in(window, cx);
-                    cx.notify();
-                }
-            }
-            ("left", modifiers)
-                if modifiers == Modifiers::none() && self.cursor_is_expanded_group() =>
-            {
-                self.activate_sidebar_cursor(window, cx);
+            ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                self.focus_area = SettingsFocus::Content;
+                self.active_section_entity.focus_in(window, cx);
+                cx.notify();
             }
             _ => {}
         }
     }
 
     fn activate_sidebar_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.sidebar_tree.activate() {
-            TreeNavAction::Selected(id) => {
-                if let Some(section) = Self::section_for_tree_id(id.as_ref()) {
-                    self.request_section_transition(section, window, cx);
-                }
-            }
-            TreeNavAction::Toggled { .. } => {
-                self.persist_collapse_state();
-                cx.notify();
-            }
-            TreeNavAction::None => {}
+        let Some(row) = self.sidebar_tree.cursor_item() else {
+            return;
+        };
+
+        if !row.selectable {
+            return;
         }
-    }
 
-    fn cursor_is_collapsed_group(&self) -> bool {
-        self.sidebar_tree
-            .cursor_item()
-            .is_some_and(|row| row.has_children && !row.selectable && !row.expanded)
-    }
-
-    fn cursor_is_expanded_group(&self) -> bool {
-        self.sidebar_tree
-            .cursor_item()
-            .is_some_and(|row| row.has_children && !row.selectable && row.expanded)
+        if let TreeNavAction::Selected(id) = self.sidebar_tree.activate()
+            && let Some(section) = Self::section_for_tree_id(id.as_ref())
+        {
+            self.request_section_transition(section, window, cx);
+        }
     }
 }

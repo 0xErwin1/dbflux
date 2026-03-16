@@ -3,14 +3,16 @@ use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use dbflux_core::{AppConfig, AppConfigStore};
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
+use super::layout;
+use super::section_trait::SectionFocusEvent;
 
 impl GeneralSection {
     pub(super) fn has_unsaved_general_changes(&self, cx: &App) -> bool {
@@ -263,6 +265,7 @@ impl GeneralSection {
             match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
                     self.gen_editing_field = false;
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
@@ -423,27 +426,15 @@ impl GeneralSection {
 
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("General"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted_fg)
-                            .child("Configure startup, session, refresh, and safety behavior"),
-                    ),
-            )
+            .child(layout::section_header(
+                "General",
+                "Configure startup, session, refresh, and safety behavior",
+                theme,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -750,6 +741,7 @@ impl GeneralSection {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
+                            this.switching_input = true;
                             this.content_focused = true;
                             if let Some(position) = this
                                 .gen_form_rows()

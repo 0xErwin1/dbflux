@@ -33,6 +33,8 @@ pub(super) struct ServicesSection {
 
     pub(super) svc_focus: ServiceFocus,
     pub(super) svc_selected_idx: Option<usize>,
+    pub(super) svc_list_scroll_handle: ScrollHandle,
+    pub(super) svc_pending_scroll_idx: Option<usize>,
     pub(super) svc_form_cursor: usize,
     pub(super) svc_env_col: usize,
     pub(super) svc_editing_field: bool,
@@ -64,6 +66,8 @@ impl ServicesSection {
             svc_config_store: None,
             svc_focus: ServiceFocus::List,
             svc_selected_idx: None,
+            svc_list_scroll_handle: ScrollHandle::new(),
+            svc_pending_scroll_idx: None,
             svc_form_cursor: 0,
             svc_env_col: 0,
             svc_editing_field: false,
@@ -135,11 +139,13 @@ impl SettingsSection for ServicesSection {
                 ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
                     self.svc_move_next_profile();
                     self.svc_load_selected_profile(window, cx);
+                    self.svc_pending_scroll_idx = self.svc_selected_idx;
                     cx.notify();
                 }
                 ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
                     self.svc_move_prev_profile();
                     self.svc_load_selected_profile(window, cx);
+                    self.svc_pending_scroll_idx = self.svc_selected_idx;
                     cx.notify();
                 }
                 ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
@@ -162,6 +168,7 @@ impl SettingsSection for ServicesSection {
                     if !self.svc_services.is_empty() {
                         self.svc_selected_idx = Some(self.svc_services.len() - 1);
                         self.svc_load_selected_profile(window, cx);
+                        self.svc_pending_scroll_idx = self.svc_selected_idx;
                     }
                     cx.notify();
                 }

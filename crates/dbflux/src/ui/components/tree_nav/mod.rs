@@ -150,6 +150,7 @@ impl TreeNav {
         self.rebuild();
     }
 
+    #[allow(dead_code)]
     pub fn expanded(&self) -> &HashSet<SharedString> {
         &self.expanded
     }

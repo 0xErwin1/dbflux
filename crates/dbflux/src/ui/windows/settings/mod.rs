@@ -1,3 +1,4 @@
+mod about_section;
 mod auth_profiles_section;
 mod drivers;
 mod drivers_section;
@@ -8,6 +9,7 @@ mod hooks;
 mod hooks_section;
 mod keybindings;
 mod keybindings_section;
+mod layout;
 mod lifecycle;
 mod proxies;
 mod proxies_section;
@@ -21,6 +23,7 @@ mod ssh_tunnels_section;
 
 use crate::app::AppState;
 use crate::ui::components::tree_nav::TreeNav;
+use about_section::AboutSection;
 use auth_profiles_section::AuthProfilesSection;
 use drivers_section::DriversSection;
 use general_section::GeneralSection;
@@ -34,37 +37,19 @@ use ssh_tunnels_section::SshTunnelsSection;
 
 pub use self::section_trait::{SettingsSection, SettingsSectionId};
 
+const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(220.0);
+const SETTINGS_SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
+const SETTINGS_SIDEBAR_MAX_WIDTH: Pixels = px(420.0);
+const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = px(4.0);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsFocus {
     Sidebar,
     Content,
 }
 
-#[allow(dead_code)]
-struct EmptySettingsSection {
-    section_id: SettingsSectionId,
-}
-
-impl EmptySettingsSection {
-    fn new(section_id: SettingsSectionId) -> Self {
-        Self { section_id }
-    }
-}
-
-impl SettingsSection for EmptySettingsSection {
-    fn section_id(&self) -> SettingsSectionId {
-        self.section_id
-    }
-}
-
-impl Render for EmptySettingsSection {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full()
-    }
-}
-
 enum ActiveSettingsSection {
-    Empty(Entity<EmptySettingsSection>),
+    About(Entity<AboutSection>),
     AuthProfiles(Entity<AuthProfilesSection>),
     Drivers(Entity<DriversSection>),
     General(Entity<GeneralSection>),
@@ -78,7 +63,7 @@ enum ActiveSettingsSection {
 impl ActiveSettingsSection {
     fn as_view(&self) -> AnyView {
         match self {
-            Self::Empty(section) => AnyView::from(section.clone()),
+            Self::About(section) => AnyView::from(section.clone()),
             Self::AuthProfiles(section) => AnyView::from(section.clone()),
             Self::Drivers(section) => AnyView::from(section.clone()),
             Self::General(section) => AnyView::from(section.clone()),
@@ -97,7 +82,7 @@ impl ActiveSettingsSection {
         cx: &mut Context<SettingsCoordinator>,
     ) {
         match self {
-            Self::Empty(section) => {
+            Self::About(section) => {
                 section.update(cx, |section, cx| {
                     section.handle_key_event(event, window, cx)
                 });
@@ -147,7 +132,7 @@ impl ActiveSettingsSection {
 
     fn focus_in(&self, window: &mut Window, cx: &mut Context<SettingsCoordinator>) {
         match self {
-            Self::Empty(section) => {
+            Self::About(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
             Self::AuthProfiles(section) => {
@@ -179,7 +164,7 @@ impl ActiveSettingsSection {
 
     fn focus_out(&self, window: &mut Window, cx: &mut Context<SettingsCoordinator>) {
         match self {
-            Self::Empty(section) => {
+            Self::About(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
             Self::AuthProfiles(section) => {
@@ -211,7 +196,7 @@ impl ActiveSettingsSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         match self {
-            Self::Empty(section) => section.read(cx).is_dirty(cx),
+            Self::About(section) => section.read(cx).is_dirty(cx),
             Self::AuthProfiles(section) => section.read(cx).is_dirty(cx),
             Self::Drivers(section) => section.read(cx).is_dirty(cx),
             Self::General(section) => section.read(cx).is_dirty(cx),
@@ -233,7 +218,12 @@ pub struct SettingsCoordinator {
     active_section_entity: ActiveSettingsSection,
     active_section_view: AnyView,
     pending_section_confirm: Option<SettingsSectionId>,
-    _section_subscription: Option<Subscription>,
+    pending_focus_return: bool,
+    sidebar_width: Pixels,
+    sidebar_is_resizing: bool,
+    sidebar_resize_start_x: Option<Pixels>,
+    sidebar_resize_start_width: Option<Pixels>,
+    _subscriptions: Vec<Subscription>,
 }
 
 pub type SettingsWindow = SettingsCoordinator;

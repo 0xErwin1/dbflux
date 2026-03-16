@@ -1,7 +1,6 @@
 use super::{SettingsCoordinator, SettingsFocus, SettingsSectionId};
 use crate::ui::components::tree_nav::{TreeNav, TreeNavNode};
 use crate::ui::icons::AppIcon;
-use dbflux_core::{UiState, UiStateStore};
 use gpui::SharedString;
 use std::collections::HashSet;
 
@@ -47,20 +46,10 @@ impl SettingsCoordinator {
             TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
         ];
 
-        let ui_state = UiStateStore::new()
-            .and_then(|store| store.load())
-            .unwrap_or_default();
-
         let mut expanded = HashSet::new();
-        if !ui_state.settings_collapsed_security {
-            expanded.insert(SharedString::from("security"));
-        }
-        if !ui_state.settings_collapsed_network {
-            expanded.insert(SharedString::from("network"));
-        }
-        if !ui_state.settings_collapsed_connection {
-            expanded.insert(SharedString::from("connection"));
-        }
+        expanded.insert(SharedString::from("security"));
+        expanded.insert(SharedString::from("network"));
+        expanded.insert(SharedString::from("connection"));
 
         TreeNav::new(nodes, expanded)
     }
@@ -99,28 +88,6 @@ impl SettingsCoordinator {
         self.focus_area = SettingsFocus::Sidebar;
         self.sidebar_tree
             .select_by_id(Self::tree_id_for_section(self.active_section));
-    }
-
-    pub(super) fn persist_collapse_state(&self) {
-        let expanded = self.sidebar_tree.expanded();
-
-        let state = UiState {
-            settings_collapsed_security: !expanded.contains("security"),
-            settings_collapsed_network: !expanded.contains("network"),
-            settings_collapsed_connection: !expanded.contains("connection"),
-        };
-
-        let store = match UiStateStore::new() {
-            Ok(store) => store,
-            Err(error) => {
-                log::error!("Failed to open UI state store: {}", error);
-                return;
-            }
-        };
-
-        if let Err(error) = store.save(&state) {
-            log::error!("Failed to persist collapse state: {}", error);
-        }
     }
 }
 

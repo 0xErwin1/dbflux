@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform;
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -42,22 +43,26 @@ impl Sidebar {
                         }
 
                         let app_state_for_window = app_state.clone();
-                        if let Ok(handle) = cx.open_window(
-                            WindowOptions {
-                                app_id: Some("dbflux".into()),
-                                titlebar: Some(TitlebarOptions {
-                                    title: Some("Settings".into()),
-                                    ..Default::default()
-                                }),
-                                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                                    None,
-                                    size(px(950.0), px(700.0)),
-                                    cx,
-                                ))),
-                                kind: WindowKind::Floating,
-                                focus: true,
+                        let mut options = WindowOptions {
+                            app_id: Some("dbflux".into()),
+                            titlebar: Some(TitlebarOptions {
+                                title: Some("Settings".into()),
                                 ..Default::default()
-                            },
+                            }),
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                                None,
+                                size(px(950.0), px(700.0)),
+                                cx,
+                            ))),
+                            focus: true,
+                            ..Default::default()
+                        };
+                        if let Some(kind) = platform::floating_window_kind() {
+                            options.kind = kind;
+                        }
+
+                        if let Ok(handle) = cx.open_window(
+                            options,
                             |window, cx| {
                                 let settings = cx.new(|cx| {
                                     SettingsWindow::new(app_state_for_window, window, cx)

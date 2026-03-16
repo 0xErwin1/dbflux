@@ -9,6 +9,7 @@ use super::form_nav::FormGridNav;
 use super::proxies_section::{
     PendingProxyAction, ProxiesSection, ProxyAuthSelection, ProxyFocus, ProxyFormField,
 };
+use super::section_trait::SectionFocusEvent;
 
 /// Proxy-specific form navigation state, built on top of `FormGridNav`.
 ///
@@ -168,7 +169,6 @@ impl ProxiesSection {
         cx: &mut Context<Self>,
     ) {
         self.editing_proxy_id = Some(proxy.id);
-        self.proxy_focus = ProxyFocus::Form;
         self.proxy_form_field = ProxyFormField::Name;
         self.proxy_editing_field = false;
 
@@ -447,10 +447,15 @@ impl ProxiesSection {
             return;
         }
 
+        if !self.content_focused && !self.proxy_editing_field {
+            return;
+        }
+
         if self.proxy_focus == ProxyFocus::Form && self.proxy_editing_field {
             match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
                     self.proxy_editing_field = false;
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
@@ -697,7 +702,12 @@ impl ProxiesSection {
         self.proxy_focus = ProxyFocus::Form;
         self.proxy_form_field = ProxyFormField::Name;
         self.proxy_editing_field = false;
-        self.proxy_load_selected_profile(window, cx);
+
+        if self.proxy_selected_idx.is_some() {
+            self.proxy_load_selected_profile(window, cx);
+        } else {
+            self.clear_proxy_form(window, cx);
+        }
     }
 
     fn proxy_exit_form(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {

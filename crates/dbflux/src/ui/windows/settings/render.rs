@@ -1,14 +1,17 @@
-use crate::ui::components::tree_nav::{self, FlatRow, TreeNavAction};
+use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Heights;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::Dialog;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
-use super::{SettingsCoordinator, SettingsFocus};
+use super::{
+    SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH,
+    SETTINGS_SIDEBAR_MIN_WIDTH,
+};
 
 const INDENT_PX: f32 = 16.0;
 
@@ -74,7 +77,7 @@ impl SettingsCoordinator {
         }
 
         div()
-            .w(px(180.0))
+            .w_full()
             .h_full()
             .border_r_1()
             .border_color(border_color)
@@ -136,6 +139,9 @@ impl SettingsCoordinator {
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.muted_foreground)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(row.label.clone()),
             );
 
@@ -157,10 +163,6 @@ impl SettingsCoordinator {
             .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.sidebar_tree.select_by_id(row_id.as_ref());
-                let action = this.sidebar_tree.activate();
-                if let TreeNavAction::Toggled { .. } = action {
-                    this.persist_collapse_state();
-                }
                 cx.notify();
             }))
             .child(inner)
@@ -191,7 +193,14 @@ impl SettingsCoordinator {
                         .text_color(theme.muted_foreground),
                 )
             })
-            .child(div().child(row.label.clone()));
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(row.label.clone()),
+            );
 
         div()
             .id(row.id.clone())
@@ -231,6 +240,13 @@ impl SettingsCoordinator {
 
 impl Render for SettingsCoordinator {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_focus_return {
+            self.pending_focus_return = false;
+            self.focus_area = SettingsFocus::Content;
+            self.active_section_entity.focus_in(_window, cx);
+            self.focus_handle.focus(_window);
+        }
+
         let _ = self.app_state.read(cx);
 
         div()
@@ -241,11 +257,23 @@ impl Render for SettingsCoordinator {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_event(event, window, cx);
             }))
-            .child(self.render_sidebar(cx))
+            .child(
+                div()
+                    .h_full()
+                    .w(self.sidebar_width)
+                    .flex()
+                    .flex_row()
+                    .child(div().h_full().flex_1().child(self.render_sidebar(cx)))
+                    .child(self.render_sidebar_grip(cx)),
+            )
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
                     .bg(cx.theme().background)
                     .child(self.active_section_view.clone()),
             )
@@ -276,5 +304,52 @@ impl Render for SettingsCoordinator {
                         ))),
                 )
             })
+    }
+}
+
+impl SettingsCoordinator {
+    fn render_sidebar_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("settings-sidebar-grip")
+            .h_full()
+            .w(SETTINGS_SIDEBAR_GRIP_WIDTH)
+            .cursor_col_resize()
+            .hover(|el| el.bg(cx.theme().accent.opacity(0.25)))
+            .when(self.sidebar_is_resizing, |el| el.bg(cx.theme().primary))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.sidebar_is_resizing = true;
+                    this.sidebar_resize_start_x = Some(event.position.x);
+                    this.sidebar_resize_start_width = Some(this.sidebar_width);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if !this.sidebar_is_resizing {
+                    return;
+                }
+
+                let Some(start_x) = this.sidebar_resize_start_x else {
+                    return;
+                };
+                let Some(start_width) = this.sidebar_resize_start_width else {
+                    return;
+                };
+
+                let delta = event.position.x - start_x;
+                this.sidebar_width = (start_width + delta)
+                    .clamp(SETTINGS_SIDEBAR_MIN_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH);
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.sidebar_is_resizing = false;
+                    this.sidebar_resize_start_x = None;
+                    this.sidebar_resize_start_width = None;
+                    cx.notify();
+                }),
+            )
     }
 }

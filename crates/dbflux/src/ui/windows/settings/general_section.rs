@@ -1,11 +1,12 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppState;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_core::{GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
+use gpui_component::input::{InputEvent, InputState};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GeneralFormRow {
@@ -39,8 +40,11 @@ pub(super) struct GeneralSection {
     pub(super) input_refresh_interval: Entity<InputState>,
     pub(super) input_max_bg_tasks: Entity<InputState>,
     pub(super) content_focused: bool,
+    pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
 }
+
+impl EventEmitter<SectionFocusEvent> for GeneralSection {}
 
 impl GeneralSection {
     pub(super) fn new(
@@ -123,6 +127,51 @@ impl GeneralSection {
             },
         );
 
+        let blur_max_history =
+            cx.subscribe(&input_max_history, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            });
+
+        let blur_auto_save = cx.subscribe(&input_auto_save, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur) {
+                if this.switching_input {
+                    this.switching_input = false;
+                    return;
+                }
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
+            }
+        });
+
+        let blur_refresh_interval = cx.subscribe(
+            &input_refresh_interval,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
+        let blur_max_bg_tasks =
+            cx.subscribe(&input_max_bg_tasks, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            });
+
         Self {
             app_state,
             gen_settings: settings,
@@ -136,10 +185,15 @@ impl GeneralSection {
             input_refresh_interval,
             input_max_bg_tasks,
             content_focused: false,
+            switching_input: false,
             _subscriptions: vec![
                 theme_subscription,
                 focus_subscription,
                 refresh_policy_subscription,
+                blur_max_history,
+                blur_auto_save,
+                blur_refresh_interval,
+                blur_max_bg_tasks,
             ],
         }
     }

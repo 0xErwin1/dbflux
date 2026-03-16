@@ -1,12 +1,13 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::keymap::{default_keymap, ContextId, KeyChord};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::input::Input;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
+use super::layout;
 
 impl KeybindingsSection {
     pub(super) fn render_keybindings_section(
@@ -98,27 +99,15 @@ impl KeybindingsSection {
 
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Keyboard Shortcuts"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted_foreground)
-                            .child("View all keyboard shortcuts by context"),
-                    ),
-            )
+            .child(layout::section_header(
+                "Keyboard Shortcuts",
+                "View all keyboard shortcuts by context",
+                theme,
+            ))
             .child(
                 div().p_4().border_b_1().border_color(border).child(
                     div()

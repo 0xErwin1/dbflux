@@ -1,7 +1,9 @@
 use super::SettingsEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::section_trait::SectionFocusEvent;
 use crate::app::{AppState, AppStateChanged};
+use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_core::{ConnectionHook, ScriptLanguage};
 use gpui::prelude::*;
@@ -20,6 +22,12 @@ pub(super) enum HookKindSelection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScriptSourceSelection {
     File,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HookFocus {
+    List,
+    Form,
 }
 
 pub(super) struct HooksSection {
@@ -50,7 +58,12 @@ pub(super) struct HooksSection {
     pub(super) hook_lua_connection_metadata: bool,
     pub(super) hook_lua_process_run: bool,
     pub(super) hook_failure_dropdown: Entity<Dropdown>,
+    pub(super) hook_focus: HookFocus,
+    pub(super) hook_list_idx: Option<usize>,
+    pub(super) hook_list_scroll_handle: ScrollHandle,
+    pub(super) hook_pending_scroll_idx: Option<usize>,
     pub(super) content_focused: bool,
+    pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -69,9 +82,18 @@ fn notify_on_input_change(
     cx.subscribe_in(
         input,
         window,
-        |_, _, event: &gpui_component::input::InputEvent, _window, cx| {
+        |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
             if matches!(event, gpui_component::input::InputEvent::Change) {
                 cx.notify();
+            }
+
+            if matches!(event, gpui_component::input::InputEvent::Blur) {
+                if this.switching_input {
+                    this.switching_input = false;
+                    return;
+                }
+
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
             }
         },
     )
@@ -230,7 +252,12 @@ impl HooksSection {
             hook_lua_connection_metadata: true,
             hook_lua_process_run: false,
             hook_failure_dropdown,
+            hook_focus: HookFocus::List,
+            hook_list_idx: None,
+            hook_list_scroll_handle: ScrollHandle::new(),
+            hook_pending_scroll_idx: None,
             content_focused: false,
+            switching_input: false,
             _subscriptions: vec![
                 app_state_subscription,
                 hook_kind_sub,
@@ -250,13 +277,123 @@ impl HooksSection {
         };
 
         section.refresh_hook_script_content_editor(window, cx);
+
+        let ids = section.hook_sorted_ids();
+        if let Some(first_id) = ids.first() {
+            section.hook_selected_id = Some(first_id.clone());
+            section.hook_list_idx = Some(0);
+            section.edit_hook(first_id, window, cx);
+            section.hook_focus = HookFocus::List;
+        }
+
         section
+    }
+
+    fn hook_sync_selection_from_ids(&mut self, ids: &[String]) {
+        self.hook_list_idx = self
+            .hook_selected_id
+            .as_ref()
+            .and_then(|selected| ids.iter().position(|id| id == selected));
+    }
+
+    fn hook_select_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let ids = self.hook_sorted_ids();
+        let Some(hook_id) = ids.get(index).cloned() else {
+            return;
+        };
+
+        self.hook_list_idx = Some(index);
+        self.hook_selected_id = Some(hook_id.clone());
+        self.hook_pending_scroll_idx = Some(index);
+        self.edit_hook(&hook_id, window, cx);
     }
 }
 
 impl SettingsSection for HooksSection {
     fn section_id(&self) -> SettingsSectionId {
         SettingsSectionId::Hooks
+    }
+
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.content_focused || self.pending_delete_hook_id.is_some() {
+            return;
+        }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
+        let ids = self.hook_sorted_ids();
+        self.hook_sync_selection_from_ids(&ids);
+
+        match self.hook_focus {
+            HookFocus::List => match (chord.key.as_str(), chord.modifiers) {
+                ("j", modifiers) | ("down", modifiers)
+                    if modifiers == Modifiers::none() && !ids.is_empty() =>
+                {
+                    let next = self
+                        .hook_list_idx
+                        .unwrap_or(0)
+                        .saturating_add(1)
+                        .min(ids.len() - 1);
+                    self.hook_select_index(next, window, cx);
+                    cx.notify();
+                }
+                ("k", modifiers) | ("up", modifiers)
+                    if modifiers == Modifiers::none() && !ids.is_empty() =>
+                {
+                    let prev = self.hook_list_idx.unwrap_or(0).saturating_sub(1);
+                    self.hook_select_index(prev, window, cx);
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::none() && !ids.is_empty() => {
+                    self.hook_select_index(0, window, cx);
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::shift() && !ids.is_empty() => {
+                    self.hook_select_index(ids.len() - 1, window, cx);
+                    cx.notify();
+                }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.hook_focus = HookFocus::Form;
+                    self.clear_hook_form(window, cx);
+                    self.switching_input = false;
+                    self.input_hook_id
+                        .update(cx, |input, cx| input.focus(window, cx));
+                }
+                ("d", modifiers) if modifiers == Modifiers::none() => {
+                    if let Some(hook_id) = self.hook_selected_id.clone() {
+                        self.request_delete_hook(hook_id, cx);
+                    }
+                }
+                ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
+                    if modifiers == Modifiers::none() =>
+                {
+                    self.hook_focus = HookFocus::Form;
+                    self.switching_input = false;
+                    self.input_hook_id
+                        .update(cx, |input, cx| input.focus(window, cx));
+                    cx.notify();
+                }
+                _ => {}
+            },
+            HookFocus::Form => match (chord.key.as_str(), chord.modifiers) {
+                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                    self.hook_focus = HookFocus::List;
+                    cx.notify();
+                }
+                ("enter", modifiers) if modifiers == Modifiers::none() => {
+                    self.save_hook(window, cx);
+                }
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.hook_focus = HookFocus::List;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        }
     }
 
     fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -273,6 +410,8 @@ impl SettingsSection for HooksSection {
         self.has_unsaved_hook_changes(cx)
     }
 }
+
+impl EventEmitter<SectionFocusEvent> for HooksSection {}
 
 impl EventEmitter<SettingsEvent> for HooksSection {}
 

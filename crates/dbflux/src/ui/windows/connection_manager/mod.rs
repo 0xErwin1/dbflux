@@ -8,6 +8,7 @@ mod render_tabs;
 
 use crate::app::{AppState, AuthProfileCreated};
 use crate::keymap::KeymapStack;
+use crate::platform;
 use crate::ui::components::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::{self, FormRendererState};
 use crate::ui::components::value_source_selector::ValueSourceSelector;
@@ -1943,18 +1944,22 @@ impl ConnectionManagerWindow {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(720.0), px(620.0)), cx);
 
-        let _ = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("AWS SSO Wizard".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
-                focus: true,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("AWS SSO Wizard".into()),
                 ..Default::default()
-            },
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        let _ = cx.open_window(
+            options,
             move |window, cx| {
                 let wizard = cx.new(|cx| {
                     let mut wizard = SsoWizard::new(app_state.clone(), window, cx);

@@ -9,9 +9,11 @@ use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 
+use super::layout;
 use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
 
 impl ServicesSection {
@@ -705,46 +707,35 @@ impl ServicesSection {
 }
 
 impl ServicesSection {
-    pub(super) fn render_services_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_services_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let services = &self.svc_services;
+        let services = self.svc_services.clone();
         let editing_idx = self.editing_svc_idx;
 
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Services"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("Manage external driver services. Changes require restart."),
-                    ),
-            )
+            .child(layout::section_header(
+                "Services",
+                "Manage external driver services. Changes require restart.",
+                theme,
+            ))
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .flex()
                     .overflow_hidden()
-                    .child(self.render_service_list(services, editing_idx, cx))
+                    .child(self.render_service_list(&services, editing_idx, cx))
                     .child(self.render_service_form(editing_idx, cx)),
             )
     }
 
     fn render_service_list(
-        &self,
+        &mut self,
         services: &[ServiceConfig],
         editing_idx: Option<usize>,
         cx: &mut Context<Self>,
@@ -753,9 +744,14 @@ impl ServicesSection {
         let is_list_focused = self.content_focused && self.svc_focus == ServiceFocus::List;
         let is_new_button_focused = is_list_focused && self.svc_selected_idx.is_none();
 
+        if let Some(scroll_idx) = self.svc_pending_scroll_idx.take() {
+            self.svc_list_scroll_handle.scroll_to_item(scroll_idx);
+        }
+
         div()
             .w(px(250.0))
             .h_full()
+            .min_h_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
@@ -785,13 +781,16 @@ impl ServicesSection {
             )
             .child(
                 div()
+                    .id("services-list-scroll")
                     .flex_1()
-                    .overflow_hidden()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .track_scroll(&self.svc_list_scroll_handle)
                     .p_2()
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .when(services.is_empty(), |container: Div| {
+                    .when(services.is_empty(), |container| {
                         container.child(
                             div()
                                 .p_4()
@@ -926,7 +925,8 @@ impl ServicesSection {
             .child(
                 div()
                     .flex_1()
-                    .overflow_y_hidden()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
                     .p_4()
                     .flex()
                     .flex_col()
