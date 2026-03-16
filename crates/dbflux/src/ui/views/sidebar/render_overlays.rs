@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform;
 
 impl Sidebar {
     pub(super) fn render_add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -93,27 +94,28 @@ impl Sidebar {
                         this.close_add_menu(cx);
                     });
                     let app_state = app_state.clone();
-                    cx.open_window(
-                        WindowOptions {
-                            app_id: Some("dbflux".into()),
-                            titlebar: Some(TitlebarOptions {
-                                title: Some("Connection Manager".into()),
-                                ..Default::default()
-                            }),
-                            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                                None,
-                                size(px(600.0), px(550.0)),
-                                cx,
-                            ))),
-                            kind: WindowKind::Floating,
+                    let mut options = WindowOptions {
+                        app_id: Some("dbflux".into()),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Connection Manager".into()),
                             ..Default::default()
-                        },
-                        |window, cx| {
-                            let manager =
-                                cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
-                            cx.new(|cx| Root::new(manager, window, cx))
-                        },
-                    )
+                        }),
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                            None,
+                            size(px(600.0), px(550.0)),
+                            cx,
+                        ))),
+                        ..Default::default()
+                    };
+                    if let Some(kind) = platform::floating_window_kind() {
+                        options.kind = kind;
+                    }
+
+                    cx.open_window(options, |window, cx| {
+                        let manager =
+                            cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
+                        cx.new(|cx| Root::new(manager, window, cx))
+                    })
                     .ok();
                 })
                 .child(

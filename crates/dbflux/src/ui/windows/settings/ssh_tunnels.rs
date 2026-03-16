@@ -7,6 +7,7 @@ use gpui::*;
 use uuid::Uuid;
 
 use super::form_nav::FormGridNav;
+use super::section_trait::SectionFocusEvent;
 use super::ssh_tunnels_section::{SshFocus, SshFormField, SshTestStatus, SshTunnelsSection};
 
 /// SSH form navigation. Wraps `FormGridNav` with auth/editing context
@@ -172,7 +173,6 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) {
         self.editing_tunnel_id = Some(tunnel.id);
-        self.ssh_focus = SshFocus::Form;
         self.ssh_form_field = SshFormField::Name;
         self.ssh_editing_field = false;
         self.ssh_test_status = SshTestStatus::None;
@@ -512,10 +512,15 @@ impl SshTunnelsSection {
             return;
         }
 
+        if !self.content_focused && !self.ssh_editing_field {
+            return;
+        }
+
         if self.ssh_focus == SshFocus::Form && self.ssh_editing_field {
             match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
                     self.ssh_editing_field = false;
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
@@ -723,7 +728,12 @@ impl SshTunnelsSection {
         self.ssh_focus = SshFocus::Form;
         self.ssh_form_field = SshFormField::Name;
         self.ssh_editing_field = false;
-        self.ssh_load_selected_profile(window, cx);
+
+        if self.ssh_selected_idx.is_some() {
+            self.ssh_load_selected_profile(window, cx);
+        } else {
+            self.clear_form(window, cx);
+        }
     }
 
     fn ssh_exit_form(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenDocumentDecision {
@@ -41,23 +42,39 @@ impl Workspace {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
 
-        if let Err(error) = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Connection Manager".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Connection Manager".into()),
                 ..Default::default()
-            },
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        match cx.open_window(
+            options,
             |window, cx| {
                 let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
                 cx.new(|cx| Root::new(manager, window, cx))
             },
         ) {
-            log::warn!("Failed to open connection manager window: {:?}", error);
+            Ok(handle) => {
+                // Explicitly activate the window and force initial render (X11 fix)
+                if let Err(e) = handle.update(cx, |_root, window, cx| {
+                    window.activate_window();
+                    cx.notify();
+                }) {
+                    log::warn!("Failed to activate connection manager window: {:?}", e);
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to open connection manager window: {:?}", error);
+            }
         }
     }
 
@@ -78,18 +95,22 @@ impl Workspace {
         let workspace = cx.entity().clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
-        if let Ok(handle) = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Settings".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
-                focus: true,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Settings".into()),
                 ..Default::default()
-            },
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        if let Ok(handle) = cx.open_window(
+            options,
             |window, cx| {
                 let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
 
@@ -108,6 +129,14 @@ impl Workspace {
                 cx.new(|cx| Root::new(settings, window, cx))
             },
         ) {
+            // Explicitly activate the window and force initial render (X11 fix)
+            if let Err(e) = handle.update(cx, |_root, window, cx| {
+                window.activate_window();
+                cx.notify();
+            }) {
+                log::warn!("Failed to activate settings window: {:?}", e);
+            }
+
             self.app_state.update(cx, |state, _| {
                 state.settings_window = Some(handle);
             });

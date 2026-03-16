@@ -1,5 +1,6 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppState;
 use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
@@ -9,7 +10,7 @@ use dbflux_core::{
 };
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
+use gpui_component::input::{InputEvent, InputState};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -18,6 +19,24 @@ pub(super) struct DriverSettingsEntry {
     pub(super) driver_key: DriverKey,
     pub(super) metadata: DriverMetadata,
     pub(super) settings_schema: Option<Arc<DriverFormDef>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DriversFocus {
+    List,
+    Editor,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DriverEditorField {
+    OverrideRefreshPolicy,
+    RefreshPolicy,
+    OverrideRefreshInterval,
+    RefreshInterval,
+    ConfirmDangerous,
+    RequiresWhere,
+    RequiresPreview,
+    Save,
 }
 
 pub(super) struct DriversSection {
@@ -42,9 +61,17 @@ pub(super) struct DriversSection {
 
     pub(super) drv_form_state: FormRendererState,
     pub(super) drv_form_subscriptions: Vec<Subscription>,
+    pub(super) drv_list_scroll_handle: ScrollHandle,
+    pub(super) drv_pending_scroll_idx: Option<usize>,
+    pub(super) drv_focus: DriversFocus,
+    pub(super) drv_editor_field: DriverEditorField,
     pub(super) content_focused: bool,
+    pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
+    _blur_subscriptions: Vec<Subscription>,
 }
+
+impl EventEmitter<SectionFocusEvent> for DriversSection {}
 
 impl DriversSection {
     pub(super) fn new(
@@ -125,6 +152,19 @@ impl DriversSection {
             },
         );
 
+        let blur_refresh_interval = cx.subscribe(
+            &drv_refresh_interval_input,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
         let drv_confirm_dangerous_sub = cx.subscribe_in(
             &drv_confirm_dangerous_dropdown,
             window,
@@ -191,7 +231,12 @@ impl DriversSection {
             drv_requires_preview_dropdown,
             drv_form_state: FormRendererState::default(),
             drv_form_subscriptions: Vec::new(),
+            drv_list_scroll_handle: ScrollHandle::new(),
+            drv_pending_scroll_idx: None,
+            drv_focus: DriversFocus::List,
+            drv_editor_field: DriverEditorField::OverrideRefreshPolicy,
             content_focused: false,
+            switching_input: false,
             _subscriptions: vec![
                 drv_refresh_dropdown_sub,
                 drv_refresh_input_sub,
@@ -199,10 +244,84 @@ impl DriversSection {
                 drv_requires_where_sub,
                 drv_requires_preview_sub,
             ],
+            _blur_subscriptions: vec![blur_refresh_interval],
         };
 
         section.drv_load_entries(window, cx);
         section
+    }
+
+    fn active_open_dropdown(&self, cx: &App) -> Option<Entity<Dropdown>> {
+        let core_dropdowns = [
+            &self.drv_refresh_policy_dropdown,
+            &self.drv_confirm_dangerous_dropdown,
+            &self.drv_requires_where_dropdown,
+            &self.drv_requires_preview_dropdown,
+        ];
+
+        for dropdown in core_dropdowns {
+            if dropdown.read(cx).is_open() {
+                return Some(dropdown.clone());
+            }
+        }
+
+        self.drv_form_state
+            .dropdowns
+            .values()
+            .find(|dropdown| dropdown.read(cx).is_open())
+            .cloned()
+    }
+
+    fn handle_open_dropdown(&mut self, chord: &KeyChord, cx: &mut Context<Self>) -> bool {
+        let Some(dropdown_entity) = self.active_open_dropdown(cx) else {
+            return false;
+        };
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.select_next_item(cx));
+            }
+            ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.select_prev_item(cx));
+            }
+            ("enter", modifiers) | ("tab", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.accept_selection(cx));
+            }
+            ("escape", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.close(cx));
+            }
+            ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                dropdown_entity.update(cx, |dropdown, cx| dropdown.close(cx));
+            }
+            _ => return false,
+        }
+
+        cx.notify();
+        true
+    }
+
+    fn drv_move_editor_right(&mut self) {
+        match self.drv_editor_field {
+            DriverEditorField::OverrideRefreshPolicy if self.drv_override_refresh_policy => {
+                self.drv_editor_field = DriverEditorField::RefreshPolicy;
+            }
+            DriverEditorField::OverrideRefreshInterval if self.drv_override_refresh_interval => {
+                self.drv_editor_field = DriverEditorField::RefreshInterval;
+            }
+            _ => {}
+        }
+    }
+
+    fn drv_move_editor_left(&mut self) {
+        match self.drv_editor_field {
+            DriverEditorField::RefreshPolicy => {
+                self.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
+            }
+            DriverEditorField::RefreshInterval => {
+                self.drv_editor_field = DriverEditorField::OverrideRefreshInterval;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -223,22 +342,91 @@ impl SettingsSection for DriversSection {
 
         let chord = KeyChord::from_gpui(&event.keystroke);
 
-        match (chord.key.as_str(), chord.modifiers) {
-            ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                if let Some(current) = self.drv_selected_idx
-                    && current + 1 < self.drv_entries.len()
-                {
-                    self.drv_select_driver(current + 1, window, cx);
+        if self.handle_open_dropdown(&chord, cx) {
+            return;
+        }
+
+        match self.drv_focus {
+            DriversFocus::List => match (chord.key.as_str(), chord.modifiers) {
+                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                    if let Some(current) = self.drv_selected_idx
+                        && current + 1 < self.drv_entries.len()
+                    {
+                        self.drv_select_driver(current + 1, window, cx);
+                    }
                 }
-            }
-            ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                if let Some(current) = self.drv_selected_idx
-                    && current > 0
-                {
-                    self.drv_select_driver(current - 1, window, cx);
+                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                    if let Some(current) = self.drv_selected_idx
+                        && current > 0
+                    {
+                        self.drv_select_driver(current - 1, window, cx);
+                    }
                 }
-            }
-            _ => {}
+                ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
+                    if modifiers == Modifiers::none() =>
+                {
+                    self.drv_focus = DriversFocus::Editor;
+                    cx.notify();
+                }
+                ("g", modifiers)
+                    if modifiers == Modifiers::none() && !self.drv_entries.is_empty() =>
+                {
+                    self.drv_select_driver(0, window, cx);
+                }
+                ("g", modifiers)
+                    if modifiers == Modifiers::shift() && !self.drv_entries.is_empty() =>
+                {
+                    self.drv_select_driver(self.drv_entries.len() - 1, window, cx);
+                }
+                _ => {}
+            },
+            DriversFocus::Editor => match (chord.key.as_str(), chord.modifiers) {
+                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                    let previous_field = self.drv_editor_field;
+                    self.drv_move_editor_left();
+
+                    if previous_field != self.drv_editor_field {
+                        cx.notify();
+                    }
+                }
+                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                    self.drv_move_editor_down();
+                    cx.notify();
+                }
+                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                    self.drv_move_editor_up();
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::none() => {
+                    self.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::shift() => {
+                    self.drv_editor_field = DriverEditorField::Save;
+                    cx.notify();
+                }
+                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                    let previous_field = self.drv_editor_field;
+                    self.drv_move_editor_right();
+
+                    if previous_field != self.drv_editor_field {
+                        cx.notify();
+                        return;
+                    }
+
+                    if !matches!(
+                        self.drv_editor_field,
+                        DriverEditorField::OverrideRefreshPolicy
+                            | DriverEditorField::OverrideRefreshInterval
+                    ) {
+                        self.drv_activate_editor_field(window, cx);
+                    }
+                }
+                ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
+                    self.drv_activate_editor_field(window, cx);
+                }
+                _ => {}
+            },
         }
     }
 
@@ -249,6 +437,7 @@ impl SettingsSection for DriversSection {
 
     fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.content_focused = false;
+        self.drv_focus = DriversFocus::List;
         cx.notify();
     }
 

@@ -1,3 +1,5 @@
+use super::layout;
+use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use crate::app::{AppState, AppStateChanged};
@@ -8,7 +10,7 @@ use gpui_component::button::Button;
 use gpui_component::button::ButtonVariants;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
 use uuid::Uuid;
 
@@ -67,11 +69,15 @@ pub(super) struct ProxiesSection {
     pub(super) proxy_selected_idx: Option<usize>,
     pub(super) proxy_form_field: ProxyFormField,
     pub(super) proxy_editing_field: bool,
+    pub(super) content_focused: bool,
+    pub(super) switching_input: bool,
     pub(super) pending_delete_proxy_id: Option<Uuid>,
     pub(super) pending_discard_action: Option<PendingProxyAction>,
     pub(super) pending_sync_from_app_state: bool,
     _subscriptions: Vec<Subscription>,
 }
+
+impl EventEmitter<SectionFocusEvent> for ProxiesSection {}
 
 impl ProxiesSection {
     pub(super) fn new(
@@ -101,6 +107,69 @@ impl ProxiesSection {
             cx.notify();
         });
 
+        let blur_name = cx.subscribe(&input_proxy_name, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur) {
+                if this.switching_input {
+                    this.switching_input = false;
+                    return;
+                }
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
+            }
+        });
+
+        let blur_host = cx.subscribe(&input_proxy_host, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur) {
+                if this.switching_input {
+                    this.switching_input = false;
+                    return;
+                }
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
+            }
+        });
+
+        let blur_port = cx.subscribe(&input_proxy_port, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur) {
+                if this.switching_input {
+                    this.switching_input = false;
+                    return;
+                }
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
+            }
+        });
+
+        let blur_username =
+            cx.subscribe(&input_proxy_username, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            });
+
+        let blur_password =
+            cx.subscribe(&input_proxy_password, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            });
+
+        let blur_no_proxy =
+            cx.subscribe(&input_proxy_no_proxy, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            });
+
         Self {
             app_state,
             editing_proxy_id: None,
@@ -119,10 +188,20 @@ impl ProxiesSection {
             proxy_selected_idx: None,
             proxy_form_field: ProxyFormField::Name,
             proxy_editing_field: false,
+            content_focused: false,
+            switching_input: false,
             pending_delete_proxy_id: None,
             pending_discard_action: None,
             pending_sync_from_app_state: false,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![
+                subscription,
+                blur_name,
+                blur_host,
+                blur_port,
+                blur_username,
+                blur_password,
+                blur_no_proxy,
+            ],
         }
     }
 
@@ -188,6 +267,7 @@ impl ProxiesSection {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
+                            this.switching_input = true;
                             this.proxy_focus = ProxyFocus::Form;
                             this.proxy_form_field = field;
                             this.proxy_focus_current_field(window, cx);
@@ -526,6 +606,8 @@ impl ProxiesSection {
                                     window,
                                     cx,
                                 );
+                                this.proxy_focus = ProxyFocus::Form;
+                                this.proxy_form_field = ProxyFormField::Name;
                             }))
                             .child(
                                 div()
@@ -792,6 +874,26 @@ impl SettingsSection for ProxiesSection {
         SettingsSectionId::Proxies
     }
 
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        ProxiesSection::handle_key_event(self, event, window, cx);
+    }
+
+    fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = true;
+        cx.notify();
+    }
+
+    fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = false;
+        self.proxy_editing_field = false;
+        cx.notify();
+    }
+
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_proxy_changes(cx)
     }
@@ -840,27 +942,15 @@ impl Render for ProxiesSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Proxy Profiles"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("Manage proxy configurations for database connections"),
-                    ),
-            )
+            .child(layout::section_header(
+                "Proxy Profiles",
+                "Manage proxy configurations for database connections",
+                theme,
+            ))
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .flex()
                     .overflow_hidden()
                     .child(self.render_proxy_list(&proxies, editing_id, cx))

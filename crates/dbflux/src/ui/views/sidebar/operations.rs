@@ -1,5 +1,6 @@
 use super::*;
 use crate::hook_executor::CompositeExecutor;
+use crate::platform;
 use dbflux_core::{
     CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
     HookPhase, HookResult, OutputReceiver, PipelineState, ProcessExecutionError, TaskId, TaskKind,
@@ -949,17 +950,21 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
 
-        if let Err(error) = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Connection Manager".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Connection Manager".into()),
                 ..Default::default()
-            },
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        if let Err(error) = cx.open_window(
+            options,
             |window, cx| {
                 let manager = cx.new(|cx| {
                     ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx)
@@ -2659,17 +2664,21 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(600.0), px(550.0)), cx);
 
-        if let Err(error) = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Edit Connection".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Edit Connection".into()),
                 ..Default::default()
-            },
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        if let Err(error) = cx.open_window(
+            options,
             |window, cx| {
                 let manager = cx.new(|cx| {
                     ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)

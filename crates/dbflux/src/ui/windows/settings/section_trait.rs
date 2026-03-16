@@ -54,3 +54,8 @@ pub trait SettingsSection: 'static {
         false
     }
 }
+
+#[derive(Clone, Debug)]
+pub enum SectionFocusEvent {
+    RequestFocusReturn,
+}

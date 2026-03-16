@@ -18,7 +18,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::SettingsEvent;
-use super::hooks_section::{HookKindSelection, HooksSection, ScriptSourceSelection};
+use super::hooks_section::{HookFocus, HookKindSelection, HooksSection, ScriptSourceSelection};
+use super::layout;
 
 impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
@@ -70,7 +71,7 @@ impl HooksSection {
         self.refresh_hook_script_content_editor(window, cx);
     }
 
-    fn hook_sorted_ids(&self) -> Vec<String> {
+    pub(super) fn hook_sorted_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.hook_definitions.keys().cloned().collect();
         ids.sort();
         ids
@@ -660,6 +661,7 @@ impl HooksSection {
     pub(super) fn clear_hook_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_hook_id = None;
         self.hook_selected_id = None;
+        self.hook_list_idx = None;
         self.hook_enabled = true;
         self.hook_inherit_env = true;
         self.hook_lua_logging = true;
@@ -708,6 +710,8 @@ impl HooksSection {
 
         self.editing_hook_id = Some(hook_id.to_string());
         self.hook_selected_id = Some(hook_id.to_string());
+        let ids = self.hook_sorted_ids();
+        self.hook_list_idx = ids.iter().position(|id| id == hook_id);
         self.hook_enabled = hook.enabled;
         self.hook_inherit_env = hook.inherit_env;
 
@@ -896,6 +900,7 @@ impl HooksSection {
         self.persist_hooks(window, cx);
 
         self.edit_hook(&hook_id, window, cx);
+        self.hook_focus = HookFocus::Form;
         cx.toast_success("Hook saved", window);
     }
 
@@ -917,6 +922,7 @@ impl HooksSection {
 
         if self.hook_selected_id.as_deref() == Some(hook_id.as_str()) {
             self.hook_selected_id = None;
+            self.hook_list_idx = None;
         }
 
         self.persist_hooks(window, cx);
@@ -962,70 +968,85 @@ impl HooksSection {
         Ok(env)
     }
 
-    pub(super) fn render_hooks_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Hooks"),
-                    )
-                    .child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "Create reusable hooks and associate them from connection settings",
-                    )),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_hooks_list(cx))
-                    .child(self.render_hook_form(cx)),
-            )
+        layout::section_container(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(layout::section_header(
+                    "Hooks",
+                    "Create reusable hooks and associate them from connection settings",
+                    theme,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .overflow_hidden()
+                        .child(self.render_hooks_list(cx))
+                        .child(self.render_hook_form(cx)),
+                ),
+        )
     }
 
-    fn render_hooks_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let hook_ids = self.hook_sorted_ids();
+        let list_focused = self.content_focused && self.hook_focus == HookFocus::List;
+        let is_new_button_focused = list_focused && self.hook_list_idx.is_none();
+
+        if let Some(scroll_idx) = self.hook_pending_scroll_idx.take() {
+            self.hook_list_scroll_handle.scroll_to_item(scroll_idx);
+        }
 
         div()
             .w(px(280.0))
             .h_full()
+            .min_h_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
             .flex_col()
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
-                    Button::new("new-hook")
-                        .label("New Hook")
-                        .small()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.clear_hook_form(window, cx);
-                        })),
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_new_button_focused {
+                            theme.primary
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(
+                            Button::new("new-hook")
+                                .label("New Hook")
+                                .small()
+                                .w_full()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.hook_focus = HookFocus::Form;
+                                    this.clear_hook_form(window, cx);
+                                })),
+                        ),
                 ),
             )
             .child(
                 div()
+                    .id("hooks-list-scroll")
                     .flex_1()
-                    .overflow_hidden()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .track_scroll(&self.hook_list_scroll_handle)
                     .p_2()
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .when(hook_ids.is_empty(), |container: Div| {
+                    .when(hook_ids.is_empty(), |container| {
                         container.child(
                             div()
                                 .p_4()
@@ -1034,8 +1055,9 @@ impl HooksSection {
                                 .child("No hooks defined"),
                         )
                     })
-                    .children(hook_ids.into_iter().map(|hook_id| {
+                    .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
                         let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
+                        let focused = list_focused && self.hook_list_idx == Some(idx);
                         let hook = self.hook_definitions.get(&hook_id).cloned();
                         let hook_id_for_click = hook_id.clone();
 
@@ -1046,10 +1068,15 @@ impl HooksSection {
                             .rounded(px(4.0))
                             .cursor_pointer()
                             .border_1()
-                            .border_color(gpui::transparent_black())
+                            .border_color(if focused && !selected {
+                                theme.primary
+                            } else {
+                                gpui::transparent_black()
+                            })
                             .when(selected, |div| div.bg(theme.secondary))
                             .hover(|div| div.bg(theme.secondary))
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                this.hook_focus = HookFocus::Form;
                                 this.edit_hook(&hook_id_for_click, window, cx);
                             }))
                             .child(
@@ -1109,6 +1136,12 @@ impl HooksSection {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.switching_input = true;
+                }),
+            )
             .child(
                 div().p_4().border_b_1().border_color(theme.border).child(
                     div()

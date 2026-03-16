@@ -1,4 +1,8 @@
-use super::drivers_section::{DriverSettingsEntry, DriversSection};
+use super::drivers_section::{
+    DriverEditorField, DriverSettingsEntry, DriversFocus, DriversSection,
+};
+use super::layout;
+use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
@@ -13,7 +17,6 @@ use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent};
-use gpui_component::scroll::ScrollableElement;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
@@ -81,6 +84,91 @@ fn bool_override_index(value: Option<bool>) -> usize {
 }
 
 impl DriversSection {
+    pub(super) fn drv_move_editor_down(&mut self) {
+        self.drv_editor_field = match self.drv_editor_field {
+            DriverEditorField::OverrideRefreshPolicy | DriverEditorField::RefreshPolicy => {
+                DriverEditorField::OverrideRefreshInterval
+            }
+            DriverEditorField::OverrideRefreshInterval | DriverEditorField::RefreshInterval => {
+                DriverEditorField::ConfirmDangerous
+            }
+            DriverEditorField::ConfirmDangerous => DriverEditorField::RequiresWhere,
+            DriverEditorField::RequiresWhere => DriverEditorField::RequiresPreview,
+            DriverEditorField::RequiresPreview => DriverEditorField::Save,
+            DriverEditorField::Save => DriverEditorField::Save,
+        };
+    }
+
+    pub(super) fn drv_move_editor_up(&mut self) {
+        self.drv_editor_field = match self.drv_editor_field {
+            DriverEditorField::OverrideRefreshPolicy => DriverEditorField::OverrideRefreshPolicy,
+            DriverEditorField::RefreshPolicy => DriverEditorField::OverrideRefreshPolicy,
+            DriverEditorField::OverrideRefreshInterval => DriverEditorField::OverrideRefreshPolicy,
+            DriverEditorField::RefreshInterval => DriverEditorField::OverrideRefreshInterval,
+            DriverEditorField::ConfirmDangerous => DriverEditorField::OverrideRefreshInterval,
+            DriverEditorField::RequiresWhere => DriverEditorField::ConfirmDangerous,
+            DriverEditorField::RequiresPreview => DriverEditorField::RequiresWhere,
+            DriverEditorField::Save => DriverEditorField::RequiresPreview,
+        };
+    }
+
+    pub(super) fn drv_activate_editor_field(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.drv_editor_field {
+            DriverEditorField::OverrideRefreshPolicy => {
+                self.drv_override_refresh_policy = !self.drv_override_refresh_policy;
+                self.drv_editor_dirty = true;
+                cx.notify();
+            }
+            DriverEditorField::RefreshPolicy => {
+                if !self.drv_override_refresh_policy {
+                    return;
+                }
+
+                self.drv_refresh_policy_dropdown.update(cx, |dropdown, cx| {
+                    dropdown.open(cx);
+                });
+            }
+            DriverEditorField::OverrideRefreshInterval => {
+                self.drv_override_refresh_interval = !self.drv_override_refresh_interval;
+                self.drv_editor_dirty = true;
+
+                if !self.drv_override_refresh_interval {
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+
+                cx.notify();
+            }
+            DriverEditorField::RefreshInterval => {
+                if !self.drv_override_refresh_interval {
+                    return;
+                }
+
+                self.drv_refresh_interval_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+            }
+            DriverEditorField::ConfirmDangerous => {
+                self.drv_confirm_dangerous_dropdown
+                    .update(cx, |dropdown, cx| dropdown.open(cx));
+            }
+            DriverEditorField::RequiresWhere => {
+                self.drv_requires_where_dropdown
+                    .update(cx, |dropdown, cx| dropdown.open(cx));
+            }
+            DriverEditorField::RequiresPreview => {
+                self.drv_requires_preview_dropdown
+                    .update(cx, |dropdown, cx| dropdown.open(cx));
+            }
+            DriverEditorField::Save => {
+                self.save_driver_settings(window, cx);
+            }
+        }
+    }
+
     /// Deterministic dirty check: compare the working driver overrides and
     /// settings (including the currently-open editor) against what is persisted
     /// in AppState.  This avoids false positives from transient UI events.
@@ -257,6 +345,7 @@ impl DriversSection {
         }
 
         self.drv_selected_idx = Some(idx);
+        self.drv_pending_scroll_idx = Some(idx);
         self.drv_load_selected_editor(window, cx);
         self.content_focused = true;
         cx.notify();
@@ -586,120 +675,127 @@ impl DriversSection {
         }
     }
 
-    pub(super) fn render_drivers_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
+        layout::section_container(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(layout::section_header(
+                    "Drivers",
+                    "Configure per-driver overrides and driver-defined settings",
+                    theme,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .overflow_hidden()
+                        .child(self.render_driver_list(cx))
+                        .child(self.render_driver_editor(cx)),
+                ),
+        )
+    }
+
+    fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let list_focused = self.content_focused && self.drv_focus == DriversFocus::List;
+
+        if let Some(scroll_idx) = self.drv_pending_scroll_idx.take() {
+            self.drv_list_scroll_handle.scroll_to_item(scroll_idx);
+        }
+
         div()
-            .flex_1()
+            .w(px(300.0))
+            .h_full()
+            .min_h_0()
+            .border_r_1()
+            .border_color(theme.border)
             .flex()
             .flex_col()
             .overflow_hidden()
             .child(
                 div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Drivers"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("Configure per-driver overrides and driver-defined settings"),
-                    ),
-            )
-            .child(
-                div()
+                    .id("drivers-list-scroll")
+                    .p_2()
                     .flex_1()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .track_scroll(&self.drv_list_scroll_handle)
                     .flex()
-                    .overflow_hidden()
-                    .child(self.render_driver_list(cx))
-                    .child(self.render_driver_editor(cx)),
-            )
-    }
-
-    fn render_driver_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let list_focused = self.content_focused;
-
-        div()
-            .w(px(300.0))
-            .h_full()
-            .border_r_1()
-            .border_color(theme.border)
-            .p_2()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .when(self.drv_entries.is_empty(), |d| {
-                d.child(
-                    div()
-                        .p_3()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("No registered drivers"),
-                )
-            })
-            .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
-                let selected = self.drv_selected_idx == Some(idx);
-                let focused = list_focused && selected;
-
-                div()
-                    .id(SharedString::from(format!(
-                        "settings-driver-{}",
-                        entry.driver_key
-                    )))
-                    .px_3()
-                    .py_2()
-                    .rounded(px(4.0))
-                    .cursor_pointer()
-                    .border_1()
-                    .border_color(if focused && !selected {
-                        theme.primary
-                    } else {
-                        gpui::transparent_black()
+                    .flex_col()
+                    .gap_1()
+                    .when(self.drv_entries.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .p_3()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("No registered drivers"),
+                        )
                     })
-                    .when(selected, |d| d.bg(theme.secondary))
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.drv_select_driver(idx, window, cx);
-                    }))
-                    .child(
+                    .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
+                        let selected = self.drv_selected_idx == Some(idx);
+                        let focused = list_focused && selected;
+
                         div()
-                            .flex()
-                            .items_start()
-                            .gap_2()
-                            .child(
-                                svg()
-                                    .path(AppIcon::from_icon(entry.metadata.icon).path())
-                                    .size_4()
-                                    .mt(px(2.0))
-                                    .text_color(theme.muted_foreground),
-                            )
+                            .id(SharedString::from(format!(
+                                "settings-driver-{}",
+                                entry.driver_key
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if focused {
+                                theme.primary
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(selected, |d| d.bg(theme.secondary))
+                            .hover(|d| d.bg(theme.secondary))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.drv_select_driver(idx, window, cx);
+                            }))
                             .child(
                                 div()
                                     .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                    .items_start()
+                                    .gap_2()
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(entry.metadata.display_name.clone()),
+                                        svg()
+                                            .path(AppIcon::from_icon(entry.metadata.icon).path())
+                                            .size_4()
+                                            .mt(px(2.0))
+                                            .text_color(theme.muted_foreground),
                                     )
                                     .child(
                                         div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(entry.driver_key.clone()),
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(entry.metadata.display_name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(entry.driver_key.clone()),
+                                            ),
                                     ),
-                            ),
-                    )
-            }))
+                            )
+                    }))
+            )
     }
 
     fn render_driver_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -721,116 +817,100 @@ impl DriversSection {
 
         let global = &self.gen_settings;
 
-        div()
-            .flex_1()
-            .h_full()
+        let header = div()
             .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div().p_4().border_b_1().border_color(theme.border).child(
-                    div()
-                        .flex()
-                        .items_start()
-                        .justify_between()
-                        .gap_4()
-                        .child(
-                            div()
-                                .flex()
-                                .items_start()
-                                .gap_3()
-                                .child(
-                                    svg()
-                                        .path(AppIcon::from_icon(entry.metadata.icon).path())
-                                        .size_8()
-                                        .text_color(theme.foreground),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_base()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(entry.metadata.display_name.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child(entry.driver_key.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(theme.muted_foreground)
-                                                .child(entry.metadata.description.clone()),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded(px(4.0))
-                                        .bg(theme.secondary)
-                                        .child(entry.metadata.category.display_name()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded(px(4.0))
-                                        .bg(theme.secondary)
-                                        .child(
-                                            entry
-                                                .metadata
-                                                .query_language
-                                                .display_name()
-                                                .to_string(),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
+            .items_start()
+            .justify_between()
+            .gap_4()
             .child(
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
                     .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(self.render_capabilities(entry, cx))
-                    .child(self.render_global_overrides(global, cx))
-                    .child(self.render_driver_schema(entry, cx)),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .justify_end()
+                    .items_start()
+                    .gap_3()
                     .child(
-                        Button::new("save-driver-settings")
-                            .label("Save")
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_driver_settings(window, cx);
-                            })),
+                        svg()
+                            .path(AppIcon::from_icon(entry.metadata.icon).path())
+                            .size_8()
+                            .text_color(theme.foreground),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(entry.metadata.display_name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(entry.driver_key.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(entry.metadata.description.clone()),
+                            ),
                     ),
             )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .bg(theme.secondary)
+                            .child(entry.metadata.category.display_name()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .bg(theme.secondary)
+                            .child(entry.metadata.query_language.display_name().to_string()),
+                    ),
+            );
+
+        let body = div()
+            .child(self.render_capabilities(entry, cx))
+            .child(self.render_global_overrides(global, cx))
+            .child(self.render_driver_schema(entry, cx));
+
+        let footer = {
+            let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
+            div()
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(
+                    if editor_focused && self.drv_editor_field == DriverEditorField::Save {
+                        theme.primary
+                    } else {
+                        gpui::transparent_black()
+                    },
+                )
+                .child(
+                    Button::new("save-driver-settings")
+                        .label("Save")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.save_driver_settings(window, cx);
+                        })),
+                )
+        };
+
+        layout::sticky_form_shell(header, body, footer, &theme)
     }
 
     fn render_capabilities(
@@ -883,6 +963,7 @@ impl DriversSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
+        let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
 
         div()
             .flex()
@@ -907,6 +988,8 @@ impl DriversSection {
                     .gap_3()
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
@@ -921,27 +1004,83 @@ impl DriversSection {
                     )
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
                             .child(
-                                Checkbox::new("drv-override-refresh-policy")
-                                    .checked(self.drv_override_refresh_policy)
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.drv_override_refresh_policy = *checked;
-                                        this.drv_editor_dirty = true;
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::OverrideRefreshPolicy
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::OverrideRefreshPolicy;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        Checkbox::new("drv-override-refresh-policy")
+                                            .checked(self.drv_override_refresh_policy)
+                                            .on_click(cx.listener(
+                                                |this, checked: &bool, _, cx| {
+                                                    this.drv_override_refresh_policy = *checked;
+                                                    this.drv_editor_dirty = true;
+
+                                                    if !*checked {
+                                                        cx.emit(
+                                                            SectionFocusEvent::RequestFocusReturn,
+                                                        );
+                                                    }
+
+                                                    cx.notify();
+                                                },
+                                            )),
+                                    ),
                             )
                             .child(div().w(px(220.0)).text_sm().child("Refresh policy"))
                             .child(
                                 div()
                                     .min_w(px(160.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::RefreshPolicy
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
                                     .opacity(if self.drv_override_refresh_policy {
                                         1.0
                                     } else {
                                         0.6
                                     })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::RefreshPolicy;
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
@@ -950,28 +1089,89 @@ impl DriversSection {
                     )
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
                             .child(
-                                Checkbox::new("drv-override-refresh-interval")
-                                    .checked(self.drv_override_refresh_interval)
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.drv_override_refresh_interval = *checked;
-                                        this.drv_editor_dirty = true;
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::OverrideRefreshInterval
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::OverrideRefreshInterval;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        Checkbox::new("drv-override-refresh-interval")
+                                            .checked(self.drv_override_refresh_interval)
+                                            .on_click(cx.listener(
+                                                |this, checked: &bool, _, cx| {
+                                                    this.drv_override_refresh_interval = *checked;
+                                                    this.drv_editor_dirty = true;
+
+                                                    if !*checked {
+                                                        cx.emit(
+                                                            SectionFocusEvent::RequestFocusReturn,
+                                                        );
+                                                    }
+
+                                                    cx.notify();
+                                                },
+                                            )),
+                                    ),
                             )
                             .child(div().w(px(220.0)).text_sm().child("Refresh interval (sec)"))
                             .child(
                                 div()
                                     .w(px(160.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::RefreshInterval
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
                                     .opacity(if self.drv_override_refresh_interval {
                                         1.0
                                     } else {
                                         0.6
                                     })
-                                    .child(Input::new(&self.drv_refresh_interval_input).small()),
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::RefreshInterval;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        Input::new(&self.drv_refresh_interval_input)
+                                            .small()
+                                            .disabled(!self.drv_override_refresh_interval),
+                                    ),
                             )
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
                                 format!("Default: {}", global.default_refresh_interval_secs),
@@ -979,6 +1179,8 @@ impl DriversSection {
                     )
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
@@ -991,6 +1193,27 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::ConfirmDangerous
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::ConfirmDangerous;
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
@@ -1002,6 +1225,8 @@ impl DriversSection {
                     )
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
@@ -1009,6 +1234,27 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::RequiresWhere
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::RequiresWhere;
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
@@ -1017,6 +1263,8 @@ impl DriversSection {
                     )
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .gap_3()
@@ -1024,6 +1272,27 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(
+                                        if editor_focused
+                                            && self.drv_editor_field
+                                                == DriverEditorField::RequiresPreview
+                                        {
+                                            theme.primary
+                                        } else {
+                                            gpui::transparent_black()
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.drv_focus = DriversFocus::Editor;
+                                            this.drv_editor_field =
+                                                DriverEditorField::RequiresPreview;
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
                             .child(div().text_xs().text_color(theme.muted_foreground).child(

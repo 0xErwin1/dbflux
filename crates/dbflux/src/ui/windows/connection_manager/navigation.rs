@@ -1,4 +1,5 @@
 use crate::keymap::{Command, ContextId};
+use crate::platform;
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::settings::{SettingsSectionId, SettingsWindow};
 use crate::ui::windows::ssh_shared::SshAuthSelection;
@@ -1610,25 +1611,25 @@ impl ConnectionManagerWindow {
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
-        if let Ok(handle) = cx.open_window(
-            WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Settings".into()),
-                    ..Default::default()
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Floating,
-                focus: true,
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Settings".into()),
                 ..Default::default()
-            },
-            move |window, cx| {
-                let settings = cx.new(|cx| {
-                    SettingsWindow::new_with_section(app_state.clone(), section, window, cx)
-                });
-                cx.new(|cx| Root::new(settings, window, cx))
-            },
-        ) {
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        if let Some(kind) = platform::floating_window_kind() {
+            options.kind = kind;
+        }
+
+        if let Ok(handle) = cx.open_window(options, move |window, cx| {
+            let settings = cx
+                .new(|cx| SettingsWindow::new_with_section(app_state.clone(), section, window, cx));
+            cx.new(|cx| Root::new(settings, window, cx))
+        }) {
             self.app_state.update(cx, |state, _| {
                 state.settings_window = Some(handle);
             });
