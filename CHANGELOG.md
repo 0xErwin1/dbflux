@@ -2,6 +2,18 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.9] – 2026-03-17
+
+### Fixed
+
+* X11 window management issues: windows now render correctly on all X11 compositors with proper min size hints for tiling WM support
+* Connection Manager keyboard navigation now includes auth profile and inline value source rows in the focus flow
+* Settings forms now use unified `FormSection` trait for consistent two-level focus model across all sections (Auth Profiles, Hooks, Drivers, Proxies, SSH Tunnels, Services)
+* Sidebar multi-select drag/drop and keyboard nesting stabilized with proper edge case handling
+* Nix build configuration updated for proper derivation structure
+
+---
+
 ## [0.4.0-dev.8] – 2026-03-12
 
 ### Added
