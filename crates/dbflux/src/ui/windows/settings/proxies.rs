@@ -127,24 +127,6 @@ impl ProxyFormNav {
         self.nav.move_last(&rows);
     }
 
-    #[cfg(test)]
-    pub(super) fn tab_next(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_next(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn tab_prev(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_prev(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn validate_field(&mut self) {
-        let rows = self.form_rows();
-        self.nav.validate(&rows, ProxyFormField::Name);
-    }
-
     pub(super) fn is_input_field(field: ProxyFormField) -> bool {
         matches!(
             field,
