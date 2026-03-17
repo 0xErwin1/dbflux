@@ -1,6 +1,7 @@
 use super::drivers_section::{
     DriverEditorField, DriverSettingsEntry, DriversFocus, DriversSection,
 };
+use super::form_section::FormSection;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
@@ -121,6 +122,7 @@ impl DriversSection {
             DriverEditorField::OverrideRefreshPolicy => {
                 self.drv_override_refresh_policy = !self.drv_override_refresh_policy;
                 self.drv_editor_dirty = true;
+                self.validate_form_field();
                 cx.notify();
             }
             DriverEditorField::RefreshPolicy => {
@@ -135,6 +137,7 @@ impl DriversSection {
             DriverEditorField::OverrideRefreshInterval => {
                 self.drv_override_refresh_interval = !self.drv_override_refresh_interval;
                 self.drv_editor_dirty = true;
+                self.validate_form_field();
 
                 if !self.drv_override_refresh_interval {
                     cx.emit(SectionFocusEvent::RequestFocusReturn);
@@ -147,9 +150,7 @@ impl DriversSection {
                     return;
                 }
 
-                self.drv_refresh_interval_input.update(cx, |input, cx| {
-                    input.focus(window, cx);
-                });
+                self.focus_current_field(window, cx);
             }
             DriverEditorField::ConfirmDangerous => {
                 self.drv_confirm_dangerous_dropdown
@@ -794,7 +795,7 @@ impl DriversSection {
                                             ),
                                     ),
                             )
-                    }))
+                    })),
             )
     }
 
@@ -1026,6 +1027,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::OverrideRefreshPolicy;
@@ -1075,6 +1077,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::RefreshPolicy;
@@ -1111,6 +1114,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::OverrideRefreshInterval;
@@ -1208,6 +1212,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::ConfirmDangerous;
@@ -1249,6 +1254,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::RequiresWhere;
@@ -1287,6 +1293,7 @@ impl DriversSection {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
+                                            this.switching_input = true;
                                             this.drv_focus = DriversFocus::Editor;
                                             this.drv_editor_field =
                                                 DriverEditorField::RequiresPreview;

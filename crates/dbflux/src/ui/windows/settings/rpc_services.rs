@@ -507,7 +507,7 @@ impl ServicesSection {
         rows
     }
 
-    fn current_form_row(&self) -> Option<ServiceFormRow> {
+    pub(super) fn current_form_row(&self) -> Option<ServiceFormRow> {
         let rows = self.svc_form_rows();
         rows.get(self.svc_form_cursor).copied()
     }
@@ -650,7 +650,8 @@ impl ServicesSection {
         match self.current_form_row() {
             Some(ServiceFormRow::SocketId)
             | Some(ServiceFormRow::Command)
-            | Some(ServiceFormRow::Timeout) => {
+            | Some(ServiceFormRow::Timeout)
+            | Some(ServiceFormRow::EnvValue(_)) => {
                 self.svc_focus_current_field(window, cx);
             }
 
@@ -662,12 +663,20 @@ impl ServicesSection {
                 }
             }
 
+            Some(ServiceFormRow::ArgDelete(i)) => {
+                self.remove_arg_row(i, window, cx);
+            }
+
             Some(ServiceFormRow::EnvKey(i)) => {
                 if self.svc_env_col == 2 {
                     self.remove_env_row(i, window, cx);
                 } else {
                     self.svc_focus_current_field(window, cx);
                 }
+            }
+
+            Some(ServiceFormRow::EnvDelete(i)) => {
+                self.remove_env_row(i, window, cx);
             }
 
             Some(ServiceFormRow::Enabled) => {

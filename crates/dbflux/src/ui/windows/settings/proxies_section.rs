@@ -1,7 +1,9 @@
-use super::layout;
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::FormSection;
+use super::layout;
+use super::proxies::ProxyFormNav;
+use super::section_trait::SectionFocusEvent;
 use crate::app::{AppState, AppStateChanged};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
@@ -20,7 +22,7 @@ pub(super) enum ProxyAuthSelection {
     Basic,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ProxyFocus {
     ProfileList,
     Form,
@@ -866,6 +868,110 @@ impl ProxiesSection {
             } else {
                 transparent_black()
             }))
+    }
+}
+
+impl FormSection for ProxiesSection {
+    type Focus = ProxyFocus;
+    type FormField = ProxyFormField;
+
+    fn focus_area(&self) -> Self::Focus {
+        self.proxy_focus
+    }
+
+    fn set_focus_area(&mut self, focus: Self::Focus) {
+        self.proxy_focus = focus;
+    }
+
+    fn form_field(&self) -> Self::FormField {
+        self.proxy_form_field
+    }
+
+    fn set_form_field(&mut self, field: Self::FormField) {
+        self.proxy_form_field = field;
+    }
+
+    fn editing_field(&self) -> bool {
+        self.proxy_editing_field
+    }
+
+    fn set_editing_field(&mut self, editing: bool) {
+        self.proxy_editing_field = editing;
+    }
+
+    fn switching_input(&self) -> bool {
+        self.switching_input
+    }
+
+    fn set_switching_input(&mut self, switching: bool) {
+        self.switching_input = switching;
+    }
+
+    fn content_focused(&self) -> bool {
+        self.content_focused
+    }
+
+    fn list_focus() -> Self::Focus {
+        ProxyFocus::ProfileList
+    }
+
+    fn form_focus() -> Self::Focus {
+        ProxyFocus::Form
+    }
+
+    fn first_form_field() -> Self::FormField {
+        ProxyFormField::Name
+    }
+
+    fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
+        ProxyFormNav::new(
+            self.proxy_auth_selection,
+            self.editing_proxy_id,
+            self.proxy_form_field,
+        )
+        .form_rows()
+    }
+
+    fn is_input_field(field: Self::FormField) -> bool {
+        ProxyFormNav::is_input_field(field)
+    }
+
+    fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        ProxiesSection::proxy_focus_current_field(self, window, cx);
+    }
+
+    fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        ProxiesSection::proxy_activate_current_field(self, window, cx);
+    }
+
+    fn tab_next(&mut self) {
+        let mut nav = ProxyFormNav::new(
+            self.proxy_auth_selection,
+            self.editing_proxy_id,
+            self.proxy_form_field,
+        );
+        nav.tab_next();
+        self.proxy_form_field = nav.field();
+    }
+
+    fn tab_prev(&mut self) {
+        let mut nav = ProxyFormNav::new(
+            self.proxy_auth_selection,
+            self.editing_proxy_id,
+            self.proxy_form_field,
+        );
+        nav.tab_prev();
+        self.proxy_form_field = nav.field();
+    }
+
+    fn validate_form_field(&mut self) {
+        let mut nav = ProxyFormNav::new(
+            self.proxy_auth_selection,
+            self.editing_proxy_id,
+            self.proxy_form_field,
+        );
+        nav.validate_field();
+        self.proxy_form_field = nav.field();
     }
 }
 

@@ -6,10 +6,10 @@ use gpui::*;
 use uuid::Uuid;
 
 use super::form_nav::FormGridNav;
+use super::form_section::FormSection;
 use super::proxies_section::{
     PendingProxyAction, ProxiesSection, ProxyAuthSelection, ProxyFocus, ProxyFormField,
 };
-use super::section_trait::SectionFocusEvent;
 
 /// Proxy-specific form navigation state, built on top of `FormGridNav`.
 ///
@@ -76,36 +76,6 @@ impl ProxyFormNav {
         rows
     }
 
-    pub(super) fn move_down(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_down(&rows);
-    }
-
-    pub(super) fn move_up(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_up(&rows);
-    }
-
-    pub(super) fn move_right(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_right(&rows);
-    }
-
-    pub(super) fn move_left(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_left(&rows);
-    }
-
-    pub(super) fn move_first(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_first(&rows);
-    }
-
-    pub(super) fn move_last(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_last(&rows);
-    }
-
     pub(super) fn tab_next(&mut self) {
         let rows = self.form_rows();
         self.nav.tab_next(&rows);
@@ -116,6 +86,60 @@ impl ProxyFormNav {
         self.nav.tab_prev(&rows);
     }
 
+    pub(super) fn validate_field(&mut self) {
+        let rows = self.form_rows();
+        self.nav.validate(&rows, ProxyFormField::Name);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_down(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_down(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_up(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_up(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_right(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_right(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_left(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_left(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_first(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_first(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn move_last(&mut self) {
+        let rows = self.form_rows();
+        self.nav.move_last(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn tab_next(&mut self) {
+        let rows = self.form_rows();
+        self.nav.tab_next(&rows);
+    }
+
+    #[cfg(test)]
+    pub(super) fn tab_prev(&mut self) {
+        let rows = self.form_rows();
+        self.nav.tab_prev(&rows);
+    }
+
+    #[cfg(test)]
     pub(super) fn validate_field(&mut self) {
         let rows = self.form_rows();
         self.nav.validate(&rows, ProxyFormField::Name);
@@ -441,45 +465,19 @@ impl ProxiesSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chord = KeyChord::from_gpui(&event.keystroke);
-
         if self.pending_delete_proxy_id.is_some() || self.pending_discard_action.is_some() {
             return;
         }
 
-        if !self.content_focused && !self.proxy_editing_field {
+        if !self.content_focused() && !self.editing_field() {
             return;
         }
 
-        if self.proxy_focus == ProxyFocus::Form && self.proxy_editing_field {
-            match (chord.key.as_str(), chord.modifiers) {
-                ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_editing_field = false;
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                    cx.notify();
-                }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_editing_field = false;
-                    self.proxy_move_down();
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_editing_field = false;
-                    self.proxy_tab_next();
-                    self.proxy_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.proxy_editing_field = false;
-                    self.proxy_tab_prev();
-                    self.proxy_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                _ => {}
-            }
-
+        if self.handle_editing_keys(event, window, cx) {
             return;
         }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
 
         match self.proxy_focus {
             ProxyFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {
@@ -524,43 +522,47 @@ impl ProxiesSection {
             },
             ProxyFocus::Form => match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_exit_form(window, cx);
+                    self.exit_form(window, cx);
                     cx.notify();
                 }
                 ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_down();
+                    self.move_down();
                     cx.notify();
                 }
                 ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_up();
+                    self.move_up();
                     cx.notify();
                 }
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_left();
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("left", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_left();
                     cx.notify();
                 }
                 ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_right();
+                    self.move_right();
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_activate_current_field(window, cx);
+                    self.activate_current_field(window, cx);
                     cx.notify();
                 }
                 ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_tab_next();
+                    self.tab_next();
                     cx.notify();
                 }
                 ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.proxy_tab_prev();
+                    self.tab_prev();
                     cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_first();
+                    self.move_first();
                     cx.notify();
                 }
                 ("G", modifiers) if modifiers == Modifiers::none() => {
-                    self.proxy_move_last();
+                    self.move_last();
                     cx.notify();
                 }
                 _ => {}
@@ -634,18 +636,6 @@ impl ProxiesSection {
         cx.notify();
     }
 
-    fn proxy_nav(&self) -> ProxyFormNav {
-        ProxyFormNav::new(
-            self.proxy_auth_selection,
-            self.editing_proxy_id,
-            self.proxy_form_field,
-        )
-    }
-
-    fn apply_proxy_nav(&mut self, nav: ProxyFormNav) {
-        self.proxy_form_field = nav.field();
-    }
-
     fn proxy_move_next_profile(&mut self, cx: &App) {
         let count = self.proxy_count(cx);
         if count == 0 {
@@ -710,59 +700,6 @@ impl ProxiesSection {
         }
     }
 
-    fn proxy_exit_form(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.proxy_focus = ProxyFocus::ProfileList;
-        self.proxy_editing_field = false;
-    }
-
-    fn proxy_move_down(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_down();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_move_up(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_up();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_move_right(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_right();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_move_left(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_left();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_move_first(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_first();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_move_last(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.move_last();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_tab_next(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.tab_next();
-        self.apply_proxy_nav(nav);
-    }
-
-    fn proxy_tab_prev(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.tab_prev();
-        self.apply_proxy_nav(nav);
-    }
-
     pub(super) fn proxy_focus_current_field(
         &mut self,
         window: &mut Window,
@@ -801,7 +738,11 @@ impl ProxiesSection {
         }
     }
 
-    fn proxy_activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn proxy_activate_current_field(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.proxy_form_field {
             ProxyFormField::KindHttp => {
                 self.proxy_kind = ProxyKind::Http;
@@ -851,9 +792,7 @@ impl ProxiesSection {
     }
 
     pub(super) fn validate_proxy_form_field(&mut self) {
-        let mut nav = self.proxy_nav();
-        nav.validate_field();
-        self.apply_proxy_nav(nav);
+        self.validate_form_field();
     }
 }
 

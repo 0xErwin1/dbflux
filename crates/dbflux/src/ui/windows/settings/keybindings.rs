@@ -1,9 +1,9 @@
-use crate::keymap::{default_keymap, ContextId, KeyChord};
+use crate::keymap::{ContextId, KeyChord, default_keymap};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::Input;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};

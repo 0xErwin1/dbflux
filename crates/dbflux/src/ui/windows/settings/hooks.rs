@@ -1,4 +1,5 @@
 use crate::app::AppStateChanged;
+use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
@@ -18,7 +19,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::SettingsEvent;
-use super::hooks_section::{HookFocus, HookKindSelection, HooksSection, ScriptSourceSelection};
+use super::form_section::FormSection;
+use super::hooks_section::{
+    HookFocus, HookFormField, HookKindSelection, HooksSection, ScriptSourceSelection,
+};
 use super::layout;
 
 impl HooksSection {
@@ -77,22 +81,15 @@ impl HooksSection {
         ids
     }
 
-    fn selected_hook_kind(&self, cx: &App) -> HookKindSelection {
-        match self
-            .hook_kind_dropdown
-            .read(cx)
-            .selected_value()
-            .map(|value| value.to_string())
-            .as_deref()
-        {
-            Some("script") => HookKindSelection::Script,
-            Some("lua") => HookKindSelection::Lua,
-            _ => HookKindSelection::Command,
-        }
+    fn selected_hook_kind(&self, _cx: &App) -> HookKindSelection {
+        self.hook_kind_selection
     }
 
-    fn selected_script_source(&self, cx: &App) -> ScriptSourceSelection {
-        let _ = cx;
+    fn selected_hook_execution_mode(&self, _cx: &App) -> HookExecutionMode {
+        self.hook_execution_mode
+    }
+
+    fn selected_script_source(&self, _cx: &App) -> ScriptSourceSelection {
         ScriptSourceSelection::File
     }
 
@@ -109,20 +106,8 @@ impl HooksSection {
         }
     }
 
-    fn selected_hook_execution_mode(&self, cx: &App) -> HookExecutionMode {
-        match self
-            .hook_execution_mode_dropdown
-            .read(cx)
-            .selected_value()
-            .map(|value| value.to_string())
-            .as_deref()
-        {
-            Some("detached") => HookExecutionMode::Detached,
-            _ => HookExecutionMode::Blocking,
-        }
-    }
-
-    fn set_hook_kind_dropdown(&self, kind: HookKindSelection, cx: &mut Context<Self>) {
+    fn set_hook_kind_dropdown(&mut self, kind: HookKindSelection, cx: &mut Context<Self>) {
+        self.hook_kind_selection = kind;
         let index = match kind {
             HookKindSelection::Command => 0,
             HookKindSelection::Script => 1,
@@ -161,7 +146,12 @@ impl HooksSection {
         });
     }
 
-    fn set_hook_execution_mode_dropdown(&self, mode: HookExecutionMode, cx: &mut Context<Self>) {
+    fn set_hook_execution_mode_dropdown(
+        &mut self,
+        mode: HookExecutionMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.hook_execution_mode = mode;
         let index = match mode {
             HookExecutionMode::Blocking => 0,
             HookExecutionMode::Detached => 1,
@@ -436,6 +426,56 @@ impl HooksSection {
         self.form_has_hook_content(cx)
     }
 
+    pub(super) fn hook_count(&self, cx: &App) -> usize {
+        self.app_state.read(cx).hook_definitions().len()
+    }
+
+    pub(super) fn hook_selected_id(&self) -> Option<String> {
+        self.hook_selected_id.clone()
+    }
+
+    pub(super) fn hook_move_next(&mut self, _cx: &App) {
+        let ids = self.hook_sorted_ids();
+        if ids.is_empty() {
+            self.hook_list_idx = None;
+            self.hook_selected_id = None;
+            return;
+        }
+
+        match self.hook_list_idx {
+            None => {
+                self.hook_list_idx = Some(0);
+                self.hook_selected_id = Some(ids[0].clone());
+            }
+            Some(idx) if idx + 1 < ids.len() => {
+                self.hook_list_idx = Some(idx + 1);
+                self.hook_selected_id = Some(ids[idx + 1].clone());
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn hook_move_prev(&mut self, _cx: &App) {
+        let ids = self.hook_sorted_ids();
+        if ids.is_empty() {
+            self.hook_list_idx = None;
+            self.hook_selected_id = None;
+            return;
+        }
+
+        match self.hook_list_idx {
+            Some(idx) if idx > 0 => {
+                self.hook_list_idx = Some(idx - 1);
+                self.hook_selected_id = Some(ids[idx - 1].clone());
+            }
+            Some(0) => {
+                self.hook_list_idx = None;
+                self.hook_selected_id = None;
+            }
+            _ => {}
+        }
+    }
+
     fn form_has_hook_content(&self, cx: &App) -> bool {
         !self.input_hook_id.read(cx).value().trim().is_empty()
             || !self.input_hook_command.read(cx).value().trim().is_empty()
@@ -668,6 +708,8 @@ impl HooksSection {
         self.hook_lua_env_read = true;
         self.hook_lua_connection_metadata = true;
         self.hook_lua_process_run = false;
+        self.hook_form_field = HookFormField::HookId;
+        self.hook_editing_field = false;
         self.set_hook_execution_mode_dropdown(HookExecutionMode::Blocking, cx);
 
         self.set_hook_kind_dropdown(HookKindSelection::Command, cx);
@@ -703,7 +745,174 @@ impl HooksSection {
         cx.notify();
     }
 
-    pub(super) fn edit_hook(&mut self, hook_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn load_hook_values_without_focus(
+        &mut self,
+        hook_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
+            return;
+        };
+
+        self.editing_hook_id = Some(hook_id.to_string());
+        self.hook_selected_id = Some(hook_id.to_string());
+        let ids = self.hook_sorted_ids();
+        self.hook_list_idx = ids.iter().position(|id| id == hook_id);
+        self.hook_enabled = hook.enabled;
+        self.hook_inherit_env = hook.inherit_env;
+
+        self.input_hook_id.update(cx, |input, cx| {
+            input.set_value(hook_id.to_string(), window, cx)
+        });
+
+        let (command, args, script_file_path, script_content, interpreter) = match &hook.kind {
+            HookKind::Command { command, args } => {
+                self.set_hook_kind_dropdown(HookKindSelection::Command, cx);
+                self.set_hook_execution_mode_dropdown(hook.execution_mode, cx);
+                self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
+                self.set_script_language_dropdown(ScriptLanguage::Python, cx);
+                self.hook_lua_logging = true;
+                self.hook_lua_env_read = true;
+                self.hook_lua_connection_metadata = true;
+                self.hook_lua_process_run = false;
+
+                (
+                    command.clone(),
+                    args.join(" "),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+            }
+            HookKind::Script {
+                language,
+                source,
+                interpreter,
+            } => {
+                self.set_hook_kind_dropdown(HookKindSelection::Script, cx);
+                self.set_hook_execution_mode_dropdown(hook.execution_mode, cx);
+                self.set_script_language_dropdown(*language, cx);
+                self.hook_lua_logging = true;
+                self.hook_lua_env_read = true;
+                self.hook_lua_connection_metadata = true;
+                self.hook_lua_process_run = false;
+
+                let (script_file_path, script_content) = match source {
+                    ScriptSource::File { path } => {
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
+                        (path.to_string_lossy().to_string(), String::new())
+                    }
+                    ScriptSource::Inline { content } => {
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
+                        (String::new(), content.clone())
+                    }
+                };
+
+                (
+                    String::new(),
+                    String::new(),
+                    script_file_path,
+                    script_content,
+                    interpreter.clone().unwrap_or_default(),
+                )
+            }
+            HookKind::Lua {
+                source,
+                capabilities,
+            } => {
+                self.set_hook_kind_dropdown(HookKindSelection::Lua, cx);
+                self.set_hook_execution_mode_dropdown(HookExecutionMode::Blocking, cx);
+                self.set_script_language_dropdown(ScriptLanguage::Python, cx);
+                self.hook_lua_logging = capabilities.logging;
+                self.hook_lua_env_read = capabilities.env_read;
+                self.hook_lua_connection_metadata = capabilities.connection_metadata;
+                self.hook_lua_process_run = capabilities.process_run;
+
+                let (script_file_path, script_content) = match source {
+                    ScriptSource::File { path } => {
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
+                        (path.to_string_lossy().to_string(), String::new())
+                    }
+                    ScriptSource::Inline { content } => {
+                        self.set_script_source_dropdown(ScriptSourceSelection::File, cx);
+                        (String::new(), content.clone())
+                    }
+                };
+
+                (
+                    String::new(),
+                    String::new(),
+                    script_file_path,
+                    script_content,
+                    String::new(),
+                )
+            }
+        };
+
+        self.refresh_hook_script_content_editor(window, cx);
+
+        self.input_hook_command
+            .update(cx, |input, cx| input.set_value(command, window, cx));
+        self.input_hook_args
+            .update(cx, |input, cx| input.set_value(args, window, cx));
+        self.input_hook_script_file_path.update(cx, |input, cx| {
+            input.set_value(script_file_path, window, cx)
+        });
+        self.input_hook_script_content
+            .update(cx, |input, cx| input.set_value(script_content, window, cx));
+        self.input_hook_interpreter
+            .update(cx, |input, cx| input.set_value(interpreter, window, cx));
+        self.input_hook_ready_signal.update(cx, |input, cx| {
+            input.set_value(hook.ready_signal.unwrap_or_default(), window, cx)
+        });
+        self.input_hook_cwd.update(cx, |input, cx| {
+            input.set_value(
+                hook.cwd
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+        let mut env_pairs: Vec<String> = hook
+            .env
+            .iter()
+            .map(|(key, value)| format!("{}={}", key, value))
+            .collect();
+        env_pairs.sort();
+        self.input_hook_env.update(cx, |input, cx| {
+            input.set_value(env_pairs.join(", "), window, cx)
+        });
+        self.input_hook_timeout.update(cx, |input, cx| {
+            input.set_value(
+                hook.timeout_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+
+        let failure_index = match hook.on_failure {
+            HookFailureMode::Disconnect => 0,
+            HookFailureMode::Warn => 1,
+            HookFailureMode::Ignore => 2,
+        };
+        self.hook_failure_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(Some(failure_index), cx);
+        });
+
+        cx.notify();
+    }
+
+    pub(super) fn load_hook_into_form(
+        &mut self,
+        hook_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(hook) = self.hook_definitions.get(hook_id).cloned() else {
             return;
         };
@@ -899,7 +1108,7 @@ impl HooksSection {
         self.hook_definitions.insert(hook_id.clone(), hook);
         self.persist_hooks(window, cx);
 
-        self.edit_hook(&hook_id, window, cx);
+        self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
         cx.toast_success("Hook saved", window);
     }
@@ -1077,7 +1286,7 @@ impl HooksSection {
                             .hover(|div| div.bg(theme.secondary))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.hook_focus = HookFocus::Form;
-                                this.edit_hook(&hook_id_for_click, window, cx);
+                                this.load_hook_into_form(&hook_id_for_click, window, cx);
                             }))
                             .child(
                                 div()
@@ -1617,6 +1826,242 @@ impl HooksSection {
                             })),
                     ),
             )
+    }
+
+    pub(super) fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_delete_hook_id.is_some() {
+            return;
+        }
+
+        if !self.content_focused() && !self.editing_field() {
+            return;
+        }
+
+        if self.handle_editing_keys(event, window, cx) {
+            return;
+        }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
+        let ids = self.hook_sorted_ids();
+        self.hook_sync_selection_from_ids(&ids);
+
+        match self.hook_focus {
+            HookFocus::List => match (chord.key.as_str(), chord.modifiers) {
+                ("j", modifiers) | ("down", modifiers)
+                    if modifiers == Modifiers::none() && !ids.is_empty() =>
+                {
+                    let next = self
+                        .hook_list_idx
+                        .unwrap_or(0)
+                        .saturating_add(1)
+                        .min(ids.len() - 1);
+                    self.hook_select_index(next, window, cx);
+                    cx.notify();
+                }
+                ("k", modifiers) | ("up", modifiers)
+                    if modifiers == Modifiers::none() && !ids.is_empty() =>
+                {
+                    let prev = self.hook_list_idx.unwrap_or(0).saturating_sub(1);
+                    self.hook_select_index(prev, window, cx);
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::none() && !ids.is_empty() => {
+                    self.hook_select_index(0, window, cx);
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::shift() && !ids.is_empty() => {
+                    self.hook_select_index(ids.len() - 1, window, cx);
+                    cx.notify();
+                }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.hook_focus = HookFocus::Form;
+                    self.clear_hook_form(window, cx);
+                    self.hook_form_field = HookFormField::HookId;
+                    self.hook_editing_field = false;
+                    cx.notify();
+                }
+                ("d", modifiers) if modifiers == Modifiers::none() => {
+                    if let Some(hook_id) = self.hook_selected_id.clone() {
+                        self.request_delete_hook(hook_id, cx);
+                    }
+                }
+                ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
+                    if modifiers == Modifiers::none() =>
+                {
+                    self.enter_form(window, cx);
+                    cx.notify();
+                }
+                _ => {}
+            },
+            HookFocus::Form => match (chord.key.as_str(), chord.modifiers) {
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_down();
+                    cx.notify();
+                }
+                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_up();
+                    cx.notify();
+                }
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("left", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_left();
+                    cx.notify();
+                }
+                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_right();
+                    cx.notify();
+                }
+                ("enter", modifiers) if modifiers == Modifiers::none() => {
+                    self.activate_current_field(window, cx);
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::none() => {
+                    self.tab_next();
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                    self.tab_prev();
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_first();
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::shift() => {
+                    self.move_last();
+                    cx.notify();
+                }
+                _ => {}
+            },
+        }
+    }
+
+    pub(super) fn hook_focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hook_editing_field = true;
+
+        match self.hook_form_field {
+            HookFormField::HookId => {
+                self.input_hook_id
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::Command => {
+                self.input_hook_command
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::Arguments => {
+                self.input_hook_args
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::FilePath => {
+                self.input_hook_script_file_path
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::Interpreter => {
+                self.input_hook_interpreter
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::ReadySignal => {
+                self.input_hook_ready_signal
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::WorkingDirectory => {
+                self.input_hook_cwd
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::Environment => {
+                self.input_hook_env
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            HookFormField::Timeout => {
+                self.input_hook_timeout
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            _ => {
+                self.hook_editing_field = false;
+            }
+        }
+    }
+
+    pub(super) fn hook_activate_current_field(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.hook_form_field {
+            HookFormField::KindCommand => {
+                self.set_hook_kind_dropdown(HookKindSelection::Command, cx);
+                self.validate_form_field();
+            }
+            HookFormField::KindScript => {
+                self.set_hook_kind_dropdown(HookKindSelection::Script, cx);
+                self.validate_form_field();
+            }
+            #[cfg(feature = "lua")]
+            HookFormField::KindLua => {
+                self.set_hook_kind_dropdown(HookKindSelection::Lua, cx);
+                self.validate_form_field();
+            }
+            HookFormField::ExecutionMode => {
+                let new_mode = match self.hook_execution_mode {
+                    HookExecutionMode::Blocking => HookExecutionMode::Detached,
+                    HookExecutionMode::Detached => HookExecutionMode::Blocking,
+                };
+                self.set_hook_execution_mode_dropdown(new_mode, cx);
+                self.validate_form_field();
+            }
+            HookFormField::Enabled => {
+                self.hook_enabled = !self.hook_enabled;
+            }
+            HookFormField::InheritEnv => {
+                self.hook_inherit_env = !self.hook_inherit_env;
+            }
+            #[cfg(feature = "lua")]
+            HookFormField::LuaLogging => {
+                self.hook_lua_logging = !self.hook_lua_logging;
+            }
+            #[cfg(feature = "lua")]
+            HookFormField::LuaEnvRead => {
+                self.hook_lua_env_read = !self.hook_lua_env_read;
+            }
+            #[cfg(feature = "lua")]
+            HookFormField::LuaConnectionMetadata => {
+                self.hook_lua_connection_metadata = !self.hook_lua_connection_metadata;
+            }
+            #[cfg(feature = "lua")]
+            HookFormField::LuaProcessRun => {
+                self.hook_lua_process_run = !self.hook_lua_process_run;
+            }
+            HookFormField::OpenInApp => {
+                self.open_script_in_app(window, cx);
+            }
+            HookFormField::OpenInEditor => {
+                self.open_script_in_default_editor(window, cx);
+            }
+            HookFormField::SaveButton => {
+                self.save_hook(window, cx);
+            }
+            HookFormField::DeleteButton => {
+                if let Some(hook_id) = self.editing_hook_id.clone() {
+                    self.request_delete_hook(hook_id, cx);
+                }
+            }
+            field if Self::is_input_field(field) => {
+                self.hook_focus_current_field(window, cx);
+            }
+            _ => {}
+        }
     }
 }
 

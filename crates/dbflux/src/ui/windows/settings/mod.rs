@@ -3,6 +3,7 @@ mod auth_profiles_section;
 mod drivers;
 mod drivers_section;
 mod form_nav;
+mod form_section;
 mod general;
 mod general_section;
 mod hooks;

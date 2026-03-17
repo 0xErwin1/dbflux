@@ -1,5 +1,6 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppState;
 use crate::keymap::{KeyChord, Modifiers};
@@ -21,13 +22,13 @@ pub(super) struct DriverSettingsEntry {
     pub(super) settings_schema: Option<Arc<DriverFormDef>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum DriversFocus {
     List,
     Editor,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum DriverEditorField {
     OverrideRefreshPolicy,
     RefreshPolicy,
@@ -65,6 +66,7 @@ pub(super) struct DriversSection {
     pub(super) drv_pending_scroll_idx: Option<usize>,
     pub(super) drv_focus: DriversFocus,
     pub(super) drv_editor_field: DriverEditorField,
+    pub(super) drv_editing_field: bool,
     pub(super) content_focused: bool,
     pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
@@ -235,6 +237,7 @@ impl DriversSection {
             drv_pending_scroll_idx: None,
             drv_focus: DriversFocus::List,
             drv_editor_field: DriverEditorField::OverrideRefreshPolicy,
+            drv_editing_field: false,
             content_focused: false,
             switching_input: false,
             _subscriptions: vec![
@@ -340,6 +343,10 @@ impl SettingsSection for DriversSection {
             return;
         }
 
+        if self.handle_editing_keys(event, window, cx) {
+            return;
+        }
+
         let chord = KeyChord::from_gpui(&event.keystroke);
 
         if self.handle_open_dropdown(&chord, cx) {
@@ -365,7 +372,7 @@ impl SettingsSection for DriversSection {
                 ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
                     if modifiers == Modifiers::none() =>
                 {
-                    self.drv_focus = DriversFocus::Editor;
+                    self.enter_form(window, cx);
                     cx.notify();
                 }
                 ("g", modifiers)
@@ -381,33 +388,37 @@ impl SettingsSection for DriversSection {
                 _ => {}
             },
             DriversFocus::Editor => match (chord.key.as_str(), chord.modifiers) {
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
                 ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
-                    let previous_field = self.drv_editor_field;
-                    self.drv_move_editor_left();
-
-                    if previous_field != self.drv_editor_field {
-                        cx.notify();
-                    }
+                    self.move_left();
+                    cx.notify();
                 }
                 ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                    self.drv_move_editor_down();
+                    self.move_down();
                     cx.notify();
                 }
                 ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                    self.drv_move_editor_up();
+                    self.move_up();
                     cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
-                    self.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
+                    self.move_first();
                     cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::shift() => {
-                    self.drv_editor_field = DriverEditorField::Save;
+                    self.move_last();
                     cx.notify();
                 }
                 ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
                     let previous_field = self.drv_editor_field;
-                    self.drv_move_editor_right();
+                    self.move_right();
 
                     if previous_field != self.drv_editor_field {
                         cx.notify();
@@ -419,11 +430,21 @@ impl SettingsSection for DriversSection {
                         DriverEditorField::OverrideRefreshPolicy
                             | DriverEditorField::OverrideRefreshInterval
                     ) {
-                        self.drv_activate_editor_field(window, cx);
+                        self.activate_current_field(window, cx);
                     }
+                    cx.notify();
                 }
                 ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
-                    self.drv_activate_editor_field(window, cx);
+                    self.activate_current_field(window, cx);
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::none() => {
+                    self.tab_next();
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                    self.tab_prev();
+                    cx.notify();
                 }
                 _ => {}
             },
@@ -438,6 +459,7 @@ impl SettingsSection for DriversSection {
     fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.content_focused = false;
         self.drv_focus = DriversFocus::List;
+        self.drv_editing_field = false;
         cx.notify();
     }
 
@@ -449,5 +471,183 @@ impl SettingsSection for DriversSection {
 impl Render for DriversSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_drivers_section(cx)
+    }
+}
+
+impl FormSection for DriversSection {
+    type Focus = DriversFocus;
+    type FormField = DriverEditorField;
+
+    fn focus_area(&self) -> Self::Focus {
+        self.drv_focus
+    }
+
+    fn set_focus_area(&mut self, focus: Self::Focus) {
+        self.drv_focus = focus;
+    }
+
+    fn form_field(&self) -> Self::FormField {
+        self.drv_editor_field
+    }
+
+    fn set_form_field(&mut self, field: Self::FormField) {
+        self.drv_editor_field = field;
+    }
+
+    fn editing_field(&self) -> bool {
+        self.drv_editing_field
+    }
+
+    fn set_editing_field(&mut self, editing: bool) {
+        self.drv_editing_field = editing;
+    }
+
+    fn switching_input(&self) -> bool {
+        self.switching_input
+    }
+
+    fn set_switching_input(&mut self, switching: bool) {
+        self.switching_input = switching;
+    }
+
+    fn content_focused(&self) -> bool {
+        self.content_focused
+    }
+
+    fn list_focus() -> Self::Focus {
+        DriversFocus::List
+    }
+
+    fn form_focus() -> Self::Focus {
+        DriversFocus::Editor
+    }
+
+    fn first_form_field() -> Self::FormField {
+        DriverEditorField::OverrideRefreshPolicy
+    }
+
+    fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
+        let mut rows = vec![
+            vec![
+                DriverEditorField::OverrideRefreshPolicy,
+                DriverEditorField::RefreshPolicy,
+            ],
+            vec![
+                DriverEditorField::OverrideRefreshInterval,
+                DriverEditorField::RefreshInterval,
+            ],
+            vec![DriverEditorField::ConfirmDangerous],
+            vec![DriverEditorField::RequiresWhere],
+            vec![DriverEditorField::RequiresPreview],
+            vec![DriverEditorField::Save],
+        ];
+
+        if !self.drv_override_refresh_policy {
+            rows[0].retain(|f| *f != DriverEditorField::RefreshPolicy);
+        }
+        if !self.drv_override_refresh_interval {
+            rows[1].retain(|f| *f != DriverEditorField::RefreshInterval);
+        }
+
+        rows
+    }
+
+    fn is_input_field(field: Self::FormField) -> bool {
+        matches!(field, DriverEditorField::RefreshInterval)
+    }
+
+    fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.drv_editor_field {
+            DriverEditorField::RefreshInterval => {
+                self.drv_editing_field = true;
+                self.drv_refresh_interval_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+            }
+            _ => {
+                self.drv_editing_field = false;
+            }
+        }
+    }
+
+    fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drv_activate_editor_field(window, cx);
+    }
+
+    fn move_down(&mut self) {
+        self.drv_move_editor_down();
+    }
+
+    fn move_up(&mut self) {
+        self.drv_move_editor_up();
+    }
+
+    fn move_left(&mut self) {
+        self.drv_move_editor_left();
+    }
+
+    fn move_right(&mut self) {
+        self.drv_move_editor_right();
+    }
+
+    fn move_first(&mut self) {
+        self.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
+    }
+
+    fn move_last(&mut self) {
+        self.drv_editor_field = DriverEditorField::Save;
+    }
+
+    fn tab_next(&mut self) {
+        let rows = self.form_rows();
+        let current = self.form_field();
+        let mut found_current = false;
+
+        for row in &rows {
+            for field in row {
+                if found_current {
+                    self.set_form_field(*field);
+                    return;
+                }
+                if *field == current {
+                    found_current = true;
+                }
+            }
+        }
+
+        self.move_first();
+    }
+
+    fn tab_prev(&mut self) {
+        let rows = self.form_rows();
+        let current = self.form_field();
+        let mut prev_field: Option<Self::FormField> = None;
+
+        for row in &rows {
+            for field in row {
+                if *field == current {
+                    if let Some(prev) = prev_field {
+                        self.set_form_field(prev);
+                    } else {
+                        self.move_last();
+                    }
+                    return;
+                }
+                prev_field = Some(*field);
+            }
+        }
+    }
+
+    fn validate_form_field(&mut self) {
+        let rows = self.form_rows();
+        let current = self.form_field();
+
+        for row in &rows {
+            if row.contains(&current) {
+                return;
+            }
+        }
+
+        self.set_form_field(Self::first_form_field());
     }
 }

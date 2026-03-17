@@ -21,6 +21,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         None
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_down(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
             && row_idx + 1 < rows.len()
@@ -33,6 +34,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_up(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
             && row_idx > 0
@@ -45,6 +47,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_right(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows) {
             let row = &rows[row_idx];
@@ -54,6 +57,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_left(&mut self, rows: &[Vec<F>]) {
         if let Some((row_idx, col_idx)) = self.position(rows)
             && col_idx > 0
@@ -62,6 +66,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_first(&mut self, rows: &[Vec<F>]) {
         if let Some(first_row) = rows.first()
             && let Some(first_field) = first_row.first()
@@ -70,6 +75,7 @@ impl<F: Copy + PartialEq> FormGridNav<F> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn move_last(&mut self, rows: &[Vec<F>]) {
         if let Some(last_row) = rows.last()
             && let Some(last_field) = last_row.last()

@@ -157,19 +157,16 @@ fn run_gui() {
         platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
 
         let window_handle = cx
-            .open_window(
-                main_window_options,
-                |window, cx| {
-                    cx.bind_keys(command_palette_keybindings());
+            .open_window(main_window_options, |window, cx| {
+                cx.bind_keys(command_palette_keybindings());
 
-                    let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                    IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
-                    info!("IPC server started");
+                IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
+                info!("IPC server started");
 
-                    cx.new(|cx| Root::new(workspace, window, cx))
-                },
-            )
+                cx.new(|cx| Root::new(workspace, window, cx))
+            })
             .expect("Failed to open main window");
 
         let app_state_for_close = app_state.clone();

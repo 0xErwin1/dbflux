@@ -274,11 +274,6 @@ impl SettingsCoordinator {
             ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
                 self.activate_sidebar_cursor(window, cx);
             }
-            ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
-                self.focus_area = SettingsFocus::Content;
-                self.active_section_entity.focus_in(window, cx);
-                cx.notify();
-            }
             _ => {}
         }
     }

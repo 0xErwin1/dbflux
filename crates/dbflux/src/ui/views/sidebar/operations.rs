@@ -961,15 +961,11 @@ impl Sidebar {
         };
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
-        if let Err(error) = cx.open_window(
-            options,
-            |window, cx| {
-                let manager = cx.new(|cx| {
-                    ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx)
-                });
-                cx.new(|cx| Root::new(manager, window, cx))
-            },
-        ) {
+        if let Err(error) = cx.open_window(options, |window, cx| {
+            let manager = cx
+                .new(|cx| ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx));
+            cx.new(|cx| Root::new(manager, window, cx))
+        }) {
             log::warn!(
                 "Failed to open connection manager window for folder: {:?}",
                 error
@@ -2673,15 +2669,11 @@ impl Sidebar {
         };
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
-        if let Err(error) = cx.open_window(
-            options,
-            |window, cx| {
-                let manager = cx.new(|cx| {
-                    ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
-                });
-                cx.new(|cx| Root::new(manager, window, cx))
-            },
-        ) {
+        if let Err(error) = cx.open_window(options, |window, cx| {
+            let manager =
+                cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx));
+            cx.new(|cx| Root::new(manager, window, cx))
+        }) {
             log::warn!("Failed to open connection editor window: {:?}", error);
         }
     }

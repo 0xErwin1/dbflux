@@ -7,7 +7,7 @@ use gpui::*;
 use uuid::Uuid;
 
 use super::form_nav::FormGridNav;
-use super::section_trait::SectionFocusEvent;
+use super::form_section::FormSection;
 use super::ssh_tunnels_section::{SshFocus, SshFormField, SshTestStatus, SshTunnelsSection};
 
 /// SSH form navigation. Wraps `FormGridNav` with auth/editing context
@@ -70,46 +70,6 @@ impl SshFormNav {
         }
 
         rows
-    }
-
-    pub(super) fn move_down(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_down(&rows);
-    }
-
-    pub(super) fn move_up(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_up(&rows);
-    }
-
-    pub(super) fn move_right(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_right(&rows);
-    }
-
-    pub(super) fn move_left(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_left(&rows);
-    }
-
-    pub(super) fn move_first(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_first(&rows);
-    }
-
-    pub(super) fn move_last(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_last(&rows);
-    }
-
-    pub(super) fn tab_next(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_next(&rows);
-    }
-
-    pub(super) fn tab_prev(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_prev(&rows);
     }
 
     pub(super) fn validate_field(&mut self) {
@@ -506,8 +466,6 @@ impl SshTunnelsSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chord = KeyChord::from_gpui(&event.keystroke);
-
         if self.pending_delete_tunnel_id.is_some() {
             return;
         }
@@ -516,35 +474,11 @@ impl SshTunnelsSection {
             return;
         }
 
-        if self.ssh_focus == SshFocus::Form && self.ssh_editing_field {
-            match (chord.key.as_str(), chord.modifiers) {
-                ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_editing_field = false;
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                    cx.notify();
-                }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_editing_field = false;
-                    self.ssh_move_down();
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_editing_field = false;
-                    self.ssh_tab_next();
-                    self.ssh_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.ssh_editing_field = false;
-                    self.ssh_tab_prev();
-                    self.ssh_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                _ => {}
-            }
-
+        if self.handle_editing_keys(event, window, cx) {
             return;
         }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
 
         match self.ssh_focus {
             SshFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {
@@ -589,43 +523,47 @@ impl SshTunnelsSection {
             },
             SshFocus::Form => match (chord.key.as_str(), chord.modifiers) {
                 ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_exit_form(window, cx);
+                    self.exit_form(window, cx);
                     cx.notify();
                 }
                 ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_down();
+                    self.move_down();
                     cx.notify();
                 }
                 ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_up();
+                    self.move_up();
                     cx.notify();
                 }
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_left();
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("left", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_left();
                     cx.notify();
                 }
                 ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_right();
+                    self.move_right();
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_activate_current_field(window, cx);
+                    self.activate_current_field(window, cx);
                     cx.notify();
                 }
                 ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_tab_next();
+                    self.tab_next();
                     cx.notify();
                 }
                 ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.ssh_tab_prev();
+                    self.tab_prev();
                     cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_first();
+                    self.move_first();
                     cx.notify();
                 }
                 ("G", modifiers) if modifiers == Modifiers::none() => {
-                    self.ssh_move_last();
+                    self.move_last();
                     cx.notify();
                 }
                 _ => {}
@@ -736,146 +674,14 @@ impl SshTunnelsSection {
         }
     }
 
-    fn ssh_exit_form(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.ssh_focus = SshFocus::ProfileList;
-        self.ssh_editing_field = false;
-    }
-
-    fn ssh_nav(&self) -> SshFormNav {
-        SshFormNav::new(
+    pub(super) fn validate_ssh_form_field(&mut self) {
+        let mut nav = SshFormNav::new(
             self.ssh_auth_method,
             self.editing_tunnel_id,
             self.ssh_form_field,
-        )
-    }
-
-    fn apply_ssh_nav(&mut self, nav: SshFormNav) {
-        self.ssh_form_field = nav.field();
-    }
-
-    fn ssh_move_down(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_down();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_move_up(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_up();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_move_right(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_right();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_move_left(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_left();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_move_first(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_first();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_move_last(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.move_last();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_tab_next(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.tab_next();
-        self.apply_ssh_nav(nav);
-    }
-
-    fn ssh_tab_prev(&mut self) {
-        let mut nav = self.ssh_nav();
-        nav.tab_prev();
-        self.apply_ssh_nav(nav);
-    }
-
-    pub(super) fn ssh_focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.ssh_editing_field = true;
-
-        match self.ssh_form_field {
-            SshFormField::Name => {
-                self.input_tunnel_name
-                    .update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::Host => {
-                self.input_ssh_host.update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::Port => {
-                self.input_ssh_port.update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::User => {
-                self.input_ssh_user.update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::KeyPath => {
-                self.input_ssh_key_path
-                    .update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::Passphrase => {
-                self.input_ssh_key_passphrase
-                    .update(cx, |s, cx| s.focus(window, cx));
-            }
-            SshFormField::Password => {
-                self.input_ssh_password
-                    .update(cx, |s, cx| s.focus(window, cx));
-            }
-            _ => {
-                self.ssh_editing_field = false;
-            }
-        }
-    }
-
-    fn ssh_activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.ssh_form_field {
-            SshFormField::AuthPrivateKey => {
-                self.ssh_auth_method = SshAuthSelection::PrivateKey;
-                self.validate_ssh_form_field();
-            }
-            SshFormField::AuthPassword => {
-                self.ssh_auth_method = SshAuthSelection::Password;
-                self.validate_ssh_form_field();
-            }
-            SshFormField::KeyBrowse => {
-                self.browse_ssh_key(window, cx);
-            }
-            SshFormField::SaveSecret => {
-                self.form_save_secret = !self.form_save_secret;
-            }
-            SshFormField::SaveButton => {
-                self.save_tunnel(window, cx);
-            }
-            SshFormField::TestButton => {
-                self.test_ssh_tunnel(cx);
-            }
-            SshFormField::DeleteButton => {
-                if let Some(id) = self.editing_tunnel_id {
-                    self.request_delete_tunnel(id, cx);
-                }
-            }
-            field if SshFormNav::is_input_field(field) => {
-                self.ssh_focus_current_field(window, cx);
-            }
-            _ => {}
-        }
-
-        cx.notify();
-    }
-
-    pub(super) fn validate_ssh_form_field(&mut self) {
-        let mut nav = self.ssh_nav();
+        );
         nav.validate_field();
-        self.apply_ssh_nav(nav);
+        self.ssh_form_field = nav.field();
     }
 }
 

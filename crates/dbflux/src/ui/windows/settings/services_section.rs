@@ -1,5 +1,7 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::FormSection;
+use super::section_trait::SectionFocusEvent;
 use crate::keymap::{KeyChord, Modifiers};
 use dbflux_core::{AppConfigStore, ServiceConfig};
 use gpui::prelude::*;
@@ -7,7 +9,7 @@ use gpui::*;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::InputState;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
     List,
     Form,
@@ -20,8 +22,14 @@ pub(super) enum ServiceFormRow {
     Timeout,
     Enabled,
     Arg(usize),
+    #[allow(dead_code)]
+    ArgDelete(usize),
     AddArg,
     EnvKey(usize),
+    #[allow(dead_code)]
+    EnvValue(usize),
+    #[allow(dead_code)]
+    EnvDelete(usize),
     AddEnv,
     DeleteButton,
     SaveButton,
@@ -38,6 +46,7 @@ pub(super) struct ServicesSection {
     pub(super) svc_form_cursor: usize,
     pub(super) svc_env_col: usize,
     pub(super) svc_editing_field: bool,
+    pub(super) switching_input: bool,
 
     pub(super) input_socket_id: Entity<InputState>,
     pub(super) input_svc_command: Entity<InputState>,
@@ -52,6 +61,8 @@ pub(super) struct ServicesSection {
     pub(super) pending_delete_svc_idx: Option<usize>,
     pub(super) content_focused: bool,
 }
+
+impl EventEmitter<SectionFocusEvent> for ServicesSection {}
 
 impl ServicesSection {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -71,6 +82,7 @@ impl ServicesSection {
             svc_form_cursor: 0,
             svc_env_col: 0,
             svc_editing_field: false,
+            switching_input: false,
             input_socket_id,
             input_svc_command,
             input_svc_timeout,
@@ -103,36 +115,11 @@ impl SettingsSection for ServicesSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
-
-        if self.svc_focus == ServiceFocus::Form && self.svc_editing_field {
-            match (chord.key.as_str(), chord.modifiers) {
-                ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.svc_editing_field = false;
-                    cx.notify();
-                }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.svc_editing_field = false;
-                    self.svc_move_down();
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.svc_editing_field = false;
-                    self.svc_tab_next();
-                    self.svc_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.svc_editing_field = false;
-                    self.svc_tab_prev();
-                    self.svc_focus_current_field(window, cx);
-                    cx.notify();
-                }
-                _ => {}
-            }
-
+        if self.handle_editing_keys(event, window, cx) {
             return;
         }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
 
         match self.svc_focus {
             ServiceFocus::List => match (chord.key.as_str(), chord.modifiers) {
@@ -187,7 +174,11 @@ impl SettingsSection for ServicesSection {
                     self.svc_move_up();
                     cx.notify();
                 }
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("left", modifiers) if modifiers == Modifiers::none() => {
                     self.svc_move_left();
                     cx.notify();
                 }
@@ -233,6 +224,119 @@ impl SettingsSection for ServicesSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_svc_changes(cx)
+    }
+}
+
+impl FormSection for ServicesSection {
+    type Focus = ServiceFocus;
+    type FormField = ServiceFormRow;
+
+    fn focus_area(&self) -> Self::Focus {
+        self.svc_focus
+    }
+
+    fn set_focus_area(&mut self, focus: Self::Focus) {
+        self.svc_focus = focus;
+    }
+
+    fn form_field(&self) -> Self::FormField {
+        self.current_form_row().unwrap_or(ServiceFormRow::SocketId)
+    }
+
+    fn set_form_field(&mut self, field: Self::FormField) {
+        let rows = self.svc_form_rows();
+        if let Some(pos) = rows.iter().position(|f| *f == field) {
+            self.svc_form_cursor = pos;
+            self.svc_env_col = 0;
+        }
+    }
+
+    fn editing_field(&self) -> bool {
+        self.svc_editing_field
+    }
+
+    fn set_editing_field(&mut self, editing: bool) {
+        self.svc_editing_field = editing;
+    }
+
+    fn switching_input(&self) -> bool {
+        self.switching_input
+    }
+
+    fn set_switching_input(&mut self, switching: bool) {
+        self.switching_input = switching;
+    }
+
+    fn content_focused(&self) -> bool {
+        self.content_focused
+    }
+
+    fn list_focus() -> Self::Focus {
+        ServiceFocus::List
+    }
+
+    fn form_focus() -> Self::Focus {
+        ServiceFocus::Form
+    }
+
+    fn first_form_field() -> Self::FormField {
+        ServiceFormRow::SocketId
+    }
+
+    fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
+        self.svc_form_rows().into_iter().map(|f| vec![f]).collect()
+    }
+
+    fn is_input_field(field: Self::FormField) -> bool {
+        matches!(
+            field,
+            ServiceFormRow::SocketId
+                | ServiceFormRow::Command
+                | ServiceFormRow::Timeout
+                | ServiceFormRow::Arg(_)
+                | ServiceFormRow::EnvKey(_)
+                | ServiceFormRow::EnvValue(_)
+        )
+    }
+
+    fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.svc_focus_current_field(window, cx);
+    }
+
+    fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.svc_activate_current_field(window, cx);
+    }
+
+    fn move_down(&mut self) {
+        self.svc_move_down();
+    }
+
+    fn move_up(&mut self) {
+        self.svc_move_up();
+    }
+
+    fn move_left(&mut self) {
+        self.svc_move_left();
+    }
+
+    fn move_right(&mut self) {
+        self.svc_move_right();
+    }
+
+    fn move_first(&mut self) {
+        self.svc_move_first();
+    }
+
+    fn move_last(&mut self) {
+        self.svc_move_last();
+    }
+
+    fn tab_next(&mut self) {
+        self.svc_tab_next();
+    }
+
+    fn tab_prev(&mut self) {
+        self.svc_tab_prev();
     }
 }
 

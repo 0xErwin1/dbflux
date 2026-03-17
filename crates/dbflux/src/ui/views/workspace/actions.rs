@@ -54,13 +54,10 @@ impl Workspace {
         };
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
-        match cx.open_window(
-            options,
-            |window, cx| {
-                let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
-                cx.new(|cx| Root::new(manager, window, cx))
-            },
-        ) {
+        match cx.open_window(options, |window, cx| {
+            let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
+            cx.new(|cx| Root::new(manager, window, cx))
+        }) {
             Ok(handle) => {
                 // Explicitly activate the window and force initial render (X11 fix)
                 if let Err(e) = handle.update(cx, |_root, window, cx| {
@@ -105,26 +102,23 @@ impl Workspace {
         };
         platform::apply_window_options(&mut options, 800.0, 600.0);
 
-        if let Ok(handle) = cx.open_window(
-            options,
-            |window, cx| {
-                let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
+        if let Ok(handle) = cx.open_window(options, |window, cx| {
+            let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
 
-                cx.subscribe(
-                    &settings,
-                    move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
-                        workspace.update(cx, |this, cx| match event {
-                            crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
-                                this.open_script_from_path(path.clone(), cx);
-                            }
-                        });
-                    },
-                )
-                .detach();
+            cx.subscribe(
+                &settings,
+                move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                    workspace.update(cx, |this, cx| match event {
+                        crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
+                            this.open_script_from_path(path.clone(), cx);
+                        }
+                    });
+                },
+            )
+            .detach();
 
-                cx.new(|cx| Root::new(settings, window, cx))
-            },
-        ) {
+            cx.new(|cx| Root::new(settings, window, cx))
+        }) {
             // Explicitly activate the window and force initial render (X11 fix)
             if let Err(e) = handle.update(cx, |_root, window, cx| {
                 window.activate_window();

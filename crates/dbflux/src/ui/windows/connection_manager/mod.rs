@@ -1956,17 +1956,14 @@ impl ConnectionManagerWindow {
         };
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
-        let _ = cx.open_window(
-            options,
-            move |window, cx| {
-                let wizard = cx.new(|cx| {
-                    let mut wizard = SsoWizard::new(app_state.clone(), window, cx);
-                    wizard.open(window, cx);
-                    wizard
-                });
-                cx.new(|cx| Root::new(wizard, window, cx))
-            },
-        );
+        let _ = cx.open_window(options, move |window, cx| {
+            let wizard = cx.new(|cx| {
+                let mut wizard = SsoWizard::new(app_state.clone(), window, cx);
+                wizard.open(window, cx);
+                wizard
+            });
+            cx.new(|cx| Root::new(wizard, window, cx))
+        });
     }
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {

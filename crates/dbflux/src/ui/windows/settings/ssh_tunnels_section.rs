@@ -1,7 +1,9 @@
-use super::layout;
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::{FormSection, create_blur_subscription};
+use super::layout;
+use super::section_trait::SectionFocusEvent;
+use super::ssh_tunnels::SshFormNav;
 use crate::app::{AppState, AppStateChanged};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::SshTunnelProfile;
@@ -11,11 +13,11 @@ use gpui_component::button::Button;
 use gpui_component::button::ButtonVariants;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum SshFocus {
     ProfileList,
     Form,
@@ -77,6 +79,147 @@ pub(super) struct SshTunnelsSection {
 
 impl EventEmitter<SectionFocusEvent> for SshTunnelsSection {}
 
+impl FormSection for SshTunnelsSection {
+    type Focus = SshFocus;
+    type FormField = SshFormField;
+
+    fn focus_area(&self) -> Self::Focus {
+        self.ssh_focus
+    }
+
+    fn set_focus_area(&mut self, focus: Self::Focus) {
+        self.ssh_focus = focus;
+    }
+
+    fn form_field(&self) -> Self::FormField {
+        self.ssh_form_field
+    }
+
+    fn set_form_field(&mut self, field: Self::FormField) {
+        self.ssh_form_field = field;
+    }
+
+    fn editing_field(&self) -> bool {
+        self.ssh_editing_field
+    }
+
+    fn set_editing_field(&mut self, editing: bool) {
+        self.ssh_editing_field = editing;
+    }
+
+    fn switching_input(&self) -> bool {
+        self.switching_input
+    }
+
+    fn set_switching_input(&mut self, switching: bool) {
+        self.switching_input = switching;
+    }
+
+    fn content_focused(&self) -> bool {
+        self.content_focused
+    }
+
+    fn list_focus() -> Self::Focus {
+        SshFocus::ProfileList
+    }
+
+    fn form_focus() -> Self::Focus {
+        SshFocus::Form
+    }
+
+    fn first_form_field() -> Self::FormField {
+        SshFormField::Name
+    }
+
+    fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
+        let nav = SshFormNav::new(
+            self.ssh_auth_method,
+            self.editing_tunnel_id,
+            self.ssh_form_field,
+        );
+        nav.form_rows()
+    }
+
+    fn is_input_field(field: Self::FormField) -> bool {
+        SshFormNav::is_input_field(field)
+    }
+
+    fn validate_form_field(&mut self) {
+        self.validate_ssh_form_field();
+    }
+
+    fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ssh_editing_field = true;
+
+        match self.ssh_form_field {
+            SshFormField::Name => {
+                self.input_tunnel_name
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Host => {
+                self.input_ssh_host.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Port => {
+                self.input_ssh_port.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::User => {
+                self.input_ssh_user.update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::KeyPath => {
+                self.input_ssh_key_path
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Passphrase => {
+                self.input_ssh_key_passphrase
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
+            SshFormField::Password => {
+                self.input_ssh_password
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
+            _ => {
+                self.ssh_editing_field = false;
+            }
+        }
+    }
+
+    fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.ssh_form_field {
+            SshFormField::AuthPrivateKey => {
+                self.ssh_auth_method = SshAuthSelection::PrivateKey;
+                self.validate_form_field();
+            }
+            SshFormField::AuthPassword => {
+                self.ssh_auth_method = SshAuthSelection::Password;
+                self.validate_form_field();
+            }
+            SshFormField::KeyBrowse => {
+                self.browse_ssh_key(window, cx);
+            }
+            SshFormField::SaveSecret => {
+                self.form_save_secret = !self.form_save_secret;
+            }
+            SshFormField::SaveButton => {
+                self.save_tunnel(window, cx);
+            }
+            SshFormField::TestButton => {
+                self.test_ssh_tunnel(cx);
+            }
+            SshFormField::DeleteButton => {
+                if let Some(id) = self.editing_tunnel_id {
+                    self.request_delete_tunnel(id, cx);
+                }
+            }
+            field if Self::is_input_field(field) => {
+                self.focus_current_field(window, cx);
+            }
+            _ => {}
+        }
+
+        cx.notify();
+    }
+}
+
 impl SshTunnelsSection {
     pub(super) fn new(
         app_state: Entity<AppState>,
@@ -110,81 +253,13 @@ impl SshTunnelsSection {
             cx.notify();
         });
 
-        let blur_tunnel_name =
-            cx.subscribe(&input_tunnel_name, |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Blur) {
-                    if this.switching_input {
-                        this.switching_input = false;
-                        return;
-                    }
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                }
-            });
-
-        let blur_ssh_host = cx.subscribe(&input_ssh_host, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Blur) {
-                if this.switching_input {
-                    this.switching_input = false;
-                    return;
-                }
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
-        });
-
-        let blur_ssh_port = cx.subscribe(&input_ssh_port, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Blur) {
-                if this.switching_input {
-                    this.switching_input = false;
-                    return;
-                }
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
-        });
-
-        let blur_ssh_user = cx.subscribe(&input_ssh_user, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Blur) {
-                if this.switching_input {
-                    this.switching_input = false;
-                    return;
-                }
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
-        });
-
-        let blur_ssh_key_path =
-            cx.subscribe(&input_ssh_key_path, |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Blur) {
-                    if this.switching_input {
-                        this.switching_input = false;
-                        return;
-                    }
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                }
-            });
-
-        let blur_ssh_key_passphrase = cx.subscribe(
-            &input_ssh_key_passphrase,
-            |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Blur) {
-                    if this.switching_input {
-                        this.switching_input = false;
-                        return;
-                    }
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                }
-            },
-        );
-
-        let blur_ssh_password =
-            cx.subscribe(&input_ssh_password, |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Blur) {
-                    if this.switching_input {
-                        this.switching_input = false;
-                        return;
-                    }
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
-                }
-            });
+        let blur_tunnel_name = create_blur_subscription(cx, &input_tunnel_name);
+        let blur_ssh_host = create_blur_subscription(cx, &input_ssh_host);
+        let blur_ssh_port = create_blur_subscription(cx, &input_ssh_port);
+        let blur_ssh_user = create_blur_subscription(cx, &input_ssh_user);
+        let blur_ssh_key_path = create_blur_subscription(cx, &input_ssh_key_path);
+        let blur_ssh_key_passphrase = create_blur_subscription(cx, &input_ssh_key_passphrase);
+        let blur_ssh_password = create_blur_subscription(cx, &input_ssh_password);
 
         Self {
             app_state,
@@ -289,7 +364,7 @@ impl SshTunnelsSection {
                             this.switching_input = true;
                             this.ssh_focus = SshFocus::Form;
                             this.ssh_form_field = field;
-                            this.ssh_focus_current_field(window, cx);
+                            this.focus_current_field(window, cx);
                             cx.notify();
                         }),
                     )
@@ -936,7 +1011,7 @@ impl SettingsSection for SshTunnelsSection {
 
     fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.content_focused = false;
-        self.ssh_editing_field = false;
+        self.set_editing_field(false);
         cx.notify();
     }
 

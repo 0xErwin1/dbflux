@@ -3,7 +3,7 @@
 /// Different window systems have different behaviors and requirements.
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
-use gpui::{px, WindowKind, WindowOptions};
+use gpui::{WindowKind, WindowOptions, px};
 
 /// Returns true if running on X11 (not Wayland, macOS, or Windows).
 ///

@@ -1,5 +1,6 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::app::{AppState, AppStateChanged};
@@ -11,7 +12,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
 use std::collections::{HashMap, HashSet};
@@ -28,12 +29,14 @@ pub(super) struct AuthProfilesSection {
     selected_profile_id: Option<Uuid>,
     editing_profile_id: Option<Uuid>,
     selected_provider_id: Option<String>,
+    provider_entries_cache: Vec<(String, String)>,
     profile_enabled: bool,
     pending_delete_profile_id: Option<Uuid>,
     pending_sync_from_app_state: bool,
 
     input_name: Entity<InputState>,
     form_inputs: HashMap<String, Entity<InputState>>,
+    provider_field_order: Vec<String>,
 
     #[cfg(feature = "aws")]
     sso_account_dropdown: Entity<Dropdown>,
@@ -61,6 +64,8 @@ pub(super) struct AuthProfilesSection {
     sso_roles_context_key: Option<String>,
 
     auth_focus: AuthFocus,
+    auth_form_field: AuthFormField,
+    auth_editing_field: bool,
     content_focused: bool,
     profile_list_scroll_handle: ScrollHandle,
     pending_profile_scroll_idx: Option<usize>,
@@ -70,27 +75,31 @@ pub(super) struct AuthProfilesSection {
     _blur_subscriptions: Vec<Subscription>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AuthFocus {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum AuthFocus {
     ProfileList,
     Form,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum AuthFormField {
+    Name,
+    Provider(usize),
+    DynamicField(usize),
+    #[cfg(feature = "aws")]
+    SsoLogin,
+    #[cfg(feature = "aws")]
+    SsoAccount,
+    #[cfg(feature = "aws")]
+    SsoRole,
+    Enabled,
+    DeleteButton,
+    SaveButton,
 }
 
 impl EventEmitter<SectionFocusEvent> for AuthProfilesSection {}
 
 impl AuthProfilesSection {
-    fn subscribe_input_blur(cx: &mut Context<Self>, input: &Entity<InputState>) -> Subscription {
-        cx.subscribe(input, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Blur) {
-                if this.switching_input {
-                    this.switching_input = false;
-                    return;
-                }
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
-        })
-    }
-
     pub(super) fn new(
         app_state: Entity<AppState>,
         window: &mut Window,
@@ -103,6 +112,18 @@ impl AuthProfilesSection {
             .providers()
             .next()
             .map(|provider| provider.provider_id().to_string());
+
+        let provider_entries_cache = app_state
+            .read(cx)
+            .auth_provider_registry()
+            .providers()
+            .map(|provider| {
+                (
+                    provider.provider_id().to_string(),
+                    provider.display_name().to_string(),
+                )
+            })
+            .collect();
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
 
@@ -166,11 +187,13 @@ impl AuthProfilesSection {
             selected_profile_id,
             editing_profile_id: None,
             selected_provider_id,
+            provider_entries_cache,
             profile_enabled: true,
             pending_delete_profile_id: None,
             pending_sync_from_app_state: false,
             input_name,
             form_inputs: HashMap::new(),
+            provider_field_order: Vec::new(),
 
             #[cfg(feature = "aws")]
             sso_account_dropdown,
@@ -198,6 +221,8 @@ impl AuthProfilesSection {
             sso_roles_context_key: None,
 
             auth_focus: AuthFocus::ProfileList,
+            auth_form_field: AuthFormField::Name,
+            auth_editing_field: false,
             content_focused: false,
             profile_list_scroll_handle: ScrollHandle::new(),
             pending_profile_scroll_idx: None,
@@ -245,6 +270,7 @@ impl AuthProfilesSection {
     fn rebuild_form_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(provider) = self.selected_provider(cx) else {
             self.form_inputs.clear();
+            self.provider_field_order.clear();
             self.rebuild_blur_subscriptions(cx);
             return;
         };
@@ -272,6 +298,11 @@ impl AuthProfilesSection {
         self.form_inputs
             .retain(|field_id, _| expected_ids.contains(field_id));
 
+        self.provider_field_order = field_defs
+            .iter()
+            .map(|(field_id, _, _)| field_id.clone())
+            .collect();
+
         for (field_id, placeholder, kind) in field_defs {
             if self.form_inputs.contains_key(&field_id) {
                 continue;
@@ -294,10 +325,10 @@ impl AuthProfilesSection {
     fn rebuild_blur_subscriptions(&mut self, cx: &mut Context<Self>) {
         let mut subs = Vec::new();
 
-        subs.push(Self::subscribe_input_blur(cx, &self.input_name.clone()));
+        subs.push(create_blur_subscription(cx, &self.input_name.clone()));
 
         for input in self.form_inputs.values() {
-            subs.push(Self::subscribe_input_blur(cx, input));
+            subs.push(create_blur_subscription(cx, input));
         }
 
         self._blur_subscriptions = subs;
@@ -417,6 +448,10 @@ impl AuthProfilesSection {
             return;
         }
 
+        if self.handle_editing_keys(event, window, cx) {
+            return;
+        }
+
         let chord = KeyChord::from_gpui(&event.keystroke);
 
         match self.auth_focus {
@@ -449,28 +484,55 @@ impl AuthProfilesSection {
                 ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
                     if modifiers == Modifiers::none() =>
                 {
-                    self.auth_focus = AuthFocus::Form;
-                    self.switching_input = false;
-                    self.input_name
-                        .update(cx, |state, cx| state.focus(window, cx));
+                    self.enter_form(window, cx);
                     cx.notify();
                 }
                 _ => {}
             },
             AuthFocus::Form => match (chord.key.as_str(), chord.modifiers) {
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.auth_focus = AuthFocus::ProfileList;
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_down();
+                    cx.notify();
+                }
+                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_up();
+                    cx.notify();
+                }
+                ("h", modifiers) if modifiers == Modifiers::none() => {
+                    self.exit_form(window, cx);
+                    cx.notify();
+                }
+                ("left", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_left();
+                    cx.notify();
+                }
+                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_right();
                     cx.notify();
                 }
                 ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.save_profile(window, cx);
-                }
-                ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    if let Some(selected_id) = self.selected_profile_id {
-                        self.load_profile_into_form(selected_id, window, cx);
-                    }
+                    self.activate_current_field(window, cx);
                     cx.notify();
-                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+                ("tab", modifiers) if modifiers == Modifiers::none() => {
+                    self.tab_next();
+                    cx.notify();
+                }
+                ("tab", modifiers) if modifiers == Modifiers::shift() => {
+                    self.tab_prev();
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::none() => {
+                    self.move_first();
+                    cx.notify();
+                }
+                ("g", modifiers) if modifiers == Modifiers::shift() => {
+                    self.move_last();
+                    cx.notify();
                 }
                 _ => {}
             },
@@ -528,11 +590,8 @@ impl AuthProfilesSection {
 
     fn begin_create_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_profile_id = None;
-        self.auth_focus = AuthFocus::Form;
         self.clear_form(window, cx);
-        self.switching_input = false;
-        self.input_name
-            .update(cx, |state, cx| state.focus(window, cx));
+        self.enter_form(window, cx);
         cx.notify();
     }
 
@@ -831,8 +890,12 @@ impl AuthProfilesSection {
         &self,
         label: &str,
         input: &Entity<InputState>,
+        field: AuthFormField,
+        is_focused: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let primary = cx.theme().primary;
+
         div()
             .flex()
             .flex_col()
@@ -845,11 +908,20 @@ impl AuthProfilesSection {
             )
             .child(
                 div()
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(if is_focused {
+                        primary
+                    } else {
+                        transparent_black()
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             this.switching_input = true;
                             this.auth_focus = AuthFocus::Form;
+                            this.auth_form_field = field;
+                            this.focus_current_field(window, cx);
                             cx.notify();
                         }),
                     )
@@ -1003,7 +1075,6 @@ impl AuthProfilesSection {
                                 MouseButton::Left,
                                 cx.listener(move |this, _, window, cx| {
                                     this.switching_input = true;
-                                    this.auth_focus = AuthFocus::Form;
                                     this.load_profile_into_form(profile_id, window, cx);
                                 }),
                             )
@@ -1413,9 +1484,14 @@ impl AuthProfilesSection {
                     .iter()
                     .flat_map(|tab| tab.sections.iter())
                     .flat_map(|section| section.fields.iter())
-                    .map(|field| {
+                    .enumerate()
+                    .map(|(idx, field)| {
                         if let Some(input) = self.form_inputs.get(&field.id) {
-                            self.render_input_row(&field.label, input, cx)
+                            let form_field = AuthFormField::DynamicField(idx);
+                            let is_focused = self.auth_form_field == form_field
+                                && self.auth_focus == AuthFocus::Form
+                                && self.content_focused;
+                            self.render_input_row(&field.label, input, form_field, is_focused, cx)
                                 .into_any_element()
                         } else {
                             div().into_any_element()
@@ -1460,7 +1536,18 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(self.render_input_row("Name", &self.input_name, cx))
+                    .child({
+                        let is_focused = self.auth_form_field == AuthFormField::Name
+                            && self.auth_focus == AuthFocus::Form
+                            && self.content_focused;
+                        self.render_input_row(
+                            "Name",
+                            &self.input_name,
+                            AuthFormField::Name,
+                            is_focused,
+                            cx,
+                        )
+                    })
                     .child(
                         div()
                             .flex()
@@ -1615,6 +1702,176 @@ impl AuthProfilesSection {
     }
 }
 
+impl FormSection for AuthProfilesSection {
+    type Focus = AuthFocus;
+    type FormField = AuthFormField;
+
+    fn focus_area(&self) -> Self::Focus {
+        self.auth_focus
+    }
+
+    fn set_focus_area(&mut self, focus: Self::Focus) {
+        self.auth_focus = focus;
+    }
+
+    fn form_field(&self) -> Self::FormField {
+        self.auth_form_field
+    }
+
+    fn set_form_field(&mut self, field: Self::FormField) {
+        self.auth_form_field = field;
+    }
+
+    fn editing_field(&self) -> bool {
+        self.auth_editing_field
+    }
+
+    fn set_editing_field(&mut self, editing: bool) {
+        self.auth_editing_field = editing;
+    }
+
+    fn switching_input(&self) -> bool {
+        self.switching_input
+    }
+
+    fn set_switching_input(&mut self, switching: bool) {
+        self.switching_input = switching;
+    }
+
+    fn content_focused(&self) -> bool {
+        self.content_focused
+    }
+
+    fn list_focus() -> Self::Focus {
+        AuthFocus::ProfileList
+    }
+
+    fn form_focus() -> Self::Focus {
+        AuthFocus::Form
+    }
+
+    fn first_form_field() -> Self::FormField {
+        AuthFormField::Name
+    }
+
+    fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
+        let providers = &self.provider_entries_cache;
+        let mut rows = vec![vec![AuthFormField::Name]];
+
+        let provider_row: Vec<AuthFormField> = providers
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| AuthFormField::Provider(idx))
+            .collect();
+        if !provider_row.is_empty() {
+            rows.push(provider_row);
+        }
+
+        for idx in 0..self.provider_field_order.len() {
+            rows.push(vec![AuthFormField::DynamicField(idx)]);
+        }
+
+        #[cfg(feature = "aws")]
+        if self.selected_provider_id.as_deref() == Some("aws-sso") {
+            rows.push(vec![AuthFormField::SsoLogin]);
+            rows.push(vec![AuthFormField::SsoAccount]);
+            rows.push(vec![AuthFormField::SsoRole]);
+        }
+
+        rows.push(vec![AuthFormField::Enabled]);
+
+        if self.editing_profile_id.is_some() {
+            rows.push(vec![AuthFormField::DeleteButton, AuthFormField::SaveButton]);
+        } else {
+            rows.push(vec![AuthFormField::SaveButton]);
+        }
+
+        rows
+    }
+
+    fn is_input_field(field: Self::FormField) -> bool {
+        matches!(field, AuthFormField::Name | AuthFormField::DynamicField(_))
+    }
+
+    fn focus_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.auth_editing_field = true;
+
+        match self.auth_form_field {
+            AuthFormField::Name => {
+                self.input_name
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            AuthFormField::DynamicField(idx) => {
+                if let Some(field_id) = self.provider_field_order.get(idx).cloned()
+                    && let Some(input) = self.form_inputs.get(&field_id)
+                {
+                    input.update(cx, |state, cx| state.focus(window, cx));
+                    return;
+                }
+                self.auth_editing_field = false;
+            }
+            _ => {
+                self.auth_editing_field = false;
+            }
+        }
+    }
+
+    fn activate_current_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.auth_form_field {
+            AuthFormField::Name | AuthFormField::DynamicField(_) => {
+                self.focus_current_field(window, cx);
+            }
+            AuthFormField::Provider(idx) => {
+                let providers = self.provider_entries(cx);
+                if let Some((provider_id, _)) = providers.get(idx) {
+                    let provider_id = provider_id.clone();
+                    self.selected_provider_id = Some(provider_id.clone());
+                    self.rebuild_form_inputs(window, cx);
+
+                    for input in self.form_inputs.values() {
+                        input.update(cx, |state, cx| {
+                            state.set_value("", window, cx);
+                        });
+                    }
+
+                    #[cfg(feature = "aws")]
+                    self.reset_sso_listing_state(cx);
+
+                    self.validate_form_field();
+                }
+            }
+            AuthFormField::Enabled => {
+                self.profile_enabled = !self.profile_enabled;
+            }
+            #[cfg(feature = "aws")]
+            AuthFormField::SsoLogin => {
+                self.login_sso_profile(cx);
+            }
+            AuthFormField::SaveButton => {
+                self.save_profile(window, cx);
+            }
+            AuthFormField::DeleteButton => {
+                self.request_delete_selected_profile(cx);
+            }
+            #[cfg(feature = "aws")]
+            AuthFormField::SsoAccount | AuthFormField::SsoRole => {}
+        }
+    }
+
+    fn validate_form_field(&mut self) {
+        let rows = self.form_rows();
+        let current = self.auth_form_field;
+
+        for row in &rows {
+            if row.contains(&current) {
+                return;
+            }
+        }
+
+        self.auth_form_field = AuthFormField::Name;
+    }
+}
+
 impl SettingsSection for AuthProfilesSection {
     fn section_id(&self) -> SettingsSectionId {
         SettingsSectionId::AuthProfiles
@@ -1636,6 +1893,7 @@ impl SettingsSection for AuthProfilesSection {
 
     fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.content_focused = false;
+        self.auth_editing_field = false;
         cx.notify();
     }
 }

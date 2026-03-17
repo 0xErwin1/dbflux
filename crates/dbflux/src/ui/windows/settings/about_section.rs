@@ -1,9 +1,9 @@
-use super::{layout, SettingsSection, SettingsSectionId};
+use super::{SettingsSection, SettingsSectionId, layout};
 use crate::ui::icons::AppIcon;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 pub(super) struct AboutSection;
 
