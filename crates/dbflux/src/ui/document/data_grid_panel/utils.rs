@@ -1,6 +1,18 @@
 use super::DataGridPanel;
-use dbflux_core::Value;
+use dbflux_core::{QueryResult, Value};
 use gpui::Context;
+
+/// Returns `(column_index, column_name)` for every column marked as a primary key.
+/// Used by mutations and context-menu handlers to build document filters generically.
+pub(super) fn extract_pk_columns(result: &QueryResult) -> Vec<(usize, String)> {
+    result
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| col.is_primary_key)
+        .map(|(idx, col)| (idx, col.name.clone()))
+        .collect()
+}
 
 pub(super) fn value_to_json(value: &Value) -> serde_json::Value {
     match value {

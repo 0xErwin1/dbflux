@@ -1124,6 +1124,7 @@ impl Connection for MysqlConnection {
                 name: col.name_str().to_string(),
                 type_name: format!("{:?}", col.column_type()),
                 nullable: true,
+                is_primary_key: false,
             })
             .collect();
 

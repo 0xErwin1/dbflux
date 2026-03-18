@@ -1,4 +1,4 @@
-use super::utils::value_to_json;
+use super::utils::{extract_pk_columns, value_to_json};
 use super::{
     ContextMenuItem, DataGridEvent, DataGridPanel, DataSource, EditState, PendingDeleteConfirm,
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
@@ -11,7 +11,7 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, QueryRequest,
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
     RowDelete, RowIdentity, RowInsert, RowPatch, Value,
 };
 use dbflux_export::ExportFormat;
@@ -896,7 +896,7 @@ impl DataGridPanel {
         is_document_view: bool,
     ) -> Vec<ContextMenuItem> {
         if is_document_view {
-            // Document view menu: Copy, View/Edit Document, Delete Document
+            // Document view menu: Copy, View/Edit Document, CRUD operations
             let mut items = vec![
                 ContextMenuItem {
                     label: "Copy",
@@ -921,6 +921,20 @@ impl DataGridPanel {
                         action: None,
                         icon: None,
                         is_separator: true,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Add Document",
+                        action: Some(ContextMenuAction::AddRow),
+                        icon: Some(AppIcon::Plus),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Duplicate Document",
+                        action: Some(ContextMenuAction::DuplicateRow),
+                        icon: Some(AppIcon::Layers),
+                        is_separator: false,
                         is_danger: false,
                     },
                     ContextMenuItem {
@@ -2160,8 +2174,10 @@ impl DataGridPanel {
             }
             ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
             ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
-            ContextMenuAction::AddRow => self.handle_add_row(menu.row, cx),
-            ContextMenuAction::DuplicateRow => self.handle_duplicate_row(menu.row, cx),
+            ContextMenuAction::AddRow => self.handle_add_row(menu.row, is_document_view, cx),
+            ContextMenuAction::DuplicateRow => {
+                self.handle_duplicate_row(menu.row, is_document_view, cx)
+            }
             ContextMenuAction::DeleteRow => {
                 if menu.is_document_view {
                     self.pending_delete_confirm = Some(PendingDeleteConfirm {
@@ -2513,23 +2529,17 @@ impl DataGridPanel {
 
     pub(super) fn handle_document_preview_save(
         &mut self,
-        _doc_index: usize,
+        doc_index: usize,
         document_json: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use crate::ui::overlays::document_preview_modal::DOC_INDEX_NEW;
+
         let new_doc: serde_json::Value = match serde_json::from_str(document_json) {
             Ok(v) => v,
             Err(e) => {
                 cx.toast_error(format!("Invalid JSON: {}", e), window);
-                return;
-            }
-        };
-
-        let doc_id = match new_doc.get("_id") {
-            Some(id) => id.clone(),
-            None => {
-                cx.toast_error("Document must have an _id field", window);
                 return;
             }
         };
@@ -2543,7 +2553,121 @@ impl DataGridPanel {
             return;
         };
 
-        let (conn, active_database) = {
+        // Insert mode: opened via "Add Document" or "Duplicate Document".
+        if doc_index == DOC_INDEX_NEW {
+            let (conn, active_database) = {
+                let state = self.app_state.read(cx);
+                match state.connections().get(profile_id) {
+                    Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                    None => (None, None),
+                }
+            };
+
+            let Some(conn) = conn else {
+                cx.toast_error("Connection not available", window);
+                return;
+            };
+
+            let doc_map = match new_doc {
+                serde_json::Value::Object(m) => m,
+                _ => {
+                    cx.toast_error("Document must be a JSON object", window);
+                    return;
+                }
+            };
+
+            let insert = DocumentInsert::one(collection.name.clone(), doc_map.into())
+                .with_database(collection.database.clone());
+
+            let _ = active_database;
+            let entity = cx.entity().clone();
+
+            cx.spawn(async move |_this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { conn.insert_document(&insert) })
+                    .await;
+
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        match result {
+                            Ok(_) => {
+                                panel.pending_toast = Some(PendingToast {
+                                    message: "Document inserted".to_string(),
+                                    is_error: false,
+                                });
+                                panel.pending_refresh = true;
+                            }
+                            Err(e) => {
+                                panel.pending_toast = Some(PendingToast {
+                                    message: format!("Failed to insert document: {}", e),
+                                    is_error: true,
+                                });
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .log_if_dropped();
+            })
+            .detach();
+
+            return;
+        }
+
+        // Update mode: build filter from PK columns in result metadata
+        let pk_columns = extract_pk_columns(&self.result);
+
+        let filter = if pk_columns.is_empty() {
+            // MongoDB fallback: use _id from the edited document
+            match new_doc.get("_id") {
+                Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
+                None => {
+                    cx.toast_error("Document must have an _id field", window);
+                    return;
+                }
+            }
+        } else {
+            // Extract PK values from the current row
+            let Some(table_state) = &self.table_state else {
+                cx.toast_error("Table state not available", window);
+                return;
+            };
+
+            let state = table_state.read(cx);
+            let model = state.model();
+            let mut filter_obj = serde_json::Map::new();
+
+            for (col_idx, col_name) in &pk_columns {
+                if let Some(cell) = model.cell(doc_index, *col_idx) {
+                    filter_obj.insert(col_name.clone(), value_to_json(&cell.to_value()));
+                }
+            }
+
+            if filter_obj.is_empty() {
+                cx.toast_error("Could not determine document primary key", window);
+                return;
+            }
+
+            DocumentFilter::new(serde_json::Value::Object(filter_obj))
+        };
+
+        // Build $set update (skip PK fields)
+        let pk_names: std::collections::HashSet<&str> =
+            pk_columns.iter().map(|(_, name)| name.as_str()).collect();
+
+        let mut set_fields = serde_json::Map::new();
+        if let serde_json::Value::Object(doc_map) = &new_doc {
+            for (key, value) in doc_map {
+                if !pk_names.contains(key.as_str()) {
+                    set_fields.insert(key.clone(), value.clone());
+                }
+            }
+        }
+
+        let update_doc = serde_json::json!({ "$set": set_fields });
+
+        let (conn, _active_database) = {
             let state = self.app_state.read(cx);
             match state.connections().get(profile_id) {
                 Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
@@ -2556,25 +2680,16 @@ impl DataGridPanel {
             return;
         };
 
-        let replace_query = serde_json::json!({
-            "database": collection.database,
-            "collection": collection.name,
-            "replace": {
-                "filter": { "_id": doc_id },
-                "replacement": new_doc
-            }
-        });
+        let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+            .with_database(collection.database.clone());
 
-        let query_request =
-            QueryRequest::new(replace_query.to_string()).with_database(active_database);
         let entity = cx.entity().clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&query_request) });
-
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.update_document(&update) })
+                .await;
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
@@ -2601,13 +2716,32 @@ impl DataGridPanel {
         .detach();
     }
 
-    pub(super) fn handle_add_row(&mut self, after_visual_row: usize, cx: &mut Context<Self>) {
+    pub(super) fn handle_add_row(
+        &mut self,
+        after_visual_row: usize,
+        is_document_view: bool,
+        cx: &mut Context<Self>,
+    ) {
         use crate::ui::components::data_table::model::VisualRowSource;
+        use crate::ui::overlays::document_preview_modal::DOC_INDEX_NEW;
 
         let is_table = matches!(self.source, DataSource::Table { .. });
         let is_collection = matches!(self.source, DataSource::Collection { .. });
 
         if !is_table && !is_collection {
+            return;
+        }
+
+        // In document view, open the modal with a pre-seeded document so the user
+        // can fill in all fields and confirm. The modal saves via DOC_INDEX_NEW,
+        // which routes to insert_document instead of update_document.
+        if is_document_view && is_collection {
+            let new_doc = self.build_new_document_template();
+            self.pending_document_preview = Some(PendingDocumentPreview {
+                doc_index: DOC_INDEX_NEW,
+                document_json: new_doc,
+            });
+            cx.notify();
             return;
         }
 
@@ -2636,10 +2770,9 @@ impl DataGridPanel {
                 .columns
                 .iter()
                 .map(|col| {
-                    if col.name == "_id" {
-                        let new_oid =
-                            uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string();
-                        crate::ui::components::data_table::model::CellValue::text(&new_oid)
+                    if col.is_primary_key {
+                        let new_id = self.generate_new_id_for_column(&col.name);
+                        crate::ui::components::data_table::model::CellValue::text(&new_id)
                     } else {
                         crate::ui::components::data_table::model::CellValue::null()
                     }
@@ -2671,8 +2804,37 @@ impl DataGridPanel {
         });
     }
 
-    pub(super) fn handle_duplicate_row(&mut self, visual_row: usize, cx: &mut Context<Self>) {
+    /// Build an empty document JSON template pre-seeded with generated PK values.
+    fn build_new_document_template(&self) -> String {
+        let mut doc = serde_json::Map::new();
+
+        for col in &self.result.columns {
+            if col.is_primary_key {
+                doc.insert(col.name.clone(), serde_json::Value::String(self.generate_new_id_for_column(&col.name)));
+            }
+        }
+
+        serde_json::to_string_pretty(&serde_json::Value::Object(doc))
+            .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Generate a new ID: 24-char hex for `_id` (MongoDB ObjectId), full UUID otherwise.
+    fn generate_new_id_for_column(&self, col_name: &str) -> String {
+        if col_name == "_id" {
+            uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        }
+    }
+
+    pub(super) fn handle_duplicate_row(
+        &mut self,
+        visual_row: usize,
+        is_document_view: bool,
+        cx: &mut Context<Self>,
+    ) {
         use crate::ui::components::data_table::model::VisualRowSource;
+        use crate::ui::overlays::document_preview_modal::DOC_INDEX_NEW;
 
         let is_table = matches!(self.source, DataSource::Table { .. });
         let is_collection = matches!(self.source, DataSource::Collection { .. });
@@ -2681,24 +2843,50 @@ impl DataGridPanel {
             return;
         }
 
+        // In document view, open the modal with the source document pre-filled but
+        // with a fresh PK so the user can review and confirm before inserting.
+        if is_document_view && is_collection {
+            if let Some(tree_state) = &self.document_tree_state
+                && let Some(raw_doc) = tree_state.read(cx).get_raw_document(visual_row)
+            {
+                    let mut doc_json = value_to_json(raw_doc);
+
+                    // Replace PK values with freshly generated IDs.
+                    if let serde_json::Value::Object(ref mut map) = doc_json {
+                        for col in &self.result.columns {
+                            if col.is_primary_key {
+                                map.insert(
+                                    col.name.clone(),
+                                    serde_json::Value::String(self.generate_new_id_for_column(&col.name)),
+                                );
+                            }
+                        }
+                    }
+
+                    let json_str = serde_json::to_string_pretty(&doc_json)
+                        .unwrap_or_else(|_| "{}".to_string());
+
+                    self.pending_document_preview = Some(PendingDocumentPreview {
+                        doc_index: DOC_INDEX_NEW,
+                        document_json: json_str,
+                    });
+                    cx.notify();
+            }
+            return;
+        }
+
         let Some(table_state) = &self.table_state else {
             return;
         };
 
-        let id_column_idx = if is_collection {
-            self.result.columns.iter().position(|c| c.name == "_id")
-        } else {
-            None
-        };
-
-        let pk_indices: std::collections::HashSet<usize> = if is_table {
-            self.pk_columns
-                .iter()
-                .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
-                .collect()
-        } else {
-            std::collections::HashSet::new()
-        };
+        // For collections and tables, find PK columns using is_primary_key metadata
+        let pk_indices: std::collections::HashSet<usize> = self.result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| col.is_primary_key)
+            .map(|(idx, _)| idx)
+            .collect();
 
         let column_defaults = if is_table {
             self.get_all_column_defaults(cx)
@@ -2712,7 +2900,14 @@ impl DataGridPanel {
         let buffer = state.edit_buffer();
         let visual_order = buffer.compute_visual_order();
 
-        let new_oid = || uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string();
+        // Generate new ID helper: MongoDB-style for "_id", UUID for others
+        let new_id_for_column = |col_name: &str| {
+            if col_name == "_id" {
+                uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
 
         let (source_values, insert_after_base): (
             Vec<crate::ui::components::data_table::model::CellValue>,
@@ -2727,15 +2922,19 @@ impl DataGridPanel {
                         r.iter()
                             .enumerate()
                             .map(|(idx, val)| {
-                                if Some(idx) == id_column_idx {
-                                    crate::ui::components::data_table::model::CellValue::text(&new_oid())
-                                } else if pk_indices.contains(&idx) {
-                                    if let Some(default_expr) =
-                                        column_defaults.get(idx).and_then(|d| d.as_ref())
-                                    {
-                                        crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                // Generate new ID for primary key columns
+                                if pk_indices.contains(&idx) {
+                                    let col_name = self.result.columns.get(idx).map(|c| c.name.as_str()).unwrap_or("");
+                                    if is_table {
+                                        // For tables, use default or null
+                                        if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                                            crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                        } else {
+                                            crate::ui::components::data_table::model::CellValue::null()
+                                        }
                                     } else {
-                                        crate::ui::components::data_table::model::CellValue::null()
+                                        // For collections, generate new ID
+                                        crate::ui::components::data_table::model::CellValue::text(&new_id_for_column(col_name))
                                     }
                                 } else {
                                     crate::ui::components::data_table::model::CellValue::from(val)
@@ -2760,15 +2959,19 @@ impl DataGridPanel {
                             .iter()
                             .enumerate()
                             .map(|(idx, val)| {
-                                if Some(idx) == id_column_idx {
-                                    crate::ui::components::data_table::model::CellValue::text(&new_oid())
-                                } else if pk_indices.contains(&idx) {
-                                    if let Some(default_expr) =
-                                        column_defaults.get(idx).and_then(|d| d.as_ref())
-                                    {
-                                        crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                // Generate new ID for primary key columns
+                                if pk_indices.contains(&idx) {
+                                    let col_name = self.result.columns.get(idx).map(|c| c.name.as_str()).unwrap_or("");
+                                    if is_table {
+                                        // For tables, use default or null
+                                        if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                                            crate::ui::components::data_table::model::CellValue::auto_generated(default_expr)
+                                        } else {
+                                            crate::ui::components::data_table::model::CellValue::null()
+                                        }
                                     } else {
-                                        crate::ui::components::data_table::model::CellValue::null()
+                                        // For collections, generate new ID
+                                        crate::ui::components::data_table::model::CellValue::text(&new_id_for_column(col_name))
                                     }
                                 } else {
                                     val.clone()
@@ -3434,6 +3637,58 @@ impl DataGridPanel {
         }
     }
 
+    /// Extracts primary key columns from result using `is_primary_key` flag.
+    /// Falls back to `_id` if no PK columns are found.
+    fn extract_pk_filter_for_document(&self, row_values: &[Value]) -> Option<DocumentFilter> {
+        // Try to find PK columns from ColumnMeta
+        let pk_columns: Vec<(usize, &str)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| col.is_primary_key)
+            .map(|(idx, col)| (idx, col.name.as_str()))
+            .collect();
+
+        if !pk_columns.is_empty() {
+            // Build filter from PK columns
+            let mut filter_obj = serde_json::Map::new();
+            for (idx, col_name) in pk_columns {
+                if let Some(value) = row_values.get(idx) {
+                    let json_val = match value {
+                        Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+                        Value::Text(s) => serde_json::json!(s),
+                        Value::Int(i) => serde_json::json!(i),
+                        Value::Float(f) => serde_json::json!(f),
+                        Value::Bool(b) => serde_json::json!(b),
+                        _ => continue,
+                    };
+                    filter_obj.insert(col_name.to_string(), json_val);
+                }
+            }
+
+            if !filter_obj.is_empty() {
+                return Some(DocumentFilter::new(serde_json::Value::Object(filter_obj)));
+            }
+        }
+
+        // Fallback to _id column if no PK columns found
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
+
+        match &id_value {
+            Value::ObjectId(oid) => Some(DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))),
+            Value::Text(s) => Some(DocumentFilter::new(serde_json::json!({"_id": s}))),
+            _ => None,
+        }
+    }
+
     fn build_document_mutation(
         &self,
         visual_row: usize,
@@ -3467,20 +3722,8 @@ impl DataGridPanel {
             .iter()
             .any(|value| matches!(value, Value::Unsupported(_)));
 
-        let id_col_idx = self
-            .result
-            .columns
-            .iter()
-            .position(|c| c.name == "_id")
-            .unwrap_or(0);
-
-        let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
-
-        let filter = match &id_value {
-            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
-            Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
-            _ => return None,
-        };
+        // Extract filter dynamically from PK columns or fallback to _id
+        let filter = self.extract_pk_filter_for_document(&row_values)?;
 
         match action {
             ContextMenuAction::CopyAsInsert => {
@@ -3507,9 +3750,33 @@ impl DataGridPanel {
                     return None;
                 }
 
+                // Get PK column indices to exclude from update
+                let pk_indices: std::collections::HashSet<usize> = self
+                    .result
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, col)| col.is_primary_key)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                // Fallback to _id if no PK columns
+                let id_col_idx = if pk_indices.is_empty() {
+                    Some(
+                        self.result
+                            .columns
+                            .iter()
+                            .position(|c| c.name == "_id")
+                            .unwrap_or(0),
+                    )
+                } else {
+                    None
+                };
+
                 let mut set_fields = serde_json::Map::new();
                 for (col_idx, val) in row_values.iter().enumerate() {
-                    if col_idx == id_col_idx {
+                    // Skip PK columns or _id column
+                    if pk_indices.contains(&col_idx) || Some(col_idx) == id_col_idx {
                         continue;
                     }
                     if let Some(col) = self.result.columns.get(col_idx) {

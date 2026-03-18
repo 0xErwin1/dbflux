@@ -66,11 +66,13 @@ mod tests {
                     name: "id".to_string(),
                     type_name: "int".to_string(),
                     nullable: false,
+                    is_primary_key: false,
                 },
                 ColumnMeta {
                     name: "name".to_string(),
                     type_name: "text".to_string(),
                     nullable: true,
+                    is_primary_key: false,
                 },
             ],
             vec![
@@ -108,6 +110,7 @@ mod tests {
                 name: "x".to_string(),
                 type_name: "int".to_string(),
                 nullable: false,
+                is_primary_key: false,
             }],
             vec![],
             None,

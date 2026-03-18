@@ -85,6 +85,7 @@ mod tests {
                     name: name.to_string(),
                     type_name: "text".to_string(),
                     nullable: true,
+                    is_primary_key: false,
                 })
                 .collect(),
             rows,

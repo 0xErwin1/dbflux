@@ -358,6 +358,7 @@ impl Connection for SqliteConnection {
                 name,
                 type_name: "TEXT".to_string(),
                 nullable: true,
+                is_primary_key: false,
             })
             .collect();
 

@@ -107,6 +107,9 @@ pub struct ColumnMeta {
 
     /// Whether the column allows NULL values.
     pub nullable: bool,
+
+    /// Whether the column is part of the primary key.
+    pub is_primary_key: bool,
 }
 
 // -- Query Result --

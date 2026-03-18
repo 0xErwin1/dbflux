@@ -752,7 +752,7 @@ impl DynamoConnection {
         )?;
 
         let _ = page.has_more;
-        Ok(items_to_query_result(&page.items))
+        Ok(items_to_query_result(&page.items, &key_schema))
     }
 
     fn count_collection_with_read_options(
@@ -832,38 +832,66 @@ impl DynamoConnection {
         };
 
         let runtime = runtime()?;
-        let output = runtime
-            .block_on(self.client.describe_table().table_name(table).send())
-            .map_err(|error| {
-                let formatted = DYNAMO_ERROR_FORMATTER.format_describe_error(&error, &config);
-                classify_connection_error(formatted)
-            })?;
+        
+        // Retry up to 2 times on dispatch failure (transient SDK errors)
+        let mut last_error = None;
+        for attempt in 0..2 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            
+            match runtime.block_on(self.client.describe_table().table_name(table).send()) {
+                Ok(output) => {
+                    let description = output
+                        .table()
+                        .ok_or_else(|| DbError::object_not_found(format!("Table '{}' was not found", table)))?;
 
-        let description = output
-            .table()
-            .ok_or_else(|| DbError::object_not_found(format!("Table '{}' was not found", table)))?;
+                    let keys = extract_key_components(
+                        description.key_schema(),
+                        description.attribute_definitions(),
+                    );
+                    let index_kinds = extract_table_index_kinds(description);
 
-        let keys = extract_key_components(
-            description.key_schema(),
-            description.attribute_definitions(),
-        );
-        let index_kinds = extract_table_index_kinds(description);
+                    let partition_key = keys
+                        .iter()
+                        .find(|component| component.role == DynamoKeyRole::Partition)
+                        .map(|component| component.name.clone());
 
-        let partition_key = keys
-            .iter()
-            .find(|component| component.role == DynamoKeyRole::Partition)
-            .map(|component| component.name.clone());
+                    let sort_key = keys
+                        .iter()
+                        .find(|component| component.role == DynamoKeyRole::Sort)
+                        .map(|component| component.name.clone());
 
-        let sort_key = keys
-            .iter()
-            .find(|component| component.role == DynamoKeyRole::Sort)
-            .map(|component| component.name.clone());
-
-        Ok(DynamoTableKeySchema {
-            partition_key,
-            sort_key,
-            index_kinds,
-        })
+                    return Ok(DynamoTableKeySchema {
+                        partition_key,
+                        sort_key,
+                        index_kinds,
+                    });
+                }
+                Err(error) => {
+                    let error_str = error.to_string();
+                    let is_dispatch_failure = error_str.to_lowercase().contains("dispatch");
+                    
+                    if is_dispatch_failure && attempt < 1 {
+                        // Retry on dispatch failure
+                        last_error = Some(error);
+                        continue;
+                    }
+                    
+                    // Non-retriable error or final attempt
+                    let formatted = DYNAMO_ERROR_FORMATTER.format_describe_error(&error, &config);
+                    return Err(classify_connection_error(formatted));
+                }
+            }
+        }
+        
+        // Should never reach here, but handle it just in case
+        if let Some(error) = last_error {
+            let formatted = DYNAMO_ERROR_FORMATTER.format_describe_error(&error, &config);
+            Err(classify_connection_error(formatted))
+        } else {
+            Err(DbError::query_failed("Failed to fetch table key schema after retries"))
+        }
     }
 
     fn read_items_page(
@@ -2420,13 +2448,24 @@ fn fetch_count_page(
     }
 }
 
-fn items_to_query_result(items: &[HashMap<String, AttributeValue>]) -> QueryResult {
-    if items.is_empty() {
-        return QueryResult::json(Vec::new(), Vec::new(), std::time::Duration::ZERO);
-    }
-
-    let mut field_names = Vec::new();
+fn items_to_query_result(
+    items: &[HashMap<String, AttributeValue>],
+    key_schema: &DynamoTableKeySchema,
+) -> QueryResult {
+    // Insert PK columns first (partition key, then sort key), then discovered attributes.
+    // This ensures the UI can detect PKs even when the table is empty.
+    let mut field_names: Vec<String> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    if let Some(pk) = &key_schema.partition_key
+        && seen.insert(pk.clone())
+    {
+        field_names.push(pk.clone());
+    }
+    if let Some(sk) = &key_schema.sort_key
+        && seen.insert(sk.clone())
+    {
+        field_names.push(sk.clone());
+    }
 
     for item in items {
         let mut keys: Vec<&String> = item.keys().collect();
@@ -2439,17 +2478,36 @@ fn items_to_query_result(items: &[HashMap<String, AttributeValue>]) -> QueryResu
         }
     }
 
-    if let Some(position) = field_names.iter().position(|name| name == "_id") {
-        let key = field_names.remove(position);
-        field_names.insert(0, key);
+    if items.is_empty() {
+        // Emit PK columns even with no rows so UI can show CRUD actions.
+        let columns = field_names
+            .iter()
+            .map(|name| {
+                let is_primary_key = key_schema.partition_key.as_deref() == Some(name.as_str())
+                    || key_schema.sort_key.as_deref() == Some(name.as_str());
+                ColumnMeta {
+                    name: name.clone(),
+                    type_name: "DynamoDB".to_string(),
+                    nullable: true,
+                    is_primary_key,
+                }
+            })
+            .collect();
+        return QueryResult::json(columns, Vec::new(), std::time::Duration::ZERO);
     }
 
     let columns = field_names
         .iter()
-        .map(|name| ColumnMeta {
-            name: name.clone(),
-            type_name: "DynamoDB".to_string(),
-            nullable: true,
+        .map(|name| {
+            let is_primary_key = key_schema.partition_key.as_deref() == Some(name.as_str())
+                || key_schema.sort_key.as_deref() == Some(name.as_str());
+
+            ColumnMeta {
+                name: name.clone(),
+                type_name: "DynamoDB".to_string(),
+                nullable: true,
+                is_primary_key,
+            }
         })
         .collect();
 
@@ -3275,6 +3333,10 @@ impl DynamoErrorFormatter {
         let formatted = if lower.contains("credential") || lower.contains("token") {
             FormattedError::new("AWS credentials were not found or are invalid.")
                 .with_hint("Configure credentials via AWS profile, environment, or SSO login.")
+        } else if lower.contains("dispatch failure") || lower.contains("dispatch") {
+            FormattedError::new("AWS SDK dispatch failure (transient error).")
+                .with_hint("This is usually a temporary issue. Try the operation again, or refresh AWS credentials if using SSO.")
+                .with_retriable(true)
         } else if lower.contains("timed out") || lower.contains("timeout") {
             FormattedError::new("Connection to DynamoDB timed out.")
                 .with_hint("Check network connectivity, endpoint reachability, and region.")

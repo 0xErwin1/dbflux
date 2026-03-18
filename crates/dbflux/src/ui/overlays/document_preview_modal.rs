@@ -4,6 +4,11 @@ use crate::ui::icons::AppIcon;
 use gpui::*;
 use gpui_component::input::InputState;
 
+/// Sentinel value for `doc_index` when opening the modal in insert (new document) mode.
+/// When the modal saves with this index, the handler should call `insert_document` instead
+/// of `update_document`.
+pub const DOC_INDEX_NEW: usize = usize::MAX;
+
 /// Event emitted when the modal editor saves a document.
 #[derive(Clone)]
 pub struct DocumentPreviewSaveEvent {
