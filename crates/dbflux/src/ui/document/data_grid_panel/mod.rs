@@ -992,6 +992,24 @@ impl DataGridPanel {
     }
 
     fn rebuild_table(&mut self, initial_sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        // For collections, update pk_columns from result metadata (is_primary_key flag)
+        // This allows DynamoDB and other drivers to use their actual primary keys
+        // instead of hardcoded "_id"
+        if self.source.is_collection() {
+            let pk_columns_from_metadata: Vec<String> = self
+                .result
+                .columns
+                .iter()
+                .filter(|col| col.is_primary_key)
+                .map(|col| col.name.clone())
+                .collect();
+            
+            if !pk_columns_from_metadata.is_empty() {
+                self.pk_columns = pk_columns_from_metadata;
+            }
+            // If no columns are marked as PK, keep the existing pk_columns (fallback to "_id" for MongoDB)
+        }
+        
         // Find PK column indices in result columns
         let pk_indices: Vec<usize> = self
             .pk_columns
@@ -1085,10 +1103,10 @@ impl DataGridPanel {
                         this.handle_delete_row(*row, cx);
                     }
                     DataTableEvent::AddRowRequested(row) => {
-                        this.handle_add_row(*row, cx);
+                        this.handle_add_row(*row, false, cx);
                     }
                     DataTableEvent::DuplicateRowRequested(row) => {
-                        this.handle_duplicate_row(*row, cx);
+                        this.handle_duplicate_row(*row, false, cx);
                     }
                     DataTableEvent::SetNullRequested { row, col } => {
                         this.handle_set_null(*row, *col, cx);

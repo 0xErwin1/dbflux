@@ -70,6 +70,7 @@ mod tests {
                     name: name.to_string(),
                     type_name: "text".to_string(),
                     nullable: true,
+                    is_primary_key: false,
                 })
                 .collect(),
             rows,
@@ -109,6 +110,7 @@ mod tests {
                 name: "_id".to_string(),
                 type_name: "ObjectId".to_string(),
                 nullable: false,
+                is_primary_key: false,
             }],
             vec![vec![Value::ObjectId(
                 "507f1f77bcf86cd799439011".to_string(),

@@ -390,11 +390,13 @@ fn execute_query(
                 name: "key".to_string(),
                 type_name: "TEXT".to_string(),
                 nullable: false,
+                is_primary_key: false,
             },
             ColumnMeta {
                 name: "value".to_string(),
                 type_name: "TEXT".to_string(),
                 nullable: true,
+                is_primary_key: false,
             },
         ];
 

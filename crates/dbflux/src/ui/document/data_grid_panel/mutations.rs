@@ -1,11 +1,11 @@
-use super::utils::value_to_json;
+use super::utils::{extract_pk_columns, value_to_json};
 use super::{DataGridPanel, DataSource, PendingDeleteConfirm, PendingToast};
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::NodeId;
 use crate::ui::components::toast::ToastExt;
 use dbflux_core::{
-    CollectionRef, DocumentFilter, DocumentUpdate, Pagination, RowDelete, RowIdentity, RowInsert,
-    RowPatch, RowState, TableRef, TaskKind, Value,
+    CollectionRef, DocumentFilter, DocumentUpdate, Pagination, QueryResult, RowDelete,
+    RowIdentity, RowInsert, RowPatch, RowState, TableRef, TaskKind, Value,
 };
 use gpui::*;
 use std::collections::BTreeMap;
@@ -209,22 +209,39 @@ impl DataGridPanel {
             return;
         };
 
-        let id_col_idx = self
-            .result
-            .columns
-            .iter()
-            .position(|c| c.name == "_id")
-            .unwrap_or(0);
+        // Extract PK columns from schema metadata
+        let pk_columns = extract_pk_columns(&self.result);
 
-        let id_value = row.get(id_col_idx).cloned().unwrap_or(Value::Null);
+        let filter = if pk_columns.is_empty() {
+            // MongoDB fallback: use _id column
+            let id_col_idx = self
+                .result
+                .columns
+                .iter()
+                .position(|c| c.name == "_id")
+                .unwrap_or(0);
 
-        let filter = match &id_value {
-            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
-            Value::Text(value) => DocumentFilter::new(serde_json::json!({"_id": value})),
-            _ => {
-                log::error!("[SAVE] Invalid _id value for document inline edit");
-                return;
+            let id_value = row.get(id_col_idx).cloned().unwrap_or(Value::Null);
+
+            match &id_value {
+                Value::ObjectId(oid) => {
+                    DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
+                }
+                Value::Text(value) => DocumentFilter::new(serde_json::json!({"_id": value})),
+                _ => {
+                    log::error!("[SAVE] Invalid _id value for document inline edit");
+                    return;
+                }
             }
+        } else {
+            // Use PK columns from metadata
+            let mut filter_obj = serde_json::Map::new();
+            for (col_idx, col_name) in &pk_columns {
+                if let Some(cell_value) = row.get(*col_idx) {
+                    filter_obj.insert(col_name.clone(), value_to_json(cell_value));
+                }
+            }
+            DocumentFilter::new(serde_json::Value::Object(filter_obj))
         };
 
         let field_path = node_id.path[1..].join(".");
@@ -533,26 +550,42 @@ impl DataGridPanel {
         let state = table_state.read(cx);
         let model = state.model();
 
-        // Find _id column and get its value
-        let id_col_idx = self
-            .result
-            .columns
-            .iter()
-            .position(|c| c.name == "_id")
-            .unwrap_or(0);
+        // Extract PK columns from schema metadata
+        let pk_columns = extract_pk_columns(&self.result);
 
-        let id_value = model
-            .cell(row_idx, id_col_idx)
-            .map(|c| c.to_value())
-            .unwrap_or(Value::Null);
+        let filter = if pk_columns.is_empty() {
+            // MongoDB fallback: use _id column
+            let id_col_idx = self
+                .result
+                .columns
+                .iter()
+                .position(|c| c.name == "_id")
+                .unwrap_or(0);
 
-        let filter = match &id_value {
-            Value::ObjectId(oid) => DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}})),
-            Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
-            _ => {
-                log::error!("[SAVE] Invalid _id value for document");
-                return;
+            let id_value = model
+                .cell(row_idx, id_col_idx)
+                .map(|c| c.to_value())
+                .unwrap_or(Value::Null);
+
+            match &id_value {
+                Value::ObjectId(oid) => {
+                    DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
+                }
+                Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
+                _ => {
+                    log::error!("[SAVE] Invalid _id value for document");
+                    return;
+                }
             }
+        } else {
+            // Use PK columns from metadata
+            let mut filter_obj = serde_json::Map::new();
+            for (col_idx, col_name) in &pk_columns {
+                if let Some(cell) = model.cell(row_idx, *col_idx) {
+                    filter_obj.insert(col_name.clone(), value_to_json(&cell.to_value()));
+                }
+            }
+            DocumentFilter::new(serde_json::Value::Object(filter_obj))
         };
 
         // Build $set update from changes
@@ -972,21 +1005,29 @@ impl DataGridPanel {
             return;
         };
 
-        if confirm.is_table
-            && let DataSource::Table {
+        if confirm.is_table {
+            if let DataSource::Table {
                 profile_id,
                 database,
                 table,
                 ..
             } = &self.source
+            {
+                self.commit_delete_table(
+                    *profile_id,
+                    database.clone(),
+                    table.clone(),
+                    confirm.row_idx,
+                    cx,
+                );
+            }
+        } else if let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
         {
-            self.commit_delete_table(
-                *profile_id,
-                database.clone(),
-                table.clone(),
-                confirm.row_idx,
-                cx,
-            );
+            self.commit_delete_collection(*profile_id, collection.clone(), confirm.row_idx, cx);
         }
 
         self.focus_active_view(window, cx);
@@ -1017,31 +1058,48 @@ impl DataGridPanel {
             return;
         };
 
-        let id_col_idx = self
-            .result
-            .columns
-            .iter()
-            .position(|c| c.name == "_id")
-            .unwrap_or(0);
+        // Extract PK columns from schema metadata
+        let pk_columns = extract_pk_columns(&self.result);
 
-        let id_value = {
+        let filter = if pk_columns.is_empty() {
+            // MongoDB fallback: use _id column
+            let id_col_idx = self
+                .result
+                .columns
+                .iter()
+                .position(|c| c.name == "_id")
+                .unwrap_or(0);
+
+            let id_value = {
+                let state = table_state.read(cx);
+                let model = state.model();
+                model
+                    .cell(row_idx, id_col_idx)
+                    .map(|c| c.to_value())
+                    .unwrap_or(Value::Null)
+            };
+
+            match &id_value {
+                Value::ObjectId(oid) => {
+                    dbflux_core::DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
+                }
+                Value::Text(s) => dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s})),
+                _ => {
+                    log::error!("[DELETE] Invalid _id value for document");
+                    return;
+                }
+            }
+        } else {
+            // Use PK columns from metadata
             let state = table_state.read(cx);
             let model = state.model();
-            model
-                .cell(row_idx, id_col_idx)
-                .map(|c| c.to_value())
-                .unwrap_or(Value::Null)
-        };
-
-        let filter = match &id_value {
-            Value::ObjectId(oid) => {
-                dbflux_core::DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))
+            let mut filter_obj = serde_json::Map::new();
+            for (col_idx, col_name) in &pk_columns {
+                if let Some(cell) = model.cell(row_idx, *col_idx) {
+                    filter_obj.insert(col_name.clone(), value_to_json(&cell.to_value()));
+                }
             }
-            Value::Text(s) => dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s})),
-            _ => {
-                log::error!("[DELETE] Invalid _id value for document");
-                return;
-            }
+            dbflux_core::DocumentFilter::new(serde_json::Value::Object(filter_obj))
         };
 
         let delete = dbflux_core::DocumentDelete::new(collection.name.clone(), filter)

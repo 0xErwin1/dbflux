@@ -1342,11 +1342,13 @@ fn redis_array_to_result(
                 name: "#".to_string(),
                 type_name: "int".to_string(),
                 nullable: false,
+                is_primary_key: false,
             },
             ColumnMeta {
                 name: "value".to_string(),
                 type_name: "redis".to_string(),
                 nullable: true,
+                is_primary_key: false,
             },
         ];
 

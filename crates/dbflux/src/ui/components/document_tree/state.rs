@@ -1055,11 +1055,13 @@ mod tests {
                 name: "_id".to_string(),
                 type_name: "text".to_string(),
                 nullable: false,
+                is_primary_key: false,
             },
             ColumnMeta {
                 name: "_document".to_string(),
                 type_name: "json".to_string(),
                 nullable: false,
+                is_primary_key: false,
             },
         ];
 

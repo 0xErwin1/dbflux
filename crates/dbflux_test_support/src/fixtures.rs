@@ -25,6 +25,7 @@ pub fn column(name: impl Into<String>, type_name: impl Into<String>, nullable: b
         name: name.into(),
         type_name: type_name.into(),
         nullable,
+        is_primary_key: false,
     }
 }
 
