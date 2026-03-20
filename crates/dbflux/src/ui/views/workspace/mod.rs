@@ -3,7 +3,7 @@ mod dispatch;
 pub mod pipeline;
 mod render;
 
-use crate::app::{AppState, AppStateChanged};
+use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
 use crate::keymap::{
     self, Command, CommandDispatcher, ContextId, FocusTarget, KeyChord, KeymapStack, default_keymap,
 };
@@ -295,6 +295,14 @@ impl Workspace {
         )
         .detach();
 
+        cx.subscribe(&app_state, |this, _, _event: &McpRuntimeEventRaised, cx| {
+            this.app_state.update(cx, |_state, cx| {
+                cx.emit(AppStateChanged);
+            });
+            cx.notify();
+        })
+        .detach();
+
         cx.subscribe_in(
             &tab_bar,
             window,
@@ -520,6 +528,9 @@ impl Workspace {
             PaletteCommand::new("open_settings", "Open Settings", "View"),
             PaletteCommand::new("open_login_modal", "Open Login Modal", "View"),
             PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
+            PaletteCommand::new("open_mcp_approvals", "Open MCP Approvals", "View"),
+            PaletteCommand::new("open_mcp_audit", "Open MCP Audit Viewer", "View"),
+            PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
         ]
     }
 

@@ -1,12 +1,17 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
-    GlobalOverrides, HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
-    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    AppConfig, AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks,
+    ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey,
+    EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, GovernanceSettings,
+    HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_mcp::{
+    AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
+    McpRuntime, McpRuntimeEvent, PendingExecutionSummary, TrustedClientDto,
+};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +26,10 @@ pub struct AppStateChanged;
 
 pub struct AuthProfileCreated {
     pub profile_id: Uuid,
+}
+
+pub struct McpRuntimeEventRaised {
+    pub event: McpRuntimeEvent,
 }
 
 #[cfg(feature = "sqlite")]
@@ -74,6 +83,7 @@ pub struct AppState {
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
+    mcp_runtime: McpRuntime,
 }
 
 impl AppState {
@@ -123,7 +133,27 @@ impl AppState {
                 .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
-        Self {
+        let mcp_runtime = match dbflux_audit::AuditService::new_sqlite_default() {
+            Ok(audit_service) => McpRuntime::new(audit_service),
+            Err(error) => {
+                log::warn!(
+                    "Failed to initialize default audit store for MCP runtime: {}",
+                    error
+                );
+
+                let fallback_path = dbflux_audit::temp_sqlite_path("dbflux-mcp-audit.sqlite");
+                match dbflux_audit::AuditService::new_sqlite(&fallback_path) {
+                    Ok(audit_service) => McpRuntime::new(audit_service),
+                    Err(fallback_error) => {
+                        panic!(
+                            "failed to initialize MCP runtime audit store (default and fallback): {fallback_error}"
+                        );
+                    }
+                }
+            }
+        };
+
+        let mut state = Self {
             facade,
             settings_window: None,
             general_settings,
@@ -135,7 +165,60 @@ impl AppState {
             recent_files,
             scripts_directory,
             session_store,
+            mcp_runtime,
+        };
+
+        state.bootstrap_mcp_runtime_from_persistence();
+        state
+    }
+
+    fn bootstrap_mcp_runtime_from_persistence(&mut self) {
+        if let Ok(store) = AppConfigStore::new()
+            && let Ok(config) = store.load()
+        {
+            for client in config.governance.trusted_clients {
+                let _ = self
+                    .mcp_runtime
+                    .upsert_trusted_client_mut(TrustedClientDto {
+                        id: client.id,
+                        name: client.name,
+                        issuer: client.issuer,
+                        active: client.active,
+                    });
+            }
         }
+
+        for profile in self.facade.profiles.profiles.clone() {
+            let Some(governance) = profile.mcp_governance else {
+                continue;
+            };
+
+            if !governance.enabled {
+                continue;
+            }
+
+            let assignments = governance
+                .policy_bindings
+                .into_iter()
+                .map(|binding| dbflux_policy::ConnectionPolicyAssignment {
+                    actor_id: binding.actor_id,
+                    scope: dbflux_policy::PolicyBindingScope {
+                        connection_id: profile.id.to_string(),
+                    },
+                    role_ids: binding.role_ids,
+                    policy_ids: binding.policy_ids,
+                })
+                .collect();
+
+            let _ = self.mcp_runtime.save_connection_policy_assignment_mut(
+                ConnectionPolicyAssignmentDto {
+                    connection_id: profile.id.to_string(),
+                    assignments,
+                },
+            );
+        }
+
+        self.mcp_runtime.drain_events();
     }
 
     #[allow(clippy::result_large_err)]
@@ -1337,6 +1420,151 @@ impl AppState {
         self.hook_definitions = definitions;
     }
 
+    pub fn list_mcp_trusted_clients(&self) -> Result<Vec<TrustedClientDto>, String> {
+        dbflux_mcp::McpGovernanceService::list_trusted_clients(&self.mcp_runtime)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn upsert_mcp_trusted_client(&mut self, client: TrustedClientDto) -> Result<(), String> {
+        self.mcp_runtime
+            .upsert_trusted_client_mut(client)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn delete_mcp_trusted_client(&mut self, client_id: &str) -> Result<(), String> {
+        self.mcp_runtime
+            .delete_trusted_client_mut(client_id)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn list_mcp_connection_policy_assignments(
+        &self,
+    ) -> Result<Vec<ConnectionPolicyAssignmentDto>, String> {
+        dbflux_mcp::McpGovernanceService::list_connection_policy_assignments(&self.mcp_runtime)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn save_mcp_connection_policy_assignment(
+        &mut self,
+        assignment: ConnectionPolicyAssignmentDto,
+    ) -> Result<(), String> {
+        self.mcp_runtime
+            .save_connection_policy_assignment_mut(assignment)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn request_mcp_execution(
+        &mut self,
+        actor_id: String,
+        connection_id: String,
+        tool_id: String,
+        classification: dbflux_policy::ExecutionClassification,
+        payload: serde_json::Value,
+    ) -> PendingExecutionSummary {
+        let plan = self.mcp_runtime.classify_plan(
+            classification,
+            payload,
+            actor_id,
+            connection_id,
+            tool_id,
+        );
+
+        self.mcp_runtime.request_execution_mut(plan)
+    }
+
+    pub fn approve_mcp_pending_execution(
+        &mut self,
+        pending_id: &str,
+    ) -> Result<AuditEntry, String> {
+        self.mcp_runtime
+            .approve_pending_execution_mut(pending_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn reject_mcp_pending_execution(&mut self, pending_id: &str) -> Result<AuditEntry, String> {
+        self.mcp_runtime
+            .reject_pending_execution_mut(pending_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn query_mcp_audit_entries(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, String> {
+        dbflux_mcp::McpGovernanceService::query_audit_entries(&self.mcp_runtime, query)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn export_mcp_audit_entries(
+        &self,
+        query: &AuditQuery,
+        format: AuditExportFormat,
+    ) -> Result<String, String> {
+        dbflux_mcp::McpGovernanceService::export_audit_entries(&self.mcp_runtime, query, format)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn drain_mcp_runtime_events(&mut self) -> Vec<McpRuntimeEvent> {
+        self.mcp_runtime.drain_events()
+    }
+
+    pub fn set_profile_mcp_governance(
+        &mut self,
+        profile_id: Uuid,
+        governance: Option<ConnectionMcpGovernance>,
+    ) -> Result<(), String> {
+        let Some(profile) = self
+            .facade
+            .profiles
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == profile_id)
+        else {
+            return Err(format!("profile not found: {profile_id}"));
+        };
+
+        profile.mcp_governance = governance;
+        self.save_profiles();
+
+        Ok(())
+    }
+
+    pub fn persist_mcp_governance(&self) {
+        let trusted_clients = self
+            .mcp_runtime
+            .list_trusted_clients()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|client| TrustedClientConfig {
+                id: client.id,
+                name: client.name,
+                issuer: client.issuer,
+                active: client.active,
+            })
+            .collect();
+
+        let mut config = AppConfigStore::new()
+            .and_then(|store| store.load())
+            .unwrap_or_else(|_| AppConfig::default());
+
+        config.governance = GovernanceSettings {
+            mcp_enabled_by_default: false,
+            trusted_clients,
+        };
+
+        if let Ok(store) = AppConfigStore::new() {
+            let _ = store.save(&config);
+        }
+
+        self.save_profiles();
+    }
+
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -1492,6 +1720,7 @@ impl Default for AppState {
 
 impl EventEmitter<AppStateChanged> for AppState {}
 impl EventEmitter<AuthProfileCreated> for AppState {}
+impl EventEmitter<McpRuntimeEventRaised> for AppState {}
 
 #[cfg(test)]
 mod tests {
@@ -1500,6 +1729,7 @@ mod tests {
         AuthProfile, CancelToken, DbDriver, DbKind, FormValues, GeneralSettings,
         RefreshPolicySetting,
     };
+    use dbflux_mcp::{McpRuntimeEvent, TrustedClientDto};
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1795,6 +2025,54 @@ mod tests {
         };
 
         assert_eq!(error, "Auth provider 'unknown-provider' is not available");
+    }
+
+    #[test]
+    fn mcp_trusted_client_upsert_emits_runtime_event() {
+        let mut state = test_state(GeneralSettings::default());
+
+        state
+            .upsert_mcp_trusted_client(TrustedClientDto {
+                id: "agent-a".to_string(),
+                name: "Agent A".to_string(),
+                issuer: None,
+                active: true,
+            })
+            .expect("trusted client upsert should succeed");
+
+        let clients = state
+            .list_mcp_trusted_clients()
+            .expect("trusted clients should be listable");
+        assert_eq!(clients.len(), 1);
+
+        let events = state.drain_mcp_runtime_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
+        );
+    }
+
+    #[test]
+    fn mcp_execution_request_updates_pending_queue_event() {
+        let mut state = test_state(GeneralSettings::default());
+
+        let pending = state.request_mcp_execution(
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "request_execution".to_string(),
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({"query": "UPDATE users SET active = true"}),
+        );
+
+        assert_eq!(pending.actor_id, "agent-a");
+
+        let events = state.drain_mcp_runtime_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
+        );
     }
 
     #[cfg(feature = "dynamodb")]

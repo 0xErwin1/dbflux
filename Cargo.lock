@@ -2391,10 +2391,14 @@ dependencies = [
 name = "dbflux_mcp"
 version = "0.4.0-dev.9"
 dependencies = [
+ "dbflux_approval",
+ "dbflux_audit",
+ "dbflux_core",
  "dbflux_policy",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

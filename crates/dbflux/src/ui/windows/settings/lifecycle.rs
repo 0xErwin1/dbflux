@@ -163,6 +163,13 @@ impl SettingsCoordinator {
         self.sidebar_tree
             .select_by_id(Self::tree_id_for_section(section));
         self.pending_section_confirm = None;
+
+        self.app_state.update(cx, |state, cx| {
+            state.persist_mcp_governance();
+            cx.emit(crate::app::McpRuntimeEventRaised {
+                event: dbflux_mcp::McpRuntimeEvent::TrustedClientsUpdated,
+            });
+        });
     }
 
     pub(super) fn request_section_transition(

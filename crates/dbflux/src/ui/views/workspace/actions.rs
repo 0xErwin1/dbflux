@@ -152,6 +152,52 @@ impl Workspace {
         });
     }
 
+    pub(super) fn open_mcp_approvals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::components::toast::ToastExt;
+
+        self.app_state.update(cx, |state, cx| {
+            cx.emit(crate::app::McpRuntimeEventRaised {
+                event: dbflux_mcp::McpRuntimeEvent::PendingExecutionsUpdated,
+            });
+
+            for event in state.drain_mcp_runtime_events() {
+                cx.emit(crate::app::McpRuntimeEventRaised { event });
+            }
+        });
+
+        cx.toast_info("MCP approvals refreshed", window);
+    }
+
+    pub(super) fn open_mcp_audit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::components::toast::ToastExt;
+
+        self.app_state.update(cx, |state, cx| {
+            cx.emit(crate::app::McpRuntimeEventRaised {
+                event: dbflux_mcp::McpRuntimeEvent::AuditAppended,
+            });
+
+            for event in state.drain_mcp_runtime_events() {
+                cx.emit(crate::app::McpRuntimeEventRaised { event });
+            }
+        });
+
+        cx.toast_info("MCP audit viewer refreshed", window);
+    }
+
+    pub(super) fn refresh_mcp_governance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::components::toast::ToastExt;
+
+        self.app_state.update(cx, |state, cx| {
+            state.persist_mcp_governance();
+
+            for event in state.drain_mcp_runtime_events() {
+                cx.emit(crate::app::McpRuntimeEventRaised { event });
+            }
+        });
+
+        cx.toast_info("MCP governance state persisted", window);
+    }
+
     pub(super) fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 

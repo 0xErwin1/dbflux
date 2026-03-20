@@ -415,6 +415,17 @@ impl ConnectionManagerWindow {
                 state.add_profile_in_folder(profile, self.target_folder_id);
             }
 
+            state.persist_mcp_governance();
+
+            cx.emit(crate::app::McpRuntimeEventRaised {
+                event: dbflux_mcp::McpRuntimeEvent::ConnectionPolicyUpdated {
+                    connection_id: self
+                        .editing_profile_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "new-profile".to_string()),
+                },
+            });
+
             cx.emit(crate::app::AppStateChanged);
         });
 

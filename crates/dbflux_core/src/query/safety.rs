@@ -1,3 +1,9 @@
+use dbflux_policy::ExecutionClassification;
+
+use crate::QueryLanguage;
+
+use super::language_service::classify_query_for_language;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScanState {
     Normal,
@@ -5,6 +11,41 @@ enum ScanState {
     BlockComment,
     SingleQuote,
     DoubleQuote,
+}
+
+pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
+    let stripped = strip_comments(sql);
+    let trimmed = stripped.trim();
+
+    if trimmed.is_empty() {
+        return ExecutionClassification::Metadata;
+    }
+
+    let Some(keyword) = first_keyword(trimmed) else {
+        return ExecutionClassification::Write;
+    };
+
+    match keyword.as_str() {
+        "EXPLAIN" | "SHOW" | "DESC" | "DESCRIBE" => ExecutionClassification::Metadata,
+        "SELECT" | "WITH" => {
+            if is_safe_read_query(trimmed) {
+                ExecutionClassification::Read
+            } else {
+                ExecutionClassification::Write
+            }
+        }
+        "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "REPLACE" => ExecutionClassification::Write,
+        "TRUNCATE" | "DROP" | "ALTER" => ExecutionClassification::Destructive,
+        "GRANT" | "REVOKE" | "CREATE" | "SET" => ExecutionClassification::Admin,
+        _ => ExecutionClassification::Write,
+    }
+}
+
+pub fn classify_query_for_governance(
+    query_language: &QueryLanguage,
+    query: &str,
+) -> ExecutionClassification {
+    classify_query_for_language(query_language, query)
 }
 
 pub fn is_safe_read_query(sql: &str) -> bool {
@@ -182,7 +223,11 @@ fn first_keyword(sql: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_read_query;
+    use dbflux_policy::ExecutionClassification;
+
+    use crate::QueryLanguage;
+
+    use super::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 
     #[test]
     fn allows_basic_read_queries() {
@@ -219,5 +264,33 @@ mod tests {
         assert!(is_safe_read_query("-- hello\nSELECT * FROM users"));
         assert!(is_safe_read_query("/* hello */ SELECT * FROM users"));
         assert!(!is_safe_read_query("/* hello */ DELETE FROM users"));
+    }
+
+    #[test]
+    fn sql_classification_maps_read_write_and_destructive_classes() {
+        assert_eq!(
+            classify_sql_execution("SELECT * FROM users"),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_sql_execution("EXPLAIN SELECT * FROM users"),
+            ExecutionClassification::Metadata
+        );
+        assert_eq!(
+            classify_sql_execution("UPDATE users SET active = true"),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_sql_execution("DROP TABLE users"),
+            ExecutionClassification::Destructive
+        );
+    }
+
+    #[test]
+    fn ambiguous_query_escalates_conservatively() {
+        assert_eq!(
+            classify_query_for_governance(&QueryLanguage::Sql, "VACUUM users"),
+            ExecutionClassification::Write
+        );
     }
 }

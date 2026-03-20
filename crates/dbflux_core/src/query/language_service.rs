@@ -1,5 +1,8 @@
 use crate::QueryLanguage;
+use dbflux_policy::ExecutionClassification;
 use tree_sitter::{Node, Parser};
+
+use super::safety::classify_sql_execution;
 
 /// Severity level for a diagnostic message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +160,100 @@ impl DangerousQueryKind {
                 "KEYS with a pattern is a performance hazard on large databases"
             }
         }
+    }
+}
+
+pub fn classify_query_for_language(
+    query_language: &QueryLanguage,
+    query: &str,
+) -> ExecutionClassification {
+    match query_language {
+        QueryLanguage::Sql => classify_sql_execution(query),
+        QueryLanguage::MongoQuery => classify_mongo_query(query),
+        QueryLanguage::RedisCommands => classify_redis_query(query),
+        _ => ExecutionClassification::Write,
+    }
+}
+
+fn classify_mongo_query(query: &str) -> ExecutionClassification {
+    let normalized = query.trim().to_ascii_lowercase();
+
+    if normalized.is_empty() {
+        return ExecutionClassification::Metadata;
+    }
+
+    if let Some(kind) = detect_dangerous_mongo(query) {
+        return classification_from_dangerous_kind(kind);
+    }
+
+    if normalized.contains(".find(") || normalized.contains(".aggregate(") {
+        return ExecutionClassification::Read;
+    }
+
+    if normalized.contains(".countdocuments(") || normalized.contains(".estimateddocumentcount(") {
+        return ExecutionClassification::Metadata;
+    }
+
+    if normalized.contains(".insert")
+        || normalized.contains(".update")
+        || normalized.contains(".delete")
+        || normalized.contains(".replace")
+    {
+        return ExecutionClassification::Write;
+    }
+
+    if normalized.contains("createuser")
+        || normalized.contains("grantroles")
+        || normalized.contains("revoke")
+        || normalized.contains("shutdownserver")
+    {
+        return ExecutionClassification::Admin;
+    }
+
+    ExecutionClassification::Write
+}
+
+fn classify_redis_query(query: &str) -> ExecutionClassification {
+    let normalized = query.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return ExecutionClassification::Metadata;
+    }
+
+    if let Some(kind) = detect_dangerous_redis(query) {
+        return classification_from_dangerous_kind(kind);
+    }
+
+    let Some(command) = normalized.split_whitespace().next() else {
+        return ExecutionClassification::Metadata;
+    };
+
+    match command {
+        "info" | "dbsize" | "type" | "ttl" | "pttl" | "exists" | "llen" | "hget" | "hmget"
+        | "hkeys" | "hvals" | "lrange" | "zrange" | "smembers" | "get" | "mget" | "scan" => {
+            ExecutionClassification::Read
+        }
+        "command" | "help" => ExecutionClassification::Metadata,
+        "config" | "acl" | "script" | "module" => ExecutionClassification::Admin,
+        _ => ExecutionClassification::Write,
+    }
+}
+
+fn classification_from_dangerous_kind(kind: DangerousQueryKind) -> ExecutionClassification {
+    match kind {
+        DangerousQueryKind::Drop
+        | DangerousQueryKind::Truncate
+        | DangerousQueryKind::MongoDropCollection
+        | DangerousQueryKind::MongoDropDatabase
+        | DangerousQueryKind::RedisFlushAll
+        | DangerousQueryKind::RedisFlushDb => ExecutionClassification::Destructive,
+        DangerousQueryKind::DeleteNoWhere
+        | DangerousQueryKind::UpdateNoWhere
+        | DangerousQueryKind::MongoDeleteMany
+        | DangerousQueryKind::MongoUpdateMany
+        | DangerousQueryKind::RedisMultiDelete => ExecutionClassification::Write,
+        DangerousQueryKind::Alter => ExecutionClassification::Admin,
+        DangerousQueryKind::Script => ExecutionClassification::Write,
+        DangerousQueryKind::RedisKeysPattern => ExecutionClassification::Read,
     }
 }
 
@@ -1196,5 +1293,18 @@ mod tests {
         assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
         assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
         assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
+    }
+
+    #[test]
+    fn language_classification_escalates_ambiguous_queries() {
+        assert_eq!(
+            classify_query_for_language(&QueryLanguage::MongoQuery, "db.users.customOp()"),
+            ExecutionClassification::Write
+        );
+
+        assert_eq!(
+            classify_query_for_language(&QueryLanguage::RedisCommands, "CONFIG SET a b"),
+            ExecutionClassification::Admin
+        );
     }
 }
