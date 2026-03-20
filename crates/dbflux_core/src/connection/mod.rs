@@ -31,7 +31,8 @@ pub use manager::{
     SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use profile::{
-    ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
+    ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile, DbConfig, DbKind,
+    SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
 pub use profile_manager::ProfileManager;
 pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile};

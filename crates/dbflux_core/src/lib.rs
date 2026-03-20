@@ -24,29 +24,30 @@ pub use auth::{
 
 pub use config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
-    GlobalOverrides, RefreshPolicy, RefreshPolicySetting, ScriptEntry, ScriptsDirectory,
-    ServiceConfig, StartupFocus, ThemeSetting, all_script_extensions, driver_maps_differ,
-    filter_entries, hook_script_path, is_openable_script,
+    GlobalOverrides, GovernanceSettings, RefreshPolicy, RefreshPolicySetting, ScriptEntry,
+    ScriptsDirectory, ServiceConfig, StartupFocus, ThemeSetting, TrustedClientConfig,
+    all_script_extensions, driver_maps_differ, filter_entries, hook_script_path,
+    is_openable_script,
 };
 
 pub use connection::{
     AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
     ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
-    ConnectionProfile, ConnectionResolutionError, ConnectionTree, ConnectionTreeManager,
-    ConnectionTreeNode, ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig,
-    DbKind, DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender,
-    ExecutionContext, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
-    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
-    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
-    HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode, HookKind, HookPhase,
-    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
-    OutputEvent, OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
-    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
-    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
-    SwitchDatabaseParams, SwitchDatabaseResult, detached_process_channel,
-    execute_streaming_process, output_channel,
+    ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile,
+    ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
+    ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
+    DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
+    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
+    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
+    OutputStreamKind, OwnedCacheEntry, PendingOperation, ProcessExecutionError, ProcessExecutor,
+    ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
+    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
+    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
+    SwitchDatabaseResult, detached_process_channel, execute_streaming_process, output_channel,
 };
 
 pub use core::{

@@ -14,6 +14,7 @@ pub type DriverKey = String;
 
 const CONFIG_VERSION_1: u32 = 1;
 const CONFIG_VERSION_2: u32 = 2;
+const CONFIG_VERSION_3: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -37,6 +38,10 @@ pub struct AppConfig {
     /// Reusable connection hooks, referenced by connection profiles.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub hook_definitions: HashMap<String, ConnectionHook>,
+
+    /// Global governance settings for MCP runtime and trusted clients.
+    #[serde(default)]
+    pub governance: GovernanceSettings,
 }
 
 fn default_config_version() -> u32 {
@@ -46,14 +51,45 @@ fn default_config_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: CONFIG_VERSION_2,
+            version: CONFIG_VERSION_3,
             services: Vec::new(),
             general: GeneralSettings::default(),
             driver_overrides: HashMap::new(),
             driver_settings: HashMap::new(),
             hook_definitions: HashMap::new(),
+            governance: GovernanceSettings::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceSettings {
+    #[serde(default)]
+    pub mcp_enabled_by_default: bool,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_clients: Vec<TrustedClientConfig>,
+}
+
+impl Default for GovernanceSettings {
+    fn default() -> Self {
+        Self {
+            mcp_enabled_by_default: false,
+            trusted_clients: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedClientConfig {
+    pub id: String,
+    pub name: String,
+
+    #[serde(default)]
+    pub issuer: Option<String>,
+
+    #[serde(default = "default_true")]
+    pub active: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -424,29 +460,36 @@ impl AppConfigStore {
         let mut config: AppConfig =
             serde_json::from_value(json).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
 
-        if self.migrate_v1_to_v2(&mut config, legacy_allow_redis_flush) {
+        if self.migrate(&mut config, legacy_allow_redis_flush) {
             self.save(&config)?;
         }
 
         Ok(config)
     }
 
-    fn migrate_v1_to_v2(&self, config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
-        if config.version > CONFIG_VERSION_1 {
-            return false;
+    fn migrate(&self, config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
+        let mut changed = false;
+
+        if config.version <= CONFIG_VERSION_1 {
+            if legacy_allow_redis_flush {
+                config
+                    .driver_settings
+                    .entry("builtin:redis".to_string())
+                    .or_default()
+                    .entry("allow_flush".to_string())
+                    .or_insert_with(|| "true".to_string());
+            }
+
+            config.version = CONFIG_VERSION_2;
+            changed = true;
         }
 
-        if legacy_allow_redis_flush {
-            config
-                .driver_settings
-                .entry("builtin:redis".to_string())
-                .or_default()
-                .entry("allow_flush".to_string())
-                .or_insert_with(|| "true".to_string());
+        if config.version <= CONFIG_VERSION_2 {
+            config.version = CONFIG_VERSION_3;
+            changed = true;
         }
 
-        config.version = CONFIG_VERSION_2;
-        true
+        changed
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), DbError> {
@@ -894,13 +937,14 @@ mod tests {
         assert!(config.driver_overrides.is_empty());
         assert!(config.driver_settings.is_empty());
         assert!(config.hook_definitions.is_empty());
+        assert_eq!(config.governance, GovernanceSettings::default());
         assert!(config.general.confirm_dangerous_queries);
     }
 
     #[test]
     fn app_config_roundtrip_with_driver_overrides_and_settings() {
         let mut config = AppConfig::default();
-        config.version = 2;
+        config.version = 3;
         config.driver_overrides.insert(
             "builtin:redis".to_string(),
             GlobalOverrides {
@@ -918,7 +962,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&config).unwrap();
         let restored: AppConfig = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(restored.version, 2);
+        assert_eq!(restored.version, 3);
         assert_eq!(restored.driver_overrides.len(), 1);
         assert_eq!(
             restored.driver_overrides["builtin:redis"].confirm_dangerous,
@@ -929,6 +973,7 @@ mod tests {
             "500"
         );
         assert!(restored.hook_definitions.is_empty());
+        assert_eq!(restored.governance, GovernanceSettings::default());
     }
 
     #[test]
@@ -944,7 +989,7 @@ mod tests {
     #[test]
     fn app_config_default_version_is_one() {
         let config = AppConfig::default();
-        assert_eq!(config.version, 2);
+        assert_eq!(config.version, 3);
 
         // But deserialization uses the serde default function
         let config: AppConfig = serde_json::from_str("{}").unwrap();
@@ -962,10 +1007,10 @@ mod tests {
             ..AppConfig::default()
         };
 
-        let migrated = store.migrate_v1_to_v2(&mut config, true);
+        let migrated = store.migrate(&mut config, true);
 
         assert!(migrated);
-        assert_eq!(config.version, 2);
+        assert_eq!(config.version, 3);
         assert_eq!(
             config
                 .driver_settings
@@ -993,7 +1038,7 @@ mod tests {
             .or_default()
             .insert("allow_flush".to_string(), "false".to_string());
 
-        let migrated = store.migrate_v1_to_v2(&mut config, true);
+        let migrated = store.migrate(&mut config, true);
 
         assert!(migrated);
         assert_eq!(
@@ -1007,17 +1052,36 @@ mod tests {
     }
 
     #[test]
-    fn migration_skips_when_version_is_already_two() {
+    fn migration_skips_when_version_is_already_three() {
         let store = AppConfigStore {
             path: PathBuf::from("/tmp/unused"),
         };
 
         let mut config = AppConfig::default();
 
-        let migrated = store.migrate_v1_to_v2(&mut config, true);
+        let migrated = store.migrate(&mut config, true);
 
         assert!(!migrated);
         assert!(config.driver_settings.is_empty());
+    }
+
+    #[test]
+    fn governance_roundtrip_with_trusted_clients() {
+        let mut config = AppConfig::default();
+        config.governance.mcp_enabled_by_default = true;
+        config.governance.trusted_clients = vec![TrustedClientConfig {
+            id: "client-a".to_string(),
+            name: "Client A".to_string(),
+            issuer: Some("issuer-a".to_string()),
+            active: true,
+        }];
+
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert!(restored.governance.mcp_enabled_by_default);
+        assert_eq!(restored.governance.trusted_clients.len(), 1);
+        assert_eq!(restored.governance.trusted_clients[0].id, "client-a");
     }
 
     // =========================================================================

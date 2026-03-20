@@ -98,6 +98,23 @@ pub struct SshTunnelProfile {
     pub save_secret: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionMcpPolicyBinding {
+    pub actor_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionMcpGovernance {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_bindings: Vec<ConnectionMcpPolicyBinding>,
+}
+
 impl SshTunnelProfile {
     pub fn new(name: impl Into<String>, config: SshTunnelConfig) -> Self {
         Self {
@@ -531,6 +548,10 @@ pub struct ConnectionProfile {
     /// Unified access method (replaces proxy_profile_id + ssh_tunnel_profile_id).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_kind: Option<AccessKind>,
+
+    /// Per-connection MCP governance controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_governance: Option<ConnectionMcpGovernance>,
 }
 
 impl ConnectionProfile {
@@ -551,6 +572,7 @@ impl ConnectionProfile {
             auth_profile_id: None,
             value_refs: HashMap::new(),
             access_kind: None,
+            mcp_governance: None,
         }
     }
 
@@ -574,6 +596,7 @@ impl ConnectionProfile {
             auth_profile_id: None,
             value_refs: HashMap::new(),
             access_kind: None,
+            mcp_governance: None,
         }
     }
 
@@ -599,6 +622,7 @@ impl ConnectionProfile {
             auth_profile_id: None,
             value_refs: HashMap::new(),
             access_kind: None,
+            mcp_governance: None,
         }
     }
 
@@ -735,6 +759,7 @@ mod tests {
         assert!(profile.auth_profile_id.is_none());
         assert!(profile.value_refs.is_empty());
         assert!(profile.access_kind.is_none());
+        assert!(profile.mcp_governance.is_none());
         assert!(!profile.uses_pipeline());
     }
 
@@ -785,6 +810,7 @@ mod tests {
         );
         assert!(restored.hooks.is_none());
         assert!(restored.hook_bindings.is_none());
+        assert!(restored.mcp_governance.is_none());
     }
 
     #[test]
@@ -868,6 +894,7 @@ mod tests {
         assert!(profile.connection_settings.is_none());
         assert!(profile.hooks.is_none());
         assert!(profile.hook_bindings.is_none());
+        assert!(profile.mcp_governance.is_none());
     }
 
     #[test]
@@ -989,5 +1016,29 @@ mod tests {
             .value_refs
             .insert("password".to_string(), ValueRef::env("DB_PASS"));
         assert!(profile.uses_pipeline());
+    }
+
+    #[test]
+    fn profile_roundtrip_with_connection_mcp_governance() {
+        let mut profile = sqlite_profile();
+        profile.mcp_governance = Some(ConnectionMcpGovernance {
+            enabled: true,
+            policy_bindings: vec![ConnectionMcpPolicyBinding {
+                actor_id: "agent-a".to_string(),
+                role_ids: vec!["role-reader".to_string()],
+                policy_ids: vec!["policy-read".to_string()],
+            }],
+        });
+
+        let json = serde_json::to_string(&profile).expect("serialize should succeed");
+        let restored: ConnectionProfile =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        let governance = restored
+            .mcp_governance
+            .expect("mcp governance should be present after roundtrip");
+        assert!(governance.enabled);
+        assert_eq!(governance.policy_bindings.len(), 1);
+        assert_eq!(governance.policy_bindings[0].actor_id, "agent-a");
     }
 }

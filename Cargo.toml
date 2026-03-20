@@ -19,6 +19,10 @@ members = [
     "crates/dbflux_driver_host",
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
+    "crates/dbflux_mcp",
+    "crates/dbflux_policy",
+    "crates/dbflux_approval",
+    "crates/dbflux_audit",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -50,6 +54,10 @@ dbflux_ipc = { path = "crates/dbflux_ipc" }
 dbflux_driver_ipc = { path = "crates/dbflux_driver_ipc" }
 dbflux_aws = { path = "crates/dbflux_aws" }
 dbflux_ssm = { path = "crates/dbflux_ssm" }
+dbflux_mcp = { path = "crates/dbflux_mcp" }
+dbflux_policy = { path = "crates/dbflux_policy" }
+dbflux_approval = { path = "crates/dbflux_approval" }
+dbflux_audit = { path = "crates/dbflux_audit" }
 mysql = "25"
 
 gpui = "0.2.2"

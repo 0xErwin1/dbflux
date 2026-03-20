@@ -2120,6 +2120,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
+ "dbflux_approval",
+ "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
  "dbflux_driver_dynamodb",
@@ -2132,6 +2134,8 @@ dependencies = [
  "dbflux_export",
  "dbflux_ipc",
  "dbflux_lua",
+ "dbflux_mcp",
+ "dbflux_policy",
  "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_ssm",
@@ -2150,6 +2154,28 @@ dependencies = [
  "rfd",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "dbflux_approval"
+version = "0.4.0-dev.9"
+dependencies = [
+ "dbflux_policy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_audit"
+version = "0.4.0-dev.9"
+dependencies = [
+ "dirs 5.0.1",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2184,6 +2210,7 @@ dependencies = [
  "async-trait",
  "bitflags 2.10.0",
  "chrono",
+ "dbflux_policy",
  "dbflux_test_support",
  "dirs 5.0.1",
  "futures",
@@ -2357,6 +2384,26 @@ dependencies = [
  "log",
  "mlua",
  "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_mcp"
+version = "0.4.0-dev.9"
+dependencies = [
+ "dbflux_policy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "dbflux_policy"
+version = "0.4.0-dev.9"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "uuid",
 ]
 
