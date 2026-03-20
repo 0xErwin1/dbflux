@@ -128,6 +128,40 @@ impl ConnectionManagerWindow {
                             .child(div().text_sm().child("Settings")),
                     ),
             )
+            .child(
+                div()
+                    .id("tab-mcp")
+                    .px_4()
+                    .py_2()
+                    .cursor_pointer()
+                    .border_b_2()
+                    .when(active_tab == ActiveTab::Mcp, |d| {
+                        d.border_color(theme.primary).text_color(theme.foreground)
+                    })
+                    .when(active_tab != ActiveTab::Mcp, |d| {
+                        d.border_color(gpui::transparent_black())
+                            .text_color(theme.muted_foreground)
+                    })
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active_tab = ActiveTab::Mcp;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(svg().path(AppIcon::Lock.path()).size_4().text_color(
+                                if active_tab == ActiveTab::Mcp {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(div().text_sm().child("MCP")),
+                    ),
+            )
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -598,5 +632,140 @@ impl ConnectionManagerWindow {
         }
 
         sections
+    }
+
+    pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+
+        let actor_preview = self
+            .conn_mcp_actor_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let role_preview = self
+            .conn_mcp_roles_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let policy_preview = self
+            .conn_mcp_policies_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+
+        let preview_text = if !self.conn_mcp_enabled {
+            "MCP disabled for this connection".to_string()
+        } else if actor_preview.is_empty() {
+            "MCP enabled with no actor binding".to_string()
+        } else {
+            format!(
+                "Actor '{}' scoped to this connection | roles: {} | policies: {}",
+                actor_preview,
+                if role_preview.is_empty() {
+                    "none"
+                } else {
+                    role_preview.as_str()
+                },
+                if policy_preview.is_empty() {
+                    "none"
+                } else {
+                    policy_preview.as_str()
+                }
+            )
+        };
+
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("conn-mcp-enabled")
+                            .checked(self.conn_mcp_enabled)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.conn_mcp_enabled = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().text_sm().child("Enable MCP for this connection")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Actor ID"),
+                    )
+                    .child(
+                        Input::new(&self.conn_mcp_actor_input)
+                            .small()
+                            .disabled(!self.conn_mcp_enabled),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Role IDs (comma-separated)"),
+                    )
+                    .child(
+                        Input::new(&self.conn_mcp_roles_input)
+                            .small()
+                            .disabled(!self.conn_mcp_enabled),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Policy IDs (comma-separated)"),
+                    )
+                    .child(
+                        Input::new(&self.conn_mcp_policies_input)
+                            .small()
+                            .disabled(!self.conn_mcp_enabled),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Scope/policy assignment preview")
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(preview_text),
+                    ),
+            );
+
+        vec![
+            self.render_section("MCP Governance", content, &theme)
+                .into_any_element(),
+        ]
     }
 }

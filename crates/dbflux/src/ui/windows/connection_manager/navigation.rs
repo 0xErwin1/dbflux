@@ -12,6 +12,26 @@ use super::{
     FormFocus, View,
 };
 
+fn next_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
+    match current {
+        ActiveTab::Main if has_access_tab => ActiveTab::Access,
+        ActiveTab::Main => ActiveTab::Settings,
+        ActiveTab::Access => ActiveTab::Settings,
+        ActiveTab::Settings => ActiveTab::Mcp,
+        ActiveTab::Mcp => ActiveTab::Main,
+    }
+}
+
+fn prev_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
+    match current {
+        ActiveTab::Main => ActiveTab::Mcp,
+        ActiveTab::Access => ActiveTab::Main,
+        ActiveTab::Settings if has_access_tab => ActiveTab::Access,
+        ActiveTab::Settings => ActiveTab::Main,
+        ActiveTab::Mcp => ActiveTab::Settings,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct SshNavState {
     pub(super) enabled: bool,
@@ -1389,7 +1409,7 @@ impl ConnectionManagerWindow {
                     next_focus = SsmAuthManage;
                 }
             }
-            ActiveTab::Settings => {}
+            ActiveTab::Settings | ActiveTab::Mcp => {}
         }
 
         if next_focus != self.form_focus {
@@ -1458,6 +1478,7 @@ impl ConnectionManagerWindow {
                 SettingsDriverField(idx) => 2 + idx as usize,
                 _ => 0,
             },
+            ActiveTab::Mcp => 0,
         }
     }
 
@@ -1477,6 +1498,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .down_settings(self.settings_driver_field_count()),
+            ActiveTab::Mcp => self.form_focus,
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1494,6 +1516,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .up_settings(self.settings_driver_field_count()),
+            ActiveTab::Mcp => self.form_focus,
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1509,6 +1532,7 @@ impl ConnectionManagerWindow {
                 self.proxy_nav_state(cx),
             ),
             ActiveTab::Settings => self.form_focus.left_settings(),
+            ActiveTab::Mcp => self.form_focus,
         };
 
         if self.active_tab == ActiveTab::Access
@@ -1534,6 +1558,7 @@ impl ConnectionManagerWindow {
                 self.proxy_nav_state(cx),
             ),
             ActiveTab::Settings => self.form_focus.right_settings(),
+            ActiveTab::Mcp => self.form_focus,
         };
 
         if self.active_tab == ActiveTab::Access
@@ -1553,12 +1578,7 @@ impl ConnectionManagerWindow {
     fn next_tab(&mut self, cx: &mut Context<Self>) {
         let has_access_tab = !self.uses_file_form();
 
-        self.active_tab = match self.active_tab {
-            ActiveTab::Main if has_access_tab => ActiveTab::Access,
-            ActiveTab::Main => ActiveTab::Settings,
-            ActiveTab::Access => ActiveTab::Settings,
-            ActiveTab::Settings => ActiveTab::Main,
-        };
+        self.active_tab = next_active_tab(self.active_tab, has_access_tab);
 
         self.form_focus = self.initial_focus_for_tab(cx);
 
@@ -1569,12 +1589,7 @@ impl ConnectionManagerWindow {
     fn prev_tab(&mut self, cx: &mut Context<Self>) {
         let has_access_tab = !self.uses_file_form();
 
-        self.active_tab = match self.active_tab {
-            ActiveTab::Main => ActiveTab::Settings,
-            ActiveTab::Access => ActiveTab::Main,
-            ActiveTab::Settings if has_access_tab => ActiveTab::Access,
-            ActiveTab::Settings => ActiveTab::Main,
-        };
+        self.active_tab = prev_active_tab(self.active_tab, has_access_tab);
 
         self.form_focus = self.initial_focus_for_tab(cx);
 
@@ -1587,6 +1602,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Main => FormFocus::Name,
             ActiveTab::Access => FormFocus::AccessMethod,
             ActiveTab::Settings => FormFocus::SettingsRefreshPolicy,
+            ActiveTab::Mcp => FormFocus::Name,
         }
     }
 
@@ -1961,7 +1977,10 @@ impl ConnectionManagerWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccessTabMode, FormFocus, MainNavState, ProxyNavState, SshNavState};
+    use super::{
+        AccessTabMode, ActiveTab, FormFocus, MainNavState, ProxyNavState, SshNavState,
+        next_active_tab, prev_active_tab,
+    };
     use crate::ui::windows::ssh_shared::SshAuthSelection;
 
     fn ssh_disabled() -> SshNavState {
@@ -2362,5 +2381,28 @@ mod tests {
             FormFocus::ProxyEditInSettings.up_proxy(state),
             FormFocus::ProxySelector
         );
+    }
+
+    #[test]
+    fn tab_cycle_includes_mcp_tab() {
+        let mut tab = ActiveTab::Main;
+
+        tab = next_active_tab(tab, true);
+        assert!(matches!(tab, ActiveTab::Access));
+
+        tab = next_active_tab(tab, true);
+        assert!(matches!(tab, ActiveTab::Settings));
+
+        tab = next_active_tab(tab, true);
+        assert!(matches!(tab, ActiveTab::Mcp));
+
+        tab = next_active_tab(tab, true);
+        assert!(matches!(tab, ActiveTab::Main));
+    }
+
+    #[test]
+    fn tab_reverse_cycle_from_main_enters_mcp() {
+        let tab = prev_active_tab(ActiveTab::Main, true);
+        assert!(matches!(tab, ActiveTab::Mcp));
     }
 }

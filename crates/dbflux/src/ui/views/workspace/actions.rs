@@ -155,33 +155,23 @@ impl Workspace {
     pub(super) fn open_mcp_approvals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 
-        self.app_state.update(cx, |state, cx| {
-            cx.emit(crate::app::McpRuntimeEventRaised {
-                event: dbflux_mcp::McpRuntimeEvent::PendingExecutionsUpdated,
-            });
-
-            for event in state.drain_mcp_runtime_events() {
-                cx.emit(crate::app::McpRuntimeEventRaised { event });
-            }
+        self.mcp_approvals_view.update(cx, |view, cx| {
+            view.refresh(cx);
         });
 
-        cx.toast_info("MCP approvals refreshed", window);
+        self.active_governance_panel = Some(super::GovernancePanel::Approvals);
+        cx.toast_info("Opened MCP approvals", window);
     }
 
     pub(super) fn open_mcp_audit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;
 
-        self.app_state.update(cx, |state, cx| {
-            cx.emit(crate::app::McpRuntimeEventRaised {
-                event: dbflux_mcp::McpRuntimeEvent::AuditAppended,
-            });
-
-            for event in state.drain_mcp_runtime_events() {
-                cx.emit(crate::app::McpRuntimeEventRaised { event });
-            }
+        self.mcp_audit_view.update(cx, |view, cx| {
+            view.refresh(cx);
         });
 
-        cx.toast_info("MCP audit viewer refreshed", window);
+        self.active_governance_panel = Some(super::GovernancePanel::Audit);
+        cx.toast_info("Opened MCP audit viewer", window);
     }
 
     pub(super) fn refresh_mcp_governance(&mut self, window: &mut Window, cx: &mut Context<Self>) {

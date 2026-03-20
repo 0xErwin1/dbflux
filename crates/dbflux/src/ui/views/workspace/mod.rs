@@ -10,7 +10,8 @@ use crate::keymap::{
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
+    CodeDocument, DataDocument, DocumentHandle, McpApprovalsView, McpAuditView, TabBar,
+    TabBarEvent, TabManager,
 };
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
@@ -79,6 +80,8 @@ pub struct Workspace {
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
+    mcp_approvals_view: Entity<McpApprovalsView>,
+    mcp_audit_view: Entity<McpAuditView>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -94,6 +97,14 @@ pub struct Workspace {
     focus_target: FocusTarget,
     keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
+
+    active_governance_panel: Option<GovernancePanel>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GovernancePanel {
+    Approvals,
+    Audit,
 }
 
 impl Workspace {
@@ -110,6 +121,8 @@ impl Workspace {
 
         let tab_manager = cx.new(|_cx| TabManager::new());
         let tab_bar = cx.new(|cx| TabBar::new(tab_manager.clone(), cx));
+        let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
+        let mcp_audit_view = cx.new(|cx| McpAuditView::new(app_state.clone(), window, cx));
 
         let command_palette = cx.new(|cx| {
             let mut palette = CommandPalette::new(window, cx);
@@ -440,6 +453,8 @@ impl Workspace {
             shutdown_overlay,
             tab_manager,
             tab_bar,
+            mcp_approvals_view,
+            mcp_audit_view,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
@@ -451,6 +466,7 @@ impl Workspace {
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
+            active_governance_panel: None,
         };
 
         {

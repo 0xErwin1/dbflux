@@ -124,6 +124,7 @@ enum ActiveTab {
     Main,
     Access,
     Settings,
+    Mcp,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -269,6 +270,12 @@ pub struct ConnectionManagerWindow {
     conn_form_state: FormRendererState,
     conn_form_subscriptions: Vec<Subscription>,
     conn_loading_settings: bool,
+
+    // MCP tab state
+    conn_mcp_enabled: bool,
+    conn_mcp_actor_input: Entity<InputState>,
+    conn_mcp_roles_input: Entity<InputState>,
+    conn_mcp_policies_input: Entity<InputState>,
 }
 
 impl ConnectionManagerWindow {
@@ -378,6 +385,11 @@ impl ConnectionManagerWindow {
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
         let conn_post_disconnect_hook_extra_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
+        let conn_mcp_actor_input = cx.new(|cx| InputState::new(window, cx).placeholder("agent-id"));
+        let conn_mcp_roles_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("reader, approver"));
+        let conn_mcp_policies_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("allow-read, approval-required"));
 
         let dropdown_subscription = cx.subscribe(
             &ssh_tunnel_dropdown,
@@ -485,6 +497,9 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
+            subscribe_input(cx, window, &conn_mcp_actor_input),
+            subscribe_input(cx, window, &conn_mcp_roles_input),
+            subscribe_input(cx, window, &conn_mcp_policies_input),
         ];
 
         let focus_handle = cx.focus_handle();
@@ -593,6 +608,10 @@ impl ConnectionManagerWindow {
             conn_form_state: FormRendererState::default(),
             conn_form_subscriptions: Vec::new(),
             conn_loading_settings: false,
+            conn_mcp_enabled: false,
+            conn_mcp_actor_input,
+            conn_mcp_roles_input,
+            conn_mcp_policies_input,
         }
     }
 
@@ -647,6 +666,27 @@ impl ConnectionManagerWindow {
             window,
             cx,
         );
+
+        instance.conn_mcp_enabled = profile.mcp_governance.as_ref().is_some_and(|g| g.enabled);
+
+        let first_binding = profile
+            .mcp_governance
+            .as_ref()
+            .and_then(|governance| governance.policy_bindings.first());
+
+        if let Some(binding) = first_binding {
+            instance.conn_mcp_actor_input.update(cx, |input, cx| {
+                input.set_value(binding.actor_id.clone(), window, cx);
+            });
+
+            instance.conn_mcp_roles_input.update(cx, |input, cx| {
+                input.set_value(binding.role_ids.join(", "), window, cx);
+            });
+
+            instance.conn_mcp_policies_input.update(cx, |input, cx| {
+                input.set_value(binding.policy_ids.join(", "), window, cx);
+            });
+        }
 
         instance.selected_proxy_id = profile.proxy_profile_id;
         instance.selected_auth_profile_id = profile.auth_profile_id;

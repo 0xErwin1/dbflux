@@ -108,3 +108,8 @@ pub fn export(
         .export(result, writer),
     }
 }
+
+pub fn export_text_payload(payload: &str, writer: &mut dyn Write) -> Result<(), ExportError> {
+    writer.write_all(payload.as_bytes())?;
+    Ok(())
+}
