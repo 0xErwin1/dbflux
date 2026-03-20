@@ -832,19 +832,19 @@ impl DynamoConnection {
         };
 
         let runtime = runtime()?;
-        
+
         // Retry up to 2 times on dispatch failure (transient SDK errors)
         let mut last_error = None;
         for attempt in 0..2 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            
+
             match runtime.block_on(self.client.describe_table().table_name(table).send()) {
                 Ok(output) => {
-                    let description = output
-                        .table()
-                        .ok_or_else(|| DbError::object_not_found(format!("Table '{}' was not found", table)))?;
+                    let description = output.table().ok_or_else(|| {
+                        DbError::object_not_found(format!("Table '{}' was not found", table))
+                    })?;
 
                     let keys = extract_key_components(
                         description.key_schema(),
@@ -871,26 +871,28 @@ impl DynamoConnection {
                 Err(error) => {
                     let error_str = error.to_string();
                     let is_dispatch_failure = error_str.to_lowercase().contains("dispatch");
-                    
+
                     if is_dispatch_failure && attempt < 1 {
                         // Retry on dispatch failure
                         last_error = Some(error);
                         continue;
                     }
-                    
+
                     // Non-retriable error or final attempt
                     let formatted = DYNAMO_ERROR_FORMATTER.format_describe_error(&error, &config);
                     return Err(classify_connection_error(formatted));
                 }
             }
         }
-        
+
         // Should never reach here, but handle it just in case
         if let Some(error) = last_error {
             let formatted = DYNAMO_ERROR_FORMATTER.format_describe_error(&error, &config);
             Err(classify_connection_error(formatted))
         } else {
-            Err(DbError::query_failed("Failed to fetch table key schema after retries"))
+            Err(DbError::query_failed(
+                "Failed to fetch table key schema after retries",
+            ))
         }
     }
 

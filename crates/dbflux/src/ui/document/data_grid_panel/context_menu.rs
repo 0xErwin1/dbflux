@@ -11,8 +11,8 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
-    RowDelete, RowIdentity, RowInsert, RowPatch, Value,
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
+    RowIdentity, RowInsert, RowPatch, Value,
 };
 use dbflux_export::ExportFormat;
 use gpui::prelude::FluentBuilder;
@@ -2810,7 +2810,10 @@ impl DataGridPanel {
 
         for col in &self.result.columns {
             if col.is_primary_key {
-                doc.insert(col.name.clone(), serde_json::Value::String(self.generate_new_id_for_column(&col.name)));
+                doc.insert(
+                    col.name.clone(),
+                    serde_json::Value::String(self.generate_new_id_for_column(&col.name)),
+                );
             }
         }
 
@@ -2849,28 +2852,30 @@ impl DataGridPanel {
             if let Some(tree_state) = &self.document_tree_state
                 && let Some(raw_doc) = tree_state.read(cx).get_raw_document(visual_row)
             {
-                    let mut doc_json = value_to_json(raw_doc);
+                let mut doc_json = value_to_json(raw_doc);
 
-                    // Replace PK values with freshly generated IDs.
-                    if let serde_json::Value::Object(ref mut map) = doc_json {
-                        for col in &self.result.columns {
-                            if col.is_primary_key {
-                                map.insert(
-                                    col.name.clone(),
-                                    serde_json::Value::String(self.generate_new_id_for_column(&col.name)),
-                                );
-                            }
+                // Replace PK values with freshly generated IDs.
+                if let serde_json::Value::Object(ref mut map) = doc_json {
+                    for col in &self.result.columns {
+                        if col.is_primary_key {
+                            map.insert(
+                                col.name.clone(),
+                                serde_json::Value::String(
+                                    self.generate_new_id_for_column(&col.name),
+                                ),
+                            );
                         }
                     }
+                }
 
-                    let json_str = serde_json::to_string_pretty(&doc_json)
-                        .unwrap_or_else(|_| "{}".to_string());
+                let json_str =
+                    serde_json::to_string_pretty(&doc_json).unwrap_or_else(|_| "{}".to_string());
 
-                    self.pending_document_preview = Some(PendingDocumentPreview {
-                        doc_index: DOC_INDEX_NEW,
-                        document_json: json_str,
-                    });
-                    cx.notify();
+                self.pending_document_preview = Some(PendingDocumentPreview {
+                    doc_index: DOC_INDEX_NEW,
+                    document_json: json_str,
+                });
+                cx.notify();
             }
             return;
         }
@@ -2880,7 +2885,8 @@ impl DataGridPanel {
         };
 
         // For collections and tables, find PK columns using is_primary_key metadata
-        let pk_indices: std::collections::HashSet<usize> = self.result
+        let pk_indices: std::collections::HashSet<usize> = self
+            .result
             .columns
             .iter()
             .enumerate()
@@ -3683,7 +3689,9 @@ impl DataGridPanel {
         let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
 
         match &id_value {
-            Value::ObjectId(oid) => Some(DocumentFilter::new(serde_json::json!({"_id": {"$oid": oid}}))),
+            Value::ObjectId(oid) => Some(DocumentFilter::new(
+                serde_json::json!({"_id": {"$oid": oid}}),
+            )),
             Value::Text(s) => Some(DocumentFilter::new(serde_json::json!({"_id": s}))),
             _ => None,
         }

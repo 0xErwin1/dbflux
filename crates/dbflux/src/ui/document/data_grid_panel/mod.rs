@@ -1003,13 +1003,13 @@ impl DataGridPanel {
                 .filter(|col| col.is_primary_key)
                 .map(|col| col.name.clone())
                 .collect();
-            
+
             if !pk_columns_from_metadata.is_empty() {
                 self.pk_columns = pk_columns_from_metadata;
             }
             // If no columns are marked as PK, keep the existing pk_columns (fallback to "_id" for MongoDB)
         }
-        
+
         // Find PK column indices in result columns
         let pk_indices: Vec<usize> = self
             .pk_columns
