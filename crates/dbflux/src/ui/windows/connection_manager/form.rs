@@ -21,19 +21,42 @@ impl ConnectionManagerWindow {
             .collect()
     }
 
+    fn merge_ids(primary: Option<String>, extras_raw: &str) -> Vec<String> {
+        let mut ids = Vec::new();
+        if let Some(p) = primary.filter(|s| !s.is_empty()) {
+            ids.push(p);
+        }
+        ids.extend(Self::parse_csv_ids(extras_raw));
+        ids
+    }
+
     fn collect_mcp_governance(&self, cx: &Context<Self>) -> Option<ConnectionMcpGovernance> {
         if !self.conn_mcp_enabled {
             return None;
         }
 
         let actor_id = self
-            .conn_mcp_actor_input
+            .conn_mcp_actor_dropdown
             .read(cx)
-            .value()
-            .trim()
-            .to_string();
-        let role_ids = Self::parse_csv_ids(&self.conn_mcp_roles_input.read(cx).value());
-        let policy_ids = Self::parse_csv_ids(&self.conn_mcp_policies_input.read(cx).value());
+            .selected_value()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
+        let role_ids = Self::merge_ids(
+            self.conn_mcp_role_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|v| v.to_string()),
+            &self.conn_mcp_role_extra_input.read(cx).value(),
+        );
+
+        let policy_ids = Self::merge_ids(
+            self.conn_mcp_policy_dropdown
+                .read(cx)
+                .selected_value()
+                .map(|v| v.to_string()),
+            &self.conn_mcp_policy_extra_input.read(cx).value(),
+        );
 
         let policy_bindings = if actor_id.is_empty() {
             Vec::new()

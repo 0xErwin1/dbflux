@@ -6,6 +6,7 @@ pub mod form_navigation;
 pub mod form_renderer;
 pub mod json_editor_view;
 pub mod modal_frame;
+pub mod multi_select;
 pub mod toast;
 pub mod tree_nav;
 pub mod value_source_selector;

@@ -636,44 +636,38 @@ impl ConnectionManagerWindow {
 
     pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = cx.theme().clone();
+        let enabled = self.conn_mcp_enabled;
+        let opacity = if enabled { 1.0 } else { 0.5 };
 
-        let actor_preview = self
-            .conn_mcp_actor_input
+        let actor_label = self
+            .conn_mcp_actor_dropdown
             .read(cx)
-            .value()
-            .trim()
-            .to_string();
-        let role_preview = self
-            .conn_mcp_roles_input
+            .selected_label()
+            .map(|l| l.to_string())
+            .unwrap_or_default();
+        let role_label = self
+            .conn_mcp_role_dropdown
             .read(cx)
-            .value()
-            .trim()
-            .to_string();
-        let policy_preview = self
-            .conn_mcp_policies_input
+            .selected_value()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let policy_label = self
+            .conn_mcp_policy_dropdown
             .read(cx)
-            .value()
-            .trim()
-            .to_string();
+            .selected_value()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
 
-        let preview_text = if !self.conn_mcp_enabled {
+        let preview_text = if !enabled {
             "MCP disabled for this connection".to_string()
-        } else if actor_preview.is_empty() {
-            "MCP enabled with no actor binding".to_string()
+        } else if actor_label.is_empty() {
+            "MCP enabled — select a trusted client to bind".to_string()
         } else {
             format!(
-                "Actor '{}' scoped to this connection | roles: {} | policies: {}",
-                actor_preview,
-                if role_preview.is_empty() {
-                    "none"
-                } else {
-                    role_preview.as_str()
-                },
-                if policy_preview.is_empty() {
-                    "none"
-                } else {
-                    policy_preview.as_str()
-                }
+                "Actor '{}' | role: {} | policy: {}",
+                actor_label, role_label, policy_label
             )
         };
 
@@ -686,14 +680,12 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        Checkbox::new("conn-mcp-enabled")
-                            .checked(self.conn_mcp_enabled)
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.conn_mcp_enabled = *checked;
-                                cx.notify();
-                            })),
-                    )
+                    .child(Checkbox::new("conn-mcp-enabled").checked(enabled).on_click(
+                        cx.listener(|this, checked: &bool, _, cx| {
+                            this.conn_mcp_enabled = *checked;
+                            cx.notify();
+                        }),
+                    ))
                     .child(div().text_sm().child("Enable MCP for this connection")),
             )
             .child(
@@ -701,17 +693,50 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
+                    .opacity(opacity)
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Actor ID"),
+                            .child("Trusted Client (Actor)"),
                     )
                     .child(
-                        Input::new(&self.conn_mcp_actor_input)
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("AI agent identity — configure in Settings → MCP"),
+                    )
+                    .child(self.conn_mcp_actor_dropdown.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .opacity(opacity)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Role"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Configure roles in Settings → MCP → Roles"),
+                    )
+                    .child(self.conn_mcp_role_dropdown.clone())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Additional roles (optional, comma-separated)"),
+                    )
+                    .child(
+                        Input::new(&self.conn_mcp_role_extra_input)
                             .small()
-                            .disabled(!self.conn_mcp_enabled),
+                            .disabled(!enabled),
                     ),
             )
             .child(
@@ -719,42 +744,37 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
+                    .opacity(opacity)
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Role IDs (comma-separated)"),
+                            .child("Policy"),
                     )
-                    .child(
-                        Input::new(&self.conn_mcp_roles_input)
-                            .small()
-                            .disabled(!self.conn_mcp_enabled),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(if self.conn_mcp_enabled { 1.0 } else { 0.6 })
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Policy IDs (comma-separated)"),
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Configure policies in Settings → MCP → Policies"),
+                    )
+                    .child(self.conn_mcp_policy_dropdown.clone())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Additional policies (optional, comma-separated)"),
                     )
                     .child(
-                        Input::new(&self.conn_mcp_policies_input)
+                        Input::new(&self.conn_mcp_policy_extra_input)
                             .small()
-                            .disabled(!self.conn_mcp_enabled),
+                            .disabled(!enabled),
                     ),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Scope/policy assignment preview")
+                    .child("Summary")
                     .child(
                         div()
                             .text_sm()

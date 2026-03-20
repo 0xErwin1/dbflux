@@ -2402,6 +2402,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_mcp_server"
+version = "0.4.0-dev.9"
+dependencies = [
+ "anyhow",
+ "dbflux_audit",
+ "dbflux_core",
+ "dbflux_driver_dynamodb",
+ "dbflux_driver_mongodb",
+ "dbflux_driver_mysql",
+ "dbflux_driver_postgres",
+ "dbflux_driver_redis",
+ "dbflux_driver_sqlite",
+ "dbflux_mcp",
+ "dbflux_policy",
+ "env_logger",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dbflux_policy"
 version = "0.4.0-dev.9"
 dependencies = [

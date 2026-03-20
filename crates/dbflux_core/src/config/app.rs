@@ -62,22 +62,19 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GovernanceSettings {
     #[serde(default)]
     pub mcp_enabled_by_default: bool,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_clients: Vec<TrustedClientConfig>,
-}
 
-impl Default for GovernanceSettings {
-    fn default() -> Self {
-        Self {
-            mcp_enabled_by_default: false,
-            trusted_clients: Vec::new(),
-        }
-    }
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<PolicyRoleConfig>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policies: Vec<ToolPolicyConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +87,22 @@ pub struct TrustedClientConfig {
 
     #[serde(default = "default_true")]
     pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyRoleConfig {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolPolicyConfig {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_classes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +452,16 @@ impl AppConfigStore {
 
         Ok(Self {
             path: app_dir.join("config.json"),
+        })
+    }
+
+    /// Creates a store pointing at a specific directory instead of the default
+    /// `~/.config/dbflux`. The directory is created if it does not exist.
+    pub fn from_dir(dir: &std::path::Path) -> Result<Self, DbError> {
+        fs::create_dir_all(dir).map_err(DbError::IoError)?;
+
+        Ok(Self {
+            path: dir.join("config.json"),
         })
     }
 
