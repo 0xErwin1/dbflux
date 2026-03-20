@@ -28,7 +28,12 @@ crates/
 ├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
 ├── dbflux_ssh/                # SSH tunnel support
 ├── dbflux_export/             # Export (CSV, JSON, Text, Binary)
-└── dbflux_test_support/       # Docker containers and fixtures for integration tests
+├── dbflux_test_support/       # Docker containers and fixtures for integration tests
+├── dbflux_mcp/                # MCP runtime, governance service, and tool catalog
+├── dbflux_mcp_server/         # Standalone MCP server binary for AI clients
+├── dbflux_policy/             # Policy engine, roles, trusted clients, classification
+├── dbflux_approval/           # Approval service and pending execution store
+└── dbflux_audit/              # Audit logging with SQLite backend
 ```
 
 ## Build & Run Commands
@@ -269,6 +274,11 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_proxy`: SOCKS5/HTTP CONNECT proxy via `TunnelConnector` impl
 - `dbflux_ssh`: SSH tunnel via `TunnelConnector` impl (all SSH ops serialized to one thread for libssh2 safety)
 - `dbflux_lua`: Embedded Lua runtime and `HookExecutor` implementation for in-process hooks
+- `dbflux_mcp`: MCP runtime (`McpRuntime`), governance service trait (`McpGovernanceService`), tool catalog, and handlers for query/approval/audit/discovery
+- `dbflux_mcp_server`: Standalone binary for AI clients to connect via MCP protocol; uses `dbflux_mcp` runtime
+- `dbflux_policy`: `PolicyEngine` with roles (`PolicyRole`) and tool policies (`ToolPolicy`); `TrustedClientRegistry`; `ExecutionClassification` enum
+- `dbflux_approval`: `ApprovalService` and `InMemoryPendingExecutionStore` for deferred executions requiring human approval
+- `dbflux_audit`: `AuditService` with SQLite backend for audit event logging, querying, and export
 - `dbflux`: UI only, drivers via feature flags
 
 ### Proxy and SSH Tunnels
@@ -395,6 +405,56 @@ Documents follow a consistent pattern for tab-based UI:
 5. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
 6. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
 
+### MCP Governance System
+
+DBFlux supports the Model Context Protocol (MCP) for AI client integration with a complete governance layer:
+
+**Classification**: Operations are classified by impact level via `ExecutionClassification`:
+- `Metadata` — Schema introspection (list tables, describe object)
+- `Read` — SELECT queries, data browsing
+- `Write` — INSERT/UPDATE, mutations
+- `Destructive` — DELETE, DROP, TRUNCATE
+- `Admin` — DDL operations, user management
+
+**Policy Engine** (`dbflux_policy`):
+- `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
+- Returns `PolicyDecision::Allow` or `PolicyDecision::Deny(reason)`
+- Supports roles with policy composition and connection-scoped assignments
+- `TrustedClientRegistry` identifies known AI clients
+
+**Approval Flow** (`dbflux_approval`):
+- Destructive or write operations can require human approval
+- `InMemoryPendingExecutionStore` holds deferred executions
+- `ApprovalService` manages approve/reject lifecycle
+
+**Audit** (`dbflux_audit`):
+- SQLite-backed audit log in `~/.config/dbflux/audit.sqlite`
+- Queryable via `AuditQueryFilter` (actor, tool, date range)
+- Export to JSON/CSV
+
+**Runtime** (`dbflux_mcp`):
+- `McpRuntime` implements `McpGovernanceService` trait
+- Integrates policy engine, approval service, and audit service
+- Emits `McpRuntimeEvent` for UI updates
+- Tool catalog defines canonical MCP tools and deferred tools
+
+**Standalone Server** (`dbflux_mcp_server`):
+- Binary `dbflux-mcp-server --client-id <id>` for AI clients
+- Communicates via JSON-RPC over stdin/stdout
+- Uses same governance stack as in-app MCP
+
+**UI Integration**:
+- `McpApprovalsView` document for reviewing pending executions
+- MCP settings section for trusted clients, roles, policies, and audit log
+- `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
+
+### Platform Detection
+
+`crates/dbflux/src/platform.rs` handles X11/Wayland differences:
+- X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
+- `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
+- `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
+
 ## Common Pitfalls
 
 1. Forgetting `cx.notify()` after state changes
@@ -487,3 +547,22 @@ Documents follow a consistent pattern for tab-based UI:
 | `crates/dbflux_tunnel_core/src/lib.rs`                            | Tunnel, TunnelConnector, ForwardingConnection       |
 | `crates/dbflux_proxy/src/lib.rs`                                  | SOCKS5/HTTP CONNECT proxy tunnel                    |
 | `crates/dbflux_driver_host/src/main.rs`                           | External RPC host server entrypoint                 |
+| `crates/dbflux_mcp/src/runtime.rs`                                | MCP runtime with governance integration             |
+| `crates/dbflux_mcp/src/governance_service.rs`                     | McpGovernanceService trait and DTOs                 |
+| `crates/dbflux_mcp/src/tool_catalog.rs`                           | Canonical MCP tools and deferred tool definitions   |
+| `crates/dbflux_mcp_server/src/main.rs`                            | Standalone MCP server binary entrypoint             |
+| `crates/dbflux_mcp_server/src/server.rs`                          | MCP server request loop                             |
+| `crates/dbflux_policy/src/engine.rs`                              | PolicyEngine, PolicyRole, ToolPolicy                |
+| `crates/dbflux_policy/src/classification.rs`                      | ExecutionClassification enum                        |
+| `crates/dbflux_policy/src/trusted_clients.rs`                     | TrustedClientRegistry                               |
+| `crates/dbflux_approval/src/service.rs`                           | ApprovalService for pending executions              |
+| `crates/dbflux_audit/src/lib.rs`                                  | AuditService with SQLite backend                    |
+| `crates/dbflux/src/platform.rs`                                   | X11/Wayland detection, window options               |
+| `crates/dbflux/src/ui/document/governance.rs`                     | MCP approvals view document                         |
+| `crates/dbflux/src/ui/overlays/login_modal.rs`                    | SSO login waiting modal                             |
+| `crates/dbflux/src/ui/overlays/sso_wizard.rs`                     | SSO account/role discovery wizard                   |
+| `crates/dbflux/src/ui/components/value_source_selector.rs`        | Value source dropdown (Env/Secret/Parameter/Auth)   |
+| `crates/dbflux/src/ui/components/multi_select.rs`                 | Multi-select dropdown component                     |
+| `crates/dbflux/src/ui/windows/settings/mcp_section.rs`            | MCP settings (clients, roles, policies, audit)      |
+| `crates/dbflux/src/ui/windows/settings/section_trait.rs`          | SettingsSection trait                               |
+| `crates/dbflux/src/ui/windows/settings/form_section.rs`           | FormSection trait for keyboard navigation           |

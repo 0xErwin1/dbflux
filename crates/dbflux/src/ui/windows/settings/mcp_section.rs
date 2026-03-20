@@ -2,6 +2,7 @@ use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
+use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
@@ -242,15 +243,16 @@ fn tool_description(id: &str) -> &'static str {
 use dbflux_mcp::builtin_display_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpTab {
+pub(super) enum McpSectionVariant {
     Clients,
     Roles,
     Policies,
+    Audit,
 }
 
 pub(super) struct McpSection {
     app_state: Entity<AppState>,
-    active_tab: McpTab,
+    variant: McpSectionVariant,
 
     // Client tab
     input_client_id: Entity<InputState>,
@@ -282,6 +284,7 @@ impl EventEmitter<SectionFocusEvent> for McpSection {}
 impl McpSection {
     pub(super) fn new(
         app_state: Entity<AppState>,
+        variant: McpSectionVariant,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -330,7 +333,7 @@ impl McpSection {
 
         Self {
             app_state,
-            active_tab: McpTab::Clients,
+            variant,
 
             input_client_id,
             input_client_name,
@@ -710,73 +713,6 @@ impl McpSection {
     }
 
     // ─── Render helpers ───────────────────────────────────────────────────────
-
-    fn render_tab_bar(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
-
-        let tab = |id: &'static str, label: &'static str, tab_variant: McpTab, active: McpTab| {
-            let is_active = tab_variant == active;
-            div()
-                .id(id)
-                .px_3()
-                .py_2()
-                .cursor_pointer()
-                .text_sm()
-                .border_b_2()
-                .border_color(if is_active {
-                    theme.primary
-                } else {
-                    transparent_black()
-                })
-                .text_color(if is_active {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                })
-                .hover({
-                    let fg = theme.foreground;
-                    move |d| d.text_color(fg)
-                })
-                .child(label)
-        };
-
-        div()
-            .flex()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                tab(
-                    "mcp-tab-clients",
-                    "Clients",
-                    McpTab::Clients,
-                    self.active_tab,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_tab = McpTab::Clients;
-                    cx.notify();
-                })),
-            )
-            .child(
-                tab("mcp-tab-roles", "Roles", McpTab::Roles, self.active_tab).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.active_tab = McpTab::Roles;
-                        cx.notify();
-                    }),
-                ),
-            )
-            .child(
-                tab(
-                    "mcp-tab-policies",
-                    "Policies",
-                    McpTab::Policies,
-                    self.active_tab,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_tab = McpTab::Policies;
-                    cx.notify();
-                })),
-            )
-    }
 
     fn render_clients_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -1525,11 +1461,256 @@ impl McpSection {
             .child(list)
             .child(form)
     }
+
+    fn render_audit_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(layout::section_header(
+                "Audit",
+                "Read-only audit trail recorded by the MCP server",
+                &theme,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(
+                                "Audit trail is written by the MCP server to mcp_audit.sqlite in \
+                                 the DBFlux data directory. Querying and filtering will be \
+                                 available here once the server is running.",
+                            ),
+                    ),
+            )
+    }
+
+    // ─── Keyboard navigation ──────────────────────────────────────────────────
+
+    pub(super) fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.content_focused {
+            return;
+        }
+
+        let chord = KeyChord::from_gpui(&event.keystroke);
+
+        match self.variant {
+            McpSectionVariant::Clients => self.handle_clients_nav(chord, window, cx),
+            McpSectionVariant::Roles => self.handle_roles_nav(chord, window, cx),
+            McpSectionVariant::Policies => self.handle_policies_nav(chord, window, cx),
+            McpSectionVariant::Audit => self.handle_audit_nav(chord, cx),
+        }
+    }
+
+    fn handle_clients_nav(
+        &mut self,
+        chord: KeyChord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let clients = self.trusted_clients(cx);
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", m) | ("down", m) if m == Modifiers::none() => {
+                let next_id = match &self.selected_client_id {
+                    None => clients.first().map(|c| c.id.clone()),
+                    Some(current) => {
+                        let idx = clients.iter().position(|c| &c.id == current);
+                        idx.and_then(|i| clients.get(i + 1))
+                            .or_else(|| clients.first())
+                            .map(|c| c.id.clone())
+                    }
+                };
+
+                if let Some(id) = next_id {
+                    self.select_client(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("k", m) | ("up", m) if m == Modifiers::none() => {
+                let prev_id = match &self.selected_client_id {
+                    None => clients.last().map(|c| c.id.clone()),
+                    Some(current) => {
+                        let idx = clients.iter().position(|c| &c.id == current);
+                        idx.and_then(|i| i.checked_sub(1).and_then(|i| clients.get(i)))
+                            .or_else(|| clients.last())
+                            .map(|c| c.id.clone())
+                    }
+                };
+
+                if let Some(id) = prev_id {
+                    self.select_client(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("escape", m) if m == Modifiers::none() => {
+                if self.selected_client_id.is_some() {
+                    self.clear_client_form(window, cx);
+                } else {
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn handle_roles_nav(&mut self, chord: KeyChord, window: &mut Window, cx: &mut Context<Self>) {
+        let roles = self.roles(cx);
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", m) | ("down", m) if m == Modifiers::none() => {
+                let next_id = match &self.selected_role_id {
+                    None => roles.first().map(|r| r.id.clone()),
+                    Some(current) => {
+                        let idx = roles.iter().position(|r| &r.id == current);
+                        idx.and_then(|i| roles.get(i + 1))
+                            .or_else(|| roles.first())
+                            .map(|r| r.id.clone())
+                    }
+                };
+
+                if let Some(id) = next_id {
+                    self.select_role(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("k", m) | ("up", m) if m == Modifiers::none() => {
+                let prev_id = match &self.selected_role_id {
+                    None => roles.last().map(|r| r.id.clone()),
+                    Some(current) => {
+                        let idx = roles.iter().position(|r| &r.id == current);
+                        idx.and_then(|i| i.checked_sub(1).and_then(|i| roles.get(i)))
+                            .or_else(|| roles.last())
+                            .map(|r| r.id.clone())
+                    }
+                };
+
+                if let Some(id) = prev_id {
+                    self.select_role(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("escape", m) if m == Modifiers::none() => {
+                if self.selected_role_id.is_some() {
+                    self.clear_role_form(window, cx);
+                } else {
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn handle_policies_nav(
+        &mut self,
+        chord: KeyChord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let policies = self.policies(cx);
+
+        match (chord.key.as_str(), chord.modifiers) {
+            ("j", m) | ("down", m) if m == Modifiers::none() => {
+                let next_id = match &self.selected_policy_id {
+                    None => policies.first().map(|p| p.id.clone()),
+                    Some(current) => {
+                        let idx = policies.iter().position(|p| &p.id == current);
+                        idx.and_then(|i| policies.get(i + 1))
+                            .or_else(|| policies.first())
+                            .map(|p| p.id.clone())
+                    }
+                };
+
+                if let Some(id) = next_id {
+                    self.select_policy(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("k", m) | ("up", m) if m == Modifiers::none() => {
+                let prev_id = match &self.selected_policy_id {
+                    None => policies.last().map(|p| p.id.clone()),
+                    Some(current) => {
+                        let idx = policies.iter().position(|p| &p.id == current);
+                        idx.and_then(|i| i.checked_sub(1).and_then(|i| policies.get(i)))
+                            .or_else(|| policies.last())
+                            .map(|p| p.id.clone())
+                    }
+                };
+
+                if let Some(id) = prev_id {
+                    self.select_policy(&id, window, cx);
+                }
+
+                cx.notify();
+            }
+
+            ("escape", m) if m == Modifiers::none() => {
+                if self.selected_policy_id.is_some() {
+                    self.clear_policy_form(window, cx);
+                } else {
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn handle_audit_nav(&mut self, chord: KeyChord, cx: &mut Context<Self>) {
+        if let ("escape", m) = (chord.key.as_str(), chord.modifiers) {
+            if m == Modifiers::none() {
+                cx.emit(SectionFocusEvent::RequestFocusReturn);
+            }
+        }
+    }
 }
 
 impl SettingsSection for McpSection {
     fn section_id(&self) -> SettingsSectionId {
-        SettingsSectionId::Mcp
+        match self.variant {
+            McpSectionVariant::Clients => SettingsSectionId::McpClients,
+            McpSectionVariant::Roles => SettingsSectionId::McpRoles,
+            McpSectionVariant::Policies => SettingsSectionId::McpPolicies,
+            McpSectionVariant::Audit => SettingsSectionId::McpAudit,
+        }
+    }
+
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        McpSection::handle_key_event(self, event, window, cx);
     }
 
     fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1543,7 +1724,10 @@ impl SettingsSection for McpSection {
     }
 
     fn is_dirty(&self, cx: &App) -> bool {
-        self.client_has_unsaved_changes(cx)
+        match self.variant {
+            McpSectionVariant::Clients => self.client_has_unsaved_changes(cx),
+            _ => false,
+        }
     }
 }
 
@@ -1570,20 +1754,13 @@ impl Render for McpSection {
             }
         }
 
-        let tab_bar = self.render_tab_bar(cx);
-
-        let content: AnyElement = match self.active_tab {
-            McpTab::Clients => self.render_clients_content(cx).into_any_element(),
-            McpTab::Roles => self.render_roles_content(cx).into_any_element(),
-            McpTab::Policies => self.render_policies_content(cx).into_any_element(),
+        let content: AnyElement = match self.variant {
+            McpSectionVariant::Clients => self.render_clients_content(cx).into_any_element(),
+            McpSectionVariant::Roles => self.render_roles_content(cx).into_any_element(),
+            McpSectionVariant::Policies => self.render_policies_content(cx).into_any_element(),
+            McpSectionVariant::Audit => self.render_audit_content(cx).into_any_element(),
         };
 
-        div()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(tab_bar)
-            .child(div().flex_1().overflow_hidden().child(content))
+        div().h_full().overflow_hidden().child(content)
     }
 }

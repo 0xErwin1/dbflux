@@ -4,7 +4,10 @@ use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSectionId {
     General,
-    Mcp,
+    McpClients,
+    McpRoles,
+    McpPolicies,
+    McpAudit,
     Keybindings,
     Proxies,
     SshTunnels,

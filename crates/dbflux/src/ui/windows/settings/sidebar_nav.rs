@@ -9,7 +9,17 @@ impl SettingsCoordinator {
     pub(super) fn build_sidebar_tree() -> TreeNav {
         let nodes = vec![
             TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-            TreeNavNode::leaf("mcp", "MCP Governance", Some(AppIcon::Lock)),
+            TreeNavNode::group(
+                "mcp-governance",
+                "MCP Governance",
+                Some(AppIcon::Lock),
+                vec![
+                    TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
+                    TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
+                    TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
+                ],
+            ),
             TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
             TreeNavNode::group(
                 "security",
@@ -48,6 +58,7 @@ impl SettingsCoordinator {
         ];
 
         let mut expanded = HashSet::new();
+        expanded.insert(SharedString::from("mcp-governance"));
         expanded.insert(SharedString::from("security"));
         expanded.insert(SharedString::from("network"));
         expanded.insert(SharedString::from("connection"));
@@ -58,7 +69,10 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
-            "mcp" => Some(SettingsSectionId::Mcp),
+            "mcp-clients" => Some(SettingsSectionId::McpClients),
+            "mcp-roles" => Some(SettingsSectionId::McpRoles),
+            "mcp-policies" => Some(SettingsSectionId::McpPolicies),
+            "mcp-audit" => Some(SettingsSectionId::McpAudit),
             "keybindings" => Some(SettingsSectionId::Keybindings),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
@@ -74,7 +88,10 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
-            SettingsSectionId::Mcp => "mcp",
+            SettingsSectionId::McpClients => "mcp-clients",
+            SettingsSectionId::McpRoles => "mcp-roles",
+            SettingsSectionId::McpPolicies => "mcp-policies",
+            SettingsSectionId::McpAudit => "mcp-audit",
             SettingsSectionId::Keybindings => "keybindings",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
@@ -109,8 +126,12 @@ mod tests {
             Some(SettingsSectionId::Proxies)
         );
         assert_eq!(
-            SettingsCoordinator::section_for_tree_id("mcp"),
-            Some(SettingsSectionId::Mcp)
+            SettingsCoordinator::section_for_tree_id("mcp-clients"),
+            Some(SettingsSectionId::McpClients)
+        );
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("mcp-audit"),
+            Some(SettingsSectionId::McpAudit)
         );
     }
 
@@ -120,13 +141,17 @@ mod tests {
             SettingsCoordinator::section_for_tree_id("nonexistent"),
             None
         );
+        assert_eq!(SettingsCoordinator::section_for_tree_id("mcp"), None);
     }
 
     #[test]
     fn tree_id_roundtrip_all_sections() {
         for section in [
             SettingsSectionId::General,
-            SettingsSectionId::Mcp,
+            SettingsSectionId::McpClients,
+            SettingsSectionId::McpRoles,
+            SettingsSectionId::McpPolicies,
+            SettingsSectionId::McpAudit,
             SettingsSectionId::Keybindings,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,

@@ -24,7 +24,7 @@
 crates/
   dbflux/                   # GPUI app + UI composition
     src/main.rs             # Application entry point
-    src/app.rs              # Global state, drivers, profiles, history
+    src/app.rs              # Global state, drivers, profiles, history, MCP runtime
     src/assets.rs           # GPUI AssetSource impl for embedded SVG icons
     src/access_manager.rs   # App AccessManager (direct + managed access providers)
     src/auth_provider_registry.rs # Runtime registry for DynAuthProvider implementations
@@ -32,6 +32,7 @@ crates/
     src/hook_executor.rs    # Composite hook executor routing (process + Lua)
     src/ipc_server.rs       # App-control IPC server (single-instance, OpenScript)
     src/proxy.rs            # create_proxy_tunnel callback for CreateTunnelFn
+    src/platform.rs         # X11/Wayland detection, window options for floating windows
     src/keymap/             # Keyboard system
       mod.rs
       actions.rs            # GPUI actions!() macro declarations
@@ -82,6 +83,8 @@ crates/
         history_modal.rs         # Recent/saved queries modal
         shutdown_overlay.rs      # Graceful shutdown overlay
         sql_preview_modal.rs     # SQL/query preview (dual-mode: SQL and generic)
+        login_modal.rs           # SSO login waiting modal with timeout
+        sso_wizard.rs            # SSO account/role discovery wizard
       document/             # Document-based tab system (like VS Code/DBeaver)
         mod.rs              # Document exports and shared types
         handle.rs           # DocumentHandle for entity management
@@ -94,6 +97,7 @@ crates/
         data_view.rs        # DataViewMode abstraction (Table vs Document)
         add_member_modal.rs # Modal for adding Redis set/list/sorted-set members
         new_key_modal.rs    # Modal for creating new Redis keys
+        governance.rs       # MCP approvals view for pending executions
         code/               # CodeDocument: query/script editor
           mod.rs
           completion.rs     # Language-aware autocompletion
@@ -131,6 +135,8 @@ crates/
         json_editor_view.rs # Inline JSON editor component
         modal_frame.rs      # Reusable modal chrome/frame
         toast.rs            # Custom toast notification system
+        multi_select.rs     # Multi-select dropdown component
+        value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
         data_table/         # Custom virtualized data table
           mod.rs
           table.rs          # Main table component with phantom scroller
@@ -159,6 +165,8 @@ crates/
           sidebar_nav.rs    # Settings sidebar navigation (TreeNav)
           dirty_state.rs    # Unsaved-changes tracking for settings forms
           form_nav.rs       # FormGridNav<F> generic 2D grid navigation
+          form_section.rs   # FormSection trait for keyboard navigation
+          section_trait.rs  # SettingsSection trait
           general.rs        # General settings (theme, safety toggles)
           keybindings.rs    # Keybindings settings section
           auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
@@ -167,6 +175,7 @@ crates/
           hooks.rs          # Hook definitions CRUD
           drivers.rs        # Per-driver settings overrides
           rpc_services.rs   # External RPC service management
+          mcp_section.rs    # MCP settings (trusted clients, roles, policies, audit)
         connection_manager/ # Connection manager window
           mod.rs
           access_tab.rs     # Unified access mode editor (Direct/SSH/Proxy/SSM)
@@ -297,6 +306,36 @@ crates/
     src/csv.rs              # CSV exporter
     src/json.rs             # JSON pretty/compact exporter
     src/text.rs             # Text table exporter
+  dbflux_mcp/               # MCP runtime and governance
+    src/lib.rs              # Exports for runtime, governance service, tool catalog
+    src/runtime.rs          # McpRuntime implementing McpGovernanceService
+    src/governance_service.rs # McpGovernanceService trait and DTOs
+    src/tool_catalog.rs     # Canonical MCP tools and deferred tool definitions
+    src/built_ins.rs        # Built-in roles and policies
+    src/handlers/           # MCP tool handlers (query, approval, audit, discovery, scripts)
+    src/server/             # MCP server infrastructure (router, authorization, bootstrap)
+  dbflux_mcp_server/        # Standalone MCP server binary
+    src/main.rs             # CLI entrypoint with --client-id and --config-dir
+    src/server.rs           # JSON-RPC request loop over stdin/stdout
+    src/bootstrap.rs        # Runtime initialization and state
+    src/transport.rs        # Line-based stdin/stdout transport
+    src/connection_cache.rs # Connection pool for the standalone server
+    src/handlers/           # Tool handlers adapted for standalone operation
+  dbflux_policy/            # Policy engine and classification
+    src/lib.rs              # Exports for engine, classification, trusted clients
+    src/classification.rs   # ExecutionClassification enum (Metadata/Read/Write/Destructive/Admin)
+    src/engine.rs           # PolicyEngine with PolicyRole and ToolPolicy
+    src/trusted_clients.rs  # TrustedClientRegistry for known AI clients
+    src/assignments.rs      # ConnectionPolicyAssignment and PolicyBindingScope
+  dbflux_approval/          # Approval service for deferred executions
+    src/lib.rs              # Exports for ApprovalService and pending store
+    src/service.rs          # ApprovalService (approve/reject lifecycle)
+    src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
+  dbflux_audit/             # Audit logging
+    src/lib.rs              # AuditService with SQLite backend
+    src/query.rs            # AuditQueryFilter for date/actor/tool queries
+    src/export.rs           # Audit export to JSON/CSV
+    src/store/              # SQLite store implementation
   dbflux_test_support/      # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
@@ -469,6 +508,54 @@ crates/
 - Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`).
 - Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
 - Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets loaded via `assets.rs`.
+- Platform detection: `crates/dbflux/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints.
+
+### MCP Governance System
+
+DBFlux supports the Model Context Protocol (MCP) for AI client integration with a complete governance layer:
+
+**Classification** (`dbflux_policy/classification.rs`):
+- `ExecutionClassification` enum: Metadata, Read, Write, Destructive, Admin
+- Used to categorize operations by impact level for policy decisions
+
+**Policy Engine** (`dbflux_policy/engine.rs`):
+- `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
+- Returns `PolicyDecision::Allow` or `PolicyDecision::Deny(reason)`
+- `PolicyRole` composes multiple tool policies
+- `ToolPolicy` defines allowed tools and classification levels
+- `ConnectionPolicyAssignment` binds actors/connections to roles and policies
+
+**Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
+- `TrustedClientRegistry` identifies known AI clients by id, name, issuer
+- Used to differentiate between trusted and untrusted actors in audit logs
+
+**Approval Flow** (`dbflux_approval`):
+- `ApprovalService` manages approve/reject lifecycle for deferred executions
+- `InMemoryPendingExecutionStore` holds pending executions awaiting human approval
+- `ExecutionPlan` captures the original request context for deferred execution
+
+**Audit** (`dbflux_audit`):
+- `AuditService` with SQLite backend (`~/.config/dbflux/audit.sqlite`)
+- `AuditQueryFilter` for querying by actor, tool, date range
+- Export to JSON/CSV via `AuditExportFormat`
+- All policy decisions logged with actor, tool, decision, and reason
+
+**MCP Runtime** (`dbflux_mcp/runtime.rs`):
+- `McpRuntime` implements `McpGovernanceService` trait
+- Integrates policy engine, approval service, and audit service
+- Emits `McpRuntimeEvent` for UI updates (clients/roles/policies changed, pending executions, audit)
+- Tool catalog (`tool_catalog.rs`) defines canonical MCP tools and deferred tools
+
+**Standalone Server** (`dbflux_mcp_server`):
+- Binary `dbflux-mcp-server --client-id <id>` for AI clients
+- JSON-RPC over stdin/stdout transport
+- `ConnectionCache` for connection pooling
+- Same governance stack as in-app MCP
+
+**UI Integration**:
+- `McpApprovalsView` (`ui/document/governance.rs`) for reviewing pending executions
+- `mcp_section.rs` in Settings for trusted clients, roles, policies, and audit log
+- `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
 ## Data Flow
 

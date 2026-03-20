@@ -66,15 +66,49 @@ impl SettingsCoordinator {
                 ),
                 vec![],
             ),
-            SettingsSectionId::Mcp => {
-                let section = cx.new(|cx| McpSection::new(app_state, window, cx));
+            SettingsSectionId::McpClients => {
+                let section =
+                    cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Clients, window, cx));
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
                     if matches!(event, SectionFocusEvent::RequestFocusReturn) {
                         this.pending_focus_return = true;
                         cx.notify();
                     }
                 });
-                (ActiveSettingsSection::Mcp(section), vec![focus_sub])
+                (ActiveSettingsSection::McpClients(section), vec![focus_sub])
+            }
+            SettingsSectionId::McpRoles => {
+                let section =
+                    cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Roles, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::McpRoles(section), vec![focus_sub])
+            }
+            SettingsSectionId::McpPolicies => {
+                let section = cx
+                    .new(|cx| McpSection::new(app_state, McpSectionVariant::Policies, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::McpPolicies(section), vec![focus_sub])
+            }
+            SettingsSectionId::McpAudit => {
+                let section =
+                    cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Audit, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::McpAudit(section), vec![focus_sub])
             }
             SettingsSectionId::Proxies => {
                 let section = cx.new(|cx| ProxiesSection::new(app_state, window, cx));
