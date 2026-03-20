@@ -1,0 +1,42 @@
+[package]
+name = "dbflux_mcp_server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Standalone headless MCP server for DBFlux"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbflux-mcp-server"
+path = "src/main.rs"
+
+[features]
+sqlite = ["dbflux_driver_sqlite"]
+postgres = ["dbflux_driver_postgres"]
+mysql = ["dbflux_driver_mysql"]
+mongodb = ["dbflux_driver_mongodb"]
+redis = ["dbflux_driver_redis"]
+dynamodb = ["dbflux_driver_dynamodb"]
+
+[dependencies]
+dbflux_core = { workspace = true }
+dbflux_mcp = { workspace = true }
+dbflux_policy = { workspace = true }
+dbflux_audit = { workspace = true }
+
+dbflux_driver_sqlite = { workspace = true, optional = true }
+dbflux_driver_postgres = { workspace = true, optional = true }
+dbflux_driver_mysql = { workspace = true, optional = true }
+dbflux_driver_mongodb = { workspace = true, optional = true }
+dbflux_driver_redis = { workspace = true, optional = true }
+dbflux_driver_dynamodb = { workspace = true, optional = true }
+
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros"] }
+uuid = { workspace = true }
+log.workspace = true
+env_logger.workspace = true
+anyhow = "1"

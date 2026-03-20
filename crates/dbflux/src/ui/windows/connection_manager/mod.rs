@@ -273,9 +273,11 @@ pub struct ConnectionManagerWindow {
 
     // MCP tab state
     conn_mcp_enabled: bool,
-    conn_mcp_actor_input: Entity<InputState>,
-    conn_mcp_roles_input: Entity<InputState>,
-    conn_mcp_policies_input: Entity<InputState>,
+    conn_mcp_actor_dropdown: Entity<Dropdown>,
+    conn_mcp_role_dropdown: Entity<Dropdown>,
+    conn_mcp_role_extra_input: Entity<InputState>,
+    conn_mcp_policy_dropdown: Entity<Dropdown>,
+    conn_mcp_policy_extra_input: Entity<InputState>,
 }
 
 impl ConnectionManagerWindow {
@@ -385,11 +387,20 @@ impl ConnectionManagerWindow {
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
         let conn_post_disconnect_hook_extra_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_mcp_actor_input = cx.new(|cx| InputState::new(window, cx).placeholder("agent-id"));
-        let conn_mcp_roles_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("reader, approver"));
-        let conn_mcp_policies_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("allow-read, approval-required"));
+        let conn_mcp_actor_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-mcp-actor").placeholder("Select trusted client"));
+        let conn_mcp_role_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-mcp-role").placeholder("No role"));
+        let conn_mcp_role_extra_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("additional role IDs (comma-separated, optional)")
+        });
+        let conn_mcp_policy_dropdown =
+            cx.new(|_cx| Dropdown::new("conn-mcp-policy").placeholder("No policy"));
+        let conn_mcp_policy_extra_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("additional policy IDs (comma-separated, optional)")
+        });
 
         let dropdown_subscription = cx.subscribe(
             &ssh_tunnel_dropdown,
@@ -497,9 +508,8 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
-            subscribe_input(cx, window, &conn_mcp_actor_input),
-            subscribe_input(cx, window, &conn_mcp_roles_input),
-            subscribe_input(cx, window, &conn_mcp_policies_input),
+            subscribe_input(cx, window, &conn_mcp_role_extra_input),
+            subscribe_input(cx, window, &conn_mcp_policy_extra_input),
         ];
 
         let focus_handle = cx.focus_handle();
@@ -609,9 +619,11 @@ impl ConnectionManagerWindow {
             conn_form_subscriptions: Vec::new(),
             conn_loading_settings: false,
             conn_mcp_enabled: false,
-            conn_mcp_actor_input,
-            conn_mcp_roles_input,
-            conn_mcp_policies_input,
+            conn_mcp_actor_dropdown,
+            conn_mcp_role_dropdown,
+            conn_mcp_role_extra_input,
+            conn_mcp_policy_dropdown,
+            conn_mcp_policy_extra_input,
         }
     }
 
@@ -672,21 +684,9 @@ impl ConnectionManagerWindow {
         let first_binding = profile
             .mcp_governance
             .as_ref()
-            .and_then(|governance| governance.policy_bindings.first());
+            .and_then(|governance| governance.policy_bindings.first().cloned());
 
-        if let Some(binding) = first_binding {
-            instance.conn_mcp_actor_input.update(cx, |input, cx| {
-                input.set_value(binding.actor_id.clone(), window, cx);
-            });
-
-            instance.conn_mcp_roles_input.update(cx, |input, cx| {
-                input.set_value(binding.role_ids.join(", "), window, cx);
-            });
-
-            instance.conn_mcp_policies_input.update(cx, |input, cx| {
-                input.set_value(binding.policy_ids.join(", "), window, cx);
-            });
-        }
+        instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
 
         instance.selected_proxy_id = profile.proxy_profile_id;
         instance.selected_auth_profile_id = profile.auth_profile_id;
@@ -812,6 +812,7 @@ impl ConnectionManagerWindow {
         self.reset_value_source_selectors(window, cx);
 
         self.load_settings_tab(None, None, None, window, cx);
+        self.load_mcp_dropdowns(None, window, cx);
         self.populate_auth_profile_dropdown(cx);
         self.refresh_auth_profile_sessions(cx);
         self.populate_access_method_dropdown(cx);
@@ -1299,6 +1300,116 @@ impl ConnectionManagerWindow {
                 .or_else(|| self.driver_inputs.get("database")),
             _ => None,
         }
+    }
+
+    /// Populate the MCP actor/role/policy dropdowns from the global governance state and
+    /// optionally pre-select the actor/role/policy from an existing policy binding.
+    fn load_mcp_dropdowns(
+        &mut self,
+        binding: Option<&dbflux_core::ConnectionMcpPolicyBinding>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let clients = self
+            .app_state
+            .read(cx)
+            .list_mcp_trusted_clients()
+            .unwrap_or_default();
+        let roles = self.app_state.read(cx).list_mcp_roles().unwrap_or_default();
+        let policies = self
+            .app_state
+            .read(cx)
+            .list_mcp_policies()
+            .unwrap_or_default();
+
+        let actor_items: Vec<crate::ui::components::dropdown::DropdownItem> = clients
+            .iter()
+            .map(|c| {
+                crate::ui::components::dropdown::DropdownItem::with_value(
+                    format!("{} ({})", c.name, c.id),
+                    c.id.clone(),
+                )
+            })
+            .collect();
+
+        let mut role_items = vec![crate::ui::components::dropdown::DropdownItem::with_value(
+            "No role", "",
+        )];
+        role_items.extend(roles.iter().map(|r| {
+            let label = dbflux_mcp::builtin_display_name(&r.id)
+                .map(|name| format!("{} (built-in)", name))
+                .unwrap_or_else(|| r.id.clone());
+            crate::ui::components::dropdown::DropdownItem::with_value(label, r.id.clone())
+        }));
+
+        let mut policy_items = vec![crate::ui::components::dropdown::DropdownItem::with_value(
+            "No policy",
+            "",
+        )];
+        policy_items.extend(policies.iter().map(|p| {
+            let label = dbflux_mcp::builtin_display_name(&p.id)
+                .map(|name| format!("{} (built-in)", name))
+                .unwrap_or_else(|| p.id.clone());
+            crate::ui::components::dropdown::DropdownItem::with_value(label, p.id.clone())
+        }));
+
+        let actor_index = binding.and_then(|b| {
+            actor_items
+                .iter()
+                .position(|item| item.value.as_ref() == b.actor_id.as_str())
+        });
+        let role_index = binding.and_then(|b| {
+            b.role_ids.first().and_then(|role_id| {
+                role_items
+                    .iter()
+                    .position(|item| item.value.as_ref() == role_id.as_str())
+            })
+        });
+        let role_extras = binding
+            .map(|b| {
+                b.role_ids
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let policy_index = binding.and_then(|b| {
+            b.policy_ids.first().and_then(|policy_id| {
+                policy_items
+                    .iter()
+                    .position(|item| item.value.as_ref() == policy_id.as_str())
+            })
+        });
+        let policy_extras = binding
+            .map(|b| {
+                b.policy_ids
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+
+        self.conn_mcp_actor_dropdown.update(cx, |d, cx| {
+            d.set_items(actor_items, cx);
+            d.set_selected_index(actor_index, cx);
+        });
+        self.conn_mcp_role_dropdown.update(cx, |d, cx| {
+            d.set_items(role_items, cx);
+            d.set_selected_index(role_index.or(Some(0)), cx);
+        });
+        self.conn_mcp_policy_dropdown.update(cx, |d, cx| {
+            d.set_items(policy_items, cx);
+            d.set_selected_index(policy_index.or(Some(0)), cx);
+        });
+
+        self.conn_mcp_role_extra_input
+            .update(cx, |i, cx| i.set_value(role_extras, window, cx));
+        self.conn_mcp_policy_extra_input
+            .update(cx, |i, cx| i.set_value(policy_extras, window, cx));
     }
 
     /// Initialize the Settings tab controls from the selected driver's defaults

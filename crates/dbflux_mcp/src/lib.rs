@@ -1,12 +1,17 @@
+pub mod built_ins;
 pub mod governance_service;
 pub mod handlers;
 pub mod runtime;
 pub mod server;
 pub mod tool_catalog;
 
+pub use built_ins::{
+    BUILTIN_ID_PREFIX, builtin_display_name, builtin_policies, builtin_roles, is_builtin,
+};
 pub use governance_service::{
     AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, GovernanceError,
-    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, TrustedClientDto,
+    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
+    ToolPolicyDto, TrustedClientDto,
 };
 pub use runtime::{McpRuntime, McpRuntimeEvent};
 pub use tool_catalog::{

@@ -8,6 +8,13 @@ DBFlux is an open-source database client written in Rust, built with GPUI (Zed's
 
 The long-term goal is to provide a fully open-source alternative to DBeaver, supporting both relational and non-relational databases.
 
+## Documentation
+
+- [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
+- [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
+- [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
+- [Lua Scripting](docs/LUA.md)
+
 ## Installation
 
 ### Linux

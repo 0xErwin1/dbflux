@@ -3,14 +3,16 @@ use dbflux_core::{
     AppConfig, AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks,
     ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey,
     EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, GovernanceSettings,
-    HistoryEntry, HookContext, HookPhase, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, SessionStore,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, TrustedClientConfig,
+    HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, RecentFilesStore, SavedQuery,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
+    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    ToolPolicyConfig, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_mcp::{
     AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
-    McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, TrustedClientDto,
+    McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
+    ToolPolicyDto, TrustedClientDto,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -29,6 +31,7 @@ pub struct AuthProfileCreated {
 }
 
 pub struct McpRuntimeEventRaised {
+    #[allow(dead_code)]
     pub event: McpRuntimeEvent,
 }
 
@@ -185,6 +188,21 @@ impl AppState {
                         issuer: client.issuer,
                         active: client.active,
                     });
+            }
+
+            for role in config.governance.roles {
+                let _ = self.mcp_runtime.upsert_role_mut(PolicyRoleDto {
+                    id: role.id,
+                    policy_ids: role.policy_ids,
+                });
+            }
+
+            for policy in config.governance.policies {
+                let _ = self.mcp_runtime.upsert_policy_mut(ToolPolicyDto {
+                    id: policy.id,
+                    allowed_tools: policy.allowed_tools,
+                    allowed_classes: policy.allowed_classes,
+                });
             }
         }
 
@@ -1443,6 +1461,7 @@ impl AppState {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn list_mcp_connection_policy_assignments(
         &self,
     ) -> Result<Vec<ConnectionPolicyAssignmentDto>, String> {
@@ -1462,6 +1481,7 @@ impl AppState {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn request_mcp_execution(
         &mut self,
         actor_id: String,
@@ -1527,6 +1547,77 @@ impl AppState {
         self.mcp_runtime.drain_events()
     }
 
+    pub fn list_mcp_roles(&self) -> Result<Vec<PolicyRoleDto>, String> {
+        let user_roles = dbflux_mcp::McpGovernanceService::list_roles(&self.mcp_runtime)
+            .map_err(|error| error.to_string())?;
+
+        let mut all = dbflux_mcp::builtin_roles();
+        all.extend(user_roles);
+        Ok(all)
+    }
+
+    pub fn upsert_mcp_role(&mut self, role: PolicyRoleDto) -> Result<(), String> {
+        if dbflux_mcp::is_builtin(&role.id) {
+            return Err("Built-in roles cannot be modified".to_string());
+        }
+
+        self.mcp_runtime
+            .upsert_role_mut(role)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn delete_mcp_role(&mut self, role_id: &str) -> Result<(), String> {
+        if dbflux_mcp::is_builtin(role_id) {
+            return Err("Built-in roles cannot be deleted".to_string());
+        }
+
+        self.mcp_runtime
+            .delete_role_mut(role_id)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn list_mcp_policies(&self) -> Result<Vec<ToolPolicyDto>, String> {
+        let user_policies = dbflux_mcp::McpGovernanceService::list_policies(&self.mcp_runtime)
+            .map_err(|error| error.to_string())?;
+
+        let mut all = dbflux_mcp::builtin_policies();
+        all.extend(user_policies);
+        Ok(all)
+    }
+
+    pub fn upsert_mcp_policy(&mut self, policy: ToolPolicyDto) -> Result<(), String> {
+        if dbflux_mcp::is_builtin(&policy.id) {
+            return Err("Built-in policies cannot be modified".to_string());
+        }
+
+        self.mcp_runtime
+            .upsert_policy_mut(policy)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    pub fn delete_mcp_policy(&mut self, policy_id: &str) -> Result<(), String> {
+        if dbflux_mcp::is_builtin(policy_id) {
+            return Err("Built-in policies cannot be deleted".to_string());
+        }
+
+        self.mcp_runtime
+            .delete_policy_mut(policy_id)
+            .map_err(|error| error.to_string())?;
+
+        self.persist_mcp_governance();
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn set_profile_mcp_governance(
         &mut self,
         profile_id: Uuid,
@@ -1548,6 +1639,7 @@ impl AppState {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn persist_mcp_governance(&self) {
         let trusted_clients = self
             .mcp_runtime
@@ -1562,6 +1654,29 @@ impl AppState {
             })
             .collect();
 
+        let roles = self
+            .mcp_runtime
+            .list_roles()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|role| PolicyRoleConfig {
+                id: role.id,
+                policy_ids: role.policy_ids,
+            })
+            .collect();
+
+        let policies = self
+            .mcp_runtime
+            .list_policies()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|policy| ToolPolicyConfig {
+                id: policy.id,
+                allowed_tools: policy.allowed_tools,
+                allowed_classes: policy.allowed_classes,
+            })
+            .collect();
+
         let mut config = AppConfigStore::new()
             .and_then(|store| store.load())
             .unwrap_or_else(|_| AppConfig::default());
@@ -1569,6 +1684,8 @@ impl AppState {
         config.governance = GovernanceSettings {
             mcp_enabled_by_default: false,
             trusted_clients,
+            roles,
+            policies,
         };
 
         if let Ok(store) = AppConfigStore::new() {

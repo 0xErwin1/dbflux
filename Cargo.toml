@@ -20,6 +20,7 @@ members = [
     "crates/dbflux_aws",
     "crates/dbflux_ssm",
     "crates/dbflux_mcp",
+    "crates/dbflux_mcp_server",
     "crates/dbflux_policy",
     "crates/dbflux_approval",
     "crates/dbflux_audit",

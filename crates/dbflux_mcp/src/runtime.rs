@@ -3,18 +3,22 @@ use std::collections::HashMap;
 use dbflux_approval::{ApprovalService, ExecutionPlan, InMemoryPendingExecutionStore};
 use dbflux_audit::AuditService;
 use dbflux_policy::{
-    ConnectionPolicyAssignment, ExecutionClassification, TrustedClient, TrustedClientRegistry,
+    ConnectionPolicyAssignment, ExecutionClassification, PolicyRole, ToolPolicy,
+    TrustedClientRegistry,
 };
 
 use crate::governance_service::{
     AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, GovernanceError,
-    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, TrustedClientDto,
+    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
+    ToolPolicyDto, TrustedClientDto,
 };
 use crate::handlers::{approval as approval_handler, audit as audit_handler};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpRuntimeEvent {
     TrustedClientsUpdated,
+    RolesUpdated,
+    PoliciesUpdated,
     ConnectionPolicyUpdated { connection_id: String },
     PendingExecutionsUpdated,
     AuditAppended,
@@ -22,6 +26,8 @@ pub enum McpRuntimeEvent {
 
 pub struct McpRuntime {
     trusted_clients: HashMap<String, TrustedClientDto>,
+    roles: HashMap<String, PolicyRoleDto>,
+    policies: HashMap<String, ToolPolicyDto>,
     connection_policy_assignments: HashMap<String, ConnectionPolicyAssignmentDto>,
     approval_service: ApprovalService,
     audit_service: AuditService,
@@ -32,6 +38,8 @@ impl McpRuntime {
     pub fn new(audit_service: AuditService) -> Self {
         Self {
             trusted_clients: HashMap::new(),
+            roles: HashMap::new(),
+            policies: HashMap::new(),
             connection_policy_assignments: HashMap::new(),
             approval_service: ApprovalService::new(InMemoryPendingExecutionStore::default()),
             audit_service,
@@ -44,7 +52,7 @@ impl McpRuntime {
             .trusted_clients
             .values()
             .cloned()
-            .map(|client| TrustedClient {
+            .map(|client| dbflux_policy::TrustedClient {
                 id: client.id,
                 name: client.name,
                 issuer: client.issuer,
@@ -65,6 +73,20 @@ impl McpRuntime {
 
     pub fn audit_service(&self) -> &AuditService {
         &self.audit_service
+    }
+
+    pub fn roles_for_engine(&self) -> Vec<PolicyRole> {
+        self.roles
+            .values()
+            .map(|dto| PolicyRole::from(dto.clone()))
+            .collect()
+    }
+
+    pub fn policies_for_engine(&self) -> Vec<ToolPolicy> {
+        self.policies
+            .values()
+            .filter_map(|dto| ToolPolicy::try_from(dto.clone()).ok())
+            .collect()
     }
 }
 
@@ -88,6 +110,18 @@ impl McpGovernanceService for McpRuntime {
         Err(GovernanceError::Operation(
             "delete_trusted_client requires mutable runtime access".to_string(),
         ))
+    }
+
+    fn list_roles(&self) -> Result<Vec<PolicyRoleDto>, GovernanceError> {
+        let mut roles: Vec<_> = self.roles.values().cloned().collect();
+        roles.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(roles)
+    }
+
+    fn list_policies(&self) -> Result<Vec<ToolPolicyDto>, GovernanceError> {
+        let mut policies: Vec<_> = self.policies.values().cloned().collect();
+        policies.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(policies)
     }
 
     fn list_connection_policy_assignments(
@@ -224,6 +258,58 @@ impl McpRuntime {
         }
 
         self.push_event(McpRuntimeEvent::TrustedClientsUpdated);
+        Ok(())
+    }
+
+    pub fn upsert_role_mut(
+        &mut self,
+        role: PolicyRoleDto,
+    ) -> Result<PolicyRoleDto, GovernanceError> {
+        if role.id.trim().is_empty() {
+            return Err(GovernanceError::Validation(
+                "role id must not be empty".to_string(),
+            ));
+        }
+
+        self.roles.insert(role.id.clone(), role.clone());
+        self.push_event(McpRuntimeEvent::RolesUpdated);
+        Ok(role)
+    }
+
+    pub fn delete_role_mut(&mut self, role_id: &str) -> Result<(), GovernanceError> {
+        if self.roles.remove(role_id).is_none() {
+            return Err(GovernanceError::NotFound {
+                resource: format!("role {role_id}"),
+            });
+        }
+
+        self.push_event(McpRuntimeEvent::RolesUpdated);
+        Ok(())
+    }
+
+    pub fn upsert_policy_mut(
+        &mut self,
+        policy: ToolPolicyDto,
+    ) -> Result<ToolPolicyDto, GovernanceError> {
+        if policy.id.trim().is_empty() {
+            return Err(GovernanceError::Validation(
+                "policy id must not be empty".to_string(),
+            ));
+        }
+
+        self.policies.insert(policy.id.clone(), policy.clone());
+        self.push_event(McpRuntimeEvent::PoliciesUpdated);
+        Ok(policy)
+    }
+
+    pub fn delete_policy_mut(&mut self, policy_id: &str) -> Result<(), GovernanceError> {
+        if self.policies.remove(policy_id).is_none() {
+            return Err(GovernanceError::NotFound {
+                resource: format!("policy {policy_id}"),
+            });
+        }
+
+        self.push_event(McpRuntimeEvent::PoliciesUpdated);
         Ok(())
     }
 
