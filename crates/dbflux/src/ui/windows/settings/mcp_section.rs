@@ -5,13 +5,13 @@ use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
 use dbflux_mcp::TrustedClientDto;
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
 
 pub(super) struct McpSection {
     app_state: Entity<AppState>,

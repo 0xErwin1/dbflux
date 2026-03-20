@@ -5,11 +5,11 @@ use dbflux_mcp::{
 };
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 
 pub struct McpApprovalsView {
     app_state: Entity<AppState>,
