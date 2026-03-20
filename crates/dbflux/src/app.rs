@@ -1739,10 +1739,19 @@ impl EventEmitter<McpRuntimeEventRaised> for AppState {}
 mod tests {
     use super::AppState;
     use dbflux_core::{
-        AuthProfile, CancelToken, DbDriver, DbKind, FormValues, GeneralSettings,
-        RefreshPolicySetting,
+        AuthProfile, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, DbDriver,
+        DbKind, FormValues, GeneralSettings, RefreshPolicySetting,
     };
-    use dbflux_mcp::{McpRuntimeEvent, TrustedClientDto};
+    use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
+    use dbflux_mcp::server::request_context::RequestIdentity;
+    use dbflux_mcp::{
+        AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpRuntimeEvent,
+        TrustedClientDto,
+    };
+    use dbflux_policy::{
+        ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
+        ToolPolicy,
+    };
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2086,6 +2095,192 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
         );
+    }
+
+    #[test]
+    fn mcp_ui_workflow_drives_enforcement_and_audit_export() {
+        let mut state = test_state(GeneralSettings::default());
+
+        let mut profile_a = fake_profile(&state);
+        profile_a.name = "Connection A".to_string();
+
+        let mut profile_b = fake_profile(&state);
+        profile_b.name = "Connection B".to_string();
+
+        state.add_profile_in_folder(profile_a.clone(), None);
+        state.add_profile_in_folder(profile_b.clone(), None);
+
+        state
+            .set_profile_mcp_governance(
+                profile_a.id,
+                Some(ConnectionMcpGovernance {
+                    enabled: true,
+                    policy_bindings: vec![ConnectionMcpPolicyBinding {
+                        actor_id: "agent-a".to_string(),
+                        role_ids: Vec::new(),
+                        policy_ids: vec!["policy-read".to_string()],
+                    }],
+                }),
+            )
+            .expect("connection A governance should be configurable");
+
+        state
+            .set_profile_mcp_governance(
+                profile_b.id,
+                Some(ConnectionMcpGovernance {
+                    enabled: false,
+                    policy_bindings: Vec::new(),
+                }),
+            )
+            .expect("connection B governance should be configurable");
+
+        state
+            .upsert_mcp_trusted_client(TrustedClientDto {
+                id: "agent-a".to_string(),
+                name: "Agent A".to_string(),
+                issuer: None,
+                active: true,
+            })
+            .expect("trusted client should save");
+
+        state
+            .save_mcp_connection_policy_assignment(ConnectionPolicyAssignmentDto {
+                connection_id: profile_a.id.to_string(),
+                assignments: vec![ConnectionPolicyAssignment {
+                    actor_id: "agent-a".to_string(),
+                    scope: PolicyBindingScope {
+                        connection_id: profile_a.id.to_string(),
+                    },
+                    role_ids: Vec::new(),
+                    policy_ids: vec!["policy-read".to_string()],
+                }],
+            })
+            .expect("connection policy assignment should save");
+
+        let policy_engine = PolicyEngine::new(
+            state.mcp_runtime.policy_assignments_for_engine(),
+            Vec::new(),
+            vec![ToolPolicy {
+                id: "policy-read".to_string(),
+                allowed_tools: vec!["read_query".to_string()],
+                allowed_classes: vec![ExecutionClassification::Read],
+            }],
+        );
+
+        let trusted_registry = state.mcp_runtime.trusted_client_registry();
+
+        let allowed = authorize_request(
+            &trusted_registry,
+            &policy_engine,
+            state.mcp_runtime.audit_service(),
+            &AuthorizationRequest {
+                identity: RequestIdentity {
+                    client_id: "agent-a".to_string(),
+                    issuer: None,
+                },
+                connection_id: profile_a.id.to_string(),
+                tool_id: "read_query".to_string(),
+                classification: ExecutionClassification::Read,
+                mcp_enabled_for_connection: true,
+            },
+            100,
+        )
+        .expect("authorized request should complete");
+
+        assert!(allowed.allowed);
+
+        let disabled = authorize_request(
+            &trusted_registry,
+            &policy_engine,
+            state.mcp_runtime.audit_service(),
+            &AuthorizationRequest {
+                identity: RequestIdentity {
+                    client_id: "agent-a".to_string(),
+                    issuer: None,
+                },
+                connection_id: profile_b.id.to_string(),
+                tool_id: "read_query".to_string(),
+                classification: ExecutionClassification::Read,
+                mcp_enabled_for_connection: false,
+            },
+            101,
+        )
+        .expect("connection gate denial should complete");
+
+        assert!(!disabled.allowed);
+        assert_eq!(disabled.deny_code, Some("connection_not_mcp_enabled"));
+
+        let pending = state.request_mcp_execution(
+            "agent-a".to_string(),
+            profile_a.id.to_string(),
+            "request_execution".to_string(),
+            ExecutionClassification::Write,
+            serde_json::json!({"query": "UPDATE users SET active = true"}),
+        );
+
+        let approval_audit = state
+            .approve_mcp_pending_execution(&pending.id)
+            .expect("approval should append audit event");
+        assert_eq!(approval_audit.tool_id, "approve_execution");
+
+        let filtered = state
+            .query_mcp_audit_entries(&AuditQuery {
+                actor_id: Some("agent-a".to_string()),
+                tool_id: None,
+                decision: None,
+                start_epoch_ms: None,
+                end_epoch_ms: None,
+                limit: None,
+            })
+            .expect("audit query should succeed");
+
+        assert!(!filtered.is_empty());
+
+        let exported = state
+            .export_mcp_audit_entries(
+                &AuditQuery {
+                    actor_id: Some("agent-a".to_string()),
+                    tool_id: None,
+                    decision: None,
+                    start_epoch_ms: None,
+                    end_epoch_ms: None,
+                    limit: None,
+                },
+                AuditExportFormat::Json,
+            )
+            .expect("audit export should succeed");
+
+        assert!(exported.contains("agent-a"));
+
+        state
+            .upsert_mcp_trusted_client(TrustedClientDto {
+                id: "agent-a".to_string(),
+                name: "Agent A".to_string(),
+                issuer: None,
+                active: false,
+            })
+            .expect("trusted client lifecycle toggle should persist");
+
+        let denied_untrusted = authorize_request(
+            &state.mcp_runtime.trusted_client_registry(),
+            &policy_engine,
+            state.mcp_runtime.audit_service(),
+            &AuthorizationRequest {
+                identity: RequestIdentity {
+                    client_id: "agent-a".to_string(),
+                    issuer: None,
+                },
+                connection_id: profile_a.id.to_string(),
+                tool_id: "read_query".to_string(),
+                classification: ExecutionClassification::Read,
+                mcp_enabled_for_connection: true,
+            },
+            102,
+        )
+        .expect("untrusted denial should complete");
+
+        assert!(!denied_untrusted.allowed);
+        assert_eq!(denied_untrusted.deny_code, Some("untrusted_client"));
     }
 
     #[cfg(feature = "dynamodb")]
