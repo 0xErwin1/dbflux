@@ -10,7 +10,7 @@ impl Workspace {
         on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let chevron = if is_expanded {
             AppIcon::ChevronDown
         } else {
@@ -107,7 +107,7 @@ impl Render for Workspace {
         let tasks_expanded = self.tasks_state.is_expanded();
         let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
 
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let bg_color = theme.background;
         let muted_fg = theme.muted_foreground;
         let header_size = px(25.0);
@@ -568,6 +568,81 @@ impl Render for Workspace {
             )
             // Shutdown overlay (rendered above everything during shutdown)
             .child(self.shutdown_overlay.clone())
+            .when_some(self.active_governance_panel, |root, panel| {
+                let close_entity = cx.entity().clone();
+                let title = match panel {
+                    super::GovernancePanel::Approvals => "MCP Approvals",
+                    super::GovernancePanel::Audit => "MCP Audit",
+                };
+
+                let content = match panel {
+                    super::GovernancePanel::Approvals => {
+                        self.mcp_approvals_view.clone().into_any_element()
+                    }
+                    super::GovernancePanel::Audit => self.mcp_audit_view.clone().into_any_element(),
+                };
+
+                root.child(
+                    div()
+                        .id("governance-overlay")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(
+                            div()
+                                .w(px(1080.0))
+                                .h(px(680.0))
+                                .bg(theme.sidebar)
+                                .border_1()
+                                .border_color(theme.border)
+                                .rounded(Radii::MD)
+                                .overflow_hidden()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .h(px(40.0))
+                                        .px(Spacing::MD)
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .border_b_1()
+                                        .border_color(theme.border)
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .px(Spacing::SM)
+                                                .py(Spacing::XS)
+                                                .rounded(Radii::SM)
+                                                .hover(|div| div.bg(theme.secondary))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |_, _, _, cx| {
+                                                        close_entity.update(cx, |this, cx| {
+                                                            this.active_governance_panel = None;
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                                )
+                                                .child("Close"),
+                                        ),
+                                )
+                                .child(div().flex_1().min_h_0().child(content)),
+                        ),
+                )
+            })
             // Context menu rendered at workspace level for proper positioning
             .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
                 use crate::ui::components::context_menu as ctx;

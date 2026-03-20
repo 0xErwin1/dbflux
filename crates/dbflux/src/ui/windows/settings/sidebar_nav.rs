@@ -9,6 +9,7 @@ impl SettingsCoordinator {
     pub(super) fn build_sidebar_tree() -> TreeNav {
         let nodes = vec![
             TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
+            TreeNavNode::leaf("mcp", "MCP Governance", Some(AppIcon::Lock)),
             TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
             TreeNavNode::group(
                 "security",
@@ -57,6 +58,7 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
+            "mcp" => Some(SettingsSectionId::Mcp),
             "keybindings" => Some(SettingsSectionId::Keybindings),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
@@ -72,6 +74,7 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
+            SettingsSectionId::Mcp => "mcp",
             SettingsSectionId::Keybindings => "keybindings",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
@@ -105,6 +108,10 @@ mod tests {
             SettingsCoordinator::section_for_tree_id("proxies"),
             Some(SettingsSectionId::Proxies)
         );
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("mcp"),
+            Some(SettingsSectionId::Mcp)
+        );
     }
 
     #[test]
@@ -119,6 +126,7 @@ mod tests {
     fn tree_id_roundtrip_all_sections() {
         for section in [
             SettingsSectionId::General,
+            SettingsSectionId::Mcp,
             SettingsSectionId::Keybindings,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,

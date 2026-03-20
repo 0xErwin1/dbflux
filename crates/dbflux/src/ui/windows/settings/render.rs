@@ -19,6 +19,7 @@ impl SettingsCoordinator {
     fn section_display_name(section: super::SettingsSectionId) -> &'static str {
         match section {
             super::SettingsSectionId::General => "General",
+            super::SettingsSectionId::Mcp => "MCP Governance",
             super::SettingsSectionId::Keybindings => "Keybindings",
             super::SettingsSectionId::Proxies => "Proxy",
             super::SettingsSectionId::SshTunnels => "SSH Tunnels",

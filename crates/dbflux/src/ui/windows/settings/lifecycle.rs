@@ -66,6 +66,16 @@ impl SettingsCoordinator {
                 ),
                 vec![],
             ),
+            SettingsSectionId::Mcp => {
+                let section = cx.new(|cx| McpSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Mcp(section), vec![focus_sub])
+            }
             SettingsSectionId::Proxies => {
                 let section = cx.new(|cx| ProxiesSection::new(app_state, window, cx));
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {

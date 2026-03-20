@@ -218,6 +218,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Access if !self.uses_file_form() => self.render_access_tab(cx),
             ActiveTab::Access => self.render_main_tab(cx),
             ActiveTab::Settings => self.render_settings_tab(cx),
+            ActiveTab::Mcp => self.render_mcp_tab(cx),
         };
 
         let theme = cx.theme();

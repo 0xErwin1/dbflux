@@ -10,7 +10,7 @@ use dbflux_core::{
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_mcp::{
     AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
-    McpRuntime, McpRuntimeEvent, PendingExecutionSummary, TrustedClientDto,
+    McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, TrustedClientDto,
 };
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -1479,6 +1479,19 @@ impl AppState {
         );
 
         self.mcp_runtime.request_execution_mut(plan)
+    }
+
+    pub fn list_mcp_pending_executions(&self) -> Result<Vec<PendingExecutionSummary>, String> {
+        dbflux_mcp::McpGovernanceService::list_pending_executions(&self.mcp_runtime)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn get_mcp_pending_execution(
+        &self,
+        pending_id: &str,
+    ) -> Result<PendingExecutionDetail, String> {
+        dbflux_mcp::McpGovernanceService::get_pending_execution(&self.mcp_runtime, pending_id)
+            .map_err(|error| error.to_string())
     }
 
     pub fn approve_mcp_pending_execution(

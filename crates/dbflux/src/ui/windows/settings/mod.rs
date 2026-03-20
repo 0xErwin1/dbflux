@@ -12,6 +12,7 @@ mod keybindings;
 mod keybindings_section;
 mod layout;
 mod lifecycle;
+mod mcp_section;
 mod proxies;
 mod proxies_section;
 mod render;
@@ -32,6 +33,7 @@ use gpui::prelude::*;
 use gpui::*;
 use hooks_section::HooksSection;
 use keybindings_section::KeybindingsSection;
+use mcp_section::McpSection;
 use proxies_section::ProxiesSection;
 use services_section::ServicesSection;
 use ssh_tunnels_section::SshTunnelsSection;
@@ -56,6 +58,7 @@ enum ActiveSettingsSection {
     General(Entity<GeneralSection>),
     Hooks(Entity<HooksSection>),
     Keybindings(Entity<KeybindingsSection>),
+    Mcp(Entity<McpSection>),
     Proxies(Entity<ProxiesSection>),
     Services(Entity<ServicesSection>),
     SshTunnels(Entity<SshTunnelsSection>),
@@ -70,6 +73,7 @@ impl ActiveSettingsSection {
             Self::General(section) => AnyView::from(section.clone()),
             Self::Hooks(section) => AnyView::from(section.clone()),
             Self::Keybindings(section) => AnyView::from(section.clone()),
+            Self::Mcp(section) => AnyView::from(section.clone()),
             Self::Proxies(section) => AnyView::from(section.clone()),
             Self::Services(section) => AnyView::from(section.clone()),
             Self::SshTunnels(section) => AnyView::from(section.clone()),
@@ -113,6 +117,11 @@ impl ActiveSettingsSection {
                     section.handle_key_event(event, window, cx)
                 });
             }
+            Self::Mcp(section) => {
+                section.update(cx, |section, cx| {
+                    section.handle_key_event(event, window, cx)
+                });
+            }
             Self::Proxies(section) => {
                 section.update(cx, |section, cx| {
                     section.handle_key_event(event, window, cx)
@@ -151,6 +160,9 @@ impl ActiveSettingsSection {
             Self::Keybindings(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
+            Self::Mcp(section) => {
+                section.update(cx, |section, cx| section.focus_in(window, cx));
+            }
             Self::Proxies(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
@@ -183,6 +195,9 @@ impl ActiveSettingsSection {
             Self::Keybindings(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
+            Self::Mcp(section) => {
+                section.update(cx, |section, cx| section.focus_out(window, cx));
+            }
             Self::Proxies(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
@@ -203,6 +218,7 @@ impl ActiveSettingsSection {
             Self::General(section) => section.read(cx).is_dirty(cx),
             Self::Hooks(section) => section.read(cx).is_dirty(cx),
             Self::Keybindings(section) => section.read(cx).is_dirty(cx),
+            Self::Mcp(section) => section.read(cx).is_dirty(cx),
             Self::Proxies(section) => section.read(cx).is_dirty(cx),
             Self::Services(section) => section.read(cx).is_dirty(cx),
             Self::SshTunnels(section) => section.read(cx).is_dirty(cx),

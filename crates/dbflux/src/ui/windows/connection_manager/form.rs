@@ -4,7 +4,8 @@ use crate::ui::windows::ssh_shared;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
 use dbflux_core::{
-    CancelToken, ConnectionOverrides, ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig,
+    CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionOverrides,
+    ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig,
 };
 use gpui::*;
 use log::info;
@@ -12,6 +13,44 @@ use log::info;
 use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 
 impl ConnectionManagerWindow {
+    fn parse_csv_ids(raw: &str) -> Vec<String> {
+        raw.split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    fn collect_mcp_governance(&self, cx: &Context<Self>) -> Option<ConnectionMcpGovernance> {
+        if !self.conn_mcp_enabled {
+            return None;
+        }
+
+        let actor_id = self
+            .conn_mcp_actor_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let role_ids = Self::parse_csv_ids(&self.conn_mcp_roles_input.read(cx).value());
+        let policy_ids = Self::parse_csv_ids(&self.conn_mcp_policies_input.read(cx).value());
+
+        let policy_bindings = if actor_id.is_empty() {
+            Vec::new()
+        } else {
+            vec![ConnectionMcpPolicyBinding {
+                actor_id,
+                role_ids,
+                policy_ids,
+            }]
+        };
+
+        Some(ConnectionMcpGovernance {
+            enabled: true,
+            policy_bindings,
+        })
+    }
+
     pub(super) fn validate_form(&mut self, require_name: bool, cx: &mut Context<Self>) -> bool {
         self.validation_errors.clear();
 
@@ -295,6 +334,7 @@ impl ConnectionManagerWindow {
         profile.settings_overrides = self.collect_connection_overrides(cx);
         profile.connection_settings = self.collect_connection_settings(cx);
         profile.hook_bindings = self.collect_hook_bindings(cx);
+        profile.mcp_governance = self.collect_mcp_governance(cx);
 
         // Collect access kind — update SSM fields from inputs if SSM is selected
         let access_kind = if self.is_ssm_selected() {
@@ -343,6 +383,8 @@ impl ConnectionManagerWindow {
         let Some(mut profile) = self.build_profile(cx) else {
             return;
         };
+
+        let saved_profile_id = profile.id;
 
         let mut password = self.input_password.read(cx).value().to_string();
         let uri_password = profile.config.strip_uri_password();
@@ -415,14 +457,45 @@ impl ConnectionManagerWindow {
                 state.add_profile_in_folder(profile, self.target_folder_id);
             }
 
+            if let Some(governance) = state
+                .profiles()
+                .iter()
+                .find(|item| item.id == saved_profile_id)
+                .and_then(|item| item.mcp_governance.clone())
+            {
+                let assignments = governance
+                    .policy_bindings
+                    .into_iter()
+                    .map(|binding| dbflux_policy::ConnectionPolicyAssignment {
+                        actor_id: binding.actor_id,
+                        scope: dbflux_policy::PolicyBindingScope {
+                            connection_id: saved_profile_id.to_string(),
+                        },
+                        role_ids: binding.role_ids,
+                        policy_ids: binding.policy_ids,
+                    })
+                    .collect();
+
+                let _ = state.save_mcp_connection_policy_assignment(
+                    dbflux_mcp::ConnectionPolicyAssignmentDto {
+                        connection_id: saved_profile_id.to_string(),
+                        assignments,
+                    },
+                );
+            } else {
+                let _ = state.save_mcp_connection_policy_assignment(
+                    dbflux_mcp::ConnectionPolicyAssignmentDto {
+                        connection_id: saved_profile_id.to_string(),
+                        assignments: Vec::new(),
+                    },
+                );
+            }
+
             state.persist_mcp_governance();
 
             cx.emit(crate::app::McpRuntimeEventRaised {
                 event: dbflux_mcp::McpRuntimeEvent::ConnectionPolicyUpdated {
-                    connection_id: self
-                        .editing_profile_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_else(|| "new-profile".to_string()),
+                    connection_id: saved_profile_id.to_string(),
                 },
             });
 
