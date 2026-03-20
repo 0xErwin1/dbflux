@@ -370,3 +370,102 @@ fn now_epoch_ms() -> i64 {
 
     duration.as_millis() as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use dbflux_policy::ConnectionPolicyAssignment;
+
+    use crate::{ConnectionPolicyAssignmentDto, McpGovernanceService, TrustedClientDto};
+
+    use super::{GovernanceError, McpRuntime, McpRuntimeEvent};
+
+    fn runtime_for_tests(file_name: &str) -> McpRuntime {
+        let path = dbflux_audit::temp_sqlite_path(file_name);
+        let _ = std::fs::remove_file(&path);
+        let audit = dbflux_audit::AuditService::new_sqlite(&path)
+            .expect("audit service should initialize for runtime tests");
+
+        McpRuntime::new(audit)
+    }
+
+    #[test]
+    fn trait_mutating_methods_report_sanctioned_mutation_path() {
+        let runtime = runtime_for_tests("dbflux-mcp-runtime-trait-mutations.sqlite");
+
+        let upsert_error = runtime
+            .upsert_trusted_client(TrustedClientDto {
+                id: "agent-a".to_string(),
+                name: "Agent A".to_string(),
+                issuer: None,
+                active: true,
+            })
+            .expect_err("trait upsert path should be rejected");
+
+        let save_policy_error = runtime
+            .save_connection_policy_assignment(ConnectionPolicyAssignmentDto {
+                connection_id: "conn-a".to_string(),
+                assignments: vec![ConnectionPolicyAssignment {
+                    actor_id: "agent-a".to_string(),
+                    scope: dbflux_policy::PolicyBindingScope {
+                        connection_id: "conn-a".to_string(),
+                    },
+                    role_ids: Vec::new(),
+                    policy_ids: vec!["policy-a".to_string()],
+                }],
+            })
+            .expect_err("trait save policy path should be rejected");
+
+        assert!(matches!(upsert_error, GovernanceError::Operation(_)));
+        assert!(matches!(save_policy_error, GovernanceError::Operation(_)));
+    }
+
+    #[test]
+    fn mutable_runtime_methods_apply_changes_and_emit_events() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-mutable-mutations.sqlite");
+
+        runtime
+            .upsert_trusted_client_mut(TrustedClientDto {
+                id: "agent-a".to_string(),
+                name: "Agent A".to_string(),
+                issuer: None,
+                active: true,
+            })
+            .expect("mutable trusted client upsert should succeed");
+
+        runtime
+            .save_connection_policy_assignment_mut(ConnectionPolicyAssignmentDto {
+                connection_id: "conn-a".to_string(),
+                assignments: vec![ConnectionPolicyAssignment {
+                    actor_id: "agent-a".to_string(),
+                    scope: dbflux_policy::PolicyBindingScope {
+                        connection_id: "conn-a".to_string(),
+                    },
+                    role_ids: Vec::new(),
+                    policy_ids: vec!["policy-a".to_string()],
+                }],
+            })
+            .expect("mutable policy assignment save should succeed");
+
+        let clients = runtime
+            .list_trusted_clients()
+            .expect("trusted clients should be listable");
+        assert_eq!(clients.len(), 1);
+
+        let assignments = runtime
+            .list_connection_policy_assignments()
+            .expect("policy assignments should be listable");
+        assert_eq!(assignments.len(), 1);
+
+        let events = runtime.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpRuntimeEvent::ConnectionPolicyUpdated { connection_id }
+            if connection_id == "conn-a"
+        )));
+    }
+}
