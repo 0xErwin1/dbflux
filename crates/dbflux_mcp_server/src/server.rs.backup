@@ -1,0 +1,571 @@
+//! MCP server implementation using rmcp SDK.
+
+use rmcp::{
+    tool, tool_router, tool_handler,
+    ServerHandler,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::*,
+    schemars::JsonSchema,
+};
+use serde::Deserialize;
+use std::sync::Arc;
+
+use crate::state::ServerState;
+use crate::governance::GovernanceMiddleware;
+use crate::error_messages;
+
+/// Main DBFlux MCP Server
+#[derive(Clone)]
+pub struct DbFluxServer {
+    state: ServerState,
+    governance: GovernanceMiddleware,
+    tool_router: ToolRouter<DbFluxServer>,
+}
+
+// ===== Parameter Schemas =====
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ConnectParams {
+    #[schemars(description = "Connection ID from DBFlux configuration")]
+    pub connection_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DisconnectParams {
+    #[schemars(description = "Connection ID to disconnect")]
+    pub connection_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetConnectionInfoParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExecuteQueryParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "SQL query or database command to execute")]
+    pub sql: String,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+    
+    #[schemars(description = "Maximum number of rows to return")]
+    pub limit: Option<u32>,
+    
+    #[schemars(description = "Number of rows to skip")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainQueryParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "SQL query to explain (optional, requires table if not provided)")]
+    pub sql: Option<String>,
+    
+    #[schemars(description = "Table name to explain (optional, requires sql if not provided)")]
+    pub table: Option<String>,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PreviewMutationParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "SQL mutation query to preview (INSERT, UPDATE, DELETE, etc.)")]
+    pub sql: String,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListTablesParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "Optional database/schema filter")]
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DescribeTableParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "Table name")]
+    pub table: String,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+}
+
+// ===== Tool Router Implementation =====
+
+#[tool_router]
+impl DbFluxServer {
+    pub fn new(state: ServerState) -> Self {
+        let governance = GovernanceMiddleware::new(state.clone());
+        Self {
+            state,
+            governance,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    // === Connection Management Tools ===
+    
+    #[tool(description = "List all available database connections configured in DBFlux")]
+    async fn list_connections(&self) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        self.governance.authorize_and_execute(
+            "list_connections",
+            None,
+            ExecutionClassification::Metadata,
+            || async {
+                let profile_manager = self.state.profile_manager.read().await;
+                
+                let connections: Vec<serde_json::Value> = profile_manager
+                    .profiles
+                    .iter()
+                    .map(|profile| {
+                        serde_json::json!({
+                            "id": profile.id.to_string(),
+                            "name": profile.name,
+                            "driver_id": profile.driver_id(),
+                            "kind": format!("{:?}", profile.kind()),
+                            "mcp_enabled": profile.mcp_governance
+                                .as_ref()
+                                .map(|g| g.enabled)
+                                .unwrap_or(self.state.mcp_enabled_by_default),
+                        })
+                    })
+                    .collect();
+
+                let response = serde_json::json!({ "connections": connections });
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&response).unwrap())
+                ]))
+            },
+        ).await
+    }
+
+    #[tool(description = "Connect to a database (establishes a connection if not already cached)")]
+    async fn connect(
+        &self,
+        Parameters(params): Parameters<ConnectParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "connect",
+            Some(&connection_id),
+            ExecutionClassification::Metadata,
+            || async {
+                let connection = self.get_or_connect(&connection_id).await?;
+                let metadata = connection.metadata();
+                
+                let response = serde_json::json!({
+                    "connection_id": connection_id,
+                    "status": "connected",
+                    "driver_name": metadata.display_name,
+                    "category": format!("{:?}", metadata.category),
+                });
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&response).unwrap())
+                ]))
+            },
+        ).await
+    }
+
+    #[tool(description = "Disconnect from a database (removes cached connection)")]
+    async fn disconnect(
+        &self,
+        Parameters(params): Parameters<DisconnectParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "disconnect",
+            Some(&connection_id),
+            ExecutionClassification::Metadata,
+            || async {
+                let mut cache = self.state.connection_cache.write().await;
+                
+                if cache.get(&connection_id).is_none() {
+                    return Err(ErrorData::new(
+                        ErrorCode::INVALID_REQUEST,
+                        format!("Connection '{}' is not currently connected", connection_id),
+                        None,
+                    ));
+                }
+                
+                // Remove from cache by inserting a disconnected placeholder
+                // (This is a workaround; ideally we'd have a remove() method)
+                cache.insert(connection_id.clone(), Arc::new(DisconnectedPlaceholder));
+                
+                let response = serde_json::json!({
+                    "connection_id": connection_id,
+                    "status": "disconnected",
+                });
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&response).unwrap())
+                ]))
+            },
+        ).await
+    }
+
+    #[tool(description = "Get detailed information about a connection including metadata and capabilities")]
+    async fn get_connection_info(
+        &self,
+        Parameters(params): Parameters<GetConnectionInfoParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "get_connection_info",
+            Some(&connection_id),
+            ExecutionClassification::Metadata,
+            || async {
+                let profile_uuid = connection_id
+                    .parse::<uuid::Uuid>()
+                    .map_err(|_| ErrorData::new(
+                        ErrorCode::INVALID_REQUEST,
+                        error_messages::invalid_connection_id(&connection_id),
+                        None,
+                    ))?;
+
+                let profile_manager = self.state.profile_manager.read().await;
+                let profile = profile_manager
+                    .find_by_id(profile_uuid)
+                    .ok_or_else(|| ErrorData::new(
+                        ErrorCode::INVALID_REQUEST,
+                        error_messages::connection_not_found(&connection_id),
+                        None,
+                    ))?;
+
+                let profile_info = serde_json::json!({
+                    "id": profile.id.to_string(),
+                    "name": profile.name,
+                    "driver_id": profile.driver_id(),
+                    "kind": format!("{:?}", profile.kind()),
+                    "mcp_enabled": profile.mcp_governance
+                        .as_ref()
+                        .map(|g| g.enabled)
+                        .unwrap_or(self.state.mcp_enabled_by_default),
+                });
+
+                let connection_metadata = match self.get_or_connect(&connection_id).await {
+                    Ok(connection) => {
+                        let metadata = connection.metadata();
+                        Some(serde_json::json!({
+                            "driver_name": metadata.display_name,
+                            "category": format!("{:?}", metadata.category),
+                            "capabilities": format!("{:?}", metadata.capabilities),
+                            "query_language": format!("{:?}", metadata.query_language),
+                        }))
+                    }
+                    Err(_) => None,
+                };
+
+                let response = serde_json::json!({
+                    "connection_id": connection_id,
+                    "profile": profile_info,
+                    "metadata": connection_metadata,
+                });
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&response).unwrap())
+                ]))
+            },
+        ).await
+    }
+
+    // === Query Tools ===
+    
+    #[tool(description = "Execute a database query (SELECT, INSERT, UPDATE, DELETE, etc.)")]
+    async fn execute_query(
+        &self,
+        Parameters(params): Parameters<ExecuteQueryParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let classification = self.classify_query(&params.sql);
+        
+        self.governance.authorize_and_execute(
+            "execute_query",
+            Some(&params.connection_id),
+            classification,
+            || async {
+                // TODO: Implement execute_query_impl
+                Ok(CallToolResult::success(vec![
+                    Content::text(format!("Query execution TODO: {}", params.sql))
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "Explain query execution plan or table access strategy")]
+    async fn explain_query(
+        &self,
+        Parameters(params): Parameters<ExplainQueryParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.governance.authorize_and_execute(
+            "explain_query",
+            Some(&params.connection_id),
+            dbflux_policy::ExecutionClassification::Read,
+            || async {
+                // TODO: Implement explain_query_impl
+                Ok(CallToolResult::success(vec![
+                    Content::text("Explain query TODO".to_string())
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "Preview the execution plan for a mutation query without executing it")]
+    async fn preview_mutation(
+        &self,
+        Parameters(params): Parameters<PreviewMutationParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.governance.authorize_and_execute(
+            "preview_mutation",
+            Some(&params.connection_id),
+            dbflux_policy::ExecutionClassification::Read,
+            || async {
+                // TODO: Implement preview_mutation_impl
+                Ok(CallToolResult::success(vec![
+                    Content::text("Preview mutation TODO".to_string())
+                ]))
+            },
+        ).await
+    }
+
+    // === Schema Tools ===
+    
+    #[tool(description = "List all tables in a database")]
+    async fn list_tables(
+        &self,
+        Parameters(params): Parameters<ListTablesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        self.governance.authorize_and_execute(
+            "list_tables",
+            Some(&params.connection_id),
+            ExecutionClassification::Metadata,
+            || async {
+                // TODO: Implement list_tables_impl
+                Ok(CallToolResult::success(vec![
+                    Content::text(format!("Tables listed (TODO: implement) for {}", params.connection_id))
+                ]))
+            },
+        ).await
+    }
+
+    #[tool(description = "Describe the structure of a table (columns, types, constraints)")]
+    async fn describe_table(
+        &self,
+        Parameters(params): Parameters<DescribeTableParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        self.governance.authorize_and_execute(
+            "describe_table",
+            Some(&params.connection_id),
+            ExecutionClassification::Metadata,
+            || async {
+                // TODO: Implement describe_table_impl
+                Ok(CallToolResult::success(vec![
+                    Content::text(format!(
+                        "Table {} described (TODO: implement)",
+                        params.table
+                    ))
+                ]))
+            },
+        ).await
+    }
+
+    // === Helper Methods ===
+
+    /// Get or establish a connection for the given `connection_id`.
+    ///
+    /// Looks up the cached connection first. If not present, finds the profile,
+    /// selects the driver, and calls `connect_with_secrets`. The new connection
+    /// is inserted into the cache before returning.
+    async fn get_or_connect(
+        &self,
+        connection_id: &str,
+    ) -> Result<Arc<dyn dbflux_core::Connection>, ErrorData> {
+        {
+            let cache = self.state.connection_cache.read().await;
+            if let Some(conn) = cache.get(connection_id) {
+                return Ok(conn);
+            }
+        }
+
+        let profile_uuid = connection_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                error_messages::invalid_connection_id(connection_id),
+                None,
+            ))?;
+
+        let profile = {
+            let profile_manager = self.state.profile_manager.read().await;
+            profile_manager
+                .find_by_id(profile_uuid)
+                .cloned()
+                .ok_or_else(|| ErrorData::new(
+                    ErrorCode::INVALID_REQUEST,
+                    error_messages::connection_not_found(connection_id),
+                    None,
+                ))?
+        };
+
+        let driver_id = profile.driver_id();
+
+        let available_drivers: Vec<String> = self.state.driver_registry.keys().cloned().collect();
+        let driver = self
+            .state
+            .driver_registry
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                error_messages::driver_not_available(&driver_id, &available_drivers),
+                None,
+            ))?;
+
+        let connection = driver
+            .connect_with_secrets(&profile, None, None)
+            .map_err(|e| ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                error_messages::connection_error(connection_id, &driver_id, e),
+                None,
+            ))?;
+
+        let connection: Arc<dyn dbflux_core::Connection> = Arc::from(connection);
+        
+        {
+            let mut cache = self.state.connection_cache.write().await;
+            cache.insert(connection_id.to_string(), connection.clone());
+        }
+
+        Ok(connection)
+    }
+
+    /// Classify a query based on its SQL content
+    fn classify_query(&self, query: &str) -> dbflux_policy::ExecutionClassification {
+        use dbflux_policy::ExecutionClassification;
+        
+        let query_upper = query.trim().to_uppercase();
+        
+        if query_upper.starts_with("SELECT") 
+            || query_upper.starts_with("SHOW") 
+            || query_upper.starts_with("DESCRIBE")
+            || query_upper.starts_with("EXPLAIN") {
+            ExecutionClassification::Read
+        } else if query_upper.starts_with("INSERT") 
+            || query_upper.starts_with("UPDATE") {
+            ExecutionClassification::Write
+        } else if query_upper.starts_with("DELETE") 
+            || query_upper.starts_with("DROP") 
+            || query_upper.starts_with("TRUNCATE") {
+            ExecutionClassification::Destructive
+        } else if query_upper.starts_with("CREATE") 
+            || query_upper.starts_with("ALTER") 
+            || query_upper.starts_with("GRANT") 
+            || query_upper.starts_with("REVOKE") {
+            ExecutionClassification::Admin
+        } else {
+            // Default to read for unknown queries
+            ExecutionClassification::Read
+        }
+    }
+}
+
+// ===== ServerHandler Implementation =====
+
+#[tool_handler]
+impl ServerHandler for DbFluxServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_logging()
+                .build()
+        )
+        .with_instructions(
+            "DBFlux MCP Server - AI-powered database client with governance controls.\n\
+             \n\
+             Supports multiple database types:\n\
+             • PostgreSQL, MySQL/MariaDB\n\
+             • MongoDB, Redis, DynamoDB\n\
+             • SQLite\n\
+             \n\
+             All operations are subject to role-based access control and audit logging.\n\
+             Destructive operations may require manual approval before execution."
+        )
+    }
+}
+
+// ===== Placeholder for Disconnected State =====
+
+/// Placeholder connection used to mark disconnected state in cache.
+struct DisconnectedPlaceholder;
+
+impl dbflux_core::Connection for DisconnectedPlaceholder {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn execute(&self, _req: &dbflux_core::QueryRequest) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn kind(&self) -> dbflux_core::DbKind {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        unimplemented!("DisconnectedPlaceholder should never have methods called")
+    }
+}

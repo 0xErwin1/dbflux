@@ -10,9 +10,13 @@ use rmcp::{
     RoleServer,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use dbflux_core::{Connection, DataStructure, DescribeRequest, QueryResult, TableRef, Value};
 
 use crate::state::ServerState;
 use crate::governance::GovernanceMiddleware;
+use crate::error_messages;
 
 /// Main DBFlux MCP Server
 #[derive(Clone)]
@@ -36,9 +40,57 @@ pub struct ExecuteQueryParams {
     pub connection_id: String,
     
     #[schemars(description = "SQL query or database command to execute")]
-    pub query: String,
+    pub sql: String,
     
     #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+    
+    #[schemars(description = "Maximum number of rows to return")]
+    pub limit: Option<u32>,
+    
+    #[schemars(description = "Number of rows to skip")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainQueryParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "SQL query to explain (optional, requires table if not provided)")]
+    pub sql: Option<String>,
+    
+    #[schemars(description = "Table name to explain (optional, requires sql if not provided)")]
+    pub table: Option<String>,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PreviewMutationParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "SQL mutation query to preview (INSERT, UPDATE, DELETE, etc.)")]
+    pub sql: String,
+    
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListDatabasesParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListSchemasParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+    
+    #[schemars(description = "Optional database filter")]
     pub database: Option<String>,
 }
 
@@ -49,18 +101,24 @@ pub struct ListTablesParams {
     
     #[schemars(description = "Optional database/schema filter")]
     pub database: Option<String>,
+    
+    #[schemars(description = "Optional schema filter (for relational databases)")]
+    pub schema: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct DescribeTableParams {
+pub struct DescribeObjectParams {
     #[schemars(description = "Connection ID")]
     pub connection_id: String,
     
-    #[schemars(description = "Table name")]
-    pub table: String,
+    #[schemars(description = "Object name (table/view/collection)")]
+    pub name: String,
     
-    #[schemars(description = "Optional database/schema name")]
+    #[schemars(description = "Optional database name")]
     pub database: Option<String>,
+    
+    #[schemars(description = "Optional schema name (for relational databases)")]
+    pub schema: Option<String>,
 }
 
 // ===== Tool Router Implementation =====
@@ -124,17 +182,95 @@ impl DbFluxServer {
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
         
-        // Classify query based on content
-        let classification = self.classify_query(&params.query);
+        let classification = self.classify_query(&params.sql);
+        
+        let state = self.state.clone();
+        let sql = params.sql.clone();
+        let database = params.database.clone();
+        let connection_id = params.connection_id.clone();
+        let limit = params.limit;
+        let offset = params.offset;
         
         self.governance.authorize_and_execute(
             "execute_query",
             Some(&params.connection_id),
             classification,
-            || async {
-                // TODO: Implement execute_query_impl
+            move || async move {
+                let result = Self::execute_query_impl(
+                    state,
+                    &connection_id,
+                    &sql,
+                    database.as_deref(),
+                    limit,
+                    offset,
+                ).await?;
+                
                 Ok(CallToolResult::success(vec![
-                    Content::text(format!("Query executed (TODO: implement): {}", params.query))
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "Explain query execution plan or table access strategy")]
+    async fn explain_query(
+        &self,
+        Parameters(params): Parameters<ExplainQueryParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let state = self.state.clone();
+        let sql = params.sql.clone();
+        let table = params.table.clone();
+        let database = params.database.clone();
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "explain_query",
+            Some(&params.connection_id),
+            ExecutionClassification::Read,
+            move || async move {
+                let result = Self::explain_query_impl(
+                    state,
+                    &connection_id,
+                    sql.as_deref(),
+                    table.as_deref(),
+                    database.as_deref(),
+                ).await?;
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "Preview the execution plan for a mutation query without executing it")]
+    async fn preview_mutation(
+        &self,
+        Parameters(params): Parameters<PreviewMutationParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let state = self.state.clone();
+        let sql = params.sql.clone();
+        let database = params.database.clone();
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "preview_mutation",
+            Some(&params.connection_id),
+            ExecutionClassification::Read,
+            move || async move {
+                let result = Self::preview_mutation_impl(
+                    state,
+                    &connection_id,
+                    &sql,
+                    database.as_deref(),
+                ).await?;
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
                 ]))
             },
         ).await
@@ -142,44 +278,118 @@ impl DbFluxServer {
 
     // === Schema Tools ===
     
-    #[tool(description = "List all tables in a database")]
+    #[tool(description = "List all databases available on the connection")]
+    async fn list_databases(
+        &self,
+        Parameters(params): Parameters<ListDatabasesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let state = self.state.clone();
+        let connection_id = params.connection_id.clone();
+        
+        self.governance.authorize_and_execute(
+            "list_databases",
+            Some(&params.connection_id),
+            ExecutionClassification::Metadata,
+            move || async move {
+                let result = Self::list_databases_impl(state, &connection_id).await?;
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "List all schemas (namespaces) in a database")]
+    async fn list_schemas(
+        &self,
+        Parameters(params): Parameters<ListSchemasParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+        
+        let state = self.state.clone();
+        let connection_id = params.connection_id.clone();
+        let database = params.database.clone();
+        
+        self.governance.authorize_and_execute(
+            "list_schemas",
+            Some(&params.connection_id),
+            ExecutionClassification::Metadata,
+            move || async move {
+                let result = Self::list_schemas_impl(
+                    state,
+                    &connection_id,
+                    database.as_deref(),
+                ).await?;
+                
+                Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
+                ]))
+            },
+        ).await
+    }
+    
+    #[tool(description = "List all tables and views in a database")]
     async fn list_tables(
         &self,
         Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
         
+        let state = self.state.clone();
+        let connection_id = params.connection_id.clone();
+        let database = params.database.clone();
+        let schema = params.schema.clone();
+        
         self.governance.authorize_and_execute(
             "list_tables",
             Some(&params.connection_id),
             ExecutionClassification::Metadata,
-            || async {
-                // TODO: Implement list_tables_impl
+            move || async move {
+                let result = Self::list_tables_impl(
+                    state,
+                    &connection_id,
+                    database.as_deref(),
+                    schema.as_deref(),
+                ).await?;
+                
                 Ok(CallToolResult::success(vec![
-                    Content::text(format!("Tables listed (TODO: implement) for {}", params.connection_id))
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
                 ]))
             },
         ).await
     }
 
-    #[tool(description = "Describe the structure of a table (columns, types, constraints)")]
-    async fn describe_table(
+    #[tool(description = "Describe the structure of a table or collection (columns, types, constraints)")]
+    async fn describe_object(
         &self,
-        Parameters(params): Parameters<DescribeTableParams>,
+        Parameters(params): Parameters<DescribeObjectParams>,
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
         
+        let state = self.state.clone();
+        let connection_id = params.connection_id.clone();
+        let name = params.name.clone();
+        let database = params.database.clone();
+        let schema = params.schema.clone();
+        
         self.governance.authorize_and_execute(
-            "describe_table",
+            "describe_object",
             Some(&params.connection_id),
             ExecutionClassification::Metadata,
-            || async {
-                // TODO: Implement describe_table_impl
+            move || async move {
+                let result = Self::describe_object_impl(
+                    state,
+                    &connection_id,
+                    &name,
+                    database.as_deref(),
+                    schema.as_deref(),
+                ).await?;
+                
                 Ok(CallToolResult::success(vec![
-                    Content::text(format!(
-                        "Table {} described (TODO: implement)",
-                        params.table
-                    ))
+                    Content::text(serde_json::to_string_pretty(&result).unwrap())
                 ]))
             },
         ).await
@@ -215,6 +425,232 @@ impl DbFluxServer {
             ExecutionClassification::Read
         }
     }
+    
+    /// Get or establish a connection for the given connection_id
+    async fn get_or_connect(
+        state: ServerState,
+        connection_id: &str,
+    ) -> Result<Arc<dyn Connection>, String> {
+        {
+            let cache = state.connection_cache.read().await;
+            if let Some(conn) = cache.get(connection_id) {
+                return Ok(conn);
+            }
+        }
+        
+        let profile_uuid = connection_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
+        
+        let profile = {
+            let profile_manager = state.profile_manager.read().await;
+            profile_manager
+                .find_by_id(profile_uuid)
+                .cloned()
+                .ok_or_else(|| error_messages::connection_not_found(connection_id))?
+        };
+        
+        let driver_id = profile.driver_id();
+        
+        let available_drivers: Vec<String> = state.driver_registry.keys().cloned().collect();
+        
+        let driver = state
+            .driver_registry
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| error_messages::driver_not_available(&driver_id, &available_drivers))?;
+        
+        let connection = driver
+            .connect_with_secrets(&profile, None, None)
+            .map_err(|e| error_messages::connection_error(connection_id, &driver_id, e))?;
+        
+        let connection: Arc<dyn Connection> = Arc::from(connection);
+        
+        {
+            let mut cache = state.connection_cache.write().await;
+            cache.insert(connection_id.to_string(), connection.clone());
+        }
+        
+        Ok(connection)
+    }
+    
+    // === Implementation Methods ===
+    
+    async fn execute_query_impl(
+        _state: ServerState,
+        _connection_id: &str,
+        _sql: &str,
+        _database: Option<&str>,
+        _limit: Option<u32>,
+        _offset: Option<u32>,
+    ) -> Result<serde_json::Value, String> {
+        // TODO: Implement
+        Ok(serde_json::json!({"status": "TODO: implement execute_query"}))
+    }
+    
+    async fn explain_query_impl(
+        _state: ServerState,
+        _connection_id: &str,
+        _sql: Option<&str>,
+        _table: Option<&str>,
+        _database: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        // TODO: Implement
+        Ok(serde_json::json!({"status": "TODO: implement explain_query"}))
+    }
+    
+    async fn preview_mutation_impl(
+        _state: ServerState,
+        _connection_id: &str,
+        _sql: &str,
+        _database: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        // TODO: Implement
+        Ok(serde_json::json!({"status": "TODO: implement preview_mutation"}))
+    }
+    
+    async fn list_databases_impl(
+        state: ServerState,
+        connection_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::get_or_connect(state, connection_id).await?;
+        
+        let databases = connection.list_databases().map_err(|e| {
+            error_messages::schema_operation_error(
+                "list databases",
+                connection_id,
+                None,
+                None,
+                None,
+                e,
+            )
+        })?;
+        
+        let items: Vec<serde_json::Value> = databases
+            .iter()
+            .map(|db| {
+                serde_json::json!({
+                    "name": db.name,
+                    "is_current": db.is_current,
+                })
+            })
+            .collect();
+        
+        Ok(serde_json::json!({ "databases": items }))
+    }
+    
+    async fn list_schemas_impl(
+        state: ServerState,
+        connection_id: &str,
+        database: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::get_or_connect(state, connection_id).await?;
+        
+        let snapshot = connection.schema().map_err(|e| {
+            error_messages::schema_operation_error(
+                "list schemas",
+                connection_id,
+                database,
+                None,
+                None,
+                e,
+            )
+        })?;
+        
+        let schemas: Vec<serde_json::Value> = match &snapshot.structure {
+            DataStructure::Relational(relational) => relational
+                .schemas
+                .iter()
+                .map(|s| serde_json::json!({ "name": s.name }))
+                .collect(),
+            DataStructure::Document(doc) => doc
+                .databases
+                .iter()
+                .map(|db| serde_json::json!({ "name": db.name }))
+                .collect(),
+            _ => vec![serde_json::json!({ "name": "default" })],
+        };
+        
+        Ok(serde_json::json!({ "schemas": schemas }))
+    }
+    
+    async fn list_tables_impl(
+        state: ServerState,
+        connection_id: &str,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::get_or_connect(state, connection_id).await?;
+        
+        let database_str = database.unwrap_or("");
+        let schema_info = connection.schema_for_database(database_str).map_err(|e| {
+            error_messages::schema_operation_error(
+                "list tables",
+                connection_id,
+                database,
+                schema,
+                None,
+                e,
+            )
+        })?;
+        
+        let mut tables: Vec<serde_json::Value> = schema_info
+            .tables
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "schema": t.schema,
+                    "kind": "Table",
+                })
+            })
+            .collect();
+        
+        let views: Vec<serde_json::Value> = schema_info
+            .views
+            .iter()
+            .map(|v| {
+                serde_json::json!({
+                    "name": v.name,
+                    "schema": v.schema,
+                    "kind": "View",
+                })
+            })
+            .collect();
+        
+        tables.extend(views);
+        
+        Ok(serde_json::json!({ "tables": tables }))
+    }
+    
+    async fn describe_object_impl(
+        state: ServerState,
+        connection_id: &str,
+        name: &str,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let connection = Self::get_or_connect(state, connection_id).await?;
+        
+        let table_ref = TableRef {
+            schema: schema.map(str::to_string),
+            name: name.to_string(),
+        };
+        
+        let request = DescribeRequest::new(table_ref);
+        let result = connection.describe_table(&request).map_err(|e| {
+            error_messages::schema_operation_error(
+                "describe object",
+                connection_id,
+                database,
+                schema,
+                Some(name),
+                e,
+            )
+        })?;
+        
+        Ok(serialize_query_result(&result))
+    }
 }
 
 // ===== ServerHandler Implementation =====
@@ -239,5 +675,58 @@ impl ServerHandler for DbFluxServer {
              All operations are subject to role-based access control and audit logging.\n\
              Destructive operations may require manual approval before execution."
         )
+    }
+}
+
+// ===== Helper Functions =====
+
+/// Serialize a QueryResult into a JSON value suitable for MCP responses
+fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
+    let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+    
+    let rows: Vec<serde_json::Value> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let mut obj = serde_json::Map::new();
+            for (col, cell) in columns.iter().zip(row.iter()) {
+                obj.insert((*col).to_string(), value_to_json(cell));
+            }
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+    
+    serde_json::json!({
+        "columns": columns,
+        "rows": rows,
+        "row_count": result.rows.len(),
+    })
+}
+
+fn value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::json!(i),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or_else(|| serde_json::Value::String(f.to_string())),
+        Value::Text(s)
+        | Value::Json(s)
+        | Value::Decimal(s)
+        | Value::ObjectId(s)
+        | Value::Unsupported(s) => serde_json::Value::String(s.clone()),
+        Value::Bytes(b) => serde_json::json!({ "_type": "bytes", "length": b.len() }),
+        Value::DateTime(dt) => serde_json::Value::String(dt.to_rfc3339()),
+        Value::Date(d) => serde_json::Value::String(d.to_string()),
+        Value::Time(t) => serde_json::Value::String(t.to_string()),
+        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(value_to_json).collect()),
+        Value::Document(doc) => {
+            let map: serde_json::Map<_, _> = doc
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
     }
 }
