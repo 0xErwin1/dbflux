@@ -27,6 +27,7 @@ dbflux_mcp_server = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 dbflux_approval = { workspace = true, optional = true }
 dbflux_audit = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
 uuid.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -87,7 +88,7 @@ redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_audit"]
+mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_audit", "tokio"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

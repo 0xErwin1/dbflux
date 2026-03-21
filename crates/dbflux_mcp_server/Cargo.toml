@@ -21,11 +21,13 @@ redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
 
 [dependencies]
+# DBFlux core crates
 dbflux_core = { workspace = true }
 dbflux_mcp = { workspace = true }
 dbflux_policy = { workspace = true }
 dbflux_audit = { workspace = true }
 
+# Optional driver crates
 dbflux_driver_sqlite = { workspace = true, optional = true }
 dbflux_driver_postgres = { workspace = true, optional = true }
 dbflux_driver_mysql = { workspace = true, optional = true }
@@ -33,10 +35,21 @@ dbflux_driver_mongodb = { workspace = true, optional = true }
 dbflux_driver_redis = { workspace = true, optional = true }
 dbflux_driver_dynamodb = { workspace = true, optional = true }
 
+# MCP SDK
+rmcp = { version = "1.2.0", features = ["server", "macros", "transport-io"] }
+schemars = "1.0"
+
+# Serialization
 serde.workspace = true
 serde_json.workspace = true
+
+# Async runtime
 tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros"] }
+
+# Utilities
 uuid = { workspace = true }
+anyhow = "1"
+
+# Logging (keeping existing, will migrate to tracing later)
 log.workspace = true
 env_logger.workspace = true
-anyhow = "1"

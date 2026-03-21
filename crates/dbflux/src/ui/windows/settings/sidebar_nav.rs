@@ -13,19 +13,6 @@ impl SettingsCoordinator {
             Some(AppIcon::Settings),
         )];
 
-        #[cfg(feature = "mcp")]
-        nodes.push(TreeNavNode::group(
-            "mcp-governance",
-            "MCP Governance",
-            Some(AppIcon::Lock),
-            vec![
-                TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
-                TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
-                TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
-                TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
-            ],
-        ));
-
         nodes.extend([
             TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
             TreeNavNode::group(
@@ -59,6 +46,18 @@ impl SettingsCoordinator {
                     TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
                     TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
                     TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                ],
+            ),
+            #[cfg(feature = "mcp")]
+            TreeNavNode::group(
+                "mcp-governance",
+                "MCP Governance",
+                Some(AppIcon::Bot),
+                vec![
+                    TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
+                    TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
+                    TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
                 ],
             ),
             TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use dbflux_core::{QueryRequest, ScriptEntry, ScriptsDirectory};
 
-use crate::bootstrap::ServerState;
+use crate::state::ServerState;
 use crate::error_messages;
 
 use super::{get_or_connect, optional_str, require_str};

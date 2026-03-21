@@ -70,6 +70,8 @@ pub enum AppIcon {
     ScrollText,
     ListFilter,
     ArrowUpDown,
+    Bot,
+    BrainCircuit,
 
     // Connection / Network
     Plug,
@@ -185,6 +187,8 @@ impl AppIcon {
             Self::BrandJavaScript => "icons/brand/javascript.svg",
             Self::BrandInfluxDb => "icons/brand/influxdb.svg",
             Self::DbFlux => "icons/dbflux.svg",
+            Self::BrainCircuit => "icons/ui/brain-circuit.svg",
+            Self::Bot => "icons/ui/bot.svg",
         }
     }
 
@@ -303,6 +307,8 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/brand/influxdb.svg")
             }
             Self::DbFlux => include_bytes!("../../../../../resources/icons/dbflux.svg"),
+            Self::BrainCircuit => include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg"),
+            Self::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
         }
     }
 
@@ -406,6 +412,8 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Braces,
     AppIcon::SquareTerminal,
     AppIcon::Database,
+    AppIcon::BrainCircuit,
+    AppIcon::Bot,
     AppIcon::BrandPostgres,
     AppIcon::BrandMysql,
     AppIcon::BrandMariadb,

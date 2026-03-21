@@ -1,7 +1,7 @@
 use dbflux_mcp::McpGovernanceService;
 use dbflux_policy::ExecutionClassification;
 
-use crate::bootstrap::ServerState;
+use crate::state::ServerState;
 
 use super::require_str;
 
@@ -41,7 +41,7 @@ fn request_execution(
         tool_id.to_string(),
     );
 
-    let summary = state.runtime.request_execution_mut(plan);
+    let summary = state.runtime.request_execution(plan);
 
     Ok(serde_json::json!({
         "id": summary.id,
@@ -54,7 +54,7 @@ fn request_execution(
 }
 
 fn list_pending_executions(state: &ServerState) -> Result<serde_json::Value, String> {
-    let executions = McpGovernanceService::list_pending_executions(&state.runtime)
+    let executions = McpGovernanceService::list_pending_executions(state.runtime.as_ref())
         .map_err(|e| format!("list_pending_executions failed: {e}"))?;
 
     let items: Vec<serde_json::Value> = executions
@@ -80,7 +80,7 @@ fn get_pending_execution(
 ) -> Result<serde_json::Value, String> {
     let pending_id = require_str(args, "pending_id", "get_pending_execution")?;
 
-    let detail = McpGovernanceService::get_pending_execution(&state.runtime, pending_id)
+    let detail = McpGovernanceService::get_pending_execution(state.runtime.as_ref(), pending_id)
         .map_err(|e| format!("Failed to get pending execution '{}': {}", pending_id, e))?;
 
     Ok(serde_json::json!({

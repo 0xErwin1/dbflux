@@ -1,6 +1,6 @@
 use dbflux_core::{ExplainRequest, QueryRequest, TableRef};
 
-use crate::bootstrap::ServerState;
+use crate::state::ServerState;
 use crate::error_messages;
 
 use super::{get_or_connect, optional_str, require_str};

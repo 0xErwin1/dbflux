@@ -1,6 +1,6 @@
 use dbflux_mcp::{AuditExportFormat, AuditQuery, McpGovernanceService};
 
-use crate::bootstrap::ServerState;
+use crate::state::ServerState;
 use crate::error_messages;
 
 use super::{optional_str, require_str};
@@ -36,7 +36,7 @@ fn query_audit_logs(
             .map(|v| v as usize),
     };
 
-    let entries = McpGovernanceService::query_audit_entries(&state.runtime, &query)
+    let entries = McpGovernanceService::query_audit_entries(state.runtime.as_ref(), &query)
         .map_err(|e| error_messages::audit_error("query audit logs", e))?;
 
     let items: Vec<serde_json::Value> = entries
@@ -72,7 +72,7 @@ fn get_audit_entry(
         limit: None,
     };
 
-    let entries = McpGovernanceService::query_audit_entries(&state.runtime, &query)
+    let entries = McpGovernanceService::query_audit_entries(state.runtime.as_ref(), &query)
         .map_err(|e| error_messages::audit_error("get audit entry", e))?;
 
     let entry = entries
@@ -112,7 +112,7 @@ fn export_audit_logs(
         limit: None,
     };
 
-    let exported = McpGovernanceService::export_audit_entries(&state.runtime, &query, format)
+    let exported = McpGovernanceService::export_audit_entries(state.runtime.as_ref(), &query, format)
         .map_err(|e| error_messages::audit_error("export audit logs", e))?;
 
     Ok(serde_json::json!({

@@ -3,13 +3,25 @@ use std::path::PathBuf;
 #[cfg(feature = "mcp")]
 pub fn run_mcp_command(args: &[String]) -> i32 {
     match parse_mcp_args(args) {
-        Ok(mcp_args) => match dbflux_mcp_server::run_mcp_server(mcp_args) {
-            Ok(_) => 0,
-            Err(e) => {
-                eprintln!("MCP server error: {}", e);
-                1
+        Ok(mcp_args) => {
+            // Create tokio runtime for async MCP server
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Failed to create tokio runtime: {}", e);
+                    return 1;
+                }
+            };
+
+            // Run async server
+            match rt.block_on(dbflux_mcp_server::run_mcp_server(mcp_args)) {
+                Ok(_) => 0,
+                Err(e) => {
+                    eprintln!("MCP server error: {}", e);
+                    1
+                }
             }
-        },
+        }
         Err(e) => {
             eprintln!("{}", e);
             print_mcp_help();
