@@ -13,23 +13,6 @@ use log::info;
 use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 
 impl ConnectionManagerWindow {
-    fn parse_csv_ids(raw: &str) -> Vec<String> {
-        raw.split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect()
-    }
-
-    fn merge_ids(primary: Option<String>, extras_raw: &str) -> Vec<String> {
-        let mut ids = Vec::new();
-        if let Some(p) = primary.filter(|s| !s.is_empty()) {
-            ids.push(p);
-        }
-        ids.extend(Self::parse_csv_ids(extras_raw));
-        ids
-    }
-
     fn collect_mcp_governance(&self, cx: &Context<Self>) -> Option<ConnectionMcpGovernance> {
         if !self.conn_mcp_enabled {
             return None;
@@ -42,20 +25,34 @@ impl ConnectionManagerWindow {
             .map(|v| v.to_string())
             .unwrap_or_default();
 
-        let role_ids = Self::merge_ids(
-            self.conn_mcp_role_dropdown
+        let mut role_ids = Vec::new();
+        if let Some(primary_role) = self.conn_mcp_role_dropdown.read(cx).selected_value() {
+            let primary_str = primary_role.to_string();
+            if !primary_str.is_empty() {
+                role_ids.push(primary_str);
+            }
+        }
+        role_ids.extend(
+            self.conn_mcp_role_multi_select
                 .read(cx)
-                .selected_value()
-                .map(|v| v.to_string()),
-            &self.conn_mcp_role_extra_input.read(cx).value(),
+                .selected_values()
+                .into_iter()
+                .map(|s| s.to_string()),
         );
 
-        let policy_ids = Self::merge_ids(
-            self.conn_mcp_policy_dropdown
+        let mut policy_ids = Vec::new();
+        if let Some(primary_policy) = self.conn_mcp_policy_dropdown.read(cx).selected_value() {
+            let primary_str = primary_policy.to_string();
+            if !primary_str.is_empty() {
+                policy_ids.push(primary_str);
+            }
+        }
+        policy_ids.extend(
+            self.conn_mcp_policy_multi_select
                 .read(cx)
-                .selected_value()
-                .map(|v| v.to_string()),
-            &self.conn_mcp_policy_extra_input.read(cx).value(),
+                .selected_values()
+                .into_iter()
+                .map(|s| s.to_string()),
         );
 
         let policy_bindings = if actor_id.is_empty() {

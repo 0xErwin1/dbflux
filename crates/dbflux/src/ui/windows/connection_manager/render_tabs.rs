@@ -731,13 +731,9 @@ impl ConnectionManagerWindow {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Additional roles (optional, comma-separated)"),
+                            .child("Additional roles (optional)"),
                     )
-                    .child(
-                        Input::new(&self.conn_mcp_role_extra_input)
-                            .small()
-                            .disabled(!enabled),
-                    ),
+                    .child(self.conn_mcp_role_multi_select.clone()),
             )
             .child(
                 div()
@@ -762,13 +758,9 @@ impl ConnectionManagerWindow {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Additional policies (optional, comma-separated)"),
+                            .child("Additional policies (optional)"),
                     )
-                    .child(
-                        Input::new(&self.conn_mcp_policy_extra_input)
-                            .small()
-                            .disabled(!enabled),
-                    ),
+                    .child(self.conn_mcp_policy_multi_select.clone()),
             )
             .child(
                 div()

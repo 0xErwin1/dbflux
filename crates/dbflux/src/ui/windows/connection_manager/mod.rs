@@ -11,6 +11,7 @@ use crate::keymap::KeymapStack;
 use crate::platform;
 use crate::ui::components::dropdown::{Dropdown, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::{self, FormRendererState};
+use crate::ui::components::multi_select::MultiSelect;
 use crate::ui::components::value_source_selector::ValueSourceSelector;
 use crate::ui::overlays::sso_wizard::SsoWizard;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
@@ -275,9 +276,9 @@ pub struct ConnectionManagerWindow {
     conn_mcp_enabled: bool,
     conn_mcp_actor_dropdown: Entity<Dropdown>,
     conn_mcp_role_dropdown: Entity<Dropdown>,
-    conn_mcp_role_extra_input: Entity<InputState>,
+    conn_mcp_role_multi_select: Entity<MultiSelect>,
     conn_mcp_policy_dropdown: Entity<Dropdown>,
-    conn_mcp_policy_extra_input: Entity<InputState>,
+    conn_mcp_policy_multi_select: Entity<MultiSelect>,
 }
 
 impl ConnectionManagerWindow {
@@ -391,15 +392,13 @@ impl ConnectionManagerWindow {
             cx.new(|_cx| Dropdown::new("conn-mcp-actor").placeholder("Select trusted client"));
         let conn_mcp_role_dropdown =
             cx.new(|_cx| Dropdown::new("conn-mcp-role").placeholder("No role"));
-        let conn_mcp_role_extra_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("additional role IDs (comma-separated, optional)")
+        let conn_mcp_role_multi_select = cx.new(|_cx| {
+            MultiSelect::new("conn-mcp-extra-roles").placeholder("Select additional roles…")
         });
         let conn_mcp_policy_dropdown =
             cx.new(|_cx| Dropdown::new("conn-mcp-policy").placeholder("No policy"));
-        let conn_mcp_policy_extra_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("additional policy IDs (comma-separated, optional)")
+        let conn_mcp_policy_multi_select = cx.new(|_cx| {
+            MultiSelect::new("conn-mcp-extra-policies").placeholder("Select additional policies…")
         });
 
         let dropdown_subscription = cx.subscribe(
@@ -508,8 +507,6 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
-            subscribe_input(cx, window, &conn_mcp_role_extra_input),
-            subscribe_input(cx, window, &conn_mcp_policy_extra_input),
         ];
 
         let focus_handle = cx.focus_handle();
@@ -621,9 +618,9 @@ impl ConnectionManagerWindow {
             conn_mcp_enabled: false,
             conn_mcp_actor_dropdown,
             conn_mcp_role_dropdown,
-            conn_mcp_role_extra_input,
+            conn_mcp_role_multi_select,
             conn_mcp_policy_dropdown,
-            conn_mcp_policy_extra_input,
+            conn_mcp_policy_multi_select,
         }
     }
 
@@ -1310,7 +1307,7 @@ impl ConnectionManagerWindow {
     fn load_mcp_dropdowns(
         &mut self,
         binding: Option<&dbflux_core::ConnectionMcpPolicyBinding>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let clients = self
@@ -1368,16 +1365,6 @@ impl ConnectionManagerWindow {
                     .position(|item| item.value.as_ref() == role_id.as_str())
             })
         });
-        let role_extras = binding
-            .map(|b| {
-                b.role_ids
-                    .iter()
-                    .skip(1)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
         let policy_index = binding.and_then(|b| {
             b.policy_ids.first().and_then(|policy_id| {
                 policy_items
@@ -1385,16 +1372,6 @@ impl ConnectionManagerWindow {
                     .position(|item| item.value.as_ref() == policy_id.as_str())
             })
         });
-        let policy_extras = binding
-            .map(|b| {
-                b.policy_ids
-                    .iter()
-                    .skip(1)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
 
         self.conn_mcp_actor_dropdown.update(cx, |d, cx| {
             d.set_items(actor_items, cx);
@@ -1405,14 +1382,52 @@ impl ConnectionManagerWindow {
             d.set_selected_index(role_index.or(Some(0)), cx);
         });
         self.conn_mcp_policy_dropdown.update(cx, |d, cx| {
-            d.set_items(policy_items, cx);
+            d.set_items(policy_items.clone(), cx);
             d.set_selected_index(policy_index.or(Some(0)), cx);
         });
 
-        self.conn_mcp_role_extra_input
-            .update(cx, |i, cx| i.set_value(role_extras, window, cx));
-        self.conn_mcp_policy_extra_input
-            .update(cx, |i, cx| i.set_value(policy_extras, window, cx));
+        // Load MultiSelect components with all available roles/policies
+        let all_role_items: Vec<crate::ui::components::dropdown::DropdownItem> = roles
+            .iter()
+            .map(|r| {
+                let label = dbflux_mcp::builtin_display_name(&r.id)
+                    .map(|name| format!("{} (built-in)", name))
+                    .unwrap_or_else(|| r.id.clone());
+                crate::ui::components::dropdown::DropdownItem::with_value(label, r.id.clone())
+            })
+            .collect();
+
+        let all_policy_items: Vec<crate::ui::components::dropdown::DropdownItem> = policies
+            .iter()
+            .map(|p| {
+                let label = dbflux_mcp::builtin_display_name(&p.id)
+                    .map(|name| format!("{} (built-in)", name))
+                    .unwrap_or_else(|| p.id.clone());
+                crate::ui::components::dropdown::DropdownItem::with_value(label, p.id.clone())
+            })
+            .collect();
+
+        self.conn_mcp_role_multi_select.update(cx, |ms, cx| {
+            ms.set_items(all_role_items, cx);
+        });
+
+        self.conn_mcp_policy_multi_select.update(cx, |ms, cx| {
+            ms.set_items(all_policy_items, cx);
+        });
+
+        // Set selected values from binding
+        if let Some(binding) = binding {
+            let extra_roles: Vec<String> = binding.role_ids.iter().skip(1).cloned().collect();
+            let extra_policies: Vec<String> = binding.policy_ids.iter().skip(1).cloned().collect();
+
+            self.conn_mcp_role_multi_select.update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_roles, cx);
+            });
+
+            self.conn_mcp_policy_multi_select.update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_policies, cx);
+            });
+        }
     }
 
     /// Initialize the Settings tab controls from the selected driver's defaults
