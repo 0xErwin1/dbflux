@@ -1,9 +1,9 @@
-mod connection_cache;
+pub mod connection_cache;
 mod error_messages;
-mod governance;
+pub mod governance;
 mod handlers;
-mod server;
-mod state;
+pub mod server;
+pub mod state;
 
 use std::path::PathBuf;
 use rmcp::{ServiceExt, transport::stdio};

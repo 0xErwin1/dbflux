@@ -148,3 +148,130 @@ impl GovernanceMiddleware {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_mcp::{builtin_roles, builtin_policies, McpRuntime};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    /// Helper to create a test ServerState with minimal setup
+    fn create_test_state() -> ServerState {
+        let audit_service = dbflux_audit::AuditService::new_in_memory();
+        let mut runtime = McpRuntime::new(audit_service);
+
+        // Register built-in roles and policies
+        for role in builtin_roles() {
+            let _ = runtime.upsert_role_mut(role);
+        }
+
+        for policy in builtin_policies() {
+            let _ = runtime.upsert_policy_mut(policy);
+        }
+
+        // Register a test trusted client
+        let _ = runtime.upsert_trusted_client_mut(dbflux_mcp::TrustedClientDto {
+            id: "test-client".to_string(),
+            name: "Test Client".to_string(),
+            issuer: None,
+            active: true,
+        });
+
+        runtime.drain_events();
+
+        ServerState {
+            client_id: "test-client".to_string(),
+            runtime: Arc::new(runtime),
+            profile_manager: Arc::new(RwLock::new(dbflux_core::ProfileManager::new())),
+            driver_registry: Arc::new(std::collections::HashMap::new()),
+            connection_cache: Arc::new(RwLock::new(crate::connection_cache::ConnectionCache::new())),
+            mcp_enabled_by_default: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_authorize_metadata_operation_allows() {
+        let state = create_test_state();
+        let middleware = GovernanceMiddleware::new(state);
+
+        let result = middleware
+            .authorize_and_execute(
+                "list_connections",
+                None,
+                ExecutionClassification::Metadata,
+                || async { Ok(CallToolResult::success(vec![])) },
+            )
+            .await;
+
+        assert!(result.is_ok(), "Metadata operations should be allowed by default");
+    }
+
+    #[tokio::test]
+    async fn test_authorize_unknown_client_denies() {
+        let mut state = create_test_state();
+        state.client_id = "unknown-client".to_string();
+        let middleware = GovernanceMiddleware::new(state);
+
+        let result = middleware
+            .authorize_and_execute(
+                "execute_query",
+                Some("test-connection"),
+                ExecutionClassification::Read,
+                || async { Ok(CallToolResult::success(vec![])) },
+            )
+            .await;
+
+        assert!(result.is_err(), "Unknown client should be denied");
+        let err = result.unwrap_err();
+        assert!(err.message.contains("authorization denied"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_execution_success() {
+        let state = create_test_state();
+        let middleware = GovernanceMiddleware::new(state);
+
+        let result = middleware
+            .authorize_and_execute(
+                "test_tool",
+                None,
+                ExecutionClassification::Metadata,
+                || async {
+                    Ok(CallToolResult::success(vec![
+                        rmcp::model::Content::text("test result")
+                    ]))
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        assert!(call_result.is_error == Some(false));
+        assert_eq!(call_result.content.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handler_execution_failure_propagates() {
+        let state = create_test_state();
+        let middleware = GovernanceMiddleware::new(state);
+
+        let result = middleware
+            .authorize_and_execute(
+                "test_tool",
+                None,
+                ExecutionClassification::Metadata,
+                || async {
+                    Err(McpError::internal_error(
+                        "Test error".to_string(),
+                        None,
+                    ))
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.message, "Test error");
+    }
+}
