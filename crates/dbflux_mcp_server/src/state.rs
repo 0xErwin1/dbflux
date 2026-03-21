@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use dbflux_core::DbKind;
 use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, ProfileManager};
 use dbflux_mcp::{
-    builtin_policies, builtin_roles, ConnectionPolicyAssignmentDto, McpGovernanceService,
+    builtin_policies, builtin_roles, McpGovernanceService,
     McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
 };
 
@@ -19,7 +19,7 @@ use crate::error_messages;
 #[derive(Clone)]
 pub struct ServerState {
     pub client_id: String,
-    pub runtime: Arc<McpRuntime>,
+    pub runtime: Arc<RwLock<McpRuntime>>,
     pub profile_manager: Arc<RwLock<ProfileManager>>,
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
@@ -42,7 +42,7 @@ impl ServerState {
 
         let state = ServerState {
             client_id,
-            runtime: Arc::new(runtime),
+            runtime: Arc::new(RwLock::new(runtime)),
             profile_manager: Arc::new(RwLock::new(profile_manager)),
             driver_registry: Arc::new(driver_registry),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
@@ -176,11 +176,54 @@ fn load_governance_into_runtime(
         });
     }
 
+    // Create global policy assignments for all trusted clients
+    // This allows them to use tools without a specific connection_id
+    // (e.g., list_connections, list_scripts, query_audit_logs)
+    create_global_assignments(runtime)?;
+
+    Ok(())
+}
+
+/// Creates a global policy assignment (connection_id = "") for each trusted client.
+/// This allows clients to use tools that don't require a specific connection.
+fn create_global_assignments(runtime: &mut McpRuntime) -> Result<(), String> {
+    let clients = runtime
+        .list_trusted_clients()
+        .map_err(|e| format!("Failed to list trusted clients: {}", e))?;
+
+    if clients.is_empty() {
+        return Ok(());
+    }
+
+    // Create assignments for each active client
+    let assignments: Vec<dbflux_policy::ConnectionPolicyAssignment> = clients
+        .into_iter()
+        .filter(|client| client.active)
+        .map(|client| dbflux_policy::ConnectionPolicyAssignment {
+            actor_id: client.id,
+            scope: dbflux_policy::PolicyBindingScope {
+                connection_id: String::new(),
+            },
+            // Grant read-only role by default for global operations
+            role_ids: vec!["builtin/read-only".to_string()],
+            policy_ids: vec![],
+        })
+        .collect();
+
+    if !assignments.is_empty() {
+        runtime
+            .save_connection_policy_assignment_mut(dbflux_mcp::ConnectionPolicyAssignmentDto {
+                connection_id: String::new(),
+                assignments,
+            })
+            .map_err(|e| format!("Failed to save global assignments: {}", e))?;
+    }
+
     Ok(())
 }
 
 async fn load_connection_policy_assignments(
-    runtime: Arc<McpRuntime>,
+    runtime: Arc<RwLock<McpRuntime>>,
     profile_manager: Arc<RwLock<ProfileManager>>,
 ) {
     let profiles = {
@@ -188,21 +231,29 @@ async fn load_connection_policy_assignments(
         pm.profiles.clone()
     };
 
+    log::info!("Loading connection policy assignments for {} profiles", profiles.len());
+
+    let mut rt = runtime.write().await;
+    let mut loaded_count = 0;
     for profile in profiles {
-        load_profile_assignment(&runtime, &profile);
+        if load_profile_assignment(&mut rt, &profile) {
+            loaded_count += 1;
+        }
     }
 
-    // Note: drain_events is called in the runtime, but since we have Arc
-    // we can't call it here. Events will be drained on next operation.
+    log::info!("Loaded {} connection policy assignments", loaded_count);
+
+    // Drain events after loading all assignments
+    rt.drain_events();
 }
 
-fn load_profile_assignment(runtime: &McpRuntime, profile: &ConnectionProfile) {
+fn load_profile_assignment(runtime: &mut McpRuntime, profile: &ConnectionProfile) -> bool {
     let Some(governance) = &profile.mcp_governance else {
-        return;
+        return false;
     };
 
     if !governance.enabled {
-        return;
+        return false;
     };
 
     let assignments: Vec<dbflux_policy::ConnectionPolicyAssignment> = governance
@@ -218,9 +269,24 @@ fn load_profile_assignment(runtime: &McpRuntime, profile: &ConnectionProfile) {
         })
         .collect();
 
-    // Note: We can't mutate runtime through & reference with Arc wrapper
-    // Policy assignments will be loaded from config on next runtime operation
-    let _ = (runtime, assignments); // Acknowledge unused for now
+    if !assignments.is_empty() {
+        log::info!("Loading assignment for connection {} ({}) with {} bindings", 
+                   profile.name, profile.id, assignments.len());
+        match runtime.save_connection_policy_assignment_mut(
+            dbflux_mcp::ConnectionPolicyAssignmentDto {
+                connection_id: profile.id.to_string(),
+                assignments,
+            },
+        ) {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("Failed to save assignment for {}: {}", profile.name, e);
+                false
+            }
+        }
+    } else {
+        false
+    }
 }
 
 impl ServerState {

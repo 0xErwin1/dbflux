@@ -6,10 +6,8 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     schemars::JsonSchema,
-    service::RequestContext,
-    RoleServer,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use dbflux_core::{Connection, DataStructure, DescribeRequest, QueryResult, TableRef, Value};
@@ -17,6 +15,17 @@ use dbflux_core::{Connection, DataStructure, DescribeRequest, QueryResult, Table
 use crate::state::ServerState;
 use crate::governance::GovernanceMiddleware;
 use crate::error_messages;
+
+/// Helper trait to convert String errors to ErrorData
+trait IntoErrorData {
+    fn into_error_data(self) -> ErrorData;
+}
+
+impl IntoErrorData for String {
+    fn into_error_data(self) -> ErrorData {
+        ErrorData::internal_error(self, None)
+    }
+}
 
 /// Main DBFlux MCP Server
 #[derive(Clone)]
@@ -140,14 +149,52 @@ impl DbFluxServer {
     async fn list_connections(&self) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
         
+        let state = self.governance.state.clone();
         self.governance.authorize_and_execute(
             "list_connections",
             None,
             ExecutionClassification::Metadata,
-            || async {
-                // TODO: Implement list_connections_impl
+            move || async move {
+                let pm = state.profile_manager.read().await;
+                let runtime = state.runtime.read().await;
+                let client_id = &state.client_id;
+                
+                // Only show connections where this client has an assignment
+                let connections: Vec<serde_json::Value> = pm
+                    .profiles
+                    .iter()
+                    .filter(|profile| {
+                        // Check if profile has MCP enabled
+                        let mcp_enabled = profile.mcp_governance
+                            .as_ref()
+                            .map(|g| g.enabled)
+                            .unwrap_or(state.mcp_enabled_by_default);
+                        
+                        if !mcp_enabled {
+                            return false;
+                        }
+                        
+                        // Check if client has an assignment for this connection
+                        runtime.policy_assignments_for_engine()
+                            .iter()
+                            .any(|assignment| {
+                                assignment.actor_id == *client_id 
+                                    && assignment.scope.connection_id == profile.id.to_string()
+                            })
+                    })
+                    .map(|profile| {
+                        serde_json::json!({
+                            "id": profile.id.to_string(),
+                            "name": profile.name,
+                            "driver_id": profile.driver_id(),
+                            "kind": format!("{:?}", profile.kind()),
+                        })
+                    })
+                    .collect();
+                
+                let json_output = serde_json::json!({ "connections": connections });
                 Ok(CallToolResult::success(vec![
-                    Content::text("Connections listed successfully (TODO: implement)")
+                    Content::text(serde_json::to_string_pretty(&json_output).unwrap())
                 ]))
             },
         ).await
@@ -180,7 +227,7 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<ExecuteQueryParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
+        
         
         let classification = self.classify_query(&params.sql);
         
@@ -203,7 +250,7 @@ impl DbFluxServer {
                     database.as_deref(),
                     limit,
                     offset,
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -236,7 +283,7 @@ impl DbFluxServer {
                     sql.as_deref(),
                     table.as_deref(),
                     database.as_deref(),
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -267,7 +314,7 @@ impl DbFluxServer {
                     &connection_id,
                     &sql,
                     database.as_deref(),
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -293,7 +340,7 @@ impl DbFluxServer {
             Some(&params.connection_id),
             ExecutionClassification::Metadata,
             move || async move {
-                let result = Self::list_databases_impl(state, &connection_id).await?;
+                let result = Self::list_databases_impl(state, &connection_id).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -322,7 +369,7 @@ impl DbFluxServer {
                     state,
                     &connection_id,
                     database.as_deref(),
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -353,7 +400,7 @@ impl DbFluxServer {
                     &connection_id,
                     database.as_deref(),
                     schema.as_deref(),
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())
@@ -386,7 +433,7 @@ impl DbFluxServer {
                     &name,
                     database.as_deref(),
                     schema.as_deref(),
-                ).await?;
+                ).await.map_err(|e| e.into_error_data())?;
                 
                 Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&result).unwrap())

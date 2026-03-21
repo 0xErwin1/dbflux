@@ -317,12 +317,8 @@ impl McpRuntime {
         &mut self,
         assignment: ConnectionPolicyAssignmentDto,
     ) -> Result<ConnectionPolicyAssignmentDto, GovernanceError> {
-        if assignment.connection_id.trim().is_empty() {
-            return Err(GovernanceError::Validation(
-                "connection id must not be empty".to_string(),
-            ));
-        }
-
+        // Empty connection_id is valid - it's used for tools without a specific connection
+        // (e.g., list_connections, list_scripts, query_audit_logs)
         self.connection_policy_assignments
             .insert(assignment.connection_id.clone(), assignment.clone());
         self.push_event(McpRuntimeEvent::ConnectionPolicyUpdated {
@@ -543,11 +539,9 @@ mod tests {
         assert_eq!(assignments.len(), 1);
 
         let events = runtime.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
-        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
         assert!(events.iter().any(|event| matches!(
             event,
             McpRuntimeEvent::ConnectionPolicyUpdated { connection_id }
