@@ -6,8 +6,8 @@ use std::sync::Arc;
 use dbflux_core::DbKind;
 use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, ProfileManager};
 use dbflux_mcp::{
-    builtin_policies, builtin_roles, ConnectionPolicyAssignmentDto, McpRuntime, PolicyRoleDto,
-    ToolPolicyDto, TrustedClientDto,
+    builtin_policies, builtin_roles, ConnectionPolicyAssignmentDto, McpGovernanceService,
+    McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
 };
 
 use crate::connection_cache::ConnectionCache;
@@ -28,6 +28,10 @@ pub struct ServerState {
 /// `config_dir` overrides the default `~/.config/dbflux` location.
 pub fn init(client_id: String, config_dir: Option<PathBuf>) -> Result<ServerState, String> {
     let runtime = build_runtime(config_dir.as_deref())?;
+
+    // Validate that the client_id exists as a trusted client
+    validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
+
     let profile_manager = ProfileManager::new();
     let driver_registry = build_driver_registry();
 
@@ -64,6 +68,48 @@ fn build_runtime(config_dir: Option<&std::path::Path>) -> Result<McpRuntime, Str
     runtime.drain_events();
 
     Ok(runtime)
+}
+
+fn validate_client_id(
+    runtime: &McpRuntime,
+    client_id: &str,
+    config_dir: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let clients = runtime
+        .list_trusted_clients()
+        .map_err(|e| format!("Failed to list trusted clients: {}", e))?;
+
+    let client_exists = clients
+        .iter()
+        .any(|client| client.id == client_id && client.active);
+
+    if !client_exists {
+        let config_path = config_dir
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "~/.config/dbflux".to_string());
+
+        return Err(format!(
+            "Client ID '{}' is not registered as a trusted client.\n\
+             \n\
+             To fix this:\n\
+             1. Open DBFlux GUI and go to Settings → MCP → Clients\n\
+             2. Add a new trusted client with ID '{}'\n\
+             \n\
+             Or manually edit the config file:\n\
+             {}/config.json\n\
+             \n\
+             Add this to the 'governance.trusted_clients' array:\n\
+             {{\n\
+               \"id\": \"{}\",\n\
+               \"name\": \"Your Client Name\",\n\
+               \"issuer\": \"optional-issuer\",\n\
+               \"active\": true\n\
+             }}",
+            client_id, client_id, config_path, client_id
+        ));
+    }
+
+    Ok(())
 }
 
 fn load_governance_into_runtime(
