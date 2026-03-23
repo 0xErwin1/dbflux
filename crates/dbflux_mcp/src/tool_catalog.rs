@@ -11,28 +11,52 @@ pub const DEFERRED_TOOL_IDS: &[&str] = &[
 pub const DEFERRED_TOOL_REJECTION_REASON: &str = "tool not available in v1";
 
 pub const CANONICAL_V1_TOOLS: &[&str] = &[
+    // Connection management
     "list_connections",
-    "get_connection",
-    "get_connection_metadata",
+    "connect",
+    "disconnect",
+    "get_connection_info",
+    // Schema introspection
     "list_databases",
     "list_schemas",
     "list_tables",
     "list_collections",
     "describe_object",
-    "read_query",
+    // Read operations
+    "select_data",
+    "count_records",
+    "aggregate_data",
     "explain_query",
     "preview_mutation",
+    // Write operations
+    "insert_record",
+    "update_records",
+    "upsert_record",
+    // Destructive operations
+    "delete_records",
+    "truncate_table",
+    "drop_table",
+    "drop_database",
+    // DDL operations
+    "create_table",
+    "alter_table",
+    "create_index",
+    "drop_index",
+    "create_type",
+    // Script management
     "list_scripts",
     "get_script",
     "create_script",
     "update_script",
     "delete_script",
-    "run_script",
+    "execute_script",
+    // Approval workflow
     "request_execution",
     "list_pending_executions",
     "get_pending_execution",
     "approve_execution",
     "reject_execution",
+    // Audit logs
     "query_audit_logs",
     "get_audit_entry",
     "export_audit_logs",

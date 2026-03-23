@@ -75,6 +75,14 @@ impl McpRuntime {
         &self.audit_service
     }
 
+    pub fn approval_service(&self) -> &ApprovalService {
+        &self.approval_service
+    }
+
+    pub fn approval_service_mut(&mut self) -> &mut ApprovalService {
+        &mut self.approval_service
+    }
+
     pub fn roles_for_engine(&self) -> Vec<PolicyRole> {
         self.roles
             .values()

@@ -25,6 +25,7 @@ dynamodb = ["dbflux_driver_dynamodb"]
 dbflux_core = { workspace = true }
 dbflux_mcp = { workspace = true }
 dbflux_policy = { workspace = true }
+dbflux_approval = { workspace = true }
 dbflux_audit = { workspace = true }
 
 # Optional driver crates
@@ -49,7 +50,17 @@ tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "m
 # Utilities
 uuid = { workspace = true }
 anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 
 # Logging (keeping existing, will migrate to tracing later)
 log.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+# Test support
+dbflux_test_support = { workspace = true }
+tempfile = "3.10"
+
+# Async test runtime
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
