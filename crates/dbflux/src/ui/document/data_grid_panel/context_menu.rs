@@ -1056,9 +1056,6 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let entity = cx.entity().clone();
-        let entity_cancel = cx.entity().clone();
-
         let btn_hover = theme.muted;
 
         // Backdrop with centered modal
@@ -1128,10 +1125,8 @@ impl DataGridPanel {
                                     .text_color(theme.muted_foreground)
                                     .bg(theme.secondary)
                                     .hover(|d| d.bg(btn_hover))
-                                    .on_click(cx.listener(move |_, _, window, cx| {
-                                        entity_cancel.update(cx, |panel, cx| {
-                                            panel.cancel_delete(window, cx);
-                                        });
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_delete(window, cx);
                                     }))
                                     .child(
                                         svg()
@@ -1155,10 +1150,8 @@ impl DataGridPanel {
                                     .text_color(theme.background)
                                     .bg(theme.danger)
                                     .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(move |_, _, window, cx| {
-                                        entity.update(cx, |panel, cx| {
-                                            panel.confirm_delete(window, cx);
-                                        });
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_delete(window, cx);
                                     }))
                                     .child(
                                         svg()
