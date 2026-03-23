@@ -2442,6 +2442,9 @@ name = "dbflux_mcp_server"
 version = "0.4.0-dev.9"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dbflux_approval",
  "dbflux_audit",
  "dbflux_core",
  "dbflux_driver_dynamodb",
@@ -2452,12 +2455,14 @@ dependencies = [
  "dbflux_driver_sqlite",
  "dbflux_mcp",
  "dbflux_policy",
+ "dbflux_test_support",
  "env_logger",
  "log",
  "rmcp",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

@@ -2,16 +2,16 @@
 //!
 //! Provides authorization, approval flow, and audit logging for all tool executions.
 
-use std::future::Future;
 use dbflux_mcp::{
+    McpGovernanceService,
     server::{
-        authorization::{authorize_request, AuthorizationOutcome, AuthorizationRequest},
+        authorization::{AuthorizationOutcome, AuthorizationRequest, authorize_request},
         request_context::RequestIdentity,
     },
-    McpGovernanceService,
 };
 use dbflux_policy::ExecutionClassification;
 use rmcp::model::{CallToolResult, ErrorData as McpError};
+use std::future::Future;
 
 use crate::state::ServerState;
 
@@ -61,15 +61,10 @@ impl GovernanceMiddleware {
 
         // Build authorization request
         let runtime = self.state.runtime.read().await;
-        
-        let trusted_clients_dto = runtime
-            .list_trusted_clients()
-            .map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to list trusted clients: {}", e),
-                    None,
-                )
-            })?;
+
+        let trusted_clients_dto = runtime.list_trusted_clients().map_err(|e| {
+            McpError::internal_error(format!("Failed to list trusted clients: {}", e), None)
+        })?;
 
         // Build TrustedClientRegistry from DTOs
         let clients: Vec<dbflux_policy::TrustedClient> = trusted_clients_dto
@@ -109,7 +104,7 @@ impl GovernanceMiddleware {
             now_epoch_ms(),
         )
         .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
-        
+
         // Drop runtime lock now that authorization is complete
         drop(runtime);
 
@@ -156,7 +151,7 @@ impl GovernanceMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_mcp::{builtin_roles, builtin_policies, McpRuntime};
+    use dbflux_mcp::{McpRuntime, builtin_policies, builtin_roles};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -230,7 +225,9 @@ mod tests {
             runtime: Arc::new(RwLock::new(runtime)),
             profile_manager: Arc::new(RwLock::new(dbflux_core::ProfileManager::new())),
             driver_registry: Arc::new(std::collections::HashMap::new()),
-            connection_cache: Arc::new(RwLock::new(crate::connection_cache::ConnectionCache::new())),
+            connection_cache: Arc::new(
+                RwLock::new(crate::connection_cache::ConnectionCache::new()),
+            ),
             mcp_enabled_by_default: true,
         }
     }
@@ -250,9 +247,15 @@ mod tests {
             .await;
 
         if let Err(ref err) = result {
-            eprintln!("Authorization failed: code={:?}, message={}", err.code, err.message);
+            eprintln!(
+                "Authorization failed: code={:?}, message={}",
+                err.code, err.message
+            );
         }
-        assert!(result.is_ok(), "Metadata operations should be allowed by default");
+        assert!(
+            result.is_ok(),
+            "Metadata operations should be allowed by default"
+        );
     }
 
     #[tokio::test]
@@ -263,7 +266,7 @@ mod tests {
 
         let result = middleware
             .authorize_and_execute(
-                "execute_query",
+                "select_data",
                 Some("test-connection"),
                 ExecutionClassification::Read,
                 || async { Ok(CallToolResult::success(vec![])) },
@@ -287,9 +290,9 @@ mod tests {
                 None,
                 ExecutionClassification::Metadata,
                 || async {
-                    Ok(CallToolResult::success(vec![
-                        rmcp::model::Content::text("test result")
-                    ]))
+                    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                        "test result",
+                    )]))
                 },
             )
             .await;
@@ -310,12 +313,7 @@ mod tests {
                 "list_connections", // Use a tool that's in the builtin policies
                 None,
                 ExecutionClassification::Metadata,
-                || async {
-                    Err(McpError::internal_error(
-                        "Test error".to_string(),
-                        None,
-                    ))
-                },
+                || async { Err(McpError::internal_error("Test error".to_string(), None)) },
             )
             .await;
 

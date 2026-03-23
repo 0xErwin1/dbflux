@@ -17,7 +17,7 @@ use std::time::Duration;
 // ---------------------------------------------------------------------------
 
 /// Creates a test ServerState with a trusted client and admin role assignment.
-/// 
+///
 /// This is a stub - in a full implementation, this would:
 /// - Create temporary config directory
 /// - Initialize config with trusted client
@@ -43,7 +43,7 @@ async fn test_connection_tools() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Test connect - establish connection
     // 5. Test get_connection_info - verify connection metadata
     // 6. Test disconnect - remove from cache
-    
+
     Ok(())
 }
 
@@ -61,7 +61,7 @@ async fn test_schema_tools() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Test list_tables - verify test table appears
     // 5. Test list_collections (alias) - same as list_tables
     // 6. Test describe_object - verify column metadata
-    
+
     Ok(())
 }
 
@@ -78,7 +78,7 @@ async fn test_crud_insert_and_select() -> Result<(), Box<dyn std::error::Error>>
     // 3. Test insert_record - insert test data
     // 4. Test select_data with filters, ORDER BY, LIMIT
     // 5. Verify results match expected data
-    
+
     Ok(())
 }
 
@@ -90,7 +90,7 @@ async fn test_crud_count() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Test count_records without filters
     // 3. Test count_records with filters
     // 4. Verify counts match expectations
-    
+
     Ok(())
 }
 
@@ -102,7 +102,7 @@ async fn test_crud_update() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Test update_records with WHERE clause
     // 3. Verify update applied correctly
     // 4. Test that update without WHERE clause is rejected
-    
+
     Ok(())
 }
 
@@ -114,7 +114,7 @@ async fn test_crud_upsert() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Test upsert_record - insert new record
     // 3. Test upsert_record again - update existing
     // 4. Verify only one record exists with updated value
-    
+
     Ok(())
 }
 
@@ -126,7 +126,7 @@ async fn test_crud_delete_with_where_clause() -> Result<(), Box<dyn std::error::
     // 2. Test delete_records with WHERE clause
     // 3. Verify deletion
     // 4. Test that delete without WHERE clause is rejected (safety check)
-    
+
     Ok(())
 }
 
@@ -144,7 +144,7 @@ async fn test_script_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Test update_script - modify content
     // 5. Test execute_script - run against connection
     // 6. Test delete_script - remove (with confirmation)
-    
+
     Ok(())
 }
 
@@ -156,7 +156,7 @@ async fn test_script_execution_with_connection() -> Result<(), Box<dyn std::erro
     // 2. Connect to PostgreSQL
     // 3. Execute script against connection
     // 4. Verify query results
-    
+
     Ok(())
 }
 
@@ -174,7 +174,7 @@ async fn test_approval_request_and_approve() -> Result<(), Box<dyn std::error::E
     // 4. Test get_pending_execution - get details
     // 5. Test approve_execution - approve and get replay plan
     // 6. Verify replay plan can be executed
-    
+
     Ok(())
 }
 
@@ -186,7 +186,7 @@ async fn test_approval_reject() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Create pending execution
     // 3. Test reject_execution with reason
     // 4. Verify removed from pending list
-    
+
     Ok(())
 }
 
@@ -202,7 +202,7 @@ async fn test_audit_query_by_actor() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Log test events with different actors
     // 3. Test query_audit_logs filtered by actor
     // 4. Verify results contain only matching actor
-    
+
     Ok(())
 }
 
@@ -213,7 +213,7 @@ async fn test_audit_query_by_tool() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Log events with different tools
     // 2. Test query_audit_logs filtered by tool_id
     // 3. Verify results contain only matching tool
-    
+
     Ok(())
 }
 
@@ -224,7 +224,7 @@ async fn test_audit_query_by_date_range() -> Result<(), Box<dyn std::error::Erro
     // 1. Log events at different times
     // 2. Test query_audit_logs filtered by date range
     // 3. Verify only events in range are returned
-    
+
     Ok(())
 }
 
@@ -235,7 +235,7 @@ async fn test_audit_get_entry() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Log test event
     // 2. Test get_audit_entry with specific ID
     // 3. Verify correct event returned
-    
+
     Ok(())
 }
 
@@ -246,7 +246,7 @@ async fn test_audit_export_csv() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Log test events
     // 2. Test export_audit_logs as CSV
     // 3. Verify CSV contains expected data
-    
+
     Ok(())
 }
 
@@ -257,7 +257,7 @@ async fn test_audit_export_json() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Log test events
     // 2. Test export_audit_logs as JSON
     // 3. Parse and verify JSON structure
-    
+
     Ok(())
 }
 
@@ -273,7 +273,7 @@ async fn test_governance_readonly_role_restrictions() -> Result<(), Box<dyn std:
     // 2. Grant builtin/read-only role
     // 3. Verify client CANNOT call delete_records (should deny)
     // 4. Verify client CAN call select_data (should allow)
-    
+
     Ok(())
 }
 
@@ -285,7 +285,7 @@ async fn test_governance_write_role_restrictions() -> Result<(), Box<dyn std::er
     // 2. Grant builtin/write role
     // 3. Verify client CAN call delete_records (should allow)
     // 4. Verify client CANNOT call drop_table (should deny)
-    
+
     Ok(())
 }
 
@@ -298,7 +298,7 @@ async fn test_governance_admin_role_full_access() -> Result<(), Box<dyn std::err
     // 3. Verify client CAN call select_data (read)
     // 4. Verify client CAN call delete_records (destructive)
     // 5. Verify client CAN call drop_table (admin)
-    
+
     Ok(())
 }
 
@@ -310,7 +310,7 @@ async fn test_governance_connection_specific_policies() -> Result<(), Box<dyn st
     // 2. Verify client has admin on connection A
     // 3. Verify client has readonly on connection B
     // 4. Test that permissions are enforced per-connection
-    
+
     Ok(())
 }
 
@@ -322,9 +322,9 @@ async fn test_governance_connection_specific_policies() -> Result<(), Box<dyn st
 #[allow(dead_code)]
 fn example_postgres_test_pattern() {
     // This is an example pattern - not a real test
-    // 
+    //
     // use dbflux_test_support::containers;
-    // 
+    //
     // containers::with_postgres_url(|uri| {
     //     tokio::runtime::Runtime::new().unwrap().block_on(async {
     //         let state = setup_test_server().await;
@@ -340,7 +340,7 @@ fn example_connection_retry_pattern() {
     // This is an example pattern - not a real test
     //
     // use dbflux_test_support::containers;
-    // 
+    //
     // let connection = containers::retry_db_operation(
     //     Duration::from_secs(30),
     //     || {

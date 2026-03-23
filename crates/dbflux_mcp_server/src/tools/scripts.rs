@@ -5,11 +5,7 @@
 //!
 //! All tools use `ScriptsDirectory` from `dbflux_core` to manage file operations.
 
-use crate::{
-    DbFluxServer,
-    helper::IntoErrorData,
-    state::ServerState,
-};
+use crate::{DbFluxServer, helper::IntoErrorData, state::ServerState};
 use dbflux_core::{QueryLanguage, QueryRequest};
 use rmcp::{
     ErrorData,
@@ -197,10 +193,15 @@ impl DbFluxServer {
                 None, // Global operation
                 ExecutionClassification::Write,
                 move || async move {
-                    let result =
-                        Self::create_script_impl(state, &name, &content, &extension, folder.as_deref())
-                            .await
-                            .map_err(|e| e.into_error_data())?;
+                    let result = Self::create_script_impl(
+                        state,
+                        &name,
+                        &content,
+                        &extension,
+                        folder.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.into_error_data())?;
 
                     Ok(CallToolResult::success(vec![Content::text(
                         serde_json::to_string_pretty(&result).unwrap(),
@@ -295,14 +296,10 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 classification,
                 move || async move {
-                    let result = Self::execute_script_impl(
-                        state_clone,
-                        &content,
-                        &connection_id,
-                        &language,
-                    )
-                    .await
-                    .map_err(|e| e.into_error_data())?;
+                    let result =
+                        Self::execute_script_impl(state_clone, &content, &connection_id, &language)
+                            .await
+                            .map_err(|e| e.into_error_data())?;
 
                     Ok(CallToolResult::success(vec![Content::text(
                         serde_json::to_string_pretty(&result).unwrap(),
@@ -346,12 +343,7 @@ impl DbFluxServer {
                     return None;
                 }
 
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(root)
-                    .ok()?
-                    .to_str()?
-                    .to_string();
+                let relative_path = entry.path().strip_prefix(root).ok()?.to_str()?.to_string();
 
                 match entry {
                     dbflux_core::ScriptEntry::File {
@@ -507,10 +499,7 @@ impl DbFluxServer {
         })
     }
 
-    async fn delete_script_impl(
-        state: ServerState,
-        script_path: &str,
-    ) -> Result<(), String> {
+    async fn delete_script_impl(state: ServerState, script_path: &str) -> Result<(), String> {
         use dbflux_core::ScriptsDirectory;
 
         let mut scripts_dir = ScriptsDirectory::new()
@@ -526,7 +515,8 @@ impl DbFluxServer {
             return Err("Script not found".to_string());
         }
 
-        scripts_dir.delete(&full_path)
+        scripts_dir
+            .delete(&full_path)
             .map_err(|e| format!("Failed to delete script: {}", e))?;
 
         Ok(())
@@ -596,9 +586,9 @@ impl DbFluxServer {
                 // Execute as query
                 Self::execute_query_content(state, connection_id, content).await
             }
-            QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash => {
-                Err("Script language not supported for execution (only database queries)".to_string())
-            }
+            QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash => Err(
+                "Script language not supported for execution (only database queries)".to_string(),
+            ),
             QueryLanguage::Custom(_) => {
                 Err("Custom language not supported for execution".to_string())
             }

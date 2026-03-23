@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, AnyElement, App, Context, KeyDownEvent, Window};
+use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSectionId {

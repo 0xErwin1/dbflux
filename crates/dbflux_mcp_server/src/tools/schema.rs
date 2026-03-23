@@ -151,7 +151,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "List all collections in a database (alias for list_tables, used for document databases)")]
+    #[tool(
+        description = "List all collections in a database (alias for list_tables, used for document databases)"
+    )]
     async fn list_collections(
         &self,
         Parameters(params): Parameters<ListTablesParams>,

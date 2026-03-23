@@ -1484,16 +1484,11 @@ impl McpSection {
                     .flex()
                     .flex_col()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(
-                                "Audit trail is written by the MCP server to mcp_audit.sqlite in \
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(
+                        "Audit trail is written by the MCP server to mcp_audit.sqlite in \
                                  the DBFlux data directory. Querying and filtering will be \
                                  available here once the server is running.",
-                            ),
-                    ),
+                    )),
             )
     }
 
@@ -1519,12 +1514,7 @@ impl McpSection {
         }
     }
 
-    fn handle_clients_nav(
-        &mut self,
-        chord: KeyChord,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn handle_clients_nav(&mut self, chord: KeyChord, window: &mut Window, cx: &mut Context<Self>) {
         let clients = self.trusted_clients(cx);
 
         match (chord.key.as_str(), chord.modifiers) {

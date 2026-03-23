@@ -152,13 +152,15 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Get information about a database connection (version, server info, status)")]
+    #[tool(
+        description = "Get information about a database connection (version, server info, status)"
+    )]
     async fn get_connection_info(
         &self,
         Parameters(params): Parameters<GetConnectionInfoParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
         use dbflux_core::{DatabaseCategory, DbKind, QueryRequest};
+        use dbflux_policy::ExecutionClassification;
 
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
@@ -176,7 +178,7 @@ impl DbFluxServer {
                     let metadata = conn.metadata();
                     let driver_type = format!("{:?}", conn.kind());
                     let category = metadata.category;
-                    
+
                     // Try to get version info based on database type
                     let version_info = match category {
                         DatabaseCategory::Relational => {
@@ -187,7 +189,7 @@ impl DbFluxServer {
                                 DbKind::SQLite => "SELECT sqlite_version()",
                                 _ => "SELECT version()",
                             };
-                            
+
                             match conn.execute(&QueryRequest {
                                 sql: version_query.to_string(),
                                 params: Vec::new(),

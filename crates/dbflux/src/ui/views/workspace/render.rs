@@ -582,69 +582,71 @@ impl Render for Workspace {
                             super::GovernancePanel::Approvals => {
                                 self.mcp_approvals_view.clone().into_any_element()
                             }
-                            super::GovernancePanel::Audit => self.mcp_audit_view.clone().into_any_element(),
+                            super::GovernancePanel::Audit => {
+                                self.mcp_audit_view.clone().into_any_element()
+                            }
                         };
 
-                root.child(
-                    div()
-                        .id("governance-overlay")
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(
+                        root.child(
                             div()
-                                .w(px(1080.0))
-                                .h(px(680.0))
-                                .bg(theme.sidebar)
-                                .border_1()
-                                .border_color(theme.border)
-                                .rounded(Radii::MD)
-                                .overflow_hidden()
+                                .id("governance-overlay")
+                                .absolute()
+                                .inset_0()
+                                .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
                                 .flex()
-                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
                                 .child(
                                     div()
-                                        .h(px(40.0))
-                                        .px(Spacing::MD)
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .border_b_1()
+                                        .w(px(1080.0))
+                                        .h(px(680.0))
+                                        .bg(theme.sidebar)
+                                        .border_1()
                                         .border_color(theme.border)
+                                        .rounded(Radii::MD)
+                                        .overflow_hidden()
+                                        .flex()
+                                        .flex_col()
                                         .child(
                                             div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(title),
-                                        )
-                                        .child(
-                                            div()
-                                                .cursor_pointer()
-                                                .px(Spacing::SM)
-                                                .py(Spacing::XS)
-                                                .rounded(Radii::SM)
-                                                .hover(|div| div.bg(theme.secondary))
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |_, _, _, cx| {
-                                                        close_entity.update(cx, |this, cx| {
+                                                .h(px(40.0))
+                                                .px(Spacing::MD)
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .border_b_1()
+                                                .border_color(theme.border)
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(title),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .cursor_pointer()
+                                                        .px(Spacing::SM)
+                                                        .py(Spacing::XS)
+                                                        .rounded(Radii::SM)
+                                                        .hover(|div| div.bg(theme.secondary))
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(move |_, _, _, cx| {
+                                                                close_entity.update(cx, |this, cx| {
                                                             this.active_governance_panel = None;
                                                             cx.notify();
                                                         });
-                                                    }),
-                                                )
-                                                .child("Close"),
-                                        ),
-                                )
-                                .child(div().flex_1().min_h_0().child(content)),
-                        ),
-                    )
+                                                            }),
+                                                        )
+                                                        .child("Close"),
+                                                ),
+                                        )
+                                        .child(div().flex_1().min_h_0().child(content)),
+                                ),
+                        )
                     })
                 }
                 #[cfg(not(feature = "mcp"))]

@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use dbflux_core::DbKind;
 use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, ProfileManager};
 use dbflux_mcp::{
-    builtin_policies, builtin_roles, McpGovernanceService,
-    McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
+    McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
+    builtin_policies, builtin_roles,
 };
 
 use crate::connection_cache::ConnectionCache;
@@ -231,7 +231,10 @@ async fn load_connection_policy_assignments(
         pm.profiles.clone()
     };
 
-    log::info!("Loading connection policy assignments for {} profiles", profiles.len());
+    log::info!(
+        "Loading connection policy assignments for {} profiles",
+        profiles.len()
+    );
 
     let mut rt = runtime.write().await;
     let mut loaded_count = 0;
@@ -270,8 +273,12 @@ fn load_profile_assignment(runtime: &mut McpRuntime, profile: &ConnectionProfile
         .collect();
 
     if !assignments.is_empty() {
-        log::info!("Loading assignment for connection {} ({}) with {} bindings", 
-                   profile.name, profile.id, assignments.len());
+        log::info!(
+            "Loading assignment for connection {} ({}) with {} bindings",
+            profile.name,
+            profile.id,
+            assignments.len()
+        );
         match runtime.save_connection_policy_assignment_mut(
             dbflux_mcp::ConnectionPolicyAssignmentDto {
                 connection_id: profile.id.to_string(),

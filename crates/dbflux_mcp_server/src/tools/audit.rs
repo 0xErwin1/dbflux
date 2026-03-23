@@ -16,10 +16,7 @@ use rmcp::{
 };
 use serde::Deserialize;
 
-use crate::{
-    helper::IntoErrorData,
-    server::DbFluxServer,
-};
+use crate::{helper::IntoErrorData, server::DbFluxServer};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryAuditLogsParams {
@@ -29,13 +26,19 @@ pub struct QueryAuditLogsParams {
     #[schemars(description = "Filter by tool ID (optional)")]
     pub tool_id: Option<String>,
 
-    #[schemars(description = "Filter by decision (e.g., 'allow', 'deny', 'approved', 'rejected') (optional)")]
+    #[schemars(
+        description = "Filter by decision (e.g., 'allow', 'deny', 'approved', 'rejected') (optional)"
+    )]
     pub decision: Option<String>,
 
-    #[schemars(description = "Filter by start date in ISO8601 format (e.g., '2024-03-20T10:00:00Z') (optional)")]
+    #[schemars(
+        description = "Filter by start date in ISO8601 format (e.g., '2024-03-20T10:00:00Z') (optional)"
+    )]
     pub start_date: Option<String>,
 
-    #[schemars(description = "Filter by end date in ISO8601 format (e.g., '2024-03-20T23:59:59Z') (optional)")]
+    #[schemars(
+        description = "Filter by end date in ISO8601 format (e.g., '2024-03-20T23:59:59Z') (optional)"
+    )]
     pub end_date: Option<String>,
 
     #[schemars(description = "Maximum number of entries to return (optional)")]
@@ -56,13 +59,19 @@ pub struct ExportAuditLogsParams {
     #[schemars(description = "Filter by tool ID (optional)")]
     pub tool_id: Option<String>,
 
-    #[schemars(description = "Filter by decision (e.g., 'allow', 'deny', 'approved', 'rejected') (optional)")]
+    #[schemars(
+        description = "Filter by decision (e.g., 'allow', 'deny', 'approved', 'rejected') (optional)"
+    )]
     pub decision: Option<String>,
 
-    #[schemars(description = "Filter by start date in ISO8601 format (e.g., '2024-03-20T10:00:00Z') (optional)")]
+    #[schemars(
+        description = "Filter by start date in ISO8601 format (e.g., '2024-03-20T10:00:00Z') (optional)"
+    )]
     pub start_date: Option<String>,
 
-    #[schemars(description = "Filter by end date in ISO8601 format (e.g., '2024-03-20T23:59:59Z') (optional)")]
+    #[schemars(
+        description = "Filter by end date in ISO8601 format (e.g., '2024-03-20T23:59:59Z') (optional)"
+    )]
     pub end_date: Option<String>,
 
     #[schemars(description = "Maximum number of entries to return (optional)")]
@@ -111,7 +120,9 @@ fn build_audit_filter(
 }
 
 impl DbFluxServer {
-    #[tool(description = "Query audit logs with optional filters (actor, tool, decision, date range, limit)")]
+    #[tool(
+        description = "Query audit logs with optional filters (actor, tool, decision, date range, limit)"
+    )]
     async fn query_audit_logs(
         &self,
         Parameters(params): Parameters<QueryAuditLogsParams>,
@@ -134,12 +145,7 @@ impl DbFluxServer {
                 ExecutionClassification::Read,
                 move || async move {
                     let filter = build_audit_filter(
-                        actor_id,
-                        tool_id,
-                        decision,
-                        start_date,
-                        end_date,
-                        limit,
+                        actor_id, tool_id, decision, start_date, end_date, limit,
                     )
                     .map_err(|e| e.into_error_data())?;
 
@@ -188,7 +194,9 @@ impl DbFluxServer {
                         Some(entry) => Ok(CallToolResult::success(vec![Content::text(
                             serde_json::to_string_pretty(&entry).unwrap(),
                         )])),
-                        None => Err(format!("Audit entry with ID {} not found", id).into_error_data()),
+                        None => {
+                            Err(format!("Audit entry with ID {} not found", id).into_error_data())
+                        }
                     }
                 },
             )
@@ -219,12 +227,7 @@ impl DbFluxServer {
                 ExecutionClassification::Admin,
                 move || async move {
                     let filter = build_audit_filter(
-                        actor_id,
-                        tool_id,
-                        decision,
-                        start_date,
-                        end_date,
-                        limit,
+                        actor_id, tool_id, decision, start_date, end_date, limit,
                     )
                     .map_err(|e| e.into_error_data())?;
 
@@ -236,7 +239,7 @@ impl DbFluxServer {
                                 "Invalid export format '{}'. Must be 'csv' or 'json'",
                                 format
                             )
-                            .into_error_data())
+                            .into_error_data());
                         }
                     };
 

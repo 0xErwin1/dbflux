@@ -538,7 +538,7 @@ impl DbFluxServer {
                     if let Some(ref def) = op.definition {
                         let col_name = op.column.as_deref().unwrap_or("");
                         let mut parts = Vec::new();
-                        
+
                         // Build ALTER COLUMN clause based on what's being changed
                         if let Some(new_type) = def.get("type").and_then(|v| v.as_str()) {
                             parts.push(format!(
@@ -548,9 +548,13 @@ impl DbFluxServer {
                                 new_type
                             ));
                         }
-                        
+
                         if let Some(nullable) = def.get("nullable").and_then(|v| v.as_bool()) {
-                            let null_clause = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
+                            let null_clause = if nullable {
+                                "DROP NOT NULL"
+                            } else {
+                                "SET NOT NULL"
+                            };
                             parts.push(format!(
                                 "ALTER TABLE {} ALTER COLUMN {} {}",
                                 table_quoted,
@@ -558,7 +562,7 @@ impl DbFluxServer {
                                 null_clause
                             ));
                         }
-                        
+
                         if let Some(default_val) = def.get("default") {
                             if default_val.is_null() {
                                 parts.push(format!(
@@ -575,20 +579,23 @@ impl DbFluxServer {
                                 ));
                             }
                         }
-                        
+
                         if parts.is_empty() {
-                            return Err("ALTER_COLUMN requires at least one of: type, nullable, default".to_string());
+                            return Err(
+                                "ALTER_COLUMN requires at least one of: type, nullable, default"
+                                    .to_string(),
+                            );
                         }
-                        
+
                         // Execute all parts and collect results
                         for part_sql in parts {
                             let request = QueryRequest::new(&part_sql);
                             match connection.execute(&request) {
-                                Ok(_) => {},
+                                Ok(_) => {}
                                 Err(e) => return Err(format!("Alter column error: {}", e)),
                             }
                         }
-                        
+
                         // Return early since we already executed
                         results.push(serde_json::json!({"action": op.action, "success": true}));
                         continue;
@@ -598,40 +605,59 @@ impl DbFluxServer {
                 }
                 "ADD_CONSTRAINT" | "ADD CONSTRAINT" => {
                     if let Some(ref def) = op.definition {
-                        let constraint_name = def.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let constraint_type = def.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        
+                        let constraint_name =
+                            def.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let constraint_type =
+                            def.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
                         let constraint_clause = match constraint_type.to_uppercase().as_str() {
                             "CHECK" => {
-                                let condition = def.get("condition").and_then(|v| v.as_str()).unwrap_or("");
+                                let condition =
+                                    def.get("condition").and_then(|v| v.as_str()).unwrap_or("");
                                 format!("CHECK ({})", condition)
                             }
                             "UNIQUE" => {
-                                let columns = def.get("columns").and_then(|v| v.as_array())
-                                    .ok_or_else(|| "UNIQUE constraint requires columns array".to_string())?;
-                                let col_names: Vec<String> = columns.iter()
+                                let columns =
+                                    def.get("columns").and_then(|v| v.as_array()).ok_or_else(
+                                        || "UNIQUE constraint requires columns array".to_string(),
+                                    )?;
+                                let col_names: Vec<String> = columns
+                                    .iter()
                                     .filter_map(|v| v.as_str())
                                     .map(|c| dialect.quote_identifier(c))
                                     .collect();
                                 format!("UNIQUE ({})", col_names.join(", "))
                             }
                             "FOREIGN_KEY" | "FOREIGN KEY" => {
-                                let columns = def.get("columns").and_then(|v| v.as_array())
-                                    .ok_or_else(|| "FOREIGN KEY constraint requires columns array".to_string())?;
-                                let ref_table = def.get("ref_table").and_then(|v| v.as_str())
-                                    .ok_or_else(|| "FOREIGN KEY constraint requires ref_table".to_string())?;
-                                let ref_columns = def.get("ref_columns").and_then(|v| v.as_array())
-                                    .ok_or_else(|| "FOREIGN KEY constraint requires ref_columns array".to_string())?;
-                                
-                                let col_names: Vec<String> = columns.iter()
+                                let columns = def
+                                    .get("columns")
+                                    .and_then(|v| v.as_array())
+                                    .ok_or_else(|| {
+                                        "FOREIGN KEY constraint requires columns array".to_string()
+                                    })?;
+                                let ref_table =
+                                    def.get("ref_table").and_then(|v| v.as_str()).ok_or_else(
+                                        || "FOREIGN KEY constraint requires ref_table".to_string(),
+                                    )?;
+                                let ref_columns = def
+                                    .get("ref_columns")
+                                    .and_then(|v| v.as_array())
+                                    .ok_or_else(|| {
+                                        "FOREIGN KEY constraint requires ref_columns array"
+                                            .to_string()
+                                    })?;
+
+                                let col_names: Vec<String> = columns
+                                    .iter()
                                     .filter_map(|v| v.as_str())
                                     .map(|c| dialect.quote_identifier(c))
                                     .collect();
-                                let ref_col_names: Vec<String> = ref_columns.iter()
+                                let ref_col_names: Vec<String> = ref_columns
+                                    .iter()
                                     .filter_map(|v| v.as_str())
                                     .map(|c| dialect.quote_identifier(c))
                                     .collect();
-                                
+
                                 format!(
                                     "FOREIGN KEY ({}) REFERENCES {} ({})",
                                     col_names.join(", "),
@@ -639,9 +665,14 @@ impl DbFluxServer {
                                     ref_col_names.join(", ")
                                 )
                             }
-                            _ => return Err(format!("Unsupported constraint type: {}", constraint_type)),
+                            _ => {
+                                return Err(format!(
+                                    "Unsupported constraint type: {}",
+                                    constraint_type
+                                ));
+                            }
                         };
-                        
+
                         format!(
                             "ALTER TABLE {} ADD CONSTRAINT {} {}",
                             table_quoted,
@@ -654,7 +685,8 @@ impl DbFluxServer {
                 }
                 "DROP_CONSTRAINT" | "DROP CONSTRAINT" => {
                     if let Some(ref def) = op.definition {
-                        let constraint_name = def.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let constraint_name =
+                            def.get("name").and_then(|v| v.as_str()).unwrap_or("");
                         format!(
                             "ALTER TABLE {} DROP CONSTRAINT {}",
                             table_quoted,
@@ -776,10 +808,7 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         // This is PostgreSQL-specific and requires special handling
         // For now, return a not supported response
-        Err(
-            "CREATE TYPE is database-specific and not yet fully implemented."
-                .to_string(),
-        )
+        Err("CREATE TYPE is database-specific and not yet fully implemented.".to_string())
     }
 }
 

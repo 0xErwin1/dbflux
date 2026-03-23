@@ -307,7 +307,9 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/brand/influxdb.svg")
             }
             Self::DbFlux => include_bytes!("../../../../../resources/icons/dbflux.svg"),
-            Self::BrainCircuit => include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg"),
+            Self::BrainCircuit => {
+                include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
+            }
             Self::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
         }
     }

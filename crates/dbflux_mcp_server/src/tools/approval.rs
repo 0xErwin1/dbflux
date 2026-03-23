@@ -74,7 +74,7 @@ impl DbFluxServer {
 
         // Extract connection_id for authorization
         let connection_id_ref = params.connection_id.clone();
-        
+
         // Clone all values for the closure
         let connection_id = params.connection_id;
         let tool_id = params.tool_id;
@@ -86,13 +86,13 @@ impl DbFluxServer {
                 Some(&connection_id_ref),
                 ExecutionClassification::Write,
                 move || async move {
-                        let plan = ExecutionPlan {
-                            connection_id,
-                            actor_id: client_id,
-                            tool_id,
-                            classification,
-                            payload,
-                        };
+                    let plan = ExecutionPlan {
+                        connection_id,
+                        actor_id: client_id,
+                        tool_id,
+                        classification,
+                        payload,
+                    };
 
                     let pending = {
                         let mut runtime = state.runtime.write().await;
@@ -290,10 +290,13 @@ impl DbFluxServer {
     fn classify_tool(tool_id: &str) -> ExecutionClassification {
         match tool_id {
             // Metadata operations
-            "list_connections" | "list_databases" | "list_schemas" | "list_tables"
-            | "list_collections" | "describe_object" | "get_connection_info" => {
-                ExecutionClassification::Metadata
-            }
+            "list_connections"
+            | "list_databases"
+            | "list_schemas"
+            | "list_tables"
+            | "list_collections"
+            | "describe_object"
+            | "get_connection_info" => ExecutionClassification::Metadata,
 
             // Read operations
             "select_data" | "count_records" | "aggregate_data" => ExecutionClassification::Read,
@@ -302,8 +305,9 @@ impl DbFluxServer {
             "insert_record" | "update_records" | "upsert_record" => ExecutionClassification::Write,
 
             // Destructive operations
-            "delete_records" | "truncate_table" | "drop_table" | "drop_database"
-            | "drop_index" => ExecutionClassification::Destructive,
+            "delete_records" | "truncate_table" | "drop_table" | "drop_database" | "drop_index" => {
+                ExecutionClassification::Destructive
+            }
 
             // Admin operations
             "create_table" | "alter_table" | "create_index" | "create_type" => {

@@ -13,7 +13,9 @@ use crate::keymap::{
 };
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::document::{CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager};
+use crate::ui::document::{
+    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
+};
 
 #[cfg(feature = "mcp")]
 use crate::ui::document::{McpApprovalsView, McpAuditView};

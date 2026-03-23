@@ -3,19 +3,13 @@
 //! These tests verify that the server correctly handles MCP protocol requests
 //! and returns properly formatted responses.
 
-use rmcp::{
-    ServiceExt,
-    model::*,
-    transport::IntoTransport,
-};
-use tokio::io::DuplexStream;
 use dbflux_mcp_server::McpServerArgs;
+use rmcp::{ServiceExt, model::*, transport::IntoTransport};
+use tokio::io::DuplexStream;
 
 /// Helper to create a test server with in-memory transport
-async fn create_test_server() -> (
-    impl rmcp::service::Service<RoleClient> + Clone,
-    DuplexStream,
-) {
+#[allow(dead_code)]
+async fn create_test_server() -> (Box<dyn std::any::Any>, DuplexStream) {
     // Create bidirectional in-memory stream
     let (client_stream, server_stream) = tokio::io::duplex(8192);
 
@@ -37,7 +31,7 @@ async fn create_test_server() -> (
 #[ignore] // Ignored until test infrastructure is set up
 async fn test_server_initialization() {
     // This test verifies that the server can be initialized and responds to initialize request
-    
+
     let (_server, _client_stream) = create_test_server().await;
 
     // Create a mock MCP client
@@ -49,7 +43,7 @@ async fn test_server_initialization() {
 #[ignore]
 async fn test_list_tools() {
     // This test verifies that list_tools returns all registered tools
-    
+
     // Expected tools: list_connections, connect, disconnect, get_connection_info,
     // execute_query, explain_query, preview_mutation, list_databases, list_schemas,
     // list_tables, describe_object, list_scripts, get_script, create_script,
@@ -62,7 +56,7 @@ async fn test_list_tools() {
 #[ignore]
 async fn test_list_connections_tool() {
     // This test verifies that the list_connections tool works correctly
-    
+
     // Send call_tool request for list_connections
     // Verify response format
     // Check that connections list is returned
@@ -72,7 +66,7 @@ async fn test_list_connections_tool() {
 #[ignore]
 async fn test_execute_query_requires_connection() {
     // This test verifies that execute_query fails without connection_id
-    
+
     // Send call_tool request for execute_query without connection_id
     // Verify error response
 }
@@ -81,7 +75,7 @@ async fn test_execute_query_requires_connection() {
 #[ignore]
 async fn test_governance_authorization() {
     // This test verifies that governance middleware enforces policies
-    
+
     // Setup: Create server with restricted policies
     // Send call_tool request that should be denied
     // Verify authorization denied error
@@ -90,11 +84,13 @@ async fn test_governance_authorization() {
 /// Helper to create a minimal ServerState for testing
 #[allow(dead_code)]
 fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
-    use dbflux_mcp::{builtin_roles, builtin_policies, McpRuntime, TrustedClientDto};
+    use dbflux_mcp::{McpRuntime, TrustedClientDto, builtin_policies, builtin_roles};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
-    let audit_service = dbflux_audit::AuditService::new_in_memory();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let audit_path = temp_dir.path().join("test_audit.sqlite");
+    let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path).unwrap();
     let mut runtime = McpRuntime::new(audit_service);
 
     // Register built-in roles and policies
@@ -118,7 +114,7 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
 
     dbflux_mcp_server::state::ServerState {
         client_id: "test-client".to_string(),
-        runtime: Arc::new(runtime),
+        runtime: Arc::new(RwLock::new(runtime)),
         profile_manager: Arc::new(RwLock::new(dbflux_core::ProfileManager::new())),
         driver_registry: Arc::new(std::collections::HashMap::new()),
         connection_cache: Arc::new(RwLock::new(
@@ -130,7 +126,7 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
 
 // Note: These tests are currently ignored because they require:
 // 1. Exposing ServerState::new() as public API
-// 2. Exposing DbFluxServer::new() as public API  
+// 2. Exposing DbFluxServer::new() as public API
 // 3. Refactoring run_mcp_server() to return the service for testing
 //
 // Alternative approach: Use end-to-end testing with actual stdio transport
