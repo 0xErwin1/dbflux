@@ -422,7 +422,9 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `Read` — SELECT queries, data browsing
 - `Write` — INSERT/UPDATE, mutations
 - `Destructive` — DELETE, DROP, TRUNCATE
-- `Admin` — DDL operations, user management
+- `AdminSafe` — Safe DDL operations (CREATE TABLE, CREATE INDEX, ADD COLUMN with default/nullable)
+- `Admin` — Risky DDL operations (DROP COLUMN, RENAME COLUMN, ALTER COLUMN, DROP INDEX)
+- `AdminDestructive` — Irreversible DDL operations (DROP TABLE, DROP DATABASE, TRUNCATE TABLE)
 
 **Policy Engine** (`dbflux_policy`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
@@ -456,6 +458,55 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `McpApprovalsView` document for reviewing pending executions
 - MCP settings section for trusted clients, roles, policies, and audit log
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
+
+### WHERE Clause Syntax
+
+DBFlux MCP uses a unified JSON WHERE clause syntax that works across all database drivers (SQL, MongoDB, Redis, DynamoDB):
+
+**ColumnRef Pattern**: Column references support three forms:
+- `ColumnRef::Name("email")` — Simple column reference
+- `ColumnRef::Nested(vec!["metadata", "profile", "age"])` — Nested document field (MongoDB, JSONB)
+- `ColumnRef::JsonPath { column: "config", path: "$.notifications.email" }` — JSON path syntax
+
+**Operators**: Standard comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`), pattern matching (`$like`, `$ilike`, `$regex`), NULL handling (`null`, `$eq: null`), array operations (`$contains`, `$overlap`, `$size`, `$all`), and logical composition (`$and`, `$or`, `$not`).
+
+**Type Coercion**: Automatic type conversion (string ↔ number ↔ boolean) with validation.
+
+**Driver Translation**: WHERE clauses translate to SQL WHERE, MongoDB query filters, Redis SCAN patterns, or DynamoDB FilterExpression.
+
+**Reference**: See `crates/dbflux_mcp_server/docs/WHERE_CLAUSE_SYNTAX.md` for complete syntax guide with examples.
+
+### DDL Preview System
+
+MCP provides a preview-before-execute workflow for schema changes:
+
+**Preview Workflow**:
+1. AI agent calls `preview_mutation` with operation parameters
+2. DBFlux generates SQL/query using `QueryGenerator` trait
+3. Preview returned with SQL, classification, affected objects, and warnings
+4. Agent reviews and decides whether to proceed
+5. Agent calls actual tool (`alter_table`, `create_table`, etc.) if safe
+
+**Classification Algorithm**: `classify_alter_table_operation()` in `dbflux_core/src/query/classify.rs` determines risk level:
+- `ADD COLUMN` (nullable or with default) → `AdminSafe`
+- `ADD COLUMN` (non-nullable without default) → `Admin` (requires backfill)
+- `DROP COLUMN`, `RENAME COLUMN`, `ALTER COLUMN` → `Admin`
+- `ADD CONSTRAINT` (validation) → `AdminSafe`
+- `ADD CONSTRAINT` (FK with CASCADE DELETE) → `Admin`
+- `DROP CONSTRAINT`, `DROP INDEX` → `Admin`
+- `DROP TABLE`, `TRUNCATE TABLE`, `DROP DATABASE` → `AdminDestructive`
+
+**ALTER TABLE Safety Rules**:
+- Safe operations: `ADD COLUMN` (nullable), `CREATE INDEX`, validation constraints
+- Risky operations: `DROP COLUMN` (data loss), `RENAME COLUMN` (app breakage), `ALTER COLUMN` (type change)
+- Destructive operations: `DROP TABLE`, `TRUNCATE TABLE`
+
+**Driver-Specific Behavior**:
+- PostgreSQL: All DDL is transactional (except `CREATE INDEX CONCURRENTLY`)
+- MySQL: DDL is NOT transactional; rewrites entire table for most `ALTER TABLE` ops
+- SQLite: Limited `ALTER TABLE` support (only `ADD COLUMN`, `RENAME`); `DROP COLUMN` requires table recreation
+
+**Reference**: See `crates/dbflux_mcp_server/docs/DDL_SAFETY.md` for complete safety guide with classification matrix.
 
 ### Platform Detection
 
@@ -521,6 +572,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 | `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
 | `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
 | `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, MutationRequest routing       |
+| `crates/dbflux_core/src/query/column_ref.rs`                      | ColumnRef type for WHERE clause column references   |
+| `crates/dbflux_core/src/query/classify.rs`                        | DDL classification (AdminSafe/Admin/AdminDestructive)|
 | `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |
 | `crates/dbflux_core/src/query/language_service.rs`                | Dangerous query detection (SQL, MongoDB, Redis)     |
 | `crates/dbflux_core/src/pipeline/mod.rs`                          | Provider-agnostic connect pipeline orchestration    |

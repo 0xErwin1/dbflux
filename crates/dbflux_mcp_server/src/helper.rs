@@ -24,7 +24,39 @@ pub fn json_filter_to_sql(
             Ok(conditions.join(" AND "))
         }
         serde_json::Value::Null => Ok("".to_string()),
-        _ => Err("Filter must be a JSON object".to_string()),
+        serde_json::Value::String(s) => {
+            if s.trim().starts_with('{') {
+                match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s) {
+                    Ok(map) => json_filter_to_sql(&serde_json::Value::Object(map), dialect),
+                    Err(_) => Err(format!(
+                        "Filter must be a JSON object. Received a string that looks like JSON but failed to parse: {}",
+                        s
+                    )),
+                }
+            } else {
+                Err(format!(
+                    "Filter must be a JSON object, not a string. Received: {:?}. \
+                     If you intended to pass a JSON object, do not wrap it in quotes.",
+                    s
+                ))
+            }
+        }
+        serde_json::Value::Array(_) => Err("Filter must be a JSON object, not an array. \
+             Use an object with column conditions instead. \
+             Example: {{\"column_name\": \"value\"}} or {{\"id\": {{\">\": 10}}}}"
+            .to_string()),
+        serde_json::Value::Bool(b) => Err(format!(
+            "Filter must be a JSON object, not a boolean. Received: {}. \
+             Use an object with column conditions instead. \
+             Example: {{\"column_name\": \"value\"}}",
+            b
+        )),
+        serde_json::Value::Number(n) => Err(format!(
+            "Filter must be a JSON object, not a number. Received: {}. \
+             Use an object with column conditions instead. \
+             Example: {{\"column_name\": \"value\"}}",
+            n
+        )),
     }
 }
 
@@ -258,5 +290,156 @@ pub(crate) trait IntoErrorData {
 impl IntoErrorData for String {
     fn into_error_data(self) -> ErrorData {
         ErrorData::internal_error(self, None)
+    }
+}
+
+#[cfg(test)]
+mod filter_validation_tests {
+    use super::*;
+    use dbflux_core::DefaultSqlDialect;
+
+    #[test]
+    fn test_valid_object_filter() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!({
+            "name": "Alice",
+            "age": {">=": 18}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "Valid object filter should succeed");
+
+        let sql = result.unwrap();
+        assert!(sql.contains("name"));
+        assert!(sql.contains("Alice"));
+        assert!(sql.contains("age"));
+        assert!(sql.contains(">="));
+        assert!(sql.contains("18"));
+    }
+
+    #[test]
+    fn test_string_encoded_json_recovery() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!(r#"{"status": "active"}"#);
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(
+            result.is_ok(),
+            "String containing valid JSON object should be recovered"
+        );
+
+        let sql = result.unwrap();
+        assert!(sql.contains("status"));
+        assert!(sql.contains("active"));
+    }
+
+    #[test]
+    fn test_array_filter_error() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!(["id", "name", "age"]);
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_err(), "Array filter should produce error");
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("array"),
+            "Error message should mention 'array'"
+        );
+        assert!(
+            error.contains("object"),
+            "Error message should mention 'object'"
+        );
+        assert!(
+            error.contains("Example"),
+            "Error message should include example"
+        );
+    }
+
+    #[test]
+    fn test_boolean_filter_error() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!(true);
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_err(), "Boolean filter should produce error");
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("boolean"),
+            "Error message should mention 'boolean'"
+        );
+        assert!(
+            error.contains("true"),
+            "Error message should show the actual boolean value"
+        );
+        assert!(
+            error.contains("Example"),
+            "Error message should include example"
+        );
+    }
+
+    #[test]
+    fn test_number_filter_error() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!(42);
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_err(), "Number filter should produce error");
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("number"),
+            "Error message should mention 'number'"
+        );
+        assert!(
+            error.contains("42"),
+            "Error message should show the actual number"
+        );
+        assert!(
+            error.contains("Example"),
+            "Error message should include example"
+        );
+    }
+
+    #[test]
+    fn test_plain_string_filter_error() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!("just a string");
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_err(), "Plain string filter should produce error");
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("string"),
+            "Error message should mention 'string'"
+        );
+        assert!(
+            error.contains("just a string"),
+            "Error message should show the actual string"
+        );
+        assert!(
+            error.contains("do not wrap it in quotes"),
+            "Error message should warn about quotes"
+        );
+    }
+
+    #[test]
+    fn test_malformed_json_string_error() {
+        let dialect = DefaultSqlDialect;
+        let filter = serde_json::json!(r#"{"status": invalid}"#);
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(
+            result.is_err(),
+            "Malformed JSON string should produce error"
+        );
+
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("looks like JSON but failed to parse"),
+            "Error message should explain the parse failure"
+        );
     }
 }

@@ -60,6 +60,8 @@ impl From<ToolPolicy> for ToolPolicyDto {
                     ExecutionClassification::Write => "write",
                     ExecutionClassification::Destructive => "destructive",
                     ExecutionClassification::Admin => "admin",
+                    ExecutionClassification::AdminSafe => "admin_safe",
+                    ExecutionClassification::AdminDestructive => "admin_destructive",
                 })
                 .map(str::to_string)
                 .collect(),
@@ -80,6 +82,8 @@ impl TryFrom<ToolPolicyDto> for ToolPolicy {
                 "destructive" => Ok(ExecutionClassification::Destructive),
                 "admin" => Ok(ExecutionClassification::Admin),
                 "metadata" => Ok(ExecutionClassification::Metadata),
+                "admin_safe" => Ok(ExecutionClassification::AdminSafe),
+                "admin_destructive" => Ok(ExecutionClassification::AdminDestructive),
                 _ => Err(format!("invalid classification: {}", c)),
             })
             .collect::<Result<Vec<_>, _>>()?;

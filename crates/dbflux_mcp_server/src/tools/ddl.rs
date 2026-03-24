@@ -21,9 +21,9 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 fn default_true() -> Option<bool> {
     Some(true)
@@ -190,6 +190,68 @@ const DROP_TABLE_CONFIRMATION_ERROR: &str = "Confirmation string must match tabl
 const DROP_DATABASE_CONFIRMATION_ERROR: &str =
     "Confirmation string must match database name exactly";
 
+/// Classify ALTER TABLE operations based on their risk level.
+///
+/// Returns the highest (most restrictive) classification among all operations.
+pub fn classify_alter_operations(
+    operations: &[AlterOperation],
+) -> dbflux_policy::ExecutionClassification {
+    use dbflux_policy::ExecutionClassification;
+
+    let classifications: Vec<ExecutionClassification> = operations
+        .iter()
+        .map(|op| {
+            let action_upper = op.action.to_uppercase();
+            match action_upper.as_str() {
+                "ADD_COLUMN" | "ADD COLUMN" => {
+                    if is_add_column_safe(op) {
+                        ExecutionClassification::AdminSafe
+                    } else {
+                        ExecutionClassification::Admin
+                    }
+                }
+                "DROP_COLUMN" | "DROP COLUMN" => ExecutionClassification::AdminDestructive,
+                "RENAME_COLUMN" | "RENAME COLUMN" => ExecutionClassification::AdminSafe,
+                "ALTER_COLUMN" | "ALTER COLUMN" => classify_alter_column(op),
+                "ADD_CONSTRAINT" | "ADD CONSTRAINT" => ExecutionClassification::Admin,
+                "DROP_CONSTRAINT" | "DROP CONSTRAINT" => ExecutionClassification::AdminDestructive,
+                _ => ExecutionClassification::Admin,
+            }
+        })
+        .collect();
+
+    // Return the highest classification, defaulting to AdminSafe if empty
+    classifications
+        .into_iter()
+        .fold(ExecutionClassification::AdminSafe, |acc, c| acc.max(c))
+}
+
+/// Check if ADD_COLUMN operation is safe (nullable or has default).
+fn is_add_column_safe(op: &AlterOperation) -> bool {
+    if let Some(ref def) = op.definition {
+        let nullable = def
+            .get("nullable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let has_default = def.get("default").is_some();
+        nullable || has_default
+    } else {
+        true // No definition means using driver defaults (usually nullable)
+    }
+}
+
+/// Classify ALTER_COLUMN operation.
+///
+/// MVP: All ALTER_COLUMN operations are Admin level.
+/// Future: Detect widening vs narrowing types for more granular classification.
+fn classify_alter_column(_op: &AlterOperation) -> dbflux_policy::ExecutionClassification {
+    use dbflux_policy::ExecutionClassification;
+
+    // MVP: Treat all column alterations as Admin
+    // Future: Detect type widening (safe) vs narrowing (destructive)
+    ExecutionClassification::Admin
+}
+
 pub fn validate_drop_table_params(params: &DropTableParams) -> Result<(), ErrorData> {
     if params.confirm != params.table {
         return Err(ErrorData::invalid_params(
@@ -210,6 +272,7 @@ pub fn validate_drop_database_params(params: &DropDatabaseParams) -> Result<(), 
     Ok(())
 }
 
+#[tool_router(router = ddl_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Create a new table with columns and constraints")]
     async fn create_table(
@@ -255,18 +318,19 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<AlterTableParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
-
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
         let table = params.table.clone();
         let operations = params.operations.clone();
 
+        // Classify based on operations
+        let classification = classify_alter_operations(&params.operations);
+
         self.governance
             .authorize_and_execute(
                 "alter_table",
                 Some(&params.connection_id),
-                ExecutionClassification::Admin,
+                classification,
                 move || async move {
                     let result = Self::alter_table_impl(state, &connection_id, &table, &operations)
                         .await
@@ -810,6 +874,93 @@ impl DbFluxServer {
         // For now, return a not supported response
         Err("CREATE TYPE is database-specific and not yet fully implemented.".to_string())
     }
+
+    #[tool(description = "Preview DDL changes without executing them")]
+    async fn preview_ddl(
+        &self,
+        Parameters(params): Parameters<PreviewDdlParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use dbflux_policy::ExecutionClassification;
+
+        let state = self.state.clone();
+        let connection_id = params.connection_id.clone();
+        let database = params.database.clone();
+        let sql = params.sql.clone();
+
+        self.governance
+            .authorize_and_execute(
+                "preview_ddl",
+                Some(&params.connection_id),
+                ExecutionClassification::Metadata,
+                move || async move {
+                    Self::preview_ddl_impl(state, &connection_id, database.as_deref(), &sql)
+                        .await
+                        .map_err(|e| e.into_error_data())
+                },
+            )
+            .await
+    }
+
+    async fn preview_ddl_impl(
+        state: ServerState,
+        connection_id: &str,
+        database: Option<&str>,
+        sql: &str,
+    ) -> Result<CallToolResult, String> {
+        use crate::tools::ddl_preview;
+
+        let connection = Self::get_or_connect(state.clone(), connection_id).await?;
+
+        // Get profile to determine driver ID
+        let profile_uuid = connection_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| format!("Invalid connection ID: {}", connection_id))?;
+
+        let profile = {
+            let profile_manager = state.profile_manager.read().await;
+            profile_manager
+                .find_by_id(profile_uuid)
+                .cloned()
+                .ok_or_else(|| format!("Profile not found for connection: {}", connection_id))?
+        };
+
+        let driver_id = profile.driver_id();
+
+        // Get driver from registry
+        let driver = state
+            .driver_registry
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| format!("Driver not found for ID: {}", driver_id))?;
+
+        // Execute preview
+        let result = ddl_preview::preview_ddl_impl(driver, connection, database, sql)
+            .map_err(|e| e.to_string())?;
+
+        // Serialize result
+        let result_json = serde_json::to_value(&result)
+            .map_err(|e| format!("Failed to serialize preview result: {}", e))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result_json).unwrap_or_else(|_| result_json.to_string()),
+        )]))
+    }
+}
+
+// =============================================================================
+// DDL Preview Parameters
+// =============================================================================
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PreviewDdlParams {
+    #[schemars(description = "Connection ID")]
+    pub connection_id: String,
+
+    #[schemars(description = "Optional database/schema name")]
+    pub database: Option<String>,
+
+    #[schemars(description = "DDL statement to preview (CREATE, ALTER, DROP, etc.)")]
+    pub sql: String,
 }
 
 #[cfg(test)]
@@ -862,5 +1013,183 @@ mod tests {
         };
         let result = validate_drop_database_params(&params);
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+    use dbflux_policy::ExecutionClassification;
+
+    #[test]
+    fn test_add_nullable_column_is_safe() {
+        let op = AlterOperation {
+            action: "ADD_COLUMN".to_string(),
+            column: Some("new_col".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "VARCHAR(255)",
+                "nullable": true
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::AdminSafe);
+    }
+
+    #[test]
+    fn test_add_column_with_default_is_safe() {
+        let op = AlterOperation {
+            action: "ADD_COLUMN".to_string(),
+            column: Some("new_col".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "INTEGER",
+                "nullable": false,
+                "default": 0
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::AdminSafe);
+    }
+
+    #[test]
+    fn test_add_not_null_no_default_is_admin() {
+        let op = AlterOperation {
+            action: "ADD_COLUMN".to_string(),
+            column: Some("new_col".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "INTEGER",
+                "nullable": false
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::Admin);
+    }
+
+    #[test]
+    fn test_drop_column_is_destructive() {
+        let op = AlterOperation {
+            action: "DROP_COLUMN".to_string(),
+            column: Some("old_col".to_string()),
+            definition: None,
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::AdminDestructive);
+    }
+
+    #[test]
+    fn test_rename_column_is_safe() {
+        let op = AlterOperation {
+            action: "RENAME_COLUMN".to_string(),
+            column: None,
+            definition: Some(serde_json::json!({
+                "old_name": "old_col",
+                "new_name": "new_col"
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::AdminSafe);
+    }
+
+    #[test]
+    fn test_alter_column_is_admin() {
+        let op = AlterOperation {
+            action: "ALTER_COLUMN".to_string(),
+            column: Some("col".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "BIGINT"
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::Admin);
+    }
+
+    #[test]
+    fn test_add_constraint_is_admin() {
+        let op = AlterOperation {
+            action: "ADD_CONSTRAINT".to_string(),
+            column: None,
+            definition: Some(serde_json::json!({
+                "name": "chk_positive",
+                "type": "CHECK",
+                "condition": "value > 0"
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::Admin);
+    }
+
+    #[test]
+    fn test_drop_constraint_is_destructive() {
+        let op = AlterOperation {
+            action: "DROP_CONSTRAINT".to_string(),
+            column: None,
+            definition: Some(serde_json::json!({
+                "name": "chk_positive"
+            })),
+        };
+
+        let classification = classify_alter_operations(&[op]);
+        assert_eq!(classification, ExecutionClassification::AdminDestructive);
+    }
+
+    #[test]
+    fn test_mixed_operations_use_highest_classification() {
+        let ops = vec![
+            AlterOperation {
+                action: "ADD_COLUMN".to_string(),
+                column: Some("safe_col".to_string()),
+                definition: Some(serde_json::json!({
+                    "type": "TEXT",
+                    "nullable": true
+                })),
+            },
+            AlterOperation {
+                action: "RENAME_COLUMN".to_string(),
+                column: None,
+                definition: Some(serde_json::json!({
+                    "old_name": "old",
+                    "new_name": "new"
+                })),
+            },
+            AlterOperation {
+                action: "DROP_COLUMN".to_string(),
+                column: Some("obsolete_col".to_string()),
+                definition: None,
+            },
+        ];
+
+        let classification = classify_alter_operations(&ops);
+        assert_eq!(classification, ExecutionClassification::AdminDestructive);
+    }
+
+    #[test]
+    fn test_all_safe_operations_remain_safe() {
+        let ops = vec![
+            AlterOperation {
+                action: "ADD_COLUMN".to_string(),
+                column: Some("col1".to_string()),
+                definition: Some(serde_json::json!({
+                    "type": "TEXT",
+                    "nullable": true
+                })),
+            },
+            AlterOperation {
+                action: "RENAME_COLUMN".to_string(),
+                column: None,
+                definition: Some(serde_json::json!({
+                    "old_name": "old",
+                    "new_name": "new"
+                })),
+            },
+        ];
+
+        let classification = classify_alter_operations(&ops);
+        assert_eq!(classification, ExecutionClassification::AdminSafe);
     }
 }

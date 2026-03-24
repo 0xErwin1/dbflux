@@ -12,7 +12,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -121,6 +121,7 @@ fn build_audit_filter(
     })
 }
 
+#[tool_router(router = audit_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(
         description = "Query audit logs with optional filters (actor, tool, decision, date range, limit)"

@@ -4,7 +4,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -57,6 +57,7 @@ pub struct DescribeObjectParams {
     pub schema: Option<String>,
 }
 
+#[tool_router(router = schema_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "List all databases available on the connection")]
     async fn list_databases(
@@ -273,8 +274,13 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        let database_str = database.unwrap_or("");
-        let schema_info = connection.schema_for_database(database_str).map_err(|e| {
+        let conn = connection.clone();
+        let schema_snapshot = tokio::task::spawn_blocking(move || {
+            conn.schema()
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?
+        .map_err(|e| {
             error_messages::schema_operation_error(
                 "list tables",
                 connection_id,
@@ -285,7 +291,19 @@ impl DbFluxServer {
             )
         })?;
 
-        let mut tables: Vec<serde_json::Value> = schema_info
+        use dbflux_core::DataStructure;
+
+        let relational = match schema_snapshot.structure {
+            DataStructure::Relational(r) => r,
+            _ => return Err("Not a relational database".to_string()),
+        };
+
+        let target_schema = schema.unwrap_or("public");
+        let schema_data = relational.schemas.iter()
+            .find(|s| s.name == target_schema)
+            .ok_or_else(|| format!("Schema '{}' not found", target_schema))?;
+
+        let mut tables: Vec<serde_json::Value> = schema_data
             .tables
             .iter()
             .map(|t| {
@@ -297,7 +315,7 @@ impl DbFluxServer {
             })
             .collect();
 
-        let views: Vec<serde_json::Value> = schema_info
+        let views: Vec<serde_json::Value> = schema_data
             .views
             .iter()
             .map(|v| {

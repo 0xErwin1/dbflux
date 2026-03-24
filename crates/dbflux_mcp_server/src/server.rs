@@ -4,8 +4,15 @@ use rmcp::{
 use std::sync::Arc;
 
 use dbflux_core::Connection;
+use dbflux_core::secrecy::SecretString;
 
 use crate::{error_messages, governance::GovernanceMiddleware, state::ServerState};
+
+/// Resolved secrets from a profile
+struct ResolvedSecrets {
+    password: Option<SecretString>,
+    ssh_secret: Option<SecretString>,
+}
 
 /// Main DBFlux MCP Server
 #[derive(Clone)]
@@ -24,7 +31,17 @@ impl DbFluxServer {
         Self {
             state,
             governance,
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router()
+                + Self::connection_router()
+                + Self::schema_router()
+                + Self::query_router()
+                + Self::read_router()
+                + Self::write_router()
+                + Self::destructive_router()
+                + Self::ddl_router()
+                + Self::scripts_router()
+                + Self::approval_router()
+                + Self::audit_router(),
         }
     }
 
@@ -60,6 +77,42 @@ impl DbFluxServer {
         }
     }
 
+    /// Execute a blocking operation in a spawned thread
+    #[allow(dead_code)]
+    pub(crate) async fn execute_blocking<F, T, E>(f: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            f().map_err(|e| format!("{}", e))
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?
+    }
+
+    /// Get connection and execute a query in a blocking context
+    /// This is the preferred method for tools that need to execute queries
+    #[allow(dead_code)]
+    pub(crate) async fn get_connected_query<F, T>(
+        state: ServerState,
+        connection_id: &str,
+        f: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(Arc<dyn Connection>) -> Result<T, String> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = Self::get_or_connect(state, connection_id).await?;
+
+        tokio::task::spawn_blocking(move || {
+            f(conn)
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?
+    }
+
     /// Get or establish a connection for the given connection_id
     #[allow(dead_code)] // Used by tool implementations
     pub(crate) async fn get_or_connect(
@@ -85,6 +138,9 @@ impl DbFluxServer {
                 .ok_or_else(|| error_messages::connection_not_found(connection_id))?
         };
 
+        // Resolve secrets and values from the profile
+        let resolved_secrets = Self::resolve_profile_secrets(&state, &profile)?;
+
         let driver_id = profile.driver_id();
 
         let available_drivers: Vec<String> = state.driver_registry.keys().cloned().collect();
@@ -95,9 +151,19 @@ impl DbFluxServer {
             .cloned()
             .ok_or_else(|| error_messages::driver_not_available(&driver_id, &available_drivers))?;
 
-        let connection = driver
-            .connect_with_secrets(&profile, None, None)
-            .map_err(|e| error_messages::connection_error(connection_id, &driver_id, e))?;
+        let connection_id_owned = connection_id.to_string();
+        let driver_id_owned = driver_id.clone();
+        let profile_for_connect = profile.clone();
+        let password = resolved_secrets.password;
+        let ssh_secret = resolved_secrets.ssh_secret;
+
+        let connection = tokio::task::spawn_blocking(move || {
+            driver
+                .connect_with_secrets(&profile_for_connect, password.as_ref(), ssh_secret.as_ref())
+                .map_err(|e| error_messages::connection_error(&connection_id_owned, &driver_id_owned, e))
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))??;
 
         let connection: Arc<dyn Connection> = Arc::from(connection);
 
@@ -107,6 +173,34 @@ impl DbFluxServer {
         }
 
         Ok(connection)
+    }
+
+    /// Resolve secrets from a profile using keyring
+    fn resolve_profile_secrets(
+        state: &ServerState,
+        profile: &dbflux_core::ConnectionProfile,
+    ) -> Result<ResolvedSecrets, String> {
+        let mut password: Option<SecretString> = None;
+        let mut ssh_secret: Option<SecretString> = None;
+
+        // Try to get password from keyring
+        if let Some(pwd) = state.secret_manager.get_password(profile) {
+            password = Some(pwd);
+        }
+
+        // Resolve SSH secret if needed
+        if password.is_none() {
+            if let Some(pwd) = state.secret_manager.get_password(profile) {
+                password = Some(pwd);
+            }
+        }
+
+        // Resolve SSH secret if needed
+        if let Some(ssh) = state.secret_manager.get_ssh_password(profile) {
+            ssh_secret = Some(ssh);
+        }
+
+        Ok(ResolvedSecrets { password, ssh_secret })
     }
 }
 

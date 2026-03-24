@@ -366,7 +366,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let order_by = Self::get_primary_key_columns(&app_state, profile_id, &table, cx);
-        let pk_columns: Vec<String> = order_by.iter().map(|c| c.name.clone()).collect();
+        let pk_columns: Vec<String> = order_by.iter().map(|c| c.column.name.clone()).collect();
         let pagination = Pagination::default();
 
         let source = DataSource::Table {
@@ -1309,7 +1309,7 @@ impl DataGridPanel {
         match &self.source {
             DataSource::Table { order_by, .. } => order_by
                 .first()
-                .map(|col| (col.name.clone(), col.direction, true)),
+                .map(|col| (col.column.name.clone(), col.direction, true)),
             DataSource::Collection { .. } => None,
             DataSource::QueryResult { .. } => self.local_sort_state.and_then(|state| {
                 self.result

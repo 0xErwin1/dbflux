@@ -14,7 +14,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -60,6 +60,7 @@ pub struct RejectExecutionParams {
     pub reason: Option<String>,
 }
 
+#[tool_router(router = approval_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Request approval for a potentially destructive operation")]
     async fn request_execution(

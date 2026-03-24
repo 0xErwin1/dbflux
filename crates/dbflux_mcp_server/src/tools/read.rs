@@ -5,13 +5,13 @@
 //! - `count_records`: Count records matching a filter
 //! - `aggregate_data`: Perform aggregations with grouping and having clauses
 
-use dbflux_core::{QueryRequest, TableRef, Value};
+use dbflux_core::{ColumnRef, QueryRequest, TableRef, Value};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -150,6 +150,7 @@ pub struct AggregateDataParams {
     pub database: Option<String>,
 }
 
+#[tool_router(router = read_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Select data from a table with filtering, sorting, and pagination")]
     async fn select_data(
@@ -285,6 +286,32 @@ impl DbFluxServer {
             .await
     }
 
+    /// Quotes a column reference, handling qualified names (table.column or schema.table.column).
+    ///
+    /// Uses `ColumnRef` for simple and two-part qualified names.
+    /// For multi-part qualified names (schema.table.column), splits and quotes each part.
+    fn quote_column_reference(column: &str, dialect: &dyn dbflux_core::SqlDialect) -> String {
+        let parts: Vec<&str> = column.split('.').collect();
+        match parts.len() {
+            1 => {
+                let col_ref = ColumnRef::new(column);
+                col_ref.quoted_with(dialect)
+            }
+            2 => {
+                let col_ref = ColumnRef::from_qualified(column);
+                col_ref.quoted_with(dialect)
+            }
+            _ => {
+                // Multi-part qualified name (schema.table.column or more)
+                parts
+                    .iter()
+                    .map(|part| dialect.quote_identifier(part))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn select_data_impl(
         state: ServerState,
@@ -307,7 +334,7 @@ impl DbFluxServer {
                 "*".to_string()
             } else {
                 cols.iter()
-                    .map(|c| dialect.quote_identifier(c))
+                    .map(|c| Self::quote_column_reference(c, dialect))
                     .collect::<Vec<_>>()
                     .join(", ")
             }
@@ -355,7 +382,8 @@ impl DbFluxServer {
                         .as_deref()
                         .map(|d| d.to_uppercase())
                         .unwrap_or_else(|| "ASC".to_string());
-                    format!("{} {}", dialect.quote_identifier(&o.column), dir)
+                    let col_ref = ColumnRef::from_qualified(&o.column);
+                    format!("{} {}", col_ref.quoted_with(dialect), dir)
                 })
                 .collect();
             sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
@@ -502,7 +530,8 @@ impl DbFluxServer {
                         .as_deref()
                         .map(|d| d.to_uppercase())
                         .unwrap_or_else(|| "ASC".to_string());
-                    format!("{} {}", dialect.quote_identifier(&o.column), dir)
+                    let col_ref = ColumnRef::from_qualified(&o.column);
+                    format!("{} {}", col_ref.quoted_with(dialect), dir)
                 })
                 .collect();
             sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
@@ -581,5 +610,32 @@ mod tests {
 
         assert_eq!(params.effective_limit(), 500);
         assert_eq!(params.effective_offset(), 100);
+    }
+
+    #[test]
+    fn test_quote_column_reference_simple() {
+        use dbflux_core::DefaultSqlDialect;
+
+        let dialect = DefaultSqlDialect;
+        let result = DbFluxServer::quote_column_reference("name", &dialect);
+        assert_eq!(result, r#""name""#);
+    }
+
+    #[test]
+    fn test_quote_column_reference_qualified() {
+        use dbflux_core::DefaultSqlDialect;
+
+        let dialect = DefaultSqlDialect;
+        let result = DbFluxServer::quote_column_reference("users.name", &dialect);
+        assert_eq!(result, r#""users"."name""#);
+    }
+
+    #[test]
+    fn test_quote_column_reference_fully_qualified() {
+        use dbflux_core::DefaultSqlDialect;
+
+        let dialect = DefaultSqlDialect;
+        let result = DbFluxServer::quote_column_reference("public.users.name", &dialect);
+        assert_eq!(result, r#""public"."users"."name""#);
     }
 }

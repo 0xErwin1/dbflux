@@ -424,7 +424,10 @@ impl DataGridPanel {
     ) {
         // Determine sort state from order_by for visual indicator
         let initial_sort = order_by.first().and_then(|col| {
-            let pos = result.columns.iter().position(|c| c.name == col.name);
+            let pos = result
+                .columns
+                .iter()
+                .position(|c| c.name == col.column.name);
             pos.map(|column_ix| TableSortState::new(column_ix, col.direction))
         });
 

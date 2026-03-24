@@ -16,7 +16,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -71,6 +71,7 @@ pub fn validate_truncate_params(params: &TruncateTableParams) -> Result<(), Stri
     Ok(())
 }
 
+#[tool_router(router = destructive_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Delete records matching a filter (requires WHERE clause)")]
     async fn delete_records(
@@ -167,7 +168,7 @@ impl DbFluxServer {
             .authorize_and_execute(
                 "drop_table",
                 Some(&params.connection_id),
-                ExecutionClassification::Admin,
+                ExecutionClassification::AdminDestructive,
                 move || async move {
                     let result =
                         Self::drop_table_impl(state, &connection_id, &table, cascade, if_exists)
@@ -202,7 +203,7 @@ impl DbFluxServer {
             .authorize_and_execute(
                 "drop_database",
                 Some(&params.connection_id),
-                ExecutionClassification::Admin,
+                ExecutionClassification::AdminDestructive,
                 move || async move {
                     let result =
                         Self::drop_database_impl(state, &connection_id, &database, if_exists)

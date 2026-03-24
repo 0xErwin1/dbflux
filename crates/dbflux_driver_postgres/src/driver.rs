@@ -49,7 +49,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::CUSTOM_TYPES.bits()
-            | DriverCapabilities::RETURNING.bits(),
+            | DriverCapabilities::RETURNING.bits()
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),

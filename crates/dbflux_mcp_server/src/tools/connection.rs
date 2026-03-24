@@ -3,7 +3,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -27,6 +27,7 @@ pub struct GetConnectionInfoParams {
     pub connection_id: String,
 }
 
+#[tool_router(router = connection_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "List all available database connections configured in DBFlux")]
     async fn list_connections(&self) -> Result<CallToolResult, ErrorData> {
@@ -159,8 +160,9 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<GetConnectionInfoParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_core::{DatabaseCategory, DbKind, QueryRequest};
+        use dbflux_core::QueryRequest;
         use dbflux_policy::ExecutionClassification;
+        use std::sync::Arc;
 
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
@@ -178,107 +180,40 @@ impl DbFluxServer {
                     let metadata = conn.metadata();
                     let driver_type = format!("{:?}", conn.kind());
                     let category = metadata.category;
-
-                    // Try to get version info based on database type
-                    let version_info = match category {
-                        DatabaseCategory::Relational => {
-                            // For SQL databases, try SELECT version()
-                            let version_query = match conn.kind() {
-                                DbKind::Postgres => "SELECT version()",
-                                DbKind::MySQL | DbKind::MariaDB => "SELECT VERSION()",
-                                DbKind::SQLite => "SELECT sqlite_version()",
-                                _ => "SELECT version()",
-                            };
-
-                            match conn.execute(&QueryRequest {
-                                sql: version_query.to_string(),
-                                params: Vec::new(),
-                                limit: Some(1),
-                                offset: None,
-                                statement_timeout: None,
-                                database: None,
-                            }) {
-                                Ok(result) => {
-                                    if !result.rows.is_empty() && !result.rows[0].is_empty() {
-                                        Some(format!("{:?}", result.rows[0][0]))
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Err(_) => None,
-                            }
-                        }
-                        DatabaseCategory::Document => {
-                            // For MongoDB, try buildInfo command
-                            if conn.kind() == DbKind::MongoDB {
-                                match conn.execute(&QueryRequest {
-                                    sql: "db.version()".to_string(),
-                                    params: Vec::new(),
-                                    limit: Some(1),
-                                    offset: None,
-                                    statement_timeout: None,
-                                    database: None,
-                                }) {
-                                    Ok(result) => {
-                                        if !result.rows.is_empty() && !result.rows[0].is_empty() {
-                                            Some(format!("{:?}", result.rows[0][0]))
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        DatabaseCategory::KeyValue => {
-                            // For Redis, try INFO SERVER
-                            if conn.kind() == DbKind::Redis {
-                                match conn.execute(&QueryRequest {
-                                    sql: "INFO SERVER".to_string(),
-                                    params: Vec::new(),
-                                    limit: Some(100),
-                                    offset: None,
-                                    statement_timeout: None,
-                                    database: None,
-                                }) {
-                                    Ok(result) => {
-                                        // Extract version from INFO output
-                                        for row in &result.rows {
-                                            if !row.is_empty() {
-                                                let line = format!("{:?}", row[0]);
-                                                if line.contains("redis_version") {
-                                                    return Ok(CallToolResult::success(vec![Content::text(
-                                                        serde_json::to_string_pretty(&serde_json::json!({
-                                                            "connection_id": connection_id,
-                                                            "driver_type": driver_type,
-                                                            "category": format!("{:?}", category),
-                                                            "status": "connected",
-                                                            "server_info": line.trim(),
-                                                        }))
-                                                        .unwrap(),
-                                                    )]));
-                                                }
-                                            }
-                                        }
-                                        None
-                                    }
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        DatabaseCategory::WideColumn => {
-                            // DynamoDB doesn't have a version query - just return metadata
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    // Get current database if supported
                     let current_database = conn.active_database();
+                    let conn_for_blocking = conn.clone();
+
+                    let version_info: Option<String> = tokio::task::spawn_blocking(move || {
+                        use dbflux_core::{DatabaseCategory, DbKind};
+
+                        let version_query = match (category, conn_for_blocking.kind()) {
+                            (DatabaseCategory::Relational, DbKind::Postgres) => "SELECT version()",
+                            (DatabaseCategory::Relational, DbKind::MySQL | DbKind::MariaDB) => "SELECT VERSION()",
+                            (DatabaseCategory::Relational, DbKind::SQLite) => "SELECT sqlite_version()",
+                            _ => "SELECT version()",
+                        };
+
+                        conn_for_blocking.execute(&QueryRequest {
+                            sql: version_query.to_string(),
+                            params: Vec::new(),
+                            limit: Some(1),
+                            offset: None,
+                            statement_timeout: None,
+                            database: None,
+                        })
+                        .ok()
+                        .and_then(|result| {
+                            if !result.rows.is_empty() && !result.rows[0].is_empty() {
+                                Some(format!("{:?}", result.rows[0][0]))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .await
+                    .map_err(|e| format!("Blocking task failed: {}", e))
+                    .ok()
+                    .flatten();
 
                     let mut info = serde_json::json!({
                         "connection_id": connection_id,

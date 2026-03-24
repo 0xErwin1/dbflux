@@ -12,7 +12,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -121,6 +121,7 @@ pub fn validate_delete_params(params: &DeleteScriptParams) -> Result<(), String>
     Ok(())
 }
 
+#[tool_router(router = scripts_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "List scripts in the scripts directory")]
     async fn list_scripts(

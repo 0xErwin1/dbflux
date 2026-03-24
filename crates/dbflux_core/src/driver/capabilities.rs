@@ -351,6 +351,11 @@ bitflags! {
 
         /// Driver supports edge properties.
         const EDGE_PROPERTIES = 1 << 45;
+
+        /// Driver supports transactional DDL (DDL inside transactions with rollback).
+        /// When true, the driver can execute DDL statements within a transaction,
+        /// allowing dry-run schema changes via transaction rollback.
+        const TRANSACTIONAL_DDL = 1 << 46;
     }
 }
 

@@ -11,7 +11,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -93,6 +93,7 @@ impl UpdateRecordsParams {
     }
 }
 
+#[tool_router(router = write_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Insert one or more records into a table")]
     async fn insert_record(

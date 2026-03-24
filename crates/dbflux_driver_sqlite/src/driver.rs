@@ -43,7 +43,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::FILTERING.bits()
             | DriverCapabilities::EXPORT_CSV.bits()
             | DriverCapabilities::EXPORT_JSON.bits()
-            | DriverCapabilities::QUERY_CANCELLATION.bits(),
+            | DriverCapabilities::QUERY_CANCELLATION.bits()
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
     ),
     default_port: None,
     uri_scheme: "sqlite".into(),

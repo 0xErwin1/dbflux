@@ -14,7 +14,7 @@ pub use language_service::{
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use table_browser::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, DescribeRequest,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, DescribeRequest,
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
     TableCountRequest, TableRef,
 };

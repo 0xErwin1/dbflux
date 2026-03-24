@@ -46,10 +46,7 @@ impl DataGridPanel {
 
         if let Some((profile_id, database, table, new_pagination, total_rows)) = table_info {
             // Server-side sort: update source and queue re-query
-            let new_order_by = vec![OrderByColumn {
-                name: col_name,
-                direction,
-            }];
+            let new_order_by = vec![OrderByColumn::from_name(&col_name, direction)];
 
             let filter_value = self.filter_input.read(cx).value();
             let filter = if filter_value.trim().is_empty() {

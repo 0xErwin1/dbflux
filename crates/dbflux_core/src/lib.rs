@@ -79,12 +79,12 @@ pub use driver::{
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnMeta, DangerousQueryKind,
-    DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic, ExplainRequest,
-    GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination, QueryGenerator,
-    QueryHandle, QueryRequest, QueryResult, QueryResultShape, RedisLanguageService, Row,
-    SortDirection, SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest,
-    TableRef, TextPosition, TextPositionRange, TextRange, ValidationResult,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef,
+    DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
+    ExplainRequest, GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination,
+    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape, RedisLanguageService,
+    Row, SortDirection, SqlLanguageService, SqlMutationGenerator, TableBrowseRequest,
+    TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, ValidationResult,
     classify_query_for_governance, classify_query_for_language, classify_sql_execution,
     detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql,
     is_safe_read_query, language_service_for_query_language, strip_leading_comments,

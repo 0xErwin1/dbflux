@@ -4,7 +4,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     schemars::JsonSchema,
-    tool,
+    tool, tool_router,
 };
 use serde::Deserialize;
 
@@ -42,6 +42,7 @@ pub(crate) struct ExplainQueryParams {
     pub database: Option<String>,
 }
 
+#[tool_router(router = query_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Explain query execution plan or table access strategy")]
     async fn explain_query(

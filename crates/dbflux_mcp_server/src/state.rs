@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
-use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, ProfileManager};
+use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, KeyringSecretStore, ProfileManager, SecretManager};
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,
@@ -23,6 +23,7 @@ pub struct ServerState {
     pub profile_manager: Arc<RwLock<ProfileManager>>,
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
+    pub secret_manager: Arc<SecretManager>,
     pub mcp_enabled_by_default: bool,
 }
 
@@ -39,6 +40,7 @@ impl ServerState {
 
         let profile_manager = ProfileManager::new();
         let driver_registry = build_driver_registry();
+        let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
         let state = ServerState {
             client_id,
@@ -46,6 +48,7 @@ impl ServerState {
             profile_manager: Arc::new(RwLock::new(profile_manager)),
             driver_registry: Arc::new(driver_registry),
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            secret_manager,
             mcp_enabled_by_default: false,
         };
 
