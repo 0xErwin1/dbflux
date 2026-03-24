@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_approval"
-version = "0.4.0-dev.9"
+version = "0.4.0-dev.10"
 dependencies = [
  "dbflux_policy",
  "serde",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_audit"
-version = "0.4.0-dev.9"
+version = "0.4.0-dev.10"
 dependencies = [
  "dirs 5.0.1",
  "rusqlite",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp"
-version = "0.4.0-dev.9"
+version = "0.4.0-dev.10"
 dependencies = [
  "dbflux_approval",
  "dbflux_audit",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp_server"
-version = "0.4.0-dev.9"
+version = "0.4.0-dev.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_policy"
-version = "0.4.0-dev.9"
+version = "0.4.0-dev.10"
 dependencies = [
  "serde",
  "serde_json",
