@@ -766,7 +766,7 @@ impl ConnectionManagerWindow {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Summary")
+                    .child("Scope/policy assignment preview")
                     .child(
                         div()
                             .text_sm()
