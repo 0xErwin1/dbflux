@@ -3,11 +3,12 @@ use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
     Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, RedisLanguageService, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService, SyntaxInfo, TransactionCapabilities, DYNAMODB_FORM, MONGODB_FORM,
-    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
+    QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    TransactionCapabilities, DYNAMODB_FORM, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM, REDIS_FORM,
+    SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
+use dbflux_driver_redis::RedisLanguageService;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;

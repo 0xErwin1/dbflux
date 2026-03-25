@@ -2518,6 +2518,7 @@ name = "dbflux_test_support"
 version = "0.4.0-dev.10"
 dependencies = [
  "dbflux_core",
+ "dbflux_driver_redis",
  "serde_json",
  "testcontainers",
 ]

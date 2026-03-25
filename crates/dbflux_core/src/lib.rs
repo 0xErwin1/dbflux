@@ -86,12 +86,12 @@ pub use query::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef,
     DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
     ExplainRequest, GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination,
-    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape, RedisLanguageService,
+    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     Row, SortDirection, SqlLanguageService, SqlMutationGenerator, TableBrowseRequest,
     TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, ValidationResult,
     classify_query_for_governance, classify_query_for_language, classify_sql_execution,
     detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql,
-    is_safe_read_query, language_service_for_query_language, strip_leading_comments,
+    is_safe_read_query, strip_leading_comments,
 };
 
 pub use schema::node_id as schema_node_id;

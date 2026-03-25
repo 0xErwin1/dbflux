@@ -315,10 +315,10 @@ impl Connection for IpcConnection {
     }
 
     fn language_service(&self) -> &dyn LanguageService {
-        // Language service runs client-side based on the query language from metadata.
-        // This is correct because dangerous-query detection and validation are
-        // syntactic operations that don't need a server round-trip.
-        dbflux_core::language_service_for_query_language(&self.metadata.query_language)
+        // For IPC connections to external drivers, we use the default SQL language service.
+        // The actual driver provides its own language service for in-process connections.
+        // Client-side dangerous-query detection is limited for external drivers.
+        &dbflux_core::SqlLanguageService
     }
 
     fn code_gen_capabilities(&self) -> CodeGenCapabilities {

@@ -320,37 +320,6 @@ impl LanguageService for SqlLanguageService {
     }
 }
 
-/// MongoDB language service with lightweight syntax/language checks.
-pub struct MongoLanguageService;
-
-impl LanguageService for MongoLanguageService {
-    fn validate(&self, query: &str) -> ValidationResult {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return ValidationResult::Valid;
-        }
-
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert into")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete from")
-        {
-            return ValidationResult::WrongLanguage {
-                expected: QueryLanguage::MongoQuery,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
-                    .to_string(),
-            };
-        }
-
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_mongo(query)
-    }
-}
-
 /// Produce editor diagnostics for SQL using tree-sitter error nodes.
 fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
     if query.trim().is_empty() {
@@ -506,30 +475,6 @@ pub fn detect_dangerous_redis(query: &str) -> Option<DangerousQueryKind> {
     }
 
     None
-}
-
-pub struct RedisLanguageService;
-
-impl LanguageService for RedisLanguageService {
-    fn validate(&self, _query: &str) -> ValidationResult {
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_redis(query)
-    }
-}
-
-/// Resolve language service by query language.
-pub fn language_service_for_query_language(
-    query_language: &QueryLanguage,
-) -> &'static dyn LanguageService {
-    match query_language {
-        QueryLanguage::Sql => &SqlLanguageService,
-        QueryLanguage::MongoQuery => &MongoLanguageService,
-        QueryLanguage::RedisCommands => &RedisLanguageService,
-        _ => &SqlLanguageService,
-    }
 }
 
 /// Unified entry point: auto-detects language and checks for dangerous patterns.
