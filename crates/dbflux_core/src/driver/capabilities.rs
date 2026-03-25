@@ -1932,4 +1932,623 @@ mod tests {
             ExecutionClassification::AdminDestructive
         ));
     }
+
+    // =========================================================================
+    // Phase 5: Additional Unit Tests
+    // =========================================================================
+
+    // --- SyntaxInfo Tests ---
+
+    #[test]
+    fn test_syntax_info_ansi_preset() {
+        let ansi = SyntaxInfo::ansi();
+        assert_eq!(ansi.identifier_quote, '"');
+        assert_eq!(ansi.string_quote, '\'');
+        assert_eq!(ansi.placeholder_style, PlaceholderStyle::DollarNumber);
+        assert!(ansi.supports_schemas);
+        assert_eq!(ansi.default_schema, Some("public".to_string()));
+        assert!(ansi.case_sensitive_identifiers);
+    }
+
+    #[test]
+    fn test_syntax_info_mysql_preset() {
+        let mysql = SyntaxInfo::mysql();
+        assert_eq!(mysql.identifier_quote, '`');
+        assert_eq!(mysql.string_quote, '\'');
+        assert_eq!(mysql.placeholder_style, PlaceholderStyle::QuestionMark);
+        assert!(!mysql.supports_schemas);
+        assert!(mysql.default_schema.is_none());
+        assert!(!mysql.case_sensitive_identifiers);
+    }
+
+    #[test]
+    fn test_syntax_info_sqlite_preset() {
+        let sqlite = SyntaxInfo::sqlite();
+        assert_eq!(sqlite.identifier_quote, '"');
+        assert_eq!(sqlite.string_quote, '\'');
+        assert_eq!(sqlite.placeholder_style, PlaceholderStyle::QuestionMark);
+        assert!(!sqlite.supports_schemas);
+        assert!(sqlite.default_schema.is_none());
+        assert!(sqlite.case_sensitive_identifiers);
+    }
+
+    #[test]
+    fn test_syntax_info_custom() {
+        let custom = SyntaxInfo {
+            identifier_quote: '[',
+            string_quote: '\'',
+            placeholder_style: PlaceholderStyle::NamedColon,
+            supports_schemas: true,
+            default_schema: Some("dbo".to_string()),
+            case_sensitive_identifiers: false,
+        };
+        assert_eq!(custom.identifier_quote, '[');
+        assert_eq!(custom.placeholder_style, PlaceholderStyle::NamedColon);
+        assert!(custom.supports_schemas);
+        assert_eq!(custom.default_schema, Some("dbo".to_string()));
+        assert!(!custom.case_sensitive_identifiers);
+    }
+
+    // --- QueryCapabilities Tests ---
+
+    #[test]
+    fn test_query_capabilities_relational_preset() {
+        let relational = QueryCapabilities::relational();
+        assert!(relational.supports_order_by);
+        assert!(relational.supports_group_by);
+        assert!(relational.supports_having);
+        assert!(relational.supports_distinct);
+        assert!(relational.supports_limit);
+        assert!(relational.supports_offset);
+        assert!(relational.supports_joins);
+        assert!(relational.supports_subqueries);
+        assert!(relational.supports_union);
+        assert!(relational.supports_intersect);
+        assert!(relational.supports_except);
+        assert!(relational.supports_case_expressions);
+        assert!(relational.supports_window_functions);
+        assert!(relational.supports_ctes);
+        assert!(relational.supports_explain);
+        assert!(relational.pagination.contains(&PaginationStyle::Offset));
+    }
+
+    #[test]
+    fn test_query_capabilities_mongodb_preset() {
+        let mongodb = QueryCapabilities::mongodb();
+        assert!(mongodb.pagination.contains(&PaginationStyle::Cursor));
+        assert!(mongodb.pagination.contains(&PaginationStyle::PageToken));
+        assert!(!mongodb.supports_joins);
+        assert!(!mongodb.supports_union);
+        assert!(!mongodb.supports_intersect);
+        assert!(!mongodb.supports_except);
+        assert!(!mongodb.supports_ctes);
+        // MongoDB inherits default: supports_case_expressions via $switch in aggregation
+        // Also inherits: supports_window_functions via $group in aggregation
+        assert!(mongodb.supports_case_expressions);
+        assert!(mongodb.supports_window_functions);
+        assert!(mongodb.supports_order_by);
+        assert!(mongodb.supports_group_by);
+    }
+
+    #[test]
+    fn test_query_capabilities_redis_preset() {
+        let redis = QueryCapabilities::redis();
+        assert!(redis.pagination.contains(&PaginationStyle::Cursor));
+        assert!(redis.where_operators.is_empty());
+        assert!(!redis.supports_order_by);
+        assert!(!redis.supports_group_by);
+        assert!(!redis.supports_having);
+        assert!(!redis.supports_distinct);
+        assert!(!redis.supports_limit);
+        assert!(!redis.supports_offset);
+        assert!(!redis.supports_joins);
+        assert!(!redis.supports_subqueries);
+        assert!(!redis.supports_union);
+        assert!(!redis.supports_intersect);
+        assert!(!redis.supports_except);
+        assert!(!redis.supports_case_expressions);
+        assert!(!redis.supports_window_functions);
+        assert!(!redis.supports_ctes);
+        assert!(!redis.supports_explain);
+    }
+
+    #[test]
+    fn test_query_capabilities_max_parameters() {
+        let qc = QueryCapabilities {
+            max_query_parameters: 100,
+            ..Default::default()
+        };
+        assert_eq!(qc.max_query_parameters, 100);
+
+        let unlimited = QueryCapabilities::default();
+        assert_eq!(unlimited.max_query_parameters, 0);
+    }
+
+    // --- MutationCapabilities Tests ---
+
+    #[test]
+    fn test_mutation_capabilities_sqlite_preset() {
+        let sqlite = MutationCapabilities::sqlite();
+        assert!(sqlite.supports_upsert);
+        assert!(sqlite.supports_returning);
+        assert!(sqlite.supports_batch);
+        assert!(sqlite.supports_bulk_update);
+        assert!(sqlite.supports_bulk_delete);
+    }
+
+    #[test]
+    fn test_mutation_capabilities_supports_all_basic() {
+        let mc = MutationCapabilities::default();
+        assert!(mc.supports_insert);
+        assert!(mc.supports_update);
+        assert!(mc.supports_delete);
+        assert!(!mc.supports_upsert);
+        assert!(!mc.supports_returning);
+        assert!(mc.supports_batch);
+        assert!(mc.supports_bulk_update);
+        assert!(mc.supports_bulk_delete);
+    }
+
+    #[test]
+    fn test_mutation_capabilities_max_insert_values() {
+        let mc = MutationCapabilities {
+            max_insert_values: 1000,
+            ..Default::default()
+        };
+        assert_eq!(mc.max_insert_values, 1000);
+
+        let unlimited = MutationCapabilities::default();
+        assert_eq!(unlimited.max_insert_values, 0);
+    }
+
+    // --- DdlCapabilities Tests ---
+
+    #[test]
+    fn test_ddl_capabilities_sqlite_preset() {
+        let sqlite = DdlCapabilities::sqlite();
+        assert!(!sqlite.supports_alter_table);
+        assert!(sqlite.supports_add_column);
+        assert!(sqlite.supports_rename_column);
+        assert!(!sqlite.supports_drop_column);
+        assert!(!sqlite.supports_alter_column);
+        assert!(!sqlite.supports_add_constraint);
+        assert!(!sqlite.supports_drop_constraint);
+        assert!(!sqlite.transactional_ddl);
+    }
+
+    #[test]
+    fn test_ddl_capabilities_supports_basic_ddl() {
+        let dc = DdlCapabilities::default();
+        assert!(dc.supports_create_database);
+        assert!(dc.supports_drop_database);
+        assert!(dc.supports_create_table);
+        assert!(dc.supports_drop_table);
+        assert!(dc.supports_alter_table);
+        assert!(dc.supports_create_index);
+        assert!(dc.supports_drop_index);
+        assert!(dc.supports_create_view);
+        assert!(dc.supports_drop_view);
+        assert!(!dc.supports_create_trigger);
+        assert!(!dc.supports_drop_trigger);
+        assert!(dc.transactional_ddl);
+        assert!(dc.supports_add_column);
+        assert!(dc.supports_drop_column);
+        assert!(dc.supports_rename_column);
+        assert!(dc.supports_alter_column);
+        assert!(dc.supports_add_constraint);
+        assert!(dc.supports_drop_constraint);
+    }
+
+    // --- TransactionCapabilities Tests ---
+
+    #[test]
+    fn test_transaction_capabilities_sqlite_preset() {
+        let sqlite = TransactionCapabilities::sqlite();
+        assert!(sqlite.supports_transactions);
+        assert_eq!(
+            sqlite.supported_isolation_levels,
+            vec![IsolationLevel::ReadCommitted]
+        );
+        assert_eq!(
+            sqlite.default_isolation_level,
+            Some(IsolationLevel::ReadCommitted)
+        );
+        assert!(!sqlite.supports_nested_transactions);
+        assert!(sqlite.supports_deferrable);
+    }
+
+    #[test]
+    fn test_transaction_capabilities_none_preset() {
+        let none = TransactionCapabilities::none();
+        assert!(!none.supports_transactions);
+        assert!(none.supported_isolation_levels.is_empty());
+        assert!(none.default_isolation_level.is_none());
+        assert!(!none.supports_savepoints);
+        assert!(!none.supports_nested_transactions);
+        assert!(!none.supports_read_only);
+        assert!(!none.supports_deferrable);
+    }
+
+    #[test]
+    fn test_transaction_capabilities_supports_all() {
+        let tc = TransactionCapabilities::default();
+        assert!(tc.supports_transactions);
+        assert!(!tc.supported_isolation_levels.is_empty());
+        assert!(tc.default_isolation_level.is_some());
+        assert!(tc.supports_savepoints);
+        assert!(tc.supports_nested_transactions);
+        assert!(tc.supports_read_only);
+        assert!(!tc.supports_deferrable);
+    }
+
+    // --- DriverLimits Tests ---
+
+    #[test]
+    fn test_driver_limits_mysql_preset() {
+        let mysql = DriverLimits::mysql();
+        assert_eq!(mysql.max_parameters, 65535);
+        assert_eq!(mysql.max_identifier_length, 64);
+        assert_eq!(mysql.max_columns, 4096);
+        assert_eq!(mysql.max_indexes_per_table, 64);
+    }
+
+    #[test]
+    fn test_driver_limits_sqlite_preset() {
+        let sqlite = DriverLimits::sqlite();
+        assert_eq!(sqlite.max_query_length, 1_000_000_000);
+        assert_eq!(sqlite.max_parameters, 32766);
+        assert_eq!(sqlite.max_identifier_length, 100_000);
+        assert_eq!(sqlite.max_columns, 32766);
+        assert_eq!(sqlite.max_indexes_per_table, 64);
+    }
+
+    #[test]
+    fn test_driver_limits_default_unlimited() {
+        let limits = DriverLimits::default();
+        assert_eq!(limits.max_query_length, 0);
+        assert_eq!(limits.max_parameters, 0);
+        assert_eq!(limits.max_result_rows, 0);
+        assert_eq!(limits.max_connections, 0);
+        assert_eq!(limits.max_nested_subqueries, 16);
+        assert_eq!(limits.max_identifier_length, 63);
+        assert_eq!(limits.max_columns, 0);
+        assert_eq!(limits.max_indexes_per_table, 0);
+    }
+
+    // --- DriverMetadataBuilder Tests ---
+
+    #[test]
+    fn test_driver_metadata_builder_minimal() {
+        let metadata = DriverMetadataBuilder::new(
+            "test",
+            "Test Driver",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        assert_eq!(metadata.id, "test");
+        assert_eq!(metadata.display_name, "Test Driver");
+        assert_eq!(metadata.category, DatabaseCategory::Relational);
+        assert_eq!(metadata.query_language, QueryLanguage::Sql);
+        assert!(metadata.description.is_empty());
+        assert!(metadata.uri_scheme.is_empty());
+        assert_eq!(metadata.default_port, None);
+        assert_eq!(metadata.icon, Icon::Database);
+        assert!(metadata.syntax.is_none());
+        assert!(metadata.query.is_none());
+        assert!(metadata.mutation.is_none());
+        assert!(metadata.ddl.is_none());
+        assert!(metadata.transactions.is_none());
+        assert!(metadata.limits.is_none());
+    }
+
+    #[test]
+    fn test_driver_metadata_builder_all_fields() {
+        let metadata = DriverMetadataBuilder::new(
+            "custom",
+            "Custom Driver",
+            DatabaseCategory::Document,
+            QueryLanguage::MongoQuery,
+        )
+        .description("A custom driver")
+        .default_port(27017)
+        .uri_scheme("mongodb")
+        .icon(Icon::Mongodb)
+        .syntax(SyntaxInfo::default())
+        .query(QueryCapabilities::mongodb())
+        .mutation(MutationCapabilities::default())
+        .ddl(DdlCapabilities::default())
+        .transactions(TransactionCapabilities::default())
+        .limits(DriverLimits::default())
+        .build();
+
+        assert_eq!(metadata.id, "custom");
+        assert_eq!(metadata.display_name, "Custom Driver");
+        assert_eq!(metadata.description, "A custom driver");
+        assert_eq!(metadata.default_port, Some(27017));
+        assert_eq!(metadata.uri_scheme, "mongodb");
+        assert_eq!(metadata.icon, Icon::Mongodb);
+        assert_eq!(metadata.category, DatabaseCategory::Document);
+        assert!(metadata.syntax.is_some());
+        assert!(metadata.query.is_some());
+        assert!(metadata.mutation.is_some());
+        assert!(metadata.ddl.is_some());
+        assert!(metadata.transactions.is_some());
+        assert!(metadata.limits.is_some());
+    }
+
+    #[test]
+    fn test_driver_metadata_builder_capabilities() {
+        let caps = DriverCapabilities::RELATIONAL_BASE | DriverCapabilities::RETURNING;
+        let metadata = DriverMetadataBuilder::new(
+            "pg",
+            "PostgreSQL",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .capabilities(caps)
+        .build();
+
+        assert!(metadata
+            .capabilities
+            .contains(DriverCapabilities::RELATIONAL_BASE));
+        assert!(metadata
+            .capabilities
+            .contains(DriverCapabilities::RETURNING));
+    }
+
+    #[test]
+    fn test_driver_metadata_supports_methods() {
+        let metadata = DriverMetadataBuilder::new(
+            "pg",
+            "PostgreSQL",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .capabilities(DriverCapabilities::RELATIONAL_BASE | DriverCapabilities::RETURNING)
+        .build();
+
+        assert!(metadata.is_relational());
+        assert!(!metadata.is_document());
+        assert!(!metadata.is_key_value());
+        assert!(metadata.supports(DriverCapabilities::RETURNING));
+        assert!(!metadata.supports(DriverCapabilities::KV_SCAN));
+    }
+
+    // --- Icon Tests ---
+
+    #[test]
+    fn test_icon_variants() {
+        assert!(matches!(Icon::Postgres, Icon::Postgres));
+        assert!(matches!(Icon::Mysql, Icon::Mysql));
+        assert!(matches!(Icon::Mariadb, Icon::Mariadb));
+        assert!(matches!(Icon::Sqlite, Icon::Sqlite));
+        assert!(matches!(Icon::Mongodb, Icon::Mongodb));
+        assert!(matches!(Icon::Redis, Icon::Redis));
+        assert!(matches!(Icon::Dynamodb, Icon::Dynamodb));
+        assert!(matches!(Icon::Database, Icon::Database));
+    }
+
+    // --- DatabaseCategory Tests ---
+
+    #[test]
+    fn test_database_category_display_names() {
+        assert_eq!(DatabaseCategory::Relational.display_name(), "Relational");
+        assert_eq!(DatabaseCategory::Document.display_name(), "Document");
+        assert_eq!(DatabaseCategory::KeyValue.display_name(), "Key-Value");
+        assert_eq!(DatabaseCategory::Graph.display_name(), "Graph");
+        assert_eq!(DatabaseCategory::TimeSeries.display_name(), "Time Series");
+        assert_eq!(DatabaseCategory::WideColumn.display_name(), "Wide Column");
+    }
+
+    #[test]
+    fn test_database_category_container_names() {
+        assert_eq!(DatabaseCategory::Relational.container_name(), "Tables");
+        assert_eq!(DatabaseCategory::Document.container_name(), "Collections");
+        assert_eq!(DatabaseCategory::KeyValue.container_name(), "Keys");
+        assert_eq!(DatabaseCategory::Graph.container_name(), "Nodes");
+        assert_eq!(
+            DatabaseCategory::TimeSeries.container_name(),
+            "Measurements"
+        );
+        assert_eq!(DatabaseCategory::WideColumn.container_name(), "Tables");
+    }
+
+    #[test]
+    fn test_database_category_record_names() {
+        assert_eq!(DatabaseCategory::Relational.record_name(), "Rows");
+        assert_eq!(DatabaseCategory::Document.record_name(), "Documents");
+        assert_eq!(DatabaseCategory::KeyValue.record_name(), "Values");
+        assert_eq!(DatabaseCategory::Graph.record_name(), "Nodes");
+        assert_eq!(DatabaseCategory::TimeSeries.record_name(), "Points");
+        assert_eq!(DatabaseCategory::WideColumn.record_name(), "Rows");
+    }
+
+    // --- QueryLanguage Tests ---
+
+    #[test]
+    fn test_query_language_from_path() {
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("query.sql")),
+            Some(QueryLanguage::Sql)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("data.js")),
+            Some(QueryLanguage::MongoQuery)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("commands.redis")),
+            Some(QueryLanguage::RedisCommands)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("script.lua")),
+            Some(QueryLanguage::Lua)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("test.py")),
+            Some(QueryLanguage::Python)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("deploy.sh")),
+            Some(QueryLanguage::Bash)
+        );
+        assert_eq!(
+            QueryLanguage::from_path(std::path::Path::new("unknown.xyz")),
+            None
+        );
+    }
+
+    #[test]
+    fn test_query_language_default_extension() {
+        assert_eq!(QueryLanguage::Sql.default_extension(), "sql");
+        assert_eq!(QueryLanguage::MongoQuery.default_extension(), "js");
+        assert_eq!(QueryLanguage::RedisCommands.default_extension(), "redis");
+        assert_eq!(QueryLanguage::Lua.default_extension(), "lua");
+        assert_eq!(
+            QueryLanguage::Custom("custom".to_string()).default_extension(),
+            "txt"
+        );
+    }
+
+    #[test]
+    fn test_query_language_editor_mode() {
+        assert_eq!(QueryLanguage::Sql.editor_mode(), "sql");
+        assert_eq!(QueryLanguage::MongoQuery.editor_mode(), "javascript");
+        assert_eq!(QueryLanguage::RedisCommands.editor_mode(), "plaintext");
+        assert_eq!(QueryLanguage::Cypher.editor_mode(), "cypher");
+        assert_eq!(QueryLanguage::Lua.editor_mode(), "lua");
+        assert_eq!(QueryLanguage::Python.editor_mode(), "python");
+    }
+
+    #[test]
+    fn test_query_language_placeholder() {
+        assert!(QueryLanguage::Sql.placeholder().contains("SQL"));
+        assert!(QueryLanguage::MongoQuery.placeholder().contains("find"));
+        assert!(QueryLanguage::RedisCommands.placeholder().contains("Redis"));
+    }
+
+    #[test]
+    fn test_query_language_comment_prefix() {
+        assert_eq!(QueryLanguage::Sql.comment_prefix(), "--");
+        assert_eq!(QueryLanguage::MongoQuery.comment_prefix(), "//");
+        assert_eq!(QueryLanguage::RedisCommands.comment_prefix(), "#");
+        assert_eq!(QueryLanguage::Lua.comment_prefix(), "--");
+    }
+
+    #[test]
+    fn test_query_language_supports_connection_context() {
+        assert!(QueryLanguage::Sql.supports_connection_context());
+        assert!(QueryLanguage::MongoQuery.supports_connection_context());
+        assert!(QueryLanguage::RedisCommands.supports_connection_context());
+        assert!(QueryLanguage::Cypher.supports_connection_context());
+        assert!(QueryLanguage::InfluxQuery.supports_connection_context());
+        assert!(QueryLanguage::Cql.supports_connection_context());
+        // Lua, Python, Bash are scripting languages without connection context
+        assert!(!QueryLanguage::Lua.supports_connection_context());
+        assert!(!QueryLanguage::Python.supports_connection_context());
+        assert!(!QueryLanguage::Bash.supports_connection_context());
+    }
+
+    // --- WhereOperator Tests ---
+
+    #[test]
+    fn test_where_operator_all_symbols() {
+        assert_eq!(WhereOperator::Eq.sql_symbol(), "=");
+        assert_eq!(WhereOperator::Ne.sql_symbol(), "<>");
+        assert_eq!(WhereOperator::Gt.sql_symbol(), ">");
+        assert_eq!(WhereOperator::Gte.sql_symbol(), ">=");
+        assert_eq!(WhereOperator::Lt.sql_symbol(), "<");
+        assert_eq!(WhereOperator::Lte.sql_symbol(), "<=");
+        assert_eq!(WhereOperator::Like.sql_symbol(), "LIKE");
+        assert_eq!(WhereOperator::ILike.sql_symbol(), "ILIKE");
+        assert_eq!(WhereOperator::Null.sql_symbol(), "IS NULL");
+        assert_eq!(WhereOperator::In.sql_symbol(), "IN");
+        assert_eq!(WhereOperator::NotIn.sql_symbol(), "NOT IN");
+        assert_eq!(WhereOperator::Contains.sql_symbol(), "@>");
+        assert_eq!(WhereOperator::Overlap.sql_symbol(), "&&");
+        assert_eq!(WhereOperator::ContainsAll.sql_symbol(), "CONTAINS ALL");
+        assert_eq!(WhereOperator::ContainsAny.sql_symbol(), "CONTAINS ANY");
+        assert_eq!(WhereOperator::Size.sql_symbol(), "@>");
+        assert_eq!(WhereOperator::Regex.sql_symbol(), "~");
+        assert_eq!(WhereOperator::And.sql_symbol(), "AND");
+        assert_eq!(WhereOperator::Or.sql_symbol(), "OR");
+        assert_eq!(WhereOperator::Not.sql_symbol(), "NOT");
+    }
+
+    // --- IsolationLevel Tests ---
+
+    #[test]
+    fn test_isolation_level_all_names() {
+        assert_eq!(
+            IsolationLevel::ReadUncommitted.sql_name(),
+            "READ UNCOMMITTED"
+        );
+        assert_eq!(IsolationLevel::ReadCommitted.sql_name(), "READ COMMITTED");
+        assert_eq!(IsolationLevel::RepeatableRead.sql_name(), "REPEATABLE READ");
+        assert_eq!(IsolationLevel::Serializable.sql_name(), "SERIALIZABLE");
+        assert_eq!(IsolationLevel::Snapshot.sql_name(), "SNAPSHOT");
+        assert_eq!(IsolationLevel::None.sql_name(), "NONE");
+    }
+
+    // --- DriverCapabilities Tests ---
+
+    #[test]
+    fn test_driver_capabilities_construction() {
+        let caps = DriverCapabilities::RELATIONAL_BASE;
+        assert!(caps.contains(DriverCapabilities::MULTIPLE_DATABASES));
+        assert!(caps.contains(DriverCapabilities::TRANSACTIONS));
+        assert!(caps.contains(DriverCapabilities::PAGINATION));
+
+        let doc_caps = DriverCapabilities::DOCUMENT_BASE;
+        assert!(doc_caps.contains(DriverCapabilities::NESTED_DOCUMENTS));
+        assert!(doc_caps.contains(DriverCapabilities::ARRAYS));
+
+        let kv_caps = DriverCapabilities::KEYVALUE_BASE;
+        assert!(kv_caps.contains(DriverCapabilities::KV_SCAN));
+        assert!(kv_caps.contains(DriverCapabilities::KV_GET));
+    }
+
+    #[test]
+    fn test_driver_capabilities_union() {
+        let combined = DriverCapabilities::RELATIONAL_BASE | DriverCapabilities::DOCUMENT_BASE;
+        assert!(combined.contains(DriverCapabilities::RELATIONAL_BASE));
+        assert!(combined.contains(DriverCapabilities::DOCUMENT_BASE));
+    }
+
+    #[test]
+    fn test_driver_capabilities_intersection() {
+        let combined = DriverCapabilities::RELATIONAL_BASE
+            & (DriverCapabilities::RELATIONAL_BASE | DriverCapabilities::DOCUMENT_BASE);
+        assert!(combined.contains(DriverCapabilities::RELATIONAL_BASE));
+        assert!(!combined.contains(DriverCapabilities::DOCUMENT_BASE));
+    }
+
+    // --- ExecutionClassification Tests ---
+
+    #[test]
+    fn test_execution_classification_is_destructive() {
+        assert!(matches!(
+            ExecutionClassification::Destructive,
+            ExecutionClassification::Destructive
+        ));
+    }
+
+    #[test]
+    fn test_execution_classification_all_variants() {
+        use ExecutionClassification::*;
+        let all = [
+            Metadata,
+            Read,
+            Write,
+            Destructive,
+            AdminSafe,
+            Admin,
+            AdminDestructive,
+        ];
+        assert_eq!(all.len(), 7);
+        for variant in all {
+            assert!(matches!(variant, variant));
+        }
+    }
 }
