@@ -149,6 +149,11 @@ pub enum DbConfig {
     },
     SQLite {
         path: PathBuf,
+        /// Optional connection ID for in-memory databases.
+        /// Without a connection ID, each connection to `:memory:` creates a new isolated database.
+        /// With a connection ID, connections are pooled and shared.
+        #[serde(default)]
+        connection_id: Option<String>,
     },
     MySQL {
         #[serde(default)]
@@ -252,6 +257,7 @@ impl DbConfig {
     pub fn default_sqlite() -> Self {
         DbConfig::SQLite {
             path: PathBuf::new(),
+            connection_id: None,
         }
     }
 
@@ -833,10 +839,10 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RefreshPolicySetting;
     use crate::config::app::GlobalOverrides;
     use crate::driver::form::FormValues;
     use crate::values::ValueRef;
+    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
