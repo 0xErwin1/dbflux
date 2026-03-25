@@ -60,13 +60,33 @@ pub fn json_filter_to_sql(
     }
 }
 
+/// Check if a string looks like an aggregate function expression.
+///
+/// Aggregate functions like `COUNT(*)`, `SUM(amount)`, `AVG(price)` should not
+/// be quoted as column identifiers in HAVING clauses.
+fn is_aggregate_expression(s: &str) -> bool {
+    let upper = s.to_uppercase();
+    upper.starts_with("COUNT(")
+        || upper.starts_with("SUM(")
+        || upper.starts_with("AVG(")
+        || upper.starts_with("MIN(")
+        || upper.starts_with("MAX(")
+        || upper.starts_with("COUNT(DISTINCT ")
+}
+
 #[allow(dead_code)]
 pub fn parse_condition(
     key: &str,
     value: &serde_json::Value,
     dialect: &dyn SqlDialect,
 ) -> Result<String, String> {
-    let quoted_key = dialect.quote_identifier(key);
+    // Aggregate function expressions (COUNT(*), SUM(col), etc.) should not be quoted.
+    // They are already valid SQL expressions and quoting would break them.
+    let key_expr = if is_aggregate_expression(key) {
+        key.to_string()
+    } else {
+        dialect.quote_identifier(key)
+    };
 
     match value {
         serde_json::Value::Object(op_map) => {
@@ -74,16 +94,16 @@ pub fn parse_condition(
             let mut conditions = Vec::new();
             for (op, val) in op_map.iter() {
                 let cond = match op.as_str() {
-                    "=" | "==" => format!("{} = {}", quoted_key, json_to_sql_literal(val, dialect)),
+                    "=" | "==" => format!("{} = {}", key_expr, json_to_sql_literal(val, dialect)),
                     "!=" | "<>" => {
-                        format!("{} != {}", quoted_key, json_to_sql_literal(val, dialect))
+                        format!("{} != {}", key_expr, json_to_sql_literal(val, dialect))
                     }
-                    ">" => format!("{} > {}", quoted_key, json_to_sql_literal(val, dialect)),
-                    ">=" => format!("{} >= {}", quoted_key, json_to_sql_literal(val, dialect)),
-                    "<" => format!("{} < {}", quoted_key, json_to_sql_literal(val, dialect)),
-                    "<=" => format!("{} <= {}", quoted_key, json_to_sql_literal(val, dialect)),
+                    ">" => format!("{} > {}", key_expr, json_to_sql_literal(val, dialect)),
+                    ">=" => format!("{} >= {}", key_expr, json_to_sql_literal(val, dialect)),
+                    "<" => format!("{} < {}", key_expr, json_to_sql_literal(val, dialect)),
+                    "<=" => format!("{} <= {}", key_expr, json_to_sql_literal(val, dialect)),
                     "like" | "LIKE" => {
-                        format!("{} LIKE {}", quoted_key, json_to_sql_literal(val, dialect))
+                        format!("{} LIKE {}", key_expr, json_to_sql_literal(val, dialect))
                     }
                     "in" | "IN" => {
                         let arr = val
@@ -93,7 +113,7 @@ pub fn parse_condition(
                             .iter()
                             .map(|v| json_to_sql_literal(v, dialect))
                             .collect();
-                        format!("{} IN ({})", quoted_key, items.join(", "))
+                        format!("{} IN ({})", key_expr, items.join(", "))
                     }
                     "between" | "BETWEEN" => {
                         let arr = val.as_array().ok_or_else(|| {
@@ -107,16 +127,16 @@ pub fn parse_condition(
                         }
                         format!(
                             "{} BETWEEN {} AND {}",
-                            quoted_key,
+                            key_expr,
                             json_to_sql_literal(&arr[0], dialect),
                             json_to_sql_literal(&arr[1], dialect)
                         )
                     }
                     "is_null" | "IS_NULL" => {
                         if val.as_bool().unwrap_or(false) {
-                            format!("{} IS NULL", quoted_key)
+                            format!("{} IS NULL", key_expr)
                         } else {
-                            format!("{} IS NOT NULL", quoted_key)
+                            format!("{} IS NOT NULL", key_expr)
                         }
                     }
                     "and" | "AND" => {
@@ -136,7 +156,7 @@ pub fn parse_condition(
         // Simple equality condition: {"column": "value"}
         _ => Ok(format!(
             "{} = {}",
-            quoted_key,
+            key_expr,
             json_to_sql_literal(value, dialect)
         )),
     }
@@ -440,6 +460,143 @@ mod filter_validation_tests {
         assert!(
             error.contains("looks like JSON but failed to parse"),
             "Error message should explain the parse failure"
+        );
+    }
+
+    #[test]
+    fn test_having_count_greater_than() {
+        let dialect = DefaultSqlDialect;
+        // HAVING clause with COUNT(*) aggregate function
+        let filter = serde_json::json!({
+            "COUNT(*)": {">": 5}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "HAVING with COUNT(*) should succeed");
+
+        let sql = result.unwrap();
+        // COUNT(*) should NOT be quoted
+        assert!(
+            sql.contains("COUNT(*) > 5"),
+            "COUNT(*) should not be quoted. Got: {}",
+            sql
+        );
+        assert!(
+            !sql.contains("\"COUNT"),
+            "COUNT should not be double-quoted. Got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_having_sum_greater_than() {
+        let dialect = DefaultSqlDialect;
+        // HAVING clause with SUM aggregate function
+        let filter = serde_json::json!({
+            "SUM(amount)": {">=": 100}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "HAVING with SUM() should succeed");
+
+        let sql = result.unwrap();
+        // SUM(amount) should NOT be quoted
+        assert!(
+            sql.contains("SUM(amount) >= 100"),
+            "SUM(amount) should not be quoted. Got: {}",
+            sql
+        );
+        assert!(
+            !sql.contains("\"SUM"),
+            "SUM should not be double-quoted. Got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_having_avg_less_than() {
+        let dialect = DefaultSqlDialect;
+        // HAVING clause with AVG aggregate function
+        let filter = serde_json::json!({
+            "AVG(price)": {"<": 50.0}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "HAVING with AVG() should succeed");
+
+        let sql = result.unwrap();
+        assert!(
+            sql.contains("AVG(price) < 50"),
+            "AVG(price) should not be quoted. Got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_having_count_distinct() {
+        let dialect = DefaultSqlDialect;
+        // HAVING clause with COUNT(DISTINCT column)
+        let filter = serde_json::json!({
+            "COUNT(DISTINCT user_id)": {">": 10}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "HAVING with COUNT(DISTINCT) should succeed");
+
+        let sql = result.unwrap();
+        assert!(
+            sql.contains("COUNT(DISTINCT user_id) > 10"),
+            "COUNT(DISTINCT) should not be quoted. Got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_having_multiple_conditions() {
+        let dialect = DefaultSqlDialect;
+        // Multiple HAVING conditions
+        let filter = serde_json::json!({
+            "COUNT(*)": {">": 5},
+            "SUM(amount)": {">=": 100}
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "Multiple HAVING conditions should succeed");
+
+        let sql = result.unwrap();
+        assert!(
+            sql.contains("COUNT(*) > 5"),
+            "COUNT(*) should not be quoted. Got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("SUM(amount) >= 100"),
+            "SUM(amount) should not be quoted. Got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_regular_column_still_quoted() {
+        let dialect = DefaultSqlDialect;
+        // Regular column in WHERE should still be quoted
+        let filter = serde_json::json!({
+            "status": "active"
+        });
+
+        let result = json_filter_to_sql(&filter, &dialect);
+        assert!(result.is_ok(), "Regular column filter should succeed");
+
+        let sql = result.unwrap();
+        // status should be quoted (double-quoted in default dialect)
+        assert!(
+            sql.contains("\"status\""),
+            "status should be quoted. Got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("'active'"),
+            "string value should be single-quoted"
         );
     }
 }
