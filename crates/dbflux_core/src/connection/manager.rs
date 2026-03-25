@@ -1997,6 +1997,7 @@ mod tests {
             "lite",
             DbConfig::SQLite {
                 path: std::path::PathBuf::from("/tmp/test.db"),
+                connection_id: None,
             },
         );
 
@@ -2056,6 +2057,7 @@ mod tests {
             fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
                 Ok(DbConfig::SQLite {
                     path: std::path::PathBuf::from("/tmp/test.db"),
+                    connection_id: None,
                 })
             }
 

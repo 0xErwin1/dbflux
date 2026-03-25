@@ -165,7 +165,10 @@ impl DbDriver for FakeDriver {
                         DbError::InvalidProfile("Missing required field: path".to_string())
                     })?;
 
-                DbConfig::SQLite { path: path.into() }
+                DbConfig::SQLite {
+                    path: path.into(),
+                    connection_id: None,
+                }
             }
             DbKind::MySQL | DbKind::MariaDB => DbConfig::MySQL {
                 use_uri: false,
@@ -227,7 +230,7 @@ impl DbDriver for FakeDriver {
                 values.insert("user".to_string(), user.clone());
                 values.insert("database".to_string(), database.clone());
             }
-            DbConfig::SQLite { path } => {
+            DbConfig::SQLite { path, .. } => {
                 values.insert("path".to_string(), path.display().to_string());
             }
             DbConfig::MySQL {
@@ -446,7 +449,7 @@ impl Connection for FakeConnection {
 fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
     match &profile.config {
         DbConfig::Postgres { database, .. } => Some(database.clone()),
-        DbConfig::SQLite { path } => Some(path.display().to_string()),
+        DbConfig::SQLite { path, .. } => Some(path.display().to_string()),
         DbConfig::MySQL { database, .. } => database.clone(),
         DbConfig::MongoDB { database, .. } => database.clone(),
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),

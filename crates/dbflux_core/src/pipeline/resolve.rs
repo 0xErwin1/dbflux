@@ -151,7 +151,7 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
-        DbConfig::SQLite { path } => {
+        DbConfig::SQLite { path, .. } => {
             if field == "path" {
                 *path = val.into();
             }

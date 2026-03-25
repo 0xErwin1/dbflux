@@ -182,16 +182,14 @@ impl HookKind {
                 language,
                 interpreter,
                 ..
-            } => {
-                interpreter
-                    .clone()
-                    .or_else(|| {
-                        language
-                            .default_interpreter()
-                            .map(std::string::ToString::to_string)
-                    })
-                    .ok_or_else(|| {
-                        match language {
+            } => interpreter
+                .clone()
+                .or_else(|| {
+                    language
+                        .default_interpreter()
+                        .map(std::string::ToString::to_string)
+                })
+                .ok_or_else(|| match language {
                     ScriptLanguage::Bash => {
                         "Bash is not supported on Windows. Set an explicit interpreter override."
                             .to_string()
@@ -200,9 +198,7 @@ impl HookKind {
                     "{} is not supported on this platform. Set an explicit interpreter override.",
                     language.label()
                 ),
-                }
-                    })
-            }
+                }),
             Self::Lua { .. } => {
                 Err("Lua hooks run in-process and do not use an interpreter".into())
             }
@@ -459,7 +455,7 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database,
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
-        DbConfig::SQLite { path } => (None, None, Some(path.to_string_lossy().to_string())),
+        DbConfig::SQLite { path, .. } => (None, None, Some(path.to_string_lossy().to_string())),
         DbConfig::MySQL {
             host,
             port,
@@ -1311,8 +1307,8 @@ impl HookRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AppConfig;
     use crate::connection::profile::{ConnectionProfile, DbConfig};
+    use crate::AppConfig;
 
     // =========================================================================
     // Helpers
@@ -1608,6 +1604,7 @@ mod tests {
             "plain",
             DbConfig::SQLite {
                 path: PathBuf::from("/tmp/test.db"),
+                connection_id: None,
             },
         );
 
@@ -1666,6 +1663,7 @@ mod tests {
             "lite",
             DbConfig::SQLite {
                 path: PathBuf::from("/data/app.db"),
+                connection_id: None,
             },
         );
 
@@ -1706,6 +1704,7 @@ mod tests {
             "my-db",
             DbConfig::SQLite {
                 path: PathBuf::from("/tmp/test.db"),
+                connection_id: None,
             },
         );
 

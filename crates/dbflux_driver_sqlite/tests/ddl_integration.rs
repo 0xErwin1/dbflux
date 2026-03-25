@@ -16,6 +16,7 @@ fn connect_sqlite() -> Result<(Box<dyn dbflux_core::Connection>, SqliteDriver, P
         "ddl-sqlite",
         DbConfig::SQLite {
             path: db_path.clone(),
+            connection_id: None,
         },
     );
 

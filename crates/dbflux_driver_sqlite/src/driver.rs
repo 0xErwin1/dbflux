@@ -23,6 +23,11 @@ use dbflux_core::{
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
+/// Connection pool for in-memory SQLite databases.
+/// Key is "profile_id:connection_id", value is the pooled connection.
+static POOL: LazyLock<Mutex<HashMap<String, Arc<Mutex<RusqliteConnection>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// SQLite driver metadata.
 pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "sqlite".into(),
@@ -270,8 +275,8 @@ impl DbDriver for SqliteDriver {
         _password: Option<&SecretString>,
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let path = match &profile.config {
-            DbConfig::SQLite { path } => path.clone(),
+        let (path, connection_id) = match &profile.config {
+            DbConfig::SQLite { path, connection_id } => (path.clone(), connection_id.clone()),
             _ => {
                 return Err(DbError::InvalidProfile(
                     "Expected SQLite configuration".to_string(),
@@ -279,13 +284,48 @@ impl DbDriver for SqliteDriver {
             }
         };
 
+        let is_memory = path.as_os_str() == ":memory:";
+
+        // For in-memory databases, try to reuse pooled connection
+        if is_memory {
+            if let Some(id) = &connection_id {
+                let pool_key = format!("{}:{}", profile.id, id);
+                if let Some(conn) = POOL.lock().unwrap().get(&pool_key) {
+                    let conn = conn.clone();
+                    let interrupt_handle = conn.lock().unwrap().get_interrupt_handle();
+                    drop(pool_key);
+                    return Ok(Box::new(SqliteConnection {
+                        conn,
+                        interrupt_handle,
+                        cancelled: Arc::new(AtomicBool::new(false)),
+                        path,
+                    }));
+                }
+            }
+        }
+
         let conn = RusqliteConnection::open(&path)
             .map_err(|e| DbError::connection_failed(e.to_string()))?;
 
         let interrupt_handle = conn.get_interrupt_handle();
 
+        // For in-memory databases, pool the connection if connection_id is set
+        if is_memory {
+            if let Some(id) = &connection_id {
+                let pool_key = format!("{}:{}", profile.id, id);
+                let pooled_conn: Arc<Mutex<RusqliteConnection>> = Arc::new(Mutex::new(conn));
+                POOL.lock().unwrap().insert(pool_key, pooled_conn.clone());
+                return Ok(Box::new(SqliteConnection {
+                    conn: pooled_conn,
+                    interrupt_handle,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    path,
+                }));
+            }
+        }
+
         Ok(Box::new(SqliteConnection {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             interrupt_handle,
             cancelled: Arc::new(AtomicBool::new(false)),
             path,
@@ -294,7 +334,7 @@ impl DbDriver for SqliteDriver {
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
         let path = match &profile.config {
-            DbConfig::SQLite { path } => path.clone(),
+            DbConfig::SQLite { path, .. } => path.clone(),
             _ => {
                 return Err(DbError::InvalidProfile(
                     "Expected SQLite configuration".to_string(),
@@ -323,13 +363,14 @@ impl DbDriver for SqliteDriver {
 
         Ok(DbConfig::SQLite {
             path: PathBuf::from(path),
+            connection_id: None,
         })
     }
 
     fn extract_values(&self, config: &DbConfig) -> FormValues {
         let mut values = HashMap::new();
 
-        if let DbConfig::SQLite { path } = config {
+        if let DbConfig::SQLite { path, .. } = config {
             values.insert("path".to_string(), path.to_string_lossy().to_string());
         }
 
@@ -338,7 +379,7 @@ impl DbDriver for SqliteDriver {
 }
 
 pub struct SqliteConnection {
-    conn: Mutex<RusqliteConnection>,
+    conn: Arc<Mutex<RusqliteConnection>>,
     interrupt_handle: InterruptHandle,
     cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]

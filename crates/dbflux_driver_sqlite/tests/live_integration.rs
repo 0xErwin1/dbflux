@@ -10,7 +10,13 @@ fn connect_sqlite() -> Result<Box<dyn dbflux_core::Connection>, DbError> {
     let db_path = temp_dir.path().join("test.sqlite");
 
     let driver = SqliteDriver::new();
-    let profile = ConnectionProfile::new("live-sqlite", DbConfig::SQLite { path: db_path });
+    let profile = ConnectionProfile::new(
+        "live-sqlite",
+        DbConfig::SQLite {
+            path: db_path,
+            connection_id: None,
+        },
+    );
 
     let connection = driver.connect(&profile)?;
     connection.ping()?;
