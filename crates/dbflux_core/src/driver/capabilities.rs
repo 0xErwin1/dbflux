@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 use crate::sql::dialect::PlaceholderStyle;
+pub use dbflux_policy::ExecutionClassification;
 
 // ============================================================================
 // Pagination Styles
@@ -1318,26 +1319,6 @@ pub trait OperationClassifier: Send + Sync {
     fn classify_tool(&self, tool_id: &str) -> ExecutionClassification;
 }
 
-// We import ExecutionClassification from the policy crate
-// This is defined here to avoid circular dependencies
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ExecutionClassification {
-    /// Metadata operations (schema introspection).
-    Metadata,
-    /// Read operations (SELECT queries).
-    Read,
-    /// Write operations (INSERT, UPDATE).
-    Write,
-    /// Destructive operations (DELETE without WHERE).
-    Destructive,
-    /// Safe DDL operations (CREATE TABLE, CREATE INDEX).
-    AdminSafe,
-    /// DDL operations requiring caution (DROP COLUMN, ALTER TABLE).
-    Admin,
-    /// Irreversible DDL operations (DROP TABLE, DROP DATABASE, TRUNCATE).
-    AdminDestructive,
-}
-
 /// Metadata that a driver provides about itself.
 ///
 /// This is returned by `DbDriver::metadata()` and used by the UI
@@ -2290,16 +2271,12 @@ mod tests {
         .capabilities(caps)
         .build();
 
-        assert!(
-            metadata
-                .capabilities
-                .contains(DriverCapabilities::RELATIONAL_BASE)
-        );
-        assert!(
-            metadata
-                .capabilities
-                .contains(DriverCapabilities::RETURNING)
-        );
+        assert!(metadata
+            .capabilities
+            .contains(DriverCapabilities::RELATIONAL_BASE));
+        assert!(metadata
+            .capabilities
+            .contains(DriverCapabilities::RETURNING));
     }
 
     #[test]

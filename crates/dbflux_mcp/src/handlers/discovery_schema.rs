@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use dbflux_core::{DatabaseCategory, DdlCapabilities, QueryCapabilities, SyntaxInfo};
+use dbflux_core::{
+    DatabaseCategory, DdlCapabilities, DriverLimits, MutationCapabilities, QueryCapabilities,
+    SyntaxInfo, TransactionCapabilities,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +31,12 @@ pub struct ConnectionMetadata {
     pub query: QueryCapabilities,
     /// DDL capabilities (CREATE, ALTER, DROP, transactional DDL).
     pub ddl: DdlCapabilities,
+    /// Mutation capabilities (INSERT, UPDATE, DELETE, upsert, RETURNING).
+    pub mutation: MutationCapabilities,
+    /// Transaction capabilities (isolation levels, savepoints).
+    pub transactions: TransactionCapabilities,
+    /// Operational limits (max query length, max parameters, etc.).
+    pub limits: DriverLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

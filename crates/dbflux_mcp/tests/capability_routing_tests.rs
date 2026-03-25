@@ -4,8 +4,8 @@
 //! for routing decisions rather than driver-specific conditionals.
 
 use dbflux_core::{
-    DatabaseCategory, DdlCapabilities, PaginationStyle, QueryCapabilities, QueryLanguage,
-    SyntaxInfo, WhereOperator,
+    DatabaseCategory, DdlCapabilities, DriverLimits, MutationCapabilities, PaginationStyle,
+    QueryCapabilities, QueryLanguage, SyntaxInfo, TransactionCapabilities, WhereOperator,
 };
 use dbflux_mcp::handlers::discovery_schema::{
     ConnectionInfo, ConnectionMetadata, DiscoverySchemaCatalog,
@@ -66,6 +66,9 @@ fn postgresql_metadata() -> ConnectionMetadata {
         syntax: SyntaxInfo::ansi(),
         query: pg_query,
         ddl: DdlCapabilities::default(),
+        mutation: MutationCapabilities::default(),
+        transactions: TransactionCapabilities::default(),
+        limits: DriverLimits::default(),
     }
 }
 
@@ -133,6 +136,9 @@ fn mongodb_metadata() -> ConnectionMetadata {
             supports_add_constraint: false,
             supports_drop_constraint: false,
         },
+        mutation: MutationCapabilities::default(),
+        transactions: TransactionCapabilities::none(),
+        limits: DriverLimits::default(),
     }
 }
 
@@ -145,6 +151,9 @@ fn redis_metadata() -> ConnectionMetadata {
         syntax: SyntaxInfo::default(),
         query: QueryCapabilities::redis(),
         ddl: DdlCapabilities::default(),
+        mutation: MutationCapabilities::default(),
+        transactions: TransactionCapabilities::none(),
+        limits: DriverLimits::default(),
     }
 }
 
