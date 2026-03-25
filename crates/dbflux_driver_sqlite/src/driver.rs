@@ -933,8 +933,7 @@ impl Connection for SqliteConnection {
 
         let set_parts: Vec<String> = set
             .iter()
-            .enumerate()
-            .map(|(_i, (col, _))| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
+            .map(|(col, _)| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
             .collect();
         let set_str = set_parts.join(", ");
 
@@ -1639,16 +1638,13 @@ fn translate_filter_to_sql(filter: &Value) -> String {
 
 /// Collect all Value items from a filter expression into a vector for parameterized queries.
 fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            for (_, value) in doc {
-                match value {
-                    Value::Null => {}
-                    _ => params.push(value.clone()),
-                }
+    if let Value::Document(doc) = filter {
+        for value in doc.values() {
+            match value {
+                Value::Null => {}
+                _ => params.push(value.clone()),
             }
         }
-        _ => {}
     }
 }
 

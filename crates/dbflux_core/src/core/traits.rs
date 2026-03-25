@@ -58,27 +58,19 @@ impl<'de> Deserialize<'de> for SchemaFeatures {
 }
 
 /// Describes how a database driver handles schema loading for multiple databases.
-///
-/// Different database systems have fundamentally different approaches:
-/// - MySQL/MariaDB: Single connection can switch between databases with `USE`
-/// - PostgreSQL: Each database requires a separate connection
-/// - SQLite: Single database per file, no database switching
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchemaLoadingStrategy {
     /// Schema is loaded lazily per database on the same connection.
     /// Clicking a database loads its schema without reconnecting.
     /// Supports "closing" a database (unloading schema) without disconnecting.
-    /// Used by: MySQL, MariaDB
     LazyPerDatabase,
 
     /// Each database requires a separate connection.
     /// Clicking a different database prompts to create a new connection.
-    /// Used by: PostgreSQL
     ConnectionPerDatabase,
 
     /// Single database, no switching needed.
     /// Schema is loaded once at connection time.
-    /// Used by: SQLite
     SingleDatabase,
 }
 
@@ -169,7 +161,6 @@ impl QueryCancelHandle for NoopCancelHandle {
 /// Factory for creating database connections.
 ///
 /// Implementations are registered in `AppState` by `DbKind` at startup.
-/// Each database type (PostgreSQL, SQLite, etc.) provides its own driver.
 pub trait DbDriver: Send + Sync {
     /// Returns the database kind this driver handles.
     fn kind(&self) -> DbKind;
@@ -180,7 +171,7 @@ pub trait DbDriver: Send + Sync {
     /// The UI uses this to adapt its behavior without driver-specific logic.
     fn metadata(&self) -> &DriverMetadata;
 
-    /// Human-readable name for UI display (e.g., "PostgreSQL", "SQLite").
+    /// Human-readable name for UI display.
     ///
     /// Default implementation uses `metadata().display_name`.
     fn display_name(&self) -> &str {
@@ -241,7 +232,7 @@ pub trait DbDriver: Send + Sync {
     fn extract_values(&self, config: &crate::DbConfig) -> FormValues;
 
     /// Build a connection URI from individual form field values and password.
-    /// Returns `None` for drivers without URI support (e.g., SQLite).
+    /// Returns `None` for drivers without URI support.
     fn build_uri(&self, _values: &FormValues, _password: &str) -> Option<String> {
         None
     }
@@ -262,7 +253,6 @@ pub trait DbDriver: Send + Sync {
 
     /// Whether this database type requires authentication.
     ///
-    /// Returns `false` for file-based databases like SQLite.
     /// Default implementation checks for the AUTHENTICATION capability.
     fn requires_password(&self) -> bool {
         self.supports(DriverCapabilities::AUTHENTICATION)
@@ -522,20 +512,12 @@ pub trait Connection: Send + Sync {
     }
 
     /// Cancel a running query using a previously returned handle.
-    ///
-    /// Behavior varies by database:
-    /// - PostgreSQL: Sends `pg_cancel_backend()` to terminate the query
-    /// - SQLite: Returns `DbError::NotSupported` (queries are typically fast)
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError>;
 
     /// Cancel the currently active query on this connection.
     ///
     /// This is a convenience method that cancels whatever query is running
     /// without needing a handle. Returns `Ok(())` if no query is active.
-    ///
-    /// Behavior varies by database:
-    /// - PostgreSQL: Sends cancel signal to the backend
-    /// - SQLite: Calls sqlite3_interrupt()
     fn cancel_active(&self) -> Result<(), DbError> {
         Err(DbError::NotSupported(
             "Query cancellation not supported".to_string(),
@@ -566,7 +548,7 @@ pub trait Connection: Send + Sync {
     /// List all databases available on the server.
     ///
     /// Returns database names with `is_current: true` for the active database.
-    /// The default implementation returns an empty list (suitable for SQLite).
+    /// The default implementation returns an empty list.
     fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
         Ok(Vec::new())
     }
@@ -603,8 +585,8 @@ pub trait Connection: Send + Sync {
         ))
     }
 
-    /// Set active database for query execution (MySQL/MariaDB only).
-    /// Issues `USE database` before queries. No-op for Postgres/SQLite.
+    /// Set active database for query execution.
+    /// No-op for drivers that don't support database switching.
     fn set_active_database(&self, _database: Option<&str>) -> Result<(), DbError> {
         Ok(())
     }
@@ -767,9 +749,6 @@ pub trait Connection: Send + Sync {
     }
 
     /// Update a single row and return the updated row data.
-    ///
-    /// Uses `RETURNING *` on PostgreSQL for efficiency.
-    /// Falls back to UPDATE + SELECT on MySQL/SQLite.
     fn update_row(&self, _patch: &RowPatch) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Row updates not supported by this driver".to_string(),
@@ -777,9 +756,6 @@ pub trait Connection: Send + Sync {
     }
 
     /// Insert a new row and return the inserted row data.
-    ///
-    /// Uses `RETURNING *` on PostgreSQL for efficiency.
-    /// Falls back to INSERT + SELECT on MySQL/SQLite.
     fn insert_row(&self, _insert: &RowInsert) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Row inserts not supported by this driver".to_string(),
@@ -787,9 +763,6 @@ pub trait Connection: Send + Sync {
     }
 
     /// Delete a row and return the deleted row data.
-    ///
-    /// Uses `RETURNING *` on PostgreSQL for efficiency.
-    /// Falls back to SELECT + DELETE on MySQL/SQLite.
     fn delete_row(&self, _delete: &RowDelete) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Row deletes not supported by this driver".to_string(),
@@ -797,7 +770,7 @@ pub trait Connection: Send + Sync {
     }
 
     // =========================================================================
-    // Document Operations (MongoDB-style)
+    // Document Operations
     // =========================================================================
 
     /// Update documents matching a filter.
@@ -1041,8 +1014,6 @@ pub trait Connection: Send + Sync {
 // =============================================================================
 
 /// Marker trait for connections that support relational (SQL) browse operations.
-///
-/// Implementors: PostgreSQL, MySQL, MariaDB, SQLite
 pub trait RelationalConnection: Connection {
     /// Browse a table with pagination, ordering, and optional filter.
     ///
@@ -1060,8 +1031,6 @@ pub trait RelationalConnection: Connection {
 }
 
 /// Marker trait for connections that support document collection operations.
-///
-/// Implementors: MongoDB, DynamoDB
 pub trait DocumentConnection: Connection {
     /// Browse a document collection with pagination and optional filter.
     ///
@@ -1079,8 +1048,6 @@ pub trait DocumentConnection: Connection {
 }
 
 /// Marker trait for connections that support key-value scan operations.
-///
-/// Implementors: Redis
 pub trait KeyValueConnection: Connection {
     /// Scan keys with cursor-based pagination.
     ///

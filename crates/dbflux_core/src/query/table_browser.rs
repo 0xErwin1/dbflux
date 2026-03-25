@@ -59,13 +59,6 @@ impl OrderByColumn {
     }
 }
 
-/// Escape an identifier by doubling the quote character.
-fn escape_identifier(name: &str, quote_char: char) -> String {
-    let quote_str = quote_char.to_string();
-    let escaped = format!("{}{}", quote_char, quote_char);
-    name.replace(&quote_str, &escaped)
-}
-
 /// Pagination strategy for table browsing.
 ///
 /// Currently only supports OFFSET-based pagination.
