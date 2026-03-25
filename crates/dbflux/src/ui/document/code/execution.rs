@@ -883,6 +883,7 @@ impl CodeDocument {
                         execution_time: elapsed,
                         text_body: Some(output),
                         raw_bytes: None,
+                        next_page_token: None,
                     })
                 }
                 Err(error) => Err(DbError::query_failed(error)),

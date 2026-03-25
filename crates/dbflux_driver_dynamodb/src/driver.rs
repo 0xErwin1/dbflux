@@ -942,7 +942,17 @@ impl DynamoConnection {
         )?;
 
         let _ = page.has_more;
-        Ok(items_to_query_result(&page.items, &key_schema))
+
+        // Serialize LastEvaluatedKey to JSON for next_page_token
+        let next_page_token = page.last_evaluated_key.as_ref().map(|key| {
+            let wrapper = AttributeValue::M(key.clone());
+            let json_value = attribute_value_to_json(&wrapper)?;
+            serde_json::to_string(&json_value).map_err(|e| {
+                DbError::query_failed(format!("Failed to serialize pagination token: {}", e))
+            })
+        }).transpose()?;
+
+        Ok(items_to_query_result(&page.items, &key_schema, next_page_token))
     }
 
     fn count_collection_with_read_options(
@@ -1098,6 +1108,7 @@ impl DynamoConnection {
             return Ok(DynamoReadPage {
                 items: Vec::new(),
                 has_more: false,
+                last_evaluated_key: None,
             });
         }
 
@@ -1114,6 +1125,7 @@ impl DynamoConnection {
         let mut collected = Vec::new();
         let mut cursor: Option<HashMap<String, AttributeValue>> = None;
         let mut has_more = false;
+        let mut last_evaluated_key: Option<HashMap<String, AttributeValue>> = None;
 
         loop {
             if collected.len() >= limit as usize {
@@ -1156,6 +1168,7 @@ impl DynamoConnection {
                 limit as usize,
             );
             has_more = has_more || page_has_more;
+            last_evaluated_key = page.last_evaluated_key.clone();
 
             if collected.len() >= limit as usize {
                 has_more = has_more || page.last_evaluated_key.is_some();
@@ -1171,6 +1184,7 @@ impl DynamoConnection {
         Ok(DynamoReadPage {
             items: collected,
             has_more,
+            last_evaluated_key,
         })
     }
 
@@ -1966,6 +1980,7 @@ struct DynamoCountPage {
 struct DynamoReadPage {
     items: Vec<HashMap<String, AttributeValue>>,
     has_more: bool,
+    last_evaluated_key: Option<HashMap<String, AttributeValue>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2643,6 +2658,7 @@ fn fetch_count_page(
 fn items_to_query_result(
     items: &[HashMap<String, AttributeValue>],
     key_schema: &DynamoTableKeySchema,
+    next_page_token: Option<String>,
 ) -> QueryResult {
     // Insert PK columns first (partition key, then sort key), then discovered attributes.
     // This ensures the UI can detect PKs even when the table is empty.
@@ -2685,7 +2701,9 @@ fn items_to_query_result(
                 }
             })
             .collect();
-        return QueryResult::json(columns, Vec::new(), std::time::Duration::ZERO);
+        let mut result = QueryResult::json(columns, Vec::new(), std::time::Duration::ZERO);
+        result.next_page_token = next_page_token;
+        return result;
     }
 
     let columns = field_names
@@ -2717,7 +2735,9 @@ fn items_to_query_result(
         })
         .collect();
 
-    QueryResult::json(columns, rows, std::time::Duration::ZERO)
+    let mut result = QueryResult::json(columns, rows, std::time::Duration::ZERO);
+    result.next_page_token = next_page_token;
+    result
 }
 
 fn crud_result_to_query_result(result: dbflux_core::CrudResult) -> QueryResult {
