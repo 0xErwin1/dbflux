@@ -757,44 +757,6 @@ impl Default for SyntaxInfo {
     }
 }
 
-impl SyntaxInfo {
-    /// Returns a SyntaxInfo for ANSI SQL (PostgreSQL-compatible defaults).
-    pub fn ansi() -> Self {
-        Self {
-            identifier_quote: '"',
-            string_quote: '\'',
-            placeholder_style: PlaceholderStyle::DollarNumber,
-            supports_schemas: true,
-            default_schema: Some("public".to_string()),
-            case_sensitive_identifiers: true,
-        }
-    }
-
-    /// Returns a SyntaxInfo for MySQL.
-    pub fn mysql() -> Self {
-        Self {
-            identifier_quote: '`',
-            string_quote: '\'',
-            placeholder_style: PlaceholderStyle::QuestionMark,
-            supports_schemas: false,
-            default_schema: None,
-            case_sensitive_identifiers: false,
-        }
-    }
-
-    /// Returns a SyntaxInfo for SQLite.
-    pub fn sqlite() -> Self {
-        Self {
-            identifier_quote: '"',
-            string_quote: '\'',
-            placeholder_style: PlaceholderStyle::QuestionMark,
-            supports_schemas: false,
-            default_schema: None,
-            case_sensitive_identifiers: true,
-        }
-    }
-}
-
 // ============================================================================
 // Query Capabilities
 // ============================================================================
@@ -902,63 +864,6 @@ impl Default for QueryCapabilities {
     }
 }
 
-impl QueryCapabilities {
-    /// Returns QueryCapabilities for relational databases.
-    pub fn relational() -> Self {
-        Self::default()
-    }
-
-    /// Returns QueryCapabilities for MongoDB.
-    pub fn mongodb() -> Self {
-        Self {
-            pagination: vec![PaginationStyle::Cursor, PaginationStyle::PageToken],
-            where_operators: vec![
-                WhereOperator::Eq,
-                WhereOperator::Ne,
-                WhereOperator::Gt,
-                WhereOperator::Gte,
-                WhereOperator::Lt,
-                WhereOperator::Lte,
-                WhereOperator::In,
-                WhereOperator::NotIn,
-                WhereOperator::And,
-                WhereOperator::Or,
-                WhereOperator::Not,
-            ],
-            supports_joins: false,
-            supports_union: false,
-            supports_intersect: false,
-            supports_except: false,
-            supports_ctes: false,
-            ..Self::default()
-        }
-    }
-
-    /// Returns QueryCapabilities for Redis.
-    pub fn redis() -> Self {
-        Self {
-            pagination: vec![PaginationStyle::Cursor],
-            where_operators: vec![],
-            supports_order_by: false,
-            supports_group_by: false,
-            supports_having: false,
-            supports_distinct: false,
-            supports_limit: false,
-            supports_offset: false,
-            supports_joins: false,
-            supports_subqueries: false,
-            supports_union: false,
-            supports_intersect: false,
-            supports_except: false,
-            supports_case_expressions: false,
-            supports_window_functions: false,
-            supports_ctes: false,
-            supports_explain: false,
-            ..Self::default()
-        }
-    }
-}
-
 // ============================================================================
 // Mutation Capabilities
 // ============================================================================
@@ -1006,26 +911,6 @@ impl Default for MutationCapabilities {
             supports_batch: true,
             supports_bulk_update: true,
             supports_bulk_delete: true,
-        }
-    }
-}
-
-impl MutationCapabilities {
-    /// Returns MutationCapabilities for PostgreSQL.
-    pub fn postgresql() -> Self {
-        Self {
-            supports_upsert: true,
-            supports_returning: true,
-            ..Self::default()
-        }
-    }
-
-    /// Returns MutationCapabilities for SQLite.
-    pub fn sqlite() -> Self {
-        Self {
-            supports_upsert: true,
-            supports_returning: true,
-            ..Self::default()
         }
     }
 }
@@ -1118,33 +1003,6 @@ impl Default for DdlCapabilities {
     }
 }
 
-impl DdlCapabilities {
-    /// Returns DdlCapabilities for MySQL (non-transactional DDL).
-    pub fn mysql() -> Self {
-        Self {
-            transactional_ddl: false,
-            supports_rename_column: false,
-            supports_drop_column: false,
-            ..Self::default()
-        }
-    }
-
-    /// Returns DdlCapabilities for SQLite (limited ALTER TABLE).
-    pub fn sqlite() -> Self {
-        Self {
-            supports_alter_table: false,
-            supports_add_column: true,
-            supports_rename_column: true,
-            supports_drop_column: false,
-            supports_alter_column: false,
-            supports_add_constraint: false,
-            supports_drop_constraint: false,
-            transactional_ddl: false,
-            ..Self::default()
-        }
-    }
-}
-
 // ============================================================================
 // Transaction Capabilities
 // ============================================================================
@@ -1186,32 +1044,6 @@ impl Default for TransactionCapabilities {
             supports_savepoints: true,
             supports_nested_transactions: true,
             supports_read_only: true,
-            supports_deferrable: false,
-        }
-    }
-}
-
-impl TransactionCapabilities {
-    /// Returns TransactionCapabilities for SQLite.
-    pub fn sqlite() -> Self {
-        Self {
-            supported_isolation_levels: vec![IsolationLevel::ReadCommitted],
-            default_isolation_level: Some(IsolationLevel::ReadCommitted),
-            supports_nested_transactions: false,
-            supports_deferrable: true,
-            ..Self::default()
-        }
-    }
-
-    /// Returns TransactionCapabilities for drivers without transaction support.
-    pub fn none() -> Self {
-        Self {
-            supports_transactions: false,
-            supported_isolation_levels: vec![],
-            default_isolation_level: None,
-            supports_savepoints: false,
-            supports_nested_transactions: false,
-            supports_read_only: false,
             supports_deferrable: false,
         }
     }
@@ -1260,42 +1092,6 @@ impl Default for DriverLimits {
             max_identifier_length: 63,
             max_columns: 0,
             max_indexes_per_table: 0,
-        }
-    }
-}
-
-impl DriverLimits {
-    /// Returns DriverLimits for PostgreSQL.
-    pub fn postgresql() -> Self {
-        Self {
-            max_parameters: 32767,
-            max_identifier_length: 63,
-            max_columns: 250,
-            max_indexes_per_table: 32,
-            ..Self::default()
-        }
-    }
-
-    /// Returns DriverLimits for MySQL.
-    pub fn mysql() -> Self {
-        Self {
-            max_parameters: 65535,
-            max_identifier_length: 64,
-            max_columns: 4096,
-            max_indexes_per_table: 64,
-            ..Self::default()
-        }
-    }
-
-    /// Returns DriverLimits for SQLite.
-    pub fn sqlite() -> Self {
-        Self {
-            max_query_length: 1_000_000_000,
-            max_parameters: 32766,
-            max_identifier_length: 100_000,
-            max_columns: 32766,
-            max_indexes_per_table: 64,
-            ..Self::default()
         }
     }
 }
@@ -1751,18 +1547,6 @@ mod tests {
     }
 
     #[test]
-    fn test_syntax_info_presets() {
-        let pg = SyntaxInfo::ansi();
-        assert_eq!(pg.identifier_quote, '"');
-        assert!(pg.supports_schemas);
-        assert_eq!(pg.default_schema, Some("public".to_string()));
-
-        let mysql = SyntaxInfo::mysql();
-        assert_eq!(mysql.identifier_quote, '`');
-        assert!(!mysql.supports_schemas);
-    }
-
-    #[test]
     fn test_query_capabilities_default() {
         let qc = QueryCapabilities::default();
         assert!(qc.supports_order_by);
@@ -1775,15 +1559,6 @@ mod tests {
     }
 
     #[test]
-    fn test_query_capabilities_mongodb() {
-        let mongodb = QueryCapabilities::mongodb();
-        assert!(!mongodb.supports_joins);
-        assert!(!mongodb.supports_union);
-        assert!(!mongodb.supports_ctes);
-        assert!(mongodb.pagination.contains(&PaginationStyle::Cursor));
-    }
-
-    #[test]
     fn test_mutation_capabilities_default() {
         let mc = MutationCapabilities::default();
         assert!(mc.supports_insert);
@@ -1793,26 +1568,12 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_capabilities_postgresql() {
-        let pg = MutationCapabilities::postgresql();
-        assert!(pg.supports_upsert);
-        assert!(pg.supports_returning);
-    }
-
-    #[test]
     fn test_ddl_capabilities_default() {
         let dc = DdlCapabilities::default();
         assert!(dc.supports_create_table);
         assert!(dc.supports_drop_table);
         assert!(dc.supports_alter_table);
         assert!(dc.transactional_ddl);
-    }
-
-    #[test]
-    fn test_ddl_capabilities_mysql() {
-        let mysql = DdlCapabilities::mysql();
-        assert!(!mysql.transactional_ddl);
-        assert!(!mysql.supports_drop_column);
     }
 
     #[test]
@@ -1829,44 +1590,6 @@ mod tests {
         let limits = DriverLimits::default();
         assert_eq!(limits.max_identifier_length, 63);
         assert_eq!(limits.max_nested_subqueries, 16);
-    }
-
-    #[test]
-    fn test_driver_limits_postgresql() {
-        let pg = DriverLimits::postgresql();
-        assert_eq!(pg.max_parameters, 32767);
-        assert_eq!(pg.max_columns, 250);
-    }
-
-    #[test]
-    fn test_driver_metadata_builder() {
-        let metadata = DriverMetadataBuilder::new(
-            "postgres",
-            "PostgreSQL",
-            DatabaseCategory::Relational,
-            QueryLanguage::Sql,
-        )
-        .description("Test PostgreSQL driver")
-        .default_port(5432)
-        .uri_scheme("postgresql")
-        .syntax(SyntaxInfo::ansi())
-        .query(QueryCapabilities::relational())
-        .mutation(MutationCapabilities::postgresql())
-        .ddl(DdlCapabilities::default())
-        .transactions(TransactionCapabilities::default())
-        .limits(DriverLimits::postgresql())
-        .build();
-
-        assert_eq!(metadata.id, "postgres");
-        assert_eq!(metadata.display_name, "PostgreSQL");
-        assert_eq!(metadata.description, "Test PostgreSQL driver");
-        assert_eq!(metadata.default_port, Some(5432));
-        assert!(metadata.syntax.is_some());
-        assert!(metadata.query.is_some());
-        assert!(metadata.mutation.is_some());
-        assert!(metadata.ddl.is_some());
-        assert!(metadata.transactions.is_some());
-        assert!(metadata.limits.is_some());
     }
 
     #[test]
@@ -1921,39 +1644,6 @@ mod tests {
     // --- SyntaxInfo Tests ---
 
     #[test]
-    fn test_syntax_info_ansi_preset() {
-        let ansi = SyntaxInfo::ansi();
-        assert_eq!(ansi.identifier_quote, '"');
-        assert_eq!(ansi.string_quote, '\'');
-        assert_eq!(ansi.placeholder_style, PlaceholderStyle::DollarNumber);
-        assert!(ansi.supports_schemas);
-        assert_eq!(ansi.default_schema, Some("public".to_string()));
-        assert!(ansi.case_sensitive_identifiers);
-    }
-
-    #[test]
-    fn test_syntax_info_mysql_preset() {
-        let mysql = SyntaxInfo::mysql();
-        assert_eq!(mysql.identifier_quote, '`');
-        assert_eq!(mysql.string_quote, '\'');
-        assert_eq!(mysql.placeholder_style, PlaceholderStyle::QuestionMark);
-        assert!(!mysql.supports_schemas);
-        assert!(mysql.default_schema.is_none());
-        assert!(!mysql.case_sensitive_identifiers);
-    }
-
-    #[test]
-    fn test_syntax_info_sqlite_preset() {
-        let sqlite = SyntaxInfo::sqlite();
-        assert_eq!(sqlite.identifier_quote, '"');
-        assert_eq!(sqlite.string_quote, '\'');
-        assert_eq!(sqlite.placeholder_style, PlaceholderStyle::QuestionMark);
-        assert!(!sqlite.supports_schemas);
-        assert!(sqlite.default_schema.is_none());
-        assert!(sqlite.case_sensitive_identifiers);
-    }
-
-    #[test]
     fn test_syntax_info_custom() {
         let custom = SyntaxInfo {
             identifier_quote: '[',
@@ -1973,67 +1663,6 @@ mod tests {
     // --- QueryCapabilities Tests ---
 
     #[test]
-    fn test_query_capabilities_relational_preset() {
-        let relational = QueryCapabilities::relational();
-        assert!(relational.supports_order_by);
-        assert!(relational.supports_group_by);
-        assert!(relational.supports_having);
-        assert!(relational.supports_distinct);
-        assert!(relational.supports_limit);
-        assert!(relational.supports_offset);
-        assert!(relational.supports_joins);
-        assert!(relational.supports_subqueries);
-        assert!(relational.supports_union);
-        assert!(relational.supports_intersect);
-        assert!(relational.supports_except);
-        assert!(relational.supports_case_expressions);
-        assert!(relational.supports_window_functions);
-        assert!(relational.supports_ctes);
-        assert!(relational.supports_explain);
-        assert!(relational.pagination.contains(&PaginationStyle::Offset));
-    }
-
-    #[test]
-    fn test_query_capabilities_mongodb_preset() {
-        let mongodb = QueryCapabilities::mongodb();
-        assert!(mongodb.pagination.contains(&PaginationStyle::Cursor));
-        assert!(mongodb.pagination.contains(&PaginationStyle::PageToken));
-        assert!(!mongodb.supports_joins);
-        assert!(!mongodb.supports_union);
-        assert!(!mongodb.supports_intersect);
-        assert!(!mongodb.supports_except);
-        assert!(!mongodb.supports_ctes);
-        // MongoDB inherits default: supports_case_expressions via $switch in aggregation
-        // Also inherits: supports_window_functions via $group in aggregation
-        assert!(mongodb.supports_case_expressions);
-        assert!(mongodb.supports_window_functions);
-        assert!(mongodb.supports_order_by);
-        assert!(mongodb.supports_group_by);
-    }
-
-    #[test]
-    fn test_query_capabilities_redis_preset() {
-        let redis = QueryCapabilities::redis();
-        assert!(redis.pagination.contains(&PaginationStyle::Cursor));
-        assert!(redis.where_operators.is_empty());
-        assert!(!redis.supports_order_by);
-        assert!(!redis.supports_group_by);
-        assert!(!redis.supports_having);
-        assert!(!redis.supports_distinct);
-        assert!(!redis.supports_limit);
-        assert!(!redis.supports_offset);
-        assert!(!redis.supports_joins);
-        assert!(!redis.supports_subqueries);
-        assert!(!redis.supports_union);
-        assert!(!redis.supports_intersect);
-        assert!(!redis.supports_except);
-        assert!(!redis.supports_case_expressions);
-        assert!(!redis.supports_window_functions);
-        assert!(!redis.supports_ctes);
-        assert!(!redis.supports_explain);
-    }
-
-    #[test]
     fn test_query_capabilities_max_parameters() {
         let qc = QueryCapabilities {
             max_query_parameters: 100,
@@ -2046,16 +1675,6 @@ mod tests {
     }
 
     // --- MutationCapabilities Tests ---
-
-    #[test]
-    fn test_mutation_capabilities_sqlite_preset() {
-        let sqlite = MutationCapabilities::sqlite();
-        assert!(sqlite.supports_upsert);
-        assert!(sqlite.supports_returning);
-        assert!(sqlite.supports_batch);
-        assert!(sqlite.supports_bulk_update);
-        assert!(sqlite.supports_bulk_delete);
-    }
 
     #[test]
     fn test_mutation_capabilities_supports_all_basic() {
@@ -2085,19 +1704,6 @@ mod tests {
     // --- DdlCapabilities Tests ---
 
     #[test]
-    fn test_ddl_capabilities_sqlite_preset() {
-        let sqlite = DdlCapabilities::sqlite();
-        assert!(!sqlite.supports_alter_table);
-        assert!(sqlite.supports_add_column);
-        assert!(sqlite.supports_rename_column);
-        assert!(!sqlite.supports_drop_column);
-        assert!(!sqlite.supports_alter_column);
-        assert!(!sqlite.supports_add_constraint);
-        assert!(!sqlite.supports_drop_constraint);
-        assert!(!sqlite.transactional_ddl);
-    }
-
-    #[test]
     fn test_ddl_capabilities_supports_basic_ddl() {
         let dc = DdlCapabilities::default();
         assert!(dc.supports_create_database);
@@ -2123,34 +1729,6 @@ mod tests {
     // --- TransactionCapabilities Tests ---
 
     #[test]
-    fn test_transaction_capabilities_sqlite_preset() {
-        let sqlite = TransactionCapabilities::sqlite();
-        assert!(sqlite.supports_transactions);
-        assert_eq!(
-            sqlite.supported_isolation_levels,
-            vec![IsolationLevel::ReadCommitted]
-        );
-        assert_eq!(
-            sqlite.default_isolation_level,
-            Some(IsolationLevel::ReadCommitted)
-        );
-        assert!(!sqlite.supports_nested_transactions);
-        assert!(sqlite.supports_deferrable);
-    }
-
-    #[test]
-    fn test_transaction_capabilities_none_preset() {
-        let none = TransactionCapabilities::none();
-        assert!(!none.supports_transactions);
-        assert!(none.supported_isolation_levels.is_empty());
-        assert!(none.default_isolation_level.is_none());
-        assert!(!none.supports_savepoints);
-        assert!(!none.supports_nested_transactions);
-        assert!(!none.supports_read_only);
-        assert!(!none.supports_deferrable);
-    }
-
-    #[test]
     fn test_transaction_capabilities_supports_all() {
         let tc = TransactionCapabilities::default();
         assert!(tc.supports_transactions);
@@ -2163,25 +1741,6 @@ mod tests {
     }
 
     // --- DriverLimits Tests ---
-
-    #[test]
-    fn test_driver_limits_mysql_preset() {
-        let mysql = DriverLimits::mysql();
-        assert_eq!(mysql.max_parameters, 65535);
-        assert_eq!(mysql.max_identifier_length, 64);
-        assert_eq!(mysql.max_columns, 4096);
-        assert_eq!(mysql.max_indexes_per_table, 64);
-    }
-
-    #[test]
-    fn test_driver_limits_sqlite_preset() {
-        let sqlite = DriverLimits::sqlite();
-        assert_eq!(sqlite.max_query_length, 1_000_000_000);
-        assert_eq!(sqlite.max_parameters, 32766);
-        assert_eq!(sqlite.max_identifier_length, 100_000);
-        assert_eq!(sqlite.max_columns, 32766);
-        assert_eq!(sqlite.max_indexes_per_table, 64);
-    }
 
     #[test]
     fn test_driver_limits_default_unlimited() {
@@ -2222,41 +1781,6 @@ mod tests {
         assert!(metadata.ddl.is_none());
         assert!(metadata.transactions.is_none());
         assert!(metadata.limits.is_none());
-    }
-
-    #[test]
-    fn test_driver_metadata_builder_all_fields() {
-        let metadata = DriverMetadataBuilder::new(
-            "custom",
-            "Custom Driver",
-            DatabaseCategory::Document,
-            QueryLanguage::MongoQuery,
-        )
-        .description("A custom driver")
-        .default_port(27017)
-        .uri_scheme("mongodb")
-        .icon(Icon::Mongodb)
-        .syntax(SyntaxInfo::default())
-        .query(QueryCapabilities::mongodb())
-        .mutation(MutationCapabilities::default())
-        .ddl(DdlCapabilities::default())
-        .transactions(TransactionCapabilities::default())
-        .limits(DriverLimits::default())
-        .build();
-
-        assert_eq!(metadata.id, "custom");
-        assert_eq!(metadata.display_name, "Custom Driver");
-        assert_eq!(metadata.description, "A custom driver");
-        assert_eq!(metadata.default_port, Some(27017));
-        assert_eq!(metadata.uri_scheme, "mongodb");
-        assert_eq!(metadata.icon, Icon::Mongodb);
-        assert_eq!(metadata.category, DatabaseCategory::Document);
-        assert!(metadata.syntax.is_some());
-        assert!(metadata.query.is_some());
-        assert!(metadata.mutation.is_some());
-        assert!(metadata.ddl.is_some());
-        assert!(metadata.transactions.is_some());
-        assert!(metadata.limits.is_some());
     }
 
     #[test]

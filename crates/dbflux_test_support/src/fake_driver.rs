@@ -1,16 +1,16 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, POSTGRES_FORM,
-    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService, SyntaxInfo, TransactionCapabilities,
+    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
+    DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
+    Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, RedisLanguageService, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlLanguageService, SyntaxInfo, TransactionCapabilities, DYNAMODB_FORM, MONGODB_FORM,
+    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -544,12 +544,29 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
-    syntax: Some(SyntaxInfo::ansi()),
-    query: Some(QueryCapabilities::relational()),
-    mutation: Some(MutationCapabilities::postgresql()),
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::DollarNumber,
+        supports_schemas: true,
+        default_schema: Some("public".to_string()),
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities {
+        supports_upsert: true,
+        supports_returning: true,
+        ..Default::default()
+    }),
     ddl: Some(DdlCapabilities::default()),
     transactions: Some(TransactionCapabilities::default()),
-    limits: Some(DriverLimits::postgresql()),
+    limits: Some(DriverLimits {
+        max_parameters: 32767,
+        max_identifier_length: 63,
+        max_columns: 250,
+        max_indexes_per_table: 32,
+        ..Default::default()
+    }),
     classification_override: None,
 });
 
@@ -563,12 +580,46 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     default_port: None,
     uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
-    syntax: Some(SyntaxInfo::sqlite()),
-    query: Some(QueryCapabilities::relational()),
-    mutation: Some(MutationCapabilities::sqlite()),
-    ddl: Some(DdlCapabilities::sqlite()),
-    transactions: Some(TransactionCapabilities::sqlite()),
-    limits: Some(DriverLimits::sqlite()),
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities {
+        supports_upsert: true,
+        supports_returning: true,
+        ..Default::default()
+    }),
+    ddl: Some(DdlCapabilities {
+        supports_alter_table: false,
+        supports_add_column: true,
+        supports_rename_column: true,
+        supports_drop_column: false,
+        supports_alter_column: false,
+        supports_add_constraint: false,
+        supports_drop_constraint: false,
+        transactional_ddl: false,
+        ..Default::default()
+    }),
+    transactions: Some(TransactionCapabilities {
+        supported_isolation_levels: vec![dbflux_core::IsolationLevel::ReadCommitted],
+        default_isolation_level: Some(dbflux_core::IsolationLevel::ReadCommitted),
+        supports_nested_transactions: false,
+        supports_deferrable: true,
+        ..Default::default()
+    }),
+    limits: Some(DriverLimits {
+        max_query_length: 1_000_000_000,
+        max_parameters: 32766,
+        max_identifier_length: 100_000,
+        max_columns: 32766,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
     classification_override: None,
 });
 
@@ -582,12 +633,30 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
-    syntax: Some(SyntaxInfo::mysql()),
-    query: Some(QueryCapabilities::relational()),
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities::default()),
-    ddl: Some(DdlCapabilities::mysql()),
+    ddl: Some(DdlCapabilities {
+        transactional_ddl: false,
+        supports_rename_column: false,
+        supports_drop_column: false,
+        ..Default::default()
+    }),
     transactions: Some(TransactionCapabilities::default()),
-    limits: Some(DriverLimits::mysql()),
+    limits: Some(DriverLimits {
+        max_parameters: 65535,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
     classification_override: None,
 });
 
@@ -601,12 +670,30 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
     icon: Icon::Mariadb,
-    syntax: Some(SyntaxInfo::mysql()),
-    query: Some(QueryCapabilities::relational()),
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '`',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: false,
+    }),
+    query: Some(QueryCapabilities::default()),
     mutation: Some(MutationCapabilities::default()),
-    ddl: Some(DdlCapabilities::mysql()),
+    ddl: Some(DdlCapabilities {
+        transactional_ddl: false,
+        supports_rename_column: false,
+        supports_drop_column: false,
+        ..Default::default()
+    }),
     transactions: Some(TransactionCapabilities::default()),
-    limits: Some(DriverLimits::mysql()),
+    limits: Some(DriverLimits {
+        max_parameters: 65535,
+        max_identifier_length: 64,
+        max_columns: 4096,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
     classification_override: None,
 });
 
@@ -621,10 +708,42 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
     syntax: None,
-    query: Some(QueryCapabilities::mongodb()),
+    query: Some(QueryCapabilities {
+        pagination: vec![
+            dbflux_core::PaginationStyle::Cursor,
+            dbflux_core::PaginationStyle::PageToken,
+        ],
+        where_operators: vec![
+            dbflux_core::WhereOperator::Eq,
+            dbflux_core::WhereOperator::Ne,
+            dbflux_core::WhereOperator::Gt,
+            dbflux_core::WhereOperator::Gte,
+            dbflux_core::WhereOperator::Lt,
+            dbflux_core::WhereOperator::Lte,
+            dbflux_core::WhereOperator::In,
+            dbflux_core::WhereOperator::NotIn,
+            dbflux_core::WhereOperator::And,
+            dbflux_core::WhereOperator::Or,
+            dbflux_core::WhereOperator::Not,
+        ],
+        supports_joins: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_ctes: false,
+        ..Default::default()
+    }),
     mutation: None,
     ddl: None,
-    transactions: Some(TransactionCapabilities::none()),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
     limits: None,
     classification_override: None,
 });
@@ -640,10 +759,37 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     uri_scheme: "redis".into(),
     icon: Icon::Redis,
     syntax: None,
-    query: Some(QueryCapabilities::redis()),
+    query: Some(QueryCapabilities {
+        pagination: vec![dbflux_core::PaginationStyle::Cursor],
+        where_operators: vec![],
+        supports_order_by: false,
+        supports_group_by: false,
+        supports_having: false,
+        supports_distinct: false,
+        supports_limit: false,
+        supports_offset: false,
+        supports_joins: false,
+        supports_subqueries: false,
+        supports_union: false,
+        supports_intersect: false,
+        supports_except: false,
+        supports_case_expressions: false,
+        supports_window_functions: false,
+        supports_ctes: false,
+        supports_explain: false,
+        ..Default::default()
+    }),
     mutation: None,
     ddl: None,
-    transactions: Some(TransactionCapabilities::none()),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
     limits: None,
     classification_override: None,
 });
@@ -662,7 +808,15 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     query: None,
     mutation: None,
     ddl: None,
-    transactions: Some(TransactionCapabilities::none()),
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
     limits: None,
     classification_override: None,
 });
