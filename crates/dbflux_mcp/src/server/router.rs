@@ -1,4 +1,4 @@
-use crate::tool_catalog::{ToolCatalogError, validate_v1_tool};
+use crate::tool_catalog::{validate_v1_tool, ToolCatalogError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteTarget {
@@ -17,7 +17,7 @@ pub fn route_tool(tool_id: &str) -> Result<RouteTarget, ToolCatalogError> {
         "list_connections" | "get_connection" | "get_connection_metadata" => RouteTarget::Discovery,
         "list_databases" | "list_schemas" | "list_tables" | "list_collections"
         | "describe_object" => RouteTarget::Schema,
-        "read_query" | "explain_query" | "preview_mutation" => RouteTarget::Query,
+        "select_data" | "explain_query" | "preview_mutation" => RouteTarget::Query,
         "list_scripts" | "get_script" | "create_script" | "update_script" | "delete_script"
         | "run_script" => RouteTarget::Scripts,
         "request_execution"

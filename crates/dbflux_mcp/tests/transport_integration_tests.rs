@@ -72,7 +72,7 @@ impl IntegrationHarness {
             Vec::new(),
             vec![ToolPolicy {
                 id: "policy-read".to_string(),
-                allowed_tools: vec!["read_query".to_string()],
+                allowed_tools: vec!["select_data".to_string()],
                 allowed_classes: vec![ExecutionClassification::Read],
             }],
         );
@@ -90,7 +90,7 @@ impl IntegrationHarness {
         })
         .expect("transport profile should satisfy v1");
 
-        vec!["list_databases", "read_query"]
+        vec!["list_databases", "select_data"]
     }
 
     fn call_tool(
@@ -110,7 +110,7 @@ impl IntegrationHarness {
                 let databases = self.catalog.list_databases(connection_id)?;
                 Ok(ToolCallResponse::Databases(databases))
             }
-            RouteTarget::Query if tool_id == "read_query" => {
+            RouteTarget::Query if tool_id == "select_data" => {
                 let request = QueryExecutionRequest {
                     actor_id: "agent-a".to_string(),
                     connection_id: payload
@@ -118,7 +118,7 @@ impl IntegrationHarness {
                         .and_then(Value::as_str)
                         .ok_or("missing connection_id")?
                         .to_string(),
-                    tool_id: "read_query".to_string(),
+                    tool_id: "select_data".to_string(),
                     query_language: QueryLanguage::Sql,
                     query: payload
                         .get("query")
@@ -161,11 +161,11 @@ fn unix_socket_transport_supports_handshake_and_query_tool_call() {
     let harness = IntegrationHarness::new(TransportKind::UnixSocket);
 
     let tools = harness.handshake();
-    assert!(tools.contains(&"read_query"));
+    assert!(tools.contains(&"select_data"));
 
     let response = harness
         .call_tool(
-            "read_query",
+            "select_data",
             &serde_json::json!({"connection_id": "conn-a", "query": "SELECT id FROM users"}),
         )
         .expect("query tool call should succeed");
