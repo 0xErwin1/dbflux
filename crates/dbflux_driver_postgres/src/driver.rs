@@ -3057,8 +3057,7 @@ fn translate_filter_to_sql(filter: &Value) -> String {
                         if arr.is_empty() {
                             "1=1".to_string()
                         } else {
-                            let items: Vec<String> =
-                                arr.iter().map(|v| value_to_pg_literal(v)).collect();
+                            let items: Vec<String> = arr.iter().map(value_to_pg_literal).collect();
                             format!("{} = ANY(ARRAY[{}])", quoted_col, items.join(", "))
                         }
                     }
@@ -3082,23 +3081,20 @@ fn translate_filter_to_sql(filter: &Value) -> String {
 
 /// Collect all Value items from a filter expression into a vector for parameterized queries.
 fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            for (_, value) in doc {
-                match value {
-                    Value::Array(arr) => {
-                        for item in arr {
-                            if !matches!(item, Value::Null) {
-                                params.push(item.clone());
-                            }
+    if let Value::Document(doc) = filter {
+        for value in doc.values() {
+            match value {
+                Value::Array(arr) => {
+                    for item in arr {
+                        if !matches!(item, Value::Null) {
+                            params.push(item.clone());
                         }
                     }
-                    Value::Null => {}
-                    _ => params.push(value.clone()),
                 }
+                Value::Null => {}
+                _ => params.push(value.clone()),
             }
         }
-        _ => {}
     }
 }
 

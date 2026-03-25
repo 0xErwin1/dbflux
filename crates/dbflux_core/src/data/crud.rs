@@ -1,20 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Row, Value,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeySetRequest, ListPushRequest,
         ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
         StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
+    Row, Value,
 };
 
 /// Unique identification of a record for UPDATE/DELETE operations.
-///
-/// Different database types use different identification methods:
-/// - SQL: composite primary key (one or more columns)
-/// - Document DBs: ObjectId or similar unique identifier
-/// - Key-Value: the key itself
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RecordIdentity {
     /// SQL-style composite primary key.
@@ -24,8 +19,7 @@ pub enum RecordIdentity {
         values: Vec<Value>,
     },
 
-    /// MongoDB-style ObjectId.
-    /// Uses the `_id` field for identification.
+    /// ObjectId for document databases.
     ObjectId(String),
 
     /// Key-value store key.
@@ -96,7 +90,7 @@ pub struct RowPatch {
     /// Table name.
     pub table: String,
 
-    /// Schema name (PostgreSQL) or None (SQLite/MySQL).
+    /// Schema name.
     pub schema: Option<String>,
 
     /// Column changes: (column_name, new_value).
@@ -129,7 +123,7 @@ pub struct RowInsert {
     /// Table name.
     pub table: String,
 
-    /// Schema name (PostgreSQL) or None (SQLite/MySQL).
+    /// Schema name.
     pub schema: Option<String>,
 
     /// Column names for the values being inserted.
@@ -173,7 +167,7 @@ pub struct RowDelete {
     /// Table name.
     pub table: String,
 
-    /// Schema name (PostgreSQL) or None (SQLite/MySQL).
+    /// Schema name.
     pub schema: Option<String>,
 }
 
@@ -290,7 +284,7 @@ impl CrudResult {
 }
 
 // =============================================================================
-// Document Database Mutations (MongoDB-style)
+// Document Database Mutations
 // =============================================================================
 
 /// Filter criteria for document operations.
@@ -442,17 +436,14 @@ impl DocumentDelete {
 /// Unified mutation request that can represent operations across database paradigms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MutationRequest {
-    // SQL mutations (relational databases)
     SqlUpdate(RowPatch),
     SqlInsert(RowInsert),
     SqlDelete(RowDelete),
 
-    // Document mutations (MongoDB-style)
     DocumentUpdate(DocumentUpdate),
     DocumentInsert(DocumentInsert),
     DocumentDelete(DocumentDelete),
 
-    // Key-value mutations (Redis-style)
     KeyValueSet(KeySetRequest),
     KeyValueDelete(KeyDeleteRequest),
     KeyValueHashSet(HashSetRequest),

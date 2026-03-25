@@ -2048,23 +2048,15 @@ impl Connection for MysqlConnection {
         &self,
         index_name: &str,
         table_name: Option<&str>,
-        if_exists: bool,
+        _if_exists: bool,
     ) -> String {
         let quoted_index = MYSQL_DIALECT.quote_identifier(index_name);
         let quoted_table = table_name.map(|t| MYSQL_DIALECT.quote_identifier(t));
 
         if let Some(table) = quoted_table {
-            if if_exists {
-                format!("DROP INDEX {} ON {}", quoted_index, table)
-            } else {
-                format!("DROP INDEX {} ON {}", quoted_index, table)
-            }
+            format!("DROP INDEX {} ON {}", quoted_index, table)
         } else {
-            if if_exists {
-                format!("DROP INDEX {} ", quoted_index)
-            } else {
-                format!("DROP INDEX {} ", quoted_index)
-            }
+            format!("DROP INDEX {} ", quoted_index)
         }
     }
 
@@ -2627,16 +2619,13 @@ fn translate_filter_to_sql(filter: &Value) -> String {
 
 /// Collect all Value items from a filter expression into a vector for parameterized queries.
 fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    match filter {
-        Value::Document(doc) => {
-            for (_, value) in doc {
-                match value {
-                    Value::Null => {}
-                    _ => params.push(value.clone()),
-                }
+    if let Value::Document(doc) = filter {
+        for value in doc.values() {
+            match value {
+                Value::Null => {}
+                _ => params.push(value.clone()),
             }
         }
-        _ => {}
     }
 }
 

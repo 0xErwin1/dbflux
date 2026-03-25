@@ -66,7 +66,7 @@ fn postgresql_metadata() -> ConnectionMetadata {
         syntax: SyntaxInfo {
             identifier_quote: '"',
             string_quote: '\'',
-            placeholder_style: dbflux_core::sql::dialect::PlaceholderStyle::DollarNumber,
+            placeholder_style: dbflux_core::PlaceholderStyle::DollarNumber,
             supports_schemas: true,
             default_schema: Some("public".to_string()),
             case_sensitive_identifiers: true,
