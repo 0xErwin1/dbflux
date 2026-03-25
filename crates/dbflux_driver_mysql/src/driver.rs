@@ -1886,7 +1886,7 @@ impl Connection for MysqlConnection {
         let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
 
         if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
+            let (where_clause, _filter_params) = translate_filter_to_sql(f);
             if !where_clause.is_empty() {
                 sql.push_str(" WHERE ");
                 sql.push_str(&where_clause);
@@ -1952,18 +1952,15 @@ impl Connection for MysqlConnection {
         let set_str = set_parts.join(", ");
 
         let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
+        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
 
         if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
+            let (where_clause, filter_params) = translate_filter_to_sql(f);
             if !where_clause.is_empty() {
                 sql.push_str(" WHERE ");
                 sql.push_str(&where_clause);
             }
-        }
-
-        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
-        if let Some(f) = filter {
-            collect_filter_values(f, &mut params);
+            params.extend(filter_params);
         }
 
         (sql, params)
@@ -1975,12 +1972,12 @@ impl Connection for MysqlConnection {
         let mut params = Vec::new();
 
         if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
+            let (where_clause, filter_params) = translate_filter_to_sql(f);
             if !where_clause.is_empty() {
                 sql.push_str(" WHERE ");
                 sql.push_str(&where_clause);
             }
-            collect_filter_values(f, &mut params);
+            params.extend(filter_params);
         }
 
         (sql, params)
@@ -2029,7 +2026,7 @@ impl Connection for MysqlConnection {
         let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
 
         if let Some(f) = filter {
-            let where_clause = translate_filter_to_sql(f);
+            let (where_clause, _filter_params) = translate_filter_to_sql(f);
             if !where_clause.is_empty() {
                 sql.push_str(" WHERE ");
                 sql.push_str(&where_clause);
@@ -2069,7 +2066,7 @@ impl Connection for MysqlConnection {
     }
 
     fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
-        Ok(translate_filter_to_sql(filter))
+        Ok(translate_filter_to_sql(filter).0)
     }
 }
 
@@ -2587,45 +2584,37 @@ fn fetch_foreign_keys(
 }
 
 /// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
-fn translate_filter_to_sql(filter: &Value) -> String {
+/// Returns (SQL string with ? placeholders, parameter values).
+fn translate_filter_to_sql(filter: &Value) -> (String, Vec<Value>) {
     match filter {
         Value::Document(doc) => {
             let mut parts = Vec::new();
+            let mut params = Vec::new();
             for (key, value) in doc {
                 let quoted_col = MYSQL_DIALECT.quote_identifier(key);
-                let expr = match value {
-                    Value::Null => format!("{} IS NULL", quoted_col),
-                    Value::Text(s) => format!("{} = '{}'", quoted_col, mysql_escape_string(s)),
-                    Value::Int(i) => format!("{} = {}", quoted_col, i),
-                    Value::Bool(b) => format!("{} = {}", quoted_col, if *b { "TRUE" } else { "FALSE" }),
-                    Value::Float(f) => format!("{} = {}", quoted_col, f),
-                    _ => format!("{} = {}", quoted_col, value_to_mysql_literal(value)),
-                };
-                parts.push(expr);
+                match value {
+                    Value::Null => {
+                        parts.push(format!("{} IS NULL", quoted_col));
+                    }
+                    _ => {
+                        parts.push(format!("{} = ?", quoted_col));
+                        params.push(value.clone());
+                    }
+                }
             }
             if parts.is_empty() {
-                String::new()
+                (String::new(), Vec::new())
             } else {
-                parts.join(" AND ")
+                (parts.join(" AND "), params)
             }
         }
         Value::Text(s) => {
             // Treat a plain text filter as a raw SQL expression (for advanced users)
-            s.clone()
+            // WARNING: This is intentionally allowed for power users but is a SQL injection risk
+            // if the filter comes from untrusted input. The caller must validate.
+            (s.clone(), Vec::new())
         }
-        _ => String::new(),
-    }
-}
-
-/// Collect all Value items from a filter expression into a vector for parameterized queries.
-fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
-    if let Value::Document(doc) = filter {
-        for value in doc.values() {
-            match value {
-                Value::Null => {}
-                _ => params.push(value.clone()),
-            }
-        }
+        _ => (String::new(), Vec::new()),
     }
 }
 
