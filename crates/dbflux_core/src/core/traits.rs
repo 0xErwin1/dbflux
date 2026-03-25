@@ -3,13 +3,6 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
-    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -19,6 +12,13 @@ use crate::{
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
     query::generator::QueryGenerator,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
 };
 
 bitflags! {
@@ -861,4 +861,76 @@ pub trait Connection: Send + Sync {
     fn generate_sql(&self, request: &SqlGenerationRequest) -> Result<String, DbError> {
         Ok(crate::generate_sql(self.dialect(), request))
     }
+}
+
+// =============================================================================
+// Category-Specific Connection Traits
+// =============================================================================
+
+/// Marker trait for connections that support relational (SQL) browse operations.
+///
+/// Implementors: PostgreSQL, MySQL, MariaDB, SQLite
+pub trait RelationalConnection: Connection {
+    /// Browse a table with pagination, ordering, and optional filter.
+    ///
+    /// Uses `self.browse_table()` as the default implementation.
+    fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
+        Connection::browse_table(self, request)
+    }
+
+    /// Count rows in a table with an optional filter.
+    ///
+    /// Uses `self.count_table()` as the default implementation.
+    fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
+        Connection::count_table(self, request)
+    }
+}
+
+/// Marker trait for connections that support document collection operations.
+///
+/// Implementors: MongoDB, DynamoDB
+pub trait DocumentConnection: Connection {
+    /// Browse a document collection with pagination and optional filter.
+    ///
+    /// Uses `self.browse_collection()` as the default implementation.
+    fn browse_collection(&self, request: &CollectionBrowseRequest) -> Result<QueryResult, DbError> {
+        Connection::browse_collection(self, request)
+    }
+
+    /// Count documents in a collection with an optional filter.
+    ///
+    /// Uses `self.count_collection()` as the default implementation.
+    fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
+        Connection::count_collection(self, request)
+    }
+}
+
+/// Marker trait for connections that support key-value scan operations.
+///
+/// Implementors: Redis
+pub trait KeyValueConnection: Connection {
+    /// Scan keys with cursor-based pagination.
+    ///
+    /// Uses `self.key_value_api().scan_keys()` if available.
+    fn scan(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+        self.key_value_api()
+            .ok_or_else(|| DbError::NotSupported("Key-value API not supported".to_string()))?
+            .scan_keys(request)
+    }
+}
+
+/// Extension trait for downcasting `dyn Connection` to category-specific traits.
+///
+/// This provides compile-time type safety for operations while maintaining
+/// runtime flexibility. Each driver implements the appropriate marker trait
+/// based on its capabilities.
+pub trait ConnectionExt {
+    /// Attempt to cast this connection as a relational connection.
+    fn as_relational(&self) -> Option<&dyn RelationalConnection>;
+
+    /// Attempt to cast this connection as a document connection.
+    fn as_document(&self) -> Option<&dyn DocumentConnection>;
+
+    /// Attempt to cast this connection as a key-value connection.
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection>;
 }

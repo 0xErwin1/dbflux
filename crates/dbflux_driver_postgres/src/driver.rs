@@ -11,15 +11,16 @@ use dbflux_core::{
     generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
     generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
+    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues,
-    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, MutationCapabilities,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    KeyValueConnection, MutationCapabilities, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
     RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
@@ -1447,6 +1448,22 @@ impl Connection for PostgresConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
         Some(&GENERATOR)
+    }
+}
+
+impl RelationalConnection for PostgresConnection {}
+
+impl ConnectionExt for PostgresConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        Some(self)
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 

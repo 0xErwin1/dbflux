@@ -20,13 +20,12 @@ use aws_sdk_dynamodb::{Client, types::TableDescription};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
-    CollectionRef, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
+    CollectionRef, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
-    DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon,
-    IndexData, IndexDirection, LanguageService, Pagination, QueryCapabilities, QueryErrorFormatter,
-    QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SyntaxInfo, TableInfo, TransactionCapabilities, ValidationResult, Value,
+    DbKind, DbSchemaInfo, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
+    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, FieldInfo, FormValues,
+    FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection, LanguageService, Pagination, QueryErrorFormatter, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, TransactionCapabilities, ValidationResult, Value,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -722,6 +721,22 @@ impl Connection for DynamoConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &dbflux_core::DefaultSqlDialect
+    }
+}
+
+impl DocumentConnection for DynamoConnection {}
+
+impl ConnectionExt for DynamoConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        None
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        Some(self)
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 

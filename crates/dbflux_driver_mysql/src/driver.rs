@@ -7,19 +7,19 @@ use std::time::Instant;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
+    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    DdlCapabilities, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError,
-    Icon, IndexData, IndexInfo, MYSQL_FORM, MutationCapabilities, PlaceholderStyle, QueryCancelHandle,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    QueryCapabilities, RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode,
-    SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, sanitize_uri,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
+    DropIndexRequest, DdlCapabilities, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, KeyValueConnection, MYSQL_FORM, MutationCapabilities,
+    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, QueryCapabilities, RecordIdentity, RelationalConnection, RelationalSchema,
+    Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1669,6 +1669,22 @@ impl Connection for MysqlConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MYSQL_DIALECT);
         Some(&GENERATOR)
+    }
+}
+
+impl RelationalConnection for MysqlConnection {}
+
+impl ConnectionExt for MysqlConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        Some(self)
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 

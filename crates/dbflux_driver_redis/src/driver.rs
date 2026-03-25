@@ -7,20 +7,19 @@ use std::sync::Arc;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile, DatabaseCategory,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
-    DiagnosticSeverity, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
-    SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId, SyntaxInfo, TextPosition,
-    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ValueRepr, ZSetAddRequest,
-    ZSetRemoveRequest, sanitize_uri,
+    DiagnosticSeverity, DocumentConnection, DriverCapabilities, DriverFormDef, DriverMetadata,
+    EditorDiagnostic, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
+    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage,
+    KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi,
+    KeyValueConnection, KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest,
+    ListSetRequest, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, REDIS_FORM, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
+    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -710,6 +709,22 @@ impl Connection for RedisConnection {
         static GENERATOR: crate::command_generator::RedisCommandGenerator =
             crate::command_generator::RedisCommandGenerator;
         Some(&GENERATOR)
+    }
+}
+
+impl KeyValueConnection for RedisConnection {}
+
+impl ConnectionExt for RedisConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        None
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        Some(self)
     }
 }
 

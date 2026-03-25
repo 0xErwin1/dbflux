@@ -9,16 +9,16 @@ use bson::{Bson, Document, doc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
-    ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
-    DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
+    DiagnosticSeverity, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
+    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo,
     FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
-    IndexDirection, LanguageService, MONGODB_FORM, PaginationStyle, PlaceholderStyle,
+    IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, PlaceholderStyle,
     QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, SyntaxInfo,
-    TableInfo, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
-    ViewInfo, detect_dangerous_mongo, sanitize_uri,
+    QueryResult, RelationalConnection, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SshTunnelConfig, TableInfo, TextPosition, TextPositionRange, TransactionCapabilities,
+    ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1075,6 +1075,22 @@ impl Connection for MongoConnection {
         static GENERATOR: crate::query_generator::MongoShellGenerator =
             crate::query_generator::MongoShellGenerator;
         Some(&GENERATOR)
+    }
+}
+
+impl DocumentConnection for MongoConnection {}
+
+impl ConnectionExt for MongoConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        None
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        Some(self)
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 

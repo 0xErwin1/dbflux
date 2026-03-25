@@ -8,12 +8,13 @@ use std::time::Instant;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
-    Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
-    DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, DdlCapabilities,
-    ExplainRequest, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    MutationCapabilities, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, QueryCapabilities, ReindexRequest,
+    Connection, ConnectionExt, ConnectionProfile, ConstraintInfo,
+    ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DbSchemaInfo, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, DropIndexRequest, DdlCapabilities, ExplainRequest, ForeignKeyInfo,
+    FormValues, FormattedError, Icon, IndexData, IndexInfo, KeyValueConnection, MutationCapabilities,
+    PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, QueryCapabilities, ReindexRequest, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo,
@@ -756,6 +757,22 @@ impl Connection for SqliteConnection {
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&SQLITE_DIALECT);
         Some(&GENERATOR)
+    }
+}
+
+impl RelationalConnection for SqliteConnection {}
+
+impl ConnectionExt for SqliteConnection {
+    fn as_relational(&self) -> Option<&dyn RelationalConnection> {
+        Some(self)
+    }
+
+    fn as_document(&self) -> Option<&dyn DocumentConnection> {
+        None
+    }
+
+    fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
+        None
     }
 }
 
