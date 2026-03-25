@@ -228,6 +228,9 @@ mod tests {
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),
+            secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
+                dbflux_core::NoopSecretStore,
+            ))),
             mcp_enabled_by_default: true,
         }
     }

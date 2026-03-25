@@ -85,11 +85,9 @@ impl DbFluxServer {
         T: Send + 'static,
         E: std::fmt::Display + Send + 'static,
     {
-        tokio::task::spawn_blocking(move || {
-            f().map_err(|e| format!("{}", e))
-        })
-        .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?
+        tokio::task::spawn_blocking(move || f().map_err(|e| format!("{}", e)))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
     }
 
     /// Get connection and execute a query in a blocking context
@@ -106,11 +104,9 @@ impl DbFluxServer {
     {
         let conn = Self::get_or_connect(state, connection_id).await?;
 
-        tokio::task::spawn_blocking(move || {
-            f(conn)
-        })
-        .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?
+        tokio::task::spawn_blocking(move || f(conn))
+            .await
+            .map_err(|e| format!("Blocking task failed: {}", e))?
     }
 
     /// Get or establish a connection for the given connection_id
@@ -160,7 +156,9 @@ impl DbFluxServer {
         let connection = tokio::task::spawn_blocking(move || {
             driver
                 .connect_with_secrets(&profile_for_connect, password.as_ref(), ssh_secret.as_ref())
-                .map_err(|e| error_messages::connection_error(&connection_id_owned, &driver_id_owned, e))
+                .map_err(|e| {
+                    error_messages::connection_error(&connection_id_owned, &driver_id_owned, e)
+                })
         })
         .await
         .map_err(|e| format!("Blocking task failed: {}", e))??;
@@ -189,10 +187,10 @@ impl DbFluxServer {
         }
 
         // Resolve SSH secret if needed
-        if password.is_none() {
-            if let Some(pwd) = state.secret_manager.get_password(profile) {
-                password = Some(pwd);
-            }
+        if password.is_none()
+            && let Some(pwd) = state.secret_manager.get_password(profile)
+        {
+            password = Some(pwd);
         }
 
         // Resolve SSH secret if needed
@@ -200,7 +198,116 @@ impl DbFluxServer {
             ssh_secret = Some(ssh);
         }
 
-        Ok(ResolvedSecrets { password, ssh_secret })
+        Ok(ResolvedSecrets {
+            password,
+            ssh_secret,
+        })
+    }
+
+    /// Get the current database for a connection from the cache
+    pub(crate) async fn get_current_database(
+        state: &ServerState,
+        connection_id: &str,
+    ) -> Result<Option<String>, String> {
+        let cache = state.connection_cache.read().await;
+
+        if let Some(conn) = cache.get(connection_id) {
+            let conn = conn.clone();
+            let db = tokio::task::spawn_blocking(move || conn.active_database())
+                .await
+                .map_err(|e| format!("Blocking task failed: {}", e))?;
+            return Ok(db);
+        }
+
+        drop(cache);
+
+        let profile_uuid = connection_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
+
+        let profile_manager = state.profile_manager.read().await;
+        let profile = profile_manager
+            .find_by_id(profile_uuid)
+            .ok_or_else(|| error_messages::connection_not_found(connection_id))?;
+
+        Ok(profile.config.database())
+    }
+
+    /// Connect to a different database using the same profile
+    pub(crate) async fn connect_with_database(
+        state: ServerState,
+        connection_id: &str,
+        database: &str,
+    ) -> Result<Arc<dyn Connection>, String> {
+        let cache_key = format!("{}:{}", connection_id, database);
+
+        {
+            let cache = state.connection_cache.read().await;
+            if let Some(conn) = cache.get(&cache_key) {
+                return Ok(conn);
+            }
+        }
+
+        let profile_uuid = connection_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
+
+        let profile = {
+            let profile_manager = state.profile_manager.read().await;
+            profile_manager
+                .find_by_id(profile_uuid)
+                .cloned()
+                .ok_or_else(|| error_messages::connection_not_found(connection_id))?
+        };
+
+        let mut new_profile = profile.clone();
+        Self::set_database_in_profile(&mut new_profile, database)?;
+
+        let resolved_secrets = Self::resolve_profile_secrets(&state, &new_profile)?;
+
+        let driver_id = new_profile.driver_id();
+
+        let available_drivers: Vec<String> = state.driver_registry.keys().cloned().collect();
+
+        let driver = state
+            .driver_registry
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| error_messages::driver_not_available(&driver_id, &available_drivers))?;
+
+        let cache_key_owned = cache_key.clone();
+        let driver_id_owned = driver_id.clone();
+        let profile_for_connect = new_profile.clone();
+        let password = resolved_secrets.password;
+        let ssh_secret = resolved_secrets.ssh_secret;
+
+        let connection = tokio::task::spawn_blocking(move || {
+            driver
+                .connect_with_secrets(&profile_for_connect, password.as_ref(), ssh_secret.as_ref())
+                .map_err(|e| {
+                    error_messages::connection_error(&cache_key_owned, &driver_id_owned, e)
+                })
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))??;
+
+        let connection: Arc<dyn Connection> = Arc::from(connection);
+
+        {
+            let mut cache = state.connection_cache.write().await;
+            cache.insert(cache_key, connection.clone());
+        }
+
+        Ok(connection)
+    }
+
+    /// Set database in profile config (cloned and modified)
+    fn set_database_in_profile(
+        profile: &mut dbflux_core::ConnectionProfile,
+        database: &str,
+    ) -> Result<(), String> {
+        profile.config = profile.config.clone().with_database(database)?;
+        Ok(())
     }
 }
 

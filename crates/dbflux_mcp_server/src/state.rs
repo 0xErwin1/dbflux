@@ -5,7 +5,9 @@ use tokio::sync::RwLock;
 
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
-use dbflux_core::{AppConfigStore, ConnectionProfile, DbDriver, KeyringSecretStore, ProfileManager, SecretManager};
+use dbflux_core::{
+    AppConfigStore, ConnectionProfile, DbDriver, KeyringSecretStore, ProfileManager, SecretManager,
+};
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 pub mod cascade;
 pub mod diff;
 pub mod dry_run;
