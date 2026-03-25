@@ -884,6 +884,22 @@ impl ConnectionExt for RedisConnection {
     }
 }
 
+/// Escape glob special characters in a Redis SCAN pattern.
+///
+/// Redis SCAN uses glob patterns where `*`, `?`, `[`, `]`, and `\` have special
+/// meaning. This function escapes these characters so they are treated as literals.
+fn escape_redis_glob_pattern(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | '*' | '?' | '[' | ']' => result.push('\\'),
+            _ => {}
+        }
+        result.push(c);
+    }
+    result
+}
+
 impl KeyValueApi for RedisConnection {
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
         let cursor = request
@@ -906,7 +922,7 @@ impl KeyValueApi for RedisConnection {
             if let Some(filter) = request.filter.as_ref()
                 && !filter.is_empty()
             {
-                command.arg("MATCH").arg(filter);
+                command.arg("MATCH").arg(escape_redis_glob_pattern(filter));
             }
 
             command.arg("COUNT").arg(count);
@@ -2436,5 +2452,42 @@ mod tests {
     fn driver_key_is_builtin_redis() {
         let driver = RedisDriver::new();
         assert_eq!(driver.driver_key(), "builtin:redis");
+    }
+
+    // -- escape_redis_glob_pattern tests --
+
+    #[test]
+    fn test_escape_glob_pattern_no_special_chars() {
+        assert_eq!(escape_redis_glob_pattern("user:session:123"), "user:session:123");
+    }
+
+    #[test]
+    fn test_escape_glob_pattern_asterisk() {
+        assert_eq!(escape_redis_glob_pattern("user:*"), "user:\\*");
+        assert_eq!(escape_redis_glob_pattern("*"), "\\*");
+    }
+
+    #[test]
+    fn test_escape_glob_pattern_question_mark() {
+        assert_eq!(escape_redis_glob_pattern("user:?"), "user:\\?");
+        assert_eq!(escape_redis_glob_pattern("?"), "\\?");
+    }
+
+    #[test]
+    fn test_escape_glob_pattern_brackets() {
+        assert_eq!(escape_redis_glob_pattern("user:[1]"), "user:\\[1\\]");
+        assert_eq!(escape_redis_glob_pattern("[abc]"), "\\[abc\\]");
+    }
+
+    #[test]
+    fn test_escape_glob_pattern_backslash() {
+        assert_eq!(escape_redis_glob_pattern("user\\1"), "user\\\\1");
+        assert_eq!(escape_redis_glob_pattern("\\"), "\\\\");
+    }
+
+    #[test]
+    fn test_escape_glob_pattern_multiple() {
+        assert_eq!(escape_redis_glob_pattern("user:*:session:?"), "user:\\*:session:\\?");
+        assert_eq!(escape_redis_glob_pattern("a[*]b"), "a\\[\\*\\]b");
     }
 }
