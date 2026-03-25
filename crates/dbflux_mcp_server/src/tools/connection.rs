@@ -162,7 +162,6 @@ impl DbFluxServer {
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_core::QueryRequest;
         use dbflux_policy::ExecutionClassification;
-        use std::sync::Arc;
 
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
@@ -188,27 +187,32 @@ impl DbFluxServer {
 
                         let version_query = match (category, conn_for_blocking.kind()) {
                             (DatabaseCategory::Relational, DbKind::Postgres) => "SELECT version()",
-                            (DatabaseCategory::Relational, DbKind::MySQL | DbKind::MariaDB) => "SELECT VERSION()",
-                            (DatabaseCategory::Relational, DbKind::SQLite) => "SELECT sqlite_version()",
+                            (DatabaseCategory::Relational, DbKind::MySQL | DbKind::MariaDB) => {
+                                "SELECT VERSION()"
+                            }
+                            (DatabaseCategory::Relational, DbKind::SQLite) => {
+                                "SELECT sqlite_version()"
+                            }
                             _ => "SELECT version()",
                         };
 
-                        conn_for_blocking.execute(&QueryRequest {
-                            sql: version_query.to_string(),
-                            params: Vec::new(),
-                            limit: Some(1),
-                            offset: None,
-                            statement_timeout: None,
-                            database: None,
-                        })
-                        .ok()
-                        .and_then(|result| {
-                            if !result.rows.is_empty() && !result.rows[0].is_empty() {
-                                Some(format!("{:?}", result.rows[0][0]))
-                            } else {
-                                None
-                            }
-                        })
+                        conn_for_blocking
+                            .execute(&QueryRequest {
+                                sql: version_query.to_string(),
+                                params: Vec::new(),
+                                limit: Some(1),
+                                offset: None,
+                                statement_timeout: None,
+                                database: None,
+                            })
+                            .ok()
+                            .and_then(|result| {
+                                if !result.rows.is_empty() && !result.rows[0].is_empty() {
+                                    Some(format!("{:?}", result.rows[0][0]))
+                                } else {
+                                    None
+                                }
+                            })
                     })
                     .await
                     .map_err(|e| format!("Blocking task failed: {}", e))

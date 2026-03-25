@@ -50,7 +50,7 @@ fn validate_sql_syntax(sql: &str, validation: &mut ValidationResult) -> Result<(
     }
 
     // Check for unterminated strings
-    if sql.matches('\'').count() % 2 != 0 {
+    if !sql.matches('\'').count().is_multiple_of(2) {
         validation.add_error("Unterminated string literal");
     }
 
@@ -96,12 +96,13 @@ fn validate_dangerous_operations(
     }
 
     // ALTER COLUMN TYPE without USING clause (PostgreSQL)
-    if sql_upper.contains("ALTER COLUMN") && sql_upper.contains("TYPE") {
-        if !sql_upper.contains("USING") {
-            validation.add_warning(
-                "ALTER COLUMN TYPE without USING clause may fail if data is not compatible",
-            );
-        }
+    if sql_upper.contains("ALTER COLUMN")
+        && sql_upper.contains("TYPE")
+        && !sql_upper.contains("USING")
+    {
+        validation.add_warning(
+            "ALTER COLUMN TYPE without USING clause may fail if data is not compatible",
+        );
     }
 
     // DROP COLUMN

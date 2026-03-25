@@ -269,6 +269,12 @@ pub struct SchemaStateSnapshot {
     pub foreign_keys: HashMap<String, ForeignKeySnapshot>,
 }
 
+impl Default for SchemaStateSnapshot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchemaStateSnapshot {
     pub fn new() -> Self {
         Self {

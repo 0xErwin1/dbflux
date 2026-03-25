@@ -207,16 +207,25 @@ impl DbFluxServer {
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        let databases = connection.list_databases().map_err(|e| {
-            error_messages::schema_operation_error(
-                "list databases",
-                connection_id,
-                None,
-                None,
-                None,
-                e,
-            )
-        })?;
+        let conn = connection.clone();
+        let connection_id = connection_id.to_string();
+        let databases = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.list_databases().map_err(|e| {
+                error_messages::schema_operation_error(
+                    "list databases",
+                    &connection_id,
+                    None,
+                    None,
+                    None,
+                    e,
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
+
+        let databases = databases?;
 
         let items: Vec<serde_json::Value> = databases
             .iter()
@@ -236,18 +245,38 @@ impl DbFluxServer {
         connection_id: &str,
         database: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
 
-        let snapshot = connection.schema().map_err(|e| {
-            error_messages::schema_operation_error(
-                "list schemas",
-                connection_id,
-                database,
-                None,
-                None,
-                e,
-            )
-        })?;
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
+            } else {
+                Self::get_or_connect(state, connection_id).await?
+            }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
+        };
+
+        let conn = connection.clone();
+        let connection_id = connection_id.to_string();
+        let database = database.map(|d| d.to_string());
+        let snapshot = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.schema().map_err(|e| {
+                error_messages::schema_operation_error(
+                    "list schemas",
+                    &connection_id,
+                    database.as_deref(),
+                    None,
+                    None,
+                    e,
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
+
+        let snapshot = snapshot?;
 
         let schemas: Vec<serde_json::Value> = match &snapshot.structure {
             DataStructure::Relational(relational) => relational
@@ -272,24 +301,40 @@ impl DbFluxServer {
         database: Option<&str>,
         schema: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
+
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
+            } else {
+                Self::get_or_connect(state, connection_id).await?
+            }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
+        };
 
         let conn = connection.clone();
-        let schema_snapshot = tokio::task::spawn_blocking(move || {
-            conn.schema()
+        let connection_id = connection_id.to_string();
+        let database = database.map(|d| d.to_string());
+        let schema_str = schema.map(|s| s.to_string());
+        let schema_for_closure = schema_str.clone();
+        let schema_snapshot = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.schema().map_err(|e| {
+                error_messages::schema_operation_error(
+                    "list tables",
+                    &connection_id,
+                    database.as_deref(),
+                    schema_for_closure.as_deref(),
+                    None,
+                    e,
+                )
+            })
         })
         .await
-        .map_err(|e| format!("Blocking task failed: {}", e))?
-        .map_err(|e| {
-            error_messages::schema_operation_error(
-                "list tables",
-                connection_id,
-                database,
-                schema,
-                None,
-                e,
-            )
-        })?;
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
+
+        let schema_snapshot = schema_snapshot?;
 
         use dbflux_core::DataStructure;
 
@@ -298,9 +343,11 @@ impl DbFluxServer {
             _ => return Err("Not a relational database".to_string()),
         };
 
-        let target_schema = schema.unwrap_or("public");
-        let schema_data = relational.schemas.iter()
-            .find(|s| s.name == target_schema)
+        let target_schema = schema_str.unwrap_or_else(|| "public".to_string());
+        let schema_data = relational
+            .schemas
+            .iter()
+            .find(|s| s.name == target_schema.as_str())
             .ok_or_else(|| format!("Schema '{}' not found", target_schema))?;
 
         let mut tables: Vec<serde_json::Value> = schema_data

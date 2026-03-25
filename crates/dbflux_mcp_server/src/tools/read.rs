@@ -325,7 +325,18 @@ impl DbFluxServer {
         joins: Option<&[JoinSpec]>,
         database: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
+
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
+            } else {
+                Self::get_or_connect(state, connection_id).await?
+            }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
+        };
+
         let dialect = connection.dialect();
 
         // Build column list
@@ -343,7 +354,17 @@ impl DbFluxServer {
         };
 
         // Build base query
-        let table_ref = TableRef::from_qualified(table);
+        // For PostgreSQL, if no schema is specified, default to "public"
+        let table_with_schema = {
+            use dbflux_core::DbKind;
+            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
+            if is_postgres && !table.contains('.') {
+                format!("public.{}", table)
+            } else {
+                table.to_string()
+            }
+        };
+        let table_ref = TableRef::from_qualified(&table_with_schema);
         let table_quoted = table_ref.quoted_with(dialect);
 
         let mut sql = format!("SELECT {} FROM {}", column_list, table_quoted);
@@ -397,10 +418,16 @@ impl DbFluxServer {
             request = request.with_database(Some(db.to_string()));
         }
 
-        let result = connection
-            .execute(&request)
-            .map_err(|e| format!("Select error: {}", e))?;
+        let conn = connection.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.execute(&request)
+                .map_err(|e| format!("Select error: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
 
+        let result = result?;
         Ok(serialize_query_result(&result))
     }
 
@@ -411,10 +438,31 @@ impl DbFluxServer {
         filter: Option<&serde_json::Value>,
         database: Option<&str>,
     ) -> Result<u64, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = if let Some(target_db) = database {
+            let current_db = Self::get_current_database(&state, connection_id).await?;
+
+            if target_db != current_db.as_deref().unwrap_or("") {
+                Self::connect_with_database(state, connection_id, target_db).await?
+            } else {
+                Self::get_or_connect(state, connection_id).await?
+            }
+        } else {
+            Self::get_or_connect(state, connection_id).await?
+        };
+
         let dialect = connection.dialect();
 
-        let table_ref = TableRef::from_qualified(table);
+        // For PostgreSQL, if no schema is specified, default to "public"
+        let table_with_schema = {
+            use dbflux_core::DbKind;
+            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
+            if is_postgres && !table.contains('.') {
+                format!("public.{}", table)
+            } else {
+                table.to_string()
+            }
+        };
+        let table_ref = TableRef::from_qualified(&table_with_schema);
         let table_quoted = table_ref.quoted_with(dialect);
 
         let mut sql = format!("SELECT COUNT(*) FROM {}", table_quoted);
@@ -431,10 +479,16 @@ impl DbFluxServer {
             request = request.with_database(Some(db.to_string()));
         }
 
-        let result = connection
-            .execute(&request)
-            .map_err(|e| format!("Count error: {}", e))?;
+        let conn = connection.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.execute(&request)
+                .map_err(|e| format!("Count error: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
 
+        let result = result?;
         let count = result
             .rows
             .first()
@@ -464,7 +518,17 @@ impl DbFluxServer {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
 
-        let table_ref = TableRef::from_qualified(table);
+        // For PostgreSQL, if no schema is specified, default to "public"
+        let table_with_schema = {
+            use dbflux_core::DbKind;
+            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
+            if is_postgres && !table.contains('.') {
+                format!("public.{}", table)
+            } else {
+                table.to_string()
+            }
+        };
+        let table_ref = TableRef::from_qualified(&table_with_schema);
         let table_quoted = table_ref.quoted_with(dialect);
 
         // Build aggregation expressions
@@ -547,10 +611,16 @@ impl DbFluxServer {
             request = request.with_database(Some(db.to_string()));
         }
 
-        let result = connection
-            .execute(&request)
-            .map_err(|e| format!("Aggregate error: {}", e))?;
+        let conn = connection.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            #[allow(clippy::large_enum_variant)]
+            conn.execute(&request)
+                .map_err(|e| format!("Aggregate error: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?;
 
+        let result = result?;
         Ok(serialize_query_result(&result))
     }
 }

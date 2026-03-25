@@ -420,6 +420,117 @@ impl DbConfig {
 
         extracted_password
     }
+
+    /// Returns the database name for configs that support it.
+    /// Returns `None` for SQLite, DynamoDB, and External configs.
+    pub fn database(&self) -> Option<String> {
+        match self {
+            DbConfig::Postgres { database, .. } => Some(database.clone()),
+            DbConfig::MySQL { database, .. } => database.clone(),
+            DbConfig::MongoDB { database, .. } => database.clone(),
+            DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
+            DbConfig::SQLite { .. } => Some("main".to_string()),
+            DbConfig::DynamoDB { .. } => None,
+            DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Returns a new DbConfig with the database field updated.
+    /// Returns `Err` if the database type doesn't support changing the database.
+    pub fn with_database(self, database: &str) -> Result<Self, String> {
+        match self {
+            DbConfig::Postgres {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::Postgres {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: database.to_string(),
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
+            DbConfig::MySQL {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::MySQL {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: Some(database.to_string()),
+                ssl_mode,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
+            DbConfig::MongoDB {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                auth_database,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::MongoDB {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: Some(database.to_string()),
+                auth_database,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
+            DbConfig::Redis {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                tls,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => {
+                let db_index: u32 = database
+                    .parse()
+                    .map_err(|_| "Invalid database index for Redis (must be a number 0-15)")?;
+                Ok(DbConfig::Redis {
+                    use_uri,
+                    uri,
+                    host,
+                    port,
+                    user,
+                    database: Some(db_index),
+                    tls,
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id,
+                })
+            }
+            _ => Err("Changing database is not supported for this database type".to_string()),
+        }
+    }
 }
 
 /// Removes an embedded password from a connection URI.

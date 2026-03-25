@@ -120,6 +120,9 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
         connection_cache: Arc::new(RwLock::new(
             dbflux_mcp_server::connection_cache::ConnectionCache::new(),
         )),
+        secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
+            dbflux_core::NoopSecretStore,
+        ))),
         mcp_enabled_by_default: true,
     }
 }
