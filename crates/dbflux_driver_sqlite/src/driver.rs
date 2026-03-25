@@ -13,12 +13,12 @@ use dbflux_core::{
     DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo,
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
@@ -848,6 +848,219 @@ impl Connection for SqliteConnection {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&SQLITE_DIALECT);
         Some(&GENERATOR)
     }
+
+    fn build_select_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        filter: Option<&Value>,
+        order_by: &[OrderByColumn],
+        limit: u32,
+        offset: u32,
+    ) -> String {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        let cols = if columns.is_empty() {
+            "*".to_string()
+        } else {
+            columns
+                .iter()
+                .map(|c| SQLITE_DIALECT.quote_identifier(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        if !order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let order_parts = order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", col.column.quoted_with(&SQLITE_DIALECT), dir)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&order_parts);
+        }
+
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+        sql
+    }
+
+    fn build_insert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| SQLITE_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            quoted_table, cols, placeholders_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_update_sql(
+        &self,
+        table: &str,
+        set: &[(String, Value)],
+        filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+
+        let set_parts: Vec<String> = set
+            .iter()
+            .enumerate()
+            .map(|(_i, (col, _))| format!("{} = ?", SQLITE_DIALECT.quote_identifier(col)))
+            .collect();
+        let set_str = set_parts.join(", ");
+
+        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
+        if let Some(f) = filter {
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        let mut sql = format!("DELETE FROM {}", quoted_table);
+        let mut params = Vec::new();
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| SQLITE_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values.iter().map(|_| "?".to_string()).collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let conflict_cols = conflict_columns
+            .iter()
+            .map(|c| SQLITE_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let update_parts: Vec<String> = update_columns
+            .iter()
+            .map(|col| {
+                format!(
+                    "{} = ?",
+                    SQLITE_DIALECT.quote_identifier(col)
+                )
+            })
+            .collect();
+        let update_str = update_parts.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            quoted_table, cols, placeholders_str, conflict_cols, update_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        sql
+    }
+
+    fn build_truncate_sql(&self, table: &str) -> String {
+        let quoted_table = SQLITE_DIALECT.quote_identifier(table);
+        format!("DELETE FROM {}", quoted_table)
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        index_name: &str,
+        _table_name: Option<&str>,
+        if_exists: bool,
+    ) -> String {
+        let quoted_index = SQLITE_DIALECT.quote_identifier(index_name);
+        if if_exists {
+            format!("DROP INDEX IF EXISTS {}", quoted_index)
+        } else {
+            format!("DROP INDEX {}", quoted_index)
+        }
+    }
+
+    fn version_query(&self) -> &'static str {
+        "SELECT sqlite_version()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        true
+    }
+
+    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
+        Ok(translate_filter_to_sql(filter))
+    }
 }
 
 impl RelationalConnection for SqliteConnection {}
@@ -1391,6 +1604,52 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
 
     sql.push_str(");");
     sql
+}
+
+/// Translate a Value filter expression to a SQL WHERE clause string for SQLite.
+fn translate_filter_to_sql(filter: &Value) -> String {
+    match filter {
+        Value::Document(doc) => {
+            let mut parts = Vec::new();
+            for (key, value) in doc {
+                let quoted_col = SQLITE_DIALECT.quote_identifier(key);
+                let expr = match value {
+                    Value::Null => format!("{} IS NULL", quoted_col),
+                    Value::Text(s) => format!("{} = '{}'", quoted_col, sqlite_escape_string(s)),
+                    Value::Int(i) => format!("{} = {}", quoted_col, i),
+                    Value::Bool(b) => format!("{} = {}", quoted_col, if *b { "1" } else { "0" }),
+                    Value::Float(f) => format!("{} = {}", quoted_col, f),
+                    _ => format!("{} = {}", quoted_col, value_to_sqlite_literal(value)),
+                };
+                parts.push(expr);
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                parts.join(" AND ")
+            }
+        }
+        Value::Text(s) => {
+            // Treat a plain text filter as a raw SQL expression (for advanced users)
+            s.clone()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Collect all Value items from a filter expression into a vector for parameterized queries.
+fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
+    match filter {
+        Value::Document(doc) => {
+            for (_, value) in doc {
+                match value {
+                    Value::Null => {}
+                    _ => params.push(value.clone()),
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

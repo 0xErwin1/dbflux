@@ -17,12 +17,12 @@ use dbflux_core::{
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
-    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
+    OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
     SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest,
-    SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
-    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ValueRepr,
-    ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest,
+    StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
+    ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -779,6 +779,92 @@ impl Connection for RedisConnection {
         static GENERATOR: crate::command_generator::RedisCommandGenerator =
             crate::command_generator::RedisCommandGenerator;
         Some(&GENERATOR)
+    }
+
+    fn build_select_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _filter: Option<&Value>,
+        _order_by: &[OrderByColumn],
+        _limit: u32,
+        _offset: u32,
+    ) -> String {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        "SELECT * FROM key WHERE filter LIMIT offset".to_string()
+    }
+
+    fn build_insert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_update_sql(
+        &self,
+        _table: &str,
+        _set: &[(String, Value)],
+        _filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("DEL key".to_string(), Vec::new())
+    }
+
+    fn build_upsert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        ("SET key value".to_string(), Vec::new())
+    }
+
+    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
+        // Redis doesn't use SQL - this is for SQL-based drivers
+        "DBSIZE".to_string()
+    }
+
+    fn build_truncate_sql(&self, _table: &str) -> String {
+        // Redis doesn't support TRUNCATE - use FLUSHDB with caution
+        "FLUSHDB".to_string()
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        _index_name: &str,
+        _table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        // Redis doesn't have named indexes like SQL databases
+        "DROP INDEX not_applicable".to_string()
+    }
+
+    fn version_query(&self) -> &'static str {
+        // Redis uses INFO command, not SQL
+        "INFO server | grep redis_version"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        // Redis doesn't use SQL WHERE clauses
+        Err(DbError::NotSupported(
+            "translate_filter is not applicable to Redis - it uses key-based access and commands, not SQL".to_string(),
+        ))
     }
 }
 

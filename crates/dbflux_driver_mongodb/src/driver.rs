@@ -15,12 +15,12 @@ use dbflux_core::{
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind,
     FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
-    KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, PaginationStyle,
-    PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition, TextPositionRange,
-    TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
-    detect_dangerous_mongo, sanitize_uri,
+    KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo,
+    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo,
+    WhereOperator, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1156,6 +1156,93 @@ impl Connection for MongoConnection {
         static GENERATOR: crate::query_generator::MongoShellGenerator =
             crate::query_generator::MongoShellGenerator;
         Some(&GENERATOR)
+    }
+
+    fn build_select_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _filter: Option<&Value>,
+        _order_by: &[OrderByColumn],
+        _limit: u32,
+        _offset: u32,
+    ) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
+    }
+
+    fn build_insert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        ("INSERT INTO table (columns) VALUES (values)".to_string(), Vec::new())
+    }
+
+    fn build_update_sql(
+        &self,
+        _table: &str,
+        _set: &[(String, Value)],
+        _filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        ("UPDATE table SET col=val WHERE filter".to_string(), Vec::new())
+    }
+
+    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        ("DELETE FROM table WHERE filter".to_string(), Vec::new())
+    }
+
+    fn build_upsert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        ("INSERT INTO table VALUES (vals) ON CONFLICT DO UPDATE".to_string(), Vec::new())
+    }
+
+    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT COUNT(*) FROM table".to_string()
+    }
+
+    fn build_truncate_sql(&self, _table: &str) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "TRUNCATE TABLE table".to_string()
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        _index_name: &str,
+        _table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        // MongoDB doesn't use SQL - this is for SQL-based drivers
+        "DROP INDEX index_name".to_string()
+    }
+
+    fn version_query(&self) -> &'static str {
+        // MongoDB uses db.version() shell command, not SQL
+        "db.version()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        // For MongoDB, the Value filter is already in document format
+        // This is used by SQL-based drivers to convert JSON filters to SQL WHERE clauses
+        Err(DbError::NotSupported(
+            "translate_filter is not applicable to MongoDB - it uses document-based filters, not SQL".to_string(),
+        ))
     }
 }
 
