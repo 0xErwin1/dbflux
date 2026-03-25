@@ -10,12 +10,13 @@ use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest,
-    DriverCapabilities, DriverFormDef, DriverMetadata, DropIndexRequest, ExplainRequest,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, PlaceholderStyle,
-    QueryCancelHandle, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row, RowDelete, RowInsert,
-    RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, Value, ViewInfo,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, DdlCapabilities,
+    ExplainRequest, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    MutationCapabilities, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, QueryCapabilities, ReindexRequest,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_update_template,
 };
@@ -49,6 +50,13 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     default_port: None,
     uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
+    syntax: Some(SyntaxInfo::sqlite()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::sqlite()),
+    ddl: Some(DdlCapabilities::sqlite()),
+    transactions: Some(TransactionCapabilities::sqlite()),
+    limits: Some(DriverLimits::sqlite()),
+    classification_override: None,
 });
 
 /// SQLite SQL dialect implementation.

@@ -24,9 +24,9 @@ use dbflux_core::{
     DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
     DbKind, DbSchemaInfo, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
     DriverCapabilities, DriverFormDef, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon,
-    IndexData, IndexDirection, LanguageService, Pagination, QueryErrorFormatter, QueryLanguage,
-    QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
-    ValidationResult, Value,
+    IndexData, IndexDirection, LanguageService, Pagination, QueryCapabilities, QueryErrorFormatter,
+    QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SyntaxInfo, TableInfo, TransactionCapabilities, ValidationResult, Value,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -58,6 +58,13 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     default_port: None,
     uri_scheme: "dynamodb".into(),
     icon: Icon::Dynamodb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 pub const DYNAMODB_MVP_SUPPORTED_FLOWS: &[&str] = &[

@@ -12,12 +12,13 @@ use dbflux_core::{
     ConnectionErrorFormatter, ConnectionProfile, CrudResult, DangerousQueryKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
     DiagnosticSeverity, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
-    IndexDirection, LanguageService, MONGODB_FORM, PlaceholderStyle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
-    TextPositionRange, ValidationResult, Value, ViewInfo, detect_dangerous_mongo, sanitize_uri,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    IndexDirection, LanguageService, MONGODB_FORM, PaginationStyle, PlaceholderStyle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
+    ViewInfo, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -38,6 +39,13 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
+    syntax: None,
+    query: Some(QueryCapabilities::mongodb()),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 pub struct MongoDriver;

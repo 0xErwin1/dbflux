@@ -1,6 +1,6 @@
-use crate::Value;
 use crate::schema::types::{ColumnInfo, TableInfo};
 use crate::sql::dialect::{PlaceholderStyle, SqlDialect};
+use crate::Value;
 
 /// Type of SQL statement to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +254,8 @@ fn format_placeholder(dialect: &dyn SqlDialect, index: usize) -> String {
     match dialect.placeholder_style() {
         PlaceholderStyle::QuestionMark => "?".to_string(),
         PlaceholderStyle::DollarNumber => format!("${}", index + 1),
+        PlaceholderStyle::NamedColon => format!(":p{}", index + 1),
+        PlaceholderStyle::AtSign => format!("@p{}", index + 1),
     }
 }
 

@@ -1,12 +1,17 @@
 use crate::Value;
+use serde::{Deserialize, Serialize};
 
 /// Placeholder style for parameterized queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlaceholderStyle {
     /// `?` placeholders (SQLite, MySQL).
     QuestionMark,
     /// `$1`, `$2`, etc. (PostgreSQL).
     DollarNumber,
+    /// `:name` or `:1` named/ordinal placeholders (Oracle, some JDBC).
+    NamedColon,
+    /// `@param` style placeholders (SQL Server, SQL Azure).
+    AtSign,
 }
 
 /// Database-specific SQL syntax (quoting, escaping, literals).

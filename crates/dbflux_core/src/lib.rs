@@ -70,10 +70,13 @@ pub use data::{
 };
 
 pub use driver::{
-    DYNAMODB_FORM, DatabaseCategory, DriverCapabilities, DriverFormDef, DriverMetadata,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon, MONGODB_FORM, MYSQL_FORM,
-    POSTGRES_FORM, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, field_file_path,
-    field_password, field_use_uri, ssh_tab,
+    DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
+    MutationCapabilities, MYSQL_FORM, OperationClassifier, PaginationStyle, POSTGRES_FORM,
+    QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
+    TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
+    ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

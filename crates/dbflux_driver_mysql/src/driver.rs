@@ -10,13 +10,14 @@ use dbflux_core::{
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities,
-    DriverFormDef, DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest,
-    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    MYSQL_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
-    SshTunnelConfig, SslMode, TableInfo, Value, ViewInfo, generate_delete_template,
+    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
+    DdlCapabilities, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError,
+    Icon, IndexData, IndexInfo, MYSQL_FORM, MutationCapabilities, PlaceholderStyle, QueryCancelHandle,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    QueryCapabilities, RecordIdentity, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode,
+    SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
     generate_update_template, sanitize_uri,
 };
@@ -43,6 +44,13 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
+    syntax: Some(SyntaxInfo::mysql()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities::mysql()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::mysql()),
+    classification_override: None,
 });
 
 /// MariaDB driver metadata.
@@ -64,6 +72,13 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
     icon: Icon::Mariadb,
+    syntax: Some(SyntaxInfo::mysql()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities::mysql()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::mysql()),
+    classification_override: None,
 });
 
 /// MySQL/MariaDB SQL dialect implementation.

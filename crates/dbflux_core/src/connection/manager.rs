@@ -1531,6 +1531,13 @@ mod tests {
                     default_port: None,
                     uri_scheme: "test".to_string(),
                     icon: crate::Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    classification_override: None,
                 },
             }
         }
@@ -1834,6 +1841,13 @@ mod tests {
                     default_port: Some(5432),
                     uri_scheme: "postgres".to_string(),
                     icon: Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    classification_override: None,
                 },
                 form: &POSTGRES_FORM,
             })
@@ -2018,6 +2032,13 @@ mod tests {
                     default_port: None,
                     uri_scheme: "sqlite".to_string(),
                     icon: Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    classification_override: None,
                 });
                 &META
             }

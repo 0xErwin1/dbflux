@@ -15,11 +15,12 @@ use dbflux_core::{
     KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueSchema, LanguageService, ListEnd,
-    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, SchemaLoadingStrategy,
-    SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
-    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
-    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    ListPushRequest, ListRemoveRequest, ListSetRequest, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
+    SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
+    SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId, SyntaxInfo, TextPosition,
+    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ValueRepr, ZSetAddRequest,
+    ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.
@@ -47,6 +48,13 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     default_port: Some(6379),
     uri_scheme: "redis".into(),
     icon: Icon::Redis,
+    syntax: None,
+    query: Some(QueryCapabilities::redis()),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 pub struct RedisDriver;

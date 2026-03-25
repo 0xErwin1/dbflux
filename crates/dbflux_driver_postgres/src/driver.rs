@@ -1,28 +1,29 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DescribeRequest, DriverCapabilities, DriverFormDef,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, POSTGRES_FORM, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, TableInfo, TypeDefinition,
-    Value, ViewInfo, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    sanitize_uri,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
+    DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, MutationCapabilities,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TypeDefinition, Value, ViewInfo, POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -55,6 +56,13 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
+    syntax: Some(SyntaxInfo::ansi()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::postgresql()),
+    ddl: Some(DdlCapabilities::default()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::postgresql()),
+    classification_override: None,
 });
 
 /// PostgreSQL SQL dialect implementation.
@@ -2697,8 +2705,8 @@ fn get_schema_foreign_keys(
 #[cfg(test)]
 mod tests {
     use super::{
-        PgUriSslMode, PostgresDialect, PostgresDriver, inject_password_into_pg_uri,
-        parse_pg_uri_sslmode,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, PgUriSslMode, PostgresDialect,
+        PostgresDriver,
     };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
@@ -2813,11 +2821,9 @@ mod tests {
     #[test]
     fn parse_uri_rejects_non_postgres_schemes() {
         let driver = PostgresDriver::new();
-        assert!(
-            driver
-                .parse_uri("mysql://root@localhost:3306/app")
-                .is_none()
-        );
+        assert!(driver
+            .parse_uri("mysql://root@localhost:3306/app")
+            .is_none());
     }
 
     #[test]

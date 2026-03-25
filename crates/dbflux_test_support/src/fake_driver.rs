@@ -1,15 +1,16 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DriverCapabilities, DriverFormDef, DriverMetadata, FormValues, Icon, MONGODB_FORM,
-    MYSQL_FORM, POSTGRES_FORM, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService,
+    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
+    DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
+    Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, RedisLanguageService, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlLanguageService, SyntaxInfo, TransactionCapabilities, DYNAMODB_FORM, MONGODB_FORM,
+    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]
@@ -543,6 +544,13 @@ static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
     icon: Icon::Postgres,
+    syntax: Some(SyntaxInfo::ansi()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::postgresql()),
+    ddl: Some(DdlCapabilities::default()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::postgresql()),
+    classification_override: None,
 });
 
 static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -555,6 +563,13 @@ static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     default_port: None,
     uri_scheme: "sqlite".into(),
     icon: Icon::Sqlite,
+    syntax: Some(SyntaxInfo::sqlite()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::sqlite()),
+    ddl: Some(DdlCapabilities::sqlite()),
+    transactions: Some(TransactionCapabilities::sqlite()),
+    limits: Some(DriverLimits::sqlite()),
+    classification_override: None,
 });
 
 static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -567,6 +582,13 @@ static FAKE_MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
     icon: Icon::Mysql,
+    syntax: Some(SyntaxInfo::mysql()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities::mysql()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::mysql()),
+    classification_override: None,
 });
 
 static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -579,6 +601,13 @@ static FAKE_MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
     icon: Icon::Mariadb,
+    syntax: Some(SyntaxInfo::mysql()),
+    query: Some(QueryCapabilities::relational()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities::mysql()),
+    transactions: Some(TransactionCapabilities::default()),
+    limits: Some(DriverLimits::mysql()),
+    classification_override: None,
 });
 
 static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -591,6 +620,13 @@ static FAKE_MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
     icon: Icon::Mongodb,
+    syntax: None,
+    query: Some(QueryCapabilities::mongodb()),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -603,6 +639,13 @@ static FAKE_REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMe
     default_port: Some(6379),
     uri_scheme: "redis".into(),
     icon: Icon::Redis,
+    syntax: None,
+    query: Some(QueryCapabilities::redis()),
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -615,6 +658,13 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     default_port: None,
     uri_scheme: "dynamodb".into(),
     icon: Icon::Dynamodb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities::none()),
+    limits: None,
+    classification_override: None,
 });
 
 #[cfg(test)]
