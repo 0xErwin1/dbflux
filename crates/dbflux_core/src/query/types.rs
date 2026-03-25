@@ -123,6 +123,8 @@ pub struct QueryResult {
     pub execution_time: Duration,
     pub text_body: Option<String>,
     pub raw_bytes: Option<Vec<u8>>,
+    /// Pagination token for fetching the next page of results (used by PageToken-style pagination).
+    pub next_page_token: Option<String>,
 }
 
 impl QueryResult {
@@ -135,6 +137,7 @@ impl QueryResult {
             execution_time: Duration::ZERO,
             text_body: None,
             raw_bytes: None,
+            next_page_token: None,
         }
     }
 
@@ -152,6 +155,7 @@ impl QueryResult {
             execution_time,
             text_body: None,
             raw_bytes: None,
+            next_page_token: None,
         }
     }
 
@@ -164,6 +168,7 @@ impl QueryResult {
             execution_time,
             text_body: None,
             raw_bytes: None,
+            next_page_token: None,
         }
     }
 
@@ -176,6 +181,7 @@ impl QueryResult {
             execution_time,
             text_body: Some(body),
             raw_bytes: None,
+            next_page_token: None,
         }
     }
 
@@ -188,6 +194,7 @@ impl QueryResult {
             execution_time,
             text_body: None,
             raw_bytes: Some(data),
+            next_page_token: None,
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::envelope::{DRIVER_RPC_VERSION, ProtocolVersion};
+use crate::envelope::{ProtocolVersion, DRIVER_RPC_VERSION};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
@@ -129,6 +129,7 @@ pub struct QueryResultDto {
     pub execution_time_ms: u64,
     pub text_body: Option<String>,
     pub raw_bytes: Option<Vec<u8>>,
+    pub next_page_token: Option<String>,
 }
 
 impl From<&QueryResult> for QueryResultDto {
@@ -141,6 +142,7 @@ impl From<&QueryResult> for QueryResultDto {
             execution_time_ms: value.execution_time.as_millis() as u64,
             text_body: value.text_body.clone(),
             raw_bytes: value.raw_bytes.clone(),
+            next_page_token: value.next_page_token.clone(),
         }
     }
 }
@@ -155,6 +157,7 @@ impl From<QueryResultDto> for QueryResult {
             execution_time: Duration::from_millis(value.execution_time_ms),
             text_body: value.text_body,
             raw_bytes: value.raw_bytes,
+            next_page_token: value.next_page_token,
         }
     }
 }
