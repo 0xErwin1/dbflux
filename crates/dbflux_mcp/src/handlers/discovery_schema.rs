@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use dbflux_core::{DatabaseCategory, DdlCapabilities, QueryCapabilities, SyntaxInfo};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,11 +10,24 @@ pub struct ConnectionInfo {
     pub mcp_enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Rich typed metadata about a database connection.
+///
+/// This replaces `database_kind: String` with typed capability structs
+/// that enable driver-agnostic routing and validation in MCP handlers.
+#[derive(Debug, Clone)]
 pub struct ConnectionMetadata {
     pub connection_id: String,
+    /// Legacy field - prefer using `category` for routing.
     pub database_kind: String,
     pub supports_collections: bool,
+    /// Database category for driver-agnostic routing.
+    pub category: DatabaseCategory,
+    /// SQL syntax information (quoting, placeholders, schemas).
+    pub syntax: SyntaxInfo,
+    /// Query capabilities (pagination, operators, etc.).
+    pub query: QueryCapabilities,
+    /// DDL capabilities (CREATE, ALTER, DROP, transactional DDL).
+    pub ddl: DdlCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

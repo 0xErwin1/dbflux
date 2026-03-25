@@ -1,9 +1,11 @@
-use dbflux_core::QueryLanguage;
+use dbflux_core::{
+    DatabaseCategory, DdlCapabilities, QueryCapabilities, QueryLanguage, SyntaxInfo,
+};
 use dbflux_mcp::handlers::discovery_schema::{
     ConnectionInfo, ConnectionMetadata, DescribeObjectRequest, DiscoverySchemaCatalog,
     ObjectDescription,
 };
-use dbflux_mcp::handlers::query::{QueryExecutionRequest, handle_query_tool};
+use dbflux_mcp::handlers::query::{handle_query_tool, QueryExecutionRequest};
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
     ToolPolicy,
@@ -41,6 +43,10 @@ fn build_catalog() -> DiscoverySchemaCatalog {
             connection_id: "conn-a".to_string(),
             database_kind: "postgres".to_string(),
             supports_collections: false,
+            category: DatabaseCategory::Relational,
+            syntax: SyntaxInfo::ansi(),
+            query: QueryCapabilities::relational(),
+            ddl: DdlCapabilities::default(),
         },
         vec!["db_main".to_string()],
     );

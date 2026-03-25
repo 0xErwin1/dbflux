@@ -354,12 +354,17 @@ impl DbFluxServer {
         };
 
         // Build base query
-        // For PostgreSQL, if no schema is specified, default to "public"
+        // Apply default schema if the driver supports schemas and no schema qualifier is present
         let table_with_schema = {
-            use dbflux_core::DbKind;
-            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
-            if is_postgres && !table.contains('.') {
-                format!("public.{}", table)
+            let default_schema = connection
+                .metadata()
+                .syntax
+                .as_ref()
+                .filter(|s| s.supports_schemas && !table.contains('.'))
+                .and_then(|s| s.default_schema.clone());
+
+            if let Some(schema) = default_schema {
+                format!("{}.{}", schema, table)
             } else {
                 table.to_string()
             }
@@ -452,12 +457,17 @@ impl DbFluxServer {
 
         let dialect = connection.dialect();
 
-        // For PostgreSQL, if no schema is specified, default to "public"
+        // Apply default schema if the driver supports schemas and no schema qualifier is present
         let table_with_schema = {
-            use dbflux_core::DbKind;
-            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
-            if is_postgres && !table.contains('.') {
-                format!("public.{}", table)
+            let default_schema = connection
+                .metadata()
+                .syntax
+                .as_ref()
+                .filter(|s| s.supports_schemas && !table.contains('.'))
+                .and_then(|s| s.default_schema.clone());
+
+            if let Some(schema) = default_schema {
+                format!("{}.{}", schema, table)
             } else {
                 table.to_string()
             }
@@ -518,12 +528,17 @@ impl DbFluxServer {
         let connection = Self::get_or_connect(state, connection_id).await?;
         let dialect = connection.dialect();
 
-        // For PostgreSQL, if no schema is specified, default to "public"
+        // Apply default schema if the driver supports schemas and no schema qualifier is present
         let table_with_schema = {
-            use dbflux_core::DbKind;
-            let is_postgres = matches!(connection.kind(), DbKind::Postgres);
-            if is_postgres && !table.contains('.') {
-                format!("public.{}", table)
+            let default_schema = connection
+                .metadata()
+                .syntax
+                .as_ref()
+                .filter(|s| s.supports_schemas && !table.contains('.'))
+                .and_then(|s| s.default_schema.clone());
+
+            if let Some(schema) = default_schema {
+                format!("{}.{}", schema, table)
             } else {
                 table.to_string()
             }

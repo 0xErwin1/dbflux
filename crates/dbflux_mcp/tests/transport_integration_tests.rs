@@ -1,14 +1,16 @@
-use dbflux_core::QueryLanguage;
+use dbflux_core::{
+    DatabaseCategory, DdlCapabilities, QueryCapabilities, QueryLanguage, SyntaxInfo,
+};
 use dbflux_mcp::handlers::discovery_schema::{
     ConnectionInfo, ConnectionMetadata, DiscoverySchemaCatalog,
 };
 use dbflux_mcp::handlers::query::{
-    QueryExecutionRequest, QueryExecutionResponse, handle_query_tool,
+    handle_query_tool, QueryExecutionRequest, QueryExecutionResponse,
 };
 use dbflux_mcp::server::bootstrap::{
-    BootstrapConfig, TransportKind, validate_v1_transport_profile,
+    validate_v1_transport_profile, BootstrapConfig, TransportKind,
 };
-use dbflux_mcp::server::router::{RouteTarget, route_tool};
+use dbflux_mcp::server::router::{route_tool, RouteTarget};
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
     ToolPolicy,
@@ -39,6 +41,10 @@ impl IntegrationHarness {
                 connection_id: "conn-a".to_string(),
                 database_kind: "postgres".to_string(),
                 supports_collections: false,
+                category: DatabaseCategory::Relational,
+                syntax: SyntaxInfo::ansi(),
+                query: QueryCapabilities::relational(),
+                ddl: DdlCapabilities::default(),
             },
             vec!["db_main".to_string()],
         );
