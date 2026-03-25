@@ -3,13 +3,6 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
-    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -19,6 +12,14 @@ use crate::{
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
     query::generator::QueryGenerator,
+    query::table_browser::OrderByColumn,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
+    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
+    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
+    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
 };
 
 bitflags! {
@@ -860,6 +861,178 @@ pub trait Connection: Send + Sync {
     /// Default implementation delegates to `crate::generate_sql()`.
     fn generate_sql(&self, request: &SqlGenerationRequest) -> Result<String, DbError> {
         Ok(crate::generate_sql(self.dialect(), request))
+    }
+
+    // =========================================================================
+    // SQL Building Methods
+    // =========================================================================
+
+    /// Build a SELECT query with optional filtering, ordering, and pagination.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to query
+    /// * `columns` - The columns to select
+    /// * `filter` - Optional WHERE clause expression
+    /// * `order_by` - Columns to order by
+    /// * `limit` - Maximum number of rows to return
+    /// * `offset` - Number of rows to skip
+    ///
+    /// # Returns
+    /// A SQL string for the SELECT query
+    fn build_select_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        filter: Option<&Value>,
+        order_by: &[OrderByColumn],
+        limit: u32,
+        offset: u32,
+    ) -> String {
+        let _ = (table, columns, filter, order_by, limit, offset);
+        unimplemented!("build_select_sql not implemented for this driver")
+    }
+
+    /// Build an INSERT query.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to insert into
+    /// * `columns` - The columns to insert
+    /// * `values` - The values to insert
+    ///
+    /// # Returns
+    /// A tuple of (SQL string, parameter values)
+    fn build_insert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+    ) -> (String, Vec<Value>) {
+        let _ = (table, columns, values);
+        unimplemented!("build_insert_sql not implemented for this driver")
+    }
+
+    /// Build an UPDATE query.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to update
+    /// * `set` - Column/value pairs to set
+    /// * `filter` - Optional WHERE clause expression
+    ///
+    /// # Returns
+    /// A tuple of (SQL string, parameter values)
+    fn build_update_sql(
+        &self,
+        table: &str,
+        set: &[(String, Value)],
+        filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        let _ = (table, set, filter);
+        unimplemented!("build_update_sql not implemented for this driver")
+    }
+
+    /// Build a DELETE query.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to delete from
+    /// * `filter` - Optional WHERE clause expression
+    ///
+    /// # Returns
+    /// A tuple of (SQL string, parameter values)
+    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
+        let _ = (table, filter);
+        unimplemented!("build_delete_sql not implemented for this driver")
+    }
+
+    /// Build an UPSERT (INSERT ON CONFLICT) query.
+    ///
+    /// # Arguments
+    /// * `table` - The table name
+    /// * `columns` - The columns to insert/update
+    /// * `values` - The values
+    /// * `conflict_columns` - Columns that define uniqueness for conflict detection
+    /// * `update_columns` - Columns to update on conflict
+    ///
+    /// # Returns
+    /// A tuple of (SQL string, parameter values)
+    fn build_upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        let _ = (table, columns, values, conflict_columns, update_columns);
+        unimplemented!("build_upsert_sql not implemented for this driver")
+    }
+
+    /// Build a COUNT query.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to count
+    /// * `filter` - Optional WHERE clause expression
+    ///
+    /// # Returns
+    /// A SQL string for the COUNT query
+    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
+        let _ = (table, filter);
+        unimplemented!("build_count_sql not implemented for this driver")
+    }
+
+    /// Build a TRUNCATE TABLE statement.
+    ///
+    /// # Arguments
+    /// * `table` - The table name to truncate
+    ///
+    /// # Returns
+    /// A SQL string for TRUNCATE TABLE
+    fn build_truncate_sql(&self, table: &str) -> String {
+        let _ = table;
+        unimplemented!("build_truncate_sql not implemented for this driver")
+    }
+
+    /// Build a DROP INDEX statement.
+    ///
+    /// # Arguments
+    /// * `index_name` - The index name to drop
+    /// * `table_name` - Optional table name (required for MySQL)
+    /// * `if_exists` - Whether to add IF EXISTS clause
+    ///
+    /// # Returns
+    /// A SQL string for DROP INDEX
+    fn build_drop_index_sql(
+        &self,
+        index_name: &str,
+        table_name: Option<&str>,
+        if_exists: bool,
+    ) -> String {
+        let _ = (index_name, table_name, if_exists);
+        unimplemented!("build_drop_index_sql not implemented for this driver")
+    }
+
+    /// Returns the SQL query to get the server version.
+    fn version_query(&self) -> &'static str {
+        unimplemented!("version_query not implemented for this driver")
+    }
+
+    /// Returns whether this driver supports transactional DDL.
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    /// Translate a Value filter expression to a SQL WHERE clause string.
+    ///
+    /// This is used to convert JSON-based filter expressions to SQL syntax.
+    ///
+    /// # Arguments
+    /// * `filter` - The filter expression as a Value
+    ///
+    /// # Returns
+    /// A SQL WHERE clause string
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        Err(DbError::NotSupported(
+            "translate_filter not implemented for this driver".to_string(),
+        ))
     }
 }
 

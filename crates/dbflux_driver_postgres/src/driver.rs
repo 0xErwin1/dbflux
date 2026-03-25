@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, sanitize_uri,
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
@@ -16,15 +18,14 @@ use dbflux_core::{
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
     DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
     ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
-    KeyValueConnection, MutationCapabilities, POSTGRES_FORM, PaginationStyle, PlaceholderStyle,
+    KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
     QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
     QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo,
-    TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, sanitize_uri,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo,
+    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
+    POSTGRES_FORM,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1548,6 +1549,225 @@ impl Connection for PostgresConnection {
         static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&POSTGRES_DIALECT);
         Some(&GENERATOR)
     }
+
+    fn build_select_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        filter: Option<&Value>,
+        order_by: &[OrderByColumn],
+        limit: u32,
+        offset: u32,
+    ) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = if columns.is_empty() {
+            "*".to_string()
+        } else {
+            columns
+                .iter()
+                .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let mut sql = format!("SELECT {} FROM {}", cols, quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        if !order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let order_parts = order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", col.column.quoted_with(&POSTGRES_DIALECT), dir)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&order_parts);
+        }
+
+        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+        sql
+    }
+
+    fn build_insert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            quoted_table, cols, placeholders_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_update_sql(
+        &self,
+        table: &str,
+        set: &[(String, Value)],
+        filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+
+        let set_parts: Vec<String> = set
+            .iter()
+            .enumerate()
+            .map(|(i, (col, _))| format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), i + 1))
+            .collect();
+        let set_str = set_parts.join(", ");
+
+        let mut sql = format!("UPDATE {} SET {}", quoted_table, set_str);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        let mut params: Vec<Value> = set.iter().map(|(_, v)| v.clone()).collect();
+        if let Some(f) = filter {
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_delete_sql(&self, table: &str, filter: Option<&Value>) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let mut sql = format!("DELETE FROM {}", quoted_table);
+        let mut params = Vec::new();
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+            collect_filter_values(f, &mut params);
+        }
+
+        (sql, params)
+    }
+
+    fn build_upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let cols = columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let conflict_cols = conflict_columns
+            .iter()
+            .map(|c| POSTGRES_DIALECT.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let update_parts: Vec<String> = update_columns
+            .iter()
+            .map(|col| {
+                let idx = columns.iter().position(|c| c == col).unwrap_or(0) + 1;
+                format!("{} = ${}", POSTGRES_DIALECT.quote_identifier(col), idx)
+            })
+            .collect();
+        let update_str = update_parts.join(", ");
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            quoted_table, cols, placeholders_str, conflict_cols, update_str
+        );
+
+        (sql, values.to_vec())
+    }
+
+    fn build_count_sql(&self, table: &str, filter: Option<&Value>) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        let mut sql = format!("SELECT COUNT(*) FROM {}", quoted_table);
+
+        if let Some(f) = filter {
+            let where_clause = translate_filter_to_sql(f);
+            if !where_clause.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&where_clause);
+            }
+        }
+
+        sql
+    }
+
+    fn build_truncate_sql(&self, table: &str) -> String {
+        let quoted_table = POSTGRES_DIALECT.quote_identifier(table);
+        format!("TRUNCATE {} RESTART IDENTITY CASCADE", quoted_table)
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        index_name: &str,
+        _table_name: Option<&str>,
+        if_exists: bool,
+    ) -> String {
+        let quoted_index = POSTGRES_DIALECT.quote_identifier(index_name);
+        if if_exists {
+            format!("DROP INDEX IF EXISTS {} CASCADE", quoted_index)
+        } else {
+            format!("DROP INDEX {} CASCADE", quoted_index)
+        }
+    }
+
+    fn version_query(&self) -> &'static str {
+        "SELECT version()"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        true
+    }
+
+    fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
+        Ok(translate_filter_to_sql(filter))
+    }
 }
 
 impl RelationalConnection for PostgresConnection {}
@@ -2818,11 +3038,75 @@ fn get_schema_foreign_keys(
     Ok(builder.build_sorted())
 }
 
+/// Translate a Value filter expression to a SQL WHERE clause string for PostgreSQL.
+fn translate_filter_to_sql(filter: &Value) -> String {
+    match filter {
+        Value::Document(doc) => {
+            let mut parts = Vec::new();
+            for (key, value) in doc {
+                let quoted_col = POSTGRES_DIALECT.quote_identifier(key);
+                let expr = match value {
+                    Value::Null => format!("{} IS NULL", quoted_col),
+                    Value::Text(s) => format!("{} = '{}'", quoted_col, pg_escape_string(s)),
+                    Value::Int(i) => format!("{} = {}", quoted_col, i),
+                    Value::Bool(b) => {
+                        format!("{} = {}", quoted_col, if *b { "TRUE" } else { "FALSE" })
+                    }
+                    Value::Float(f) => format!("{} = {}", quoted_col, f),
+                    Value::Array(arr) => {
+                        if arr.is_empty() {
+                            "1=1".to_string()
+                        } else {
+                            let items: Vec<String> =
+                                arr.iter().map(|v| value_to_pg_literal(v)).collect();
+                            format!("{} = ANY(ARRAY[{}])", quoted_col, items.join(", "))
+                        }
+                    }
+                    _ => format!("{} = {}", quoted_col, value_to_pg_literal(value)),
+                };
+                parts.push(expr);
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                parts.join(" AND ")
+            }
+        }
+        Value::Text(s) => {
+            // Treat a plain text filter as a raw SQL expression (for advanced users)
+            s.clone()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Collect all Value items from a filter expression into a vector for parameterized queries.
+fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
+    match filter {
+        Value::Document(doc) => {
+            for (_, value) in doc {
+                match value {
+                    Value::Array(arr) => {
+                        for item in arr {
+                            if !matches!(item, Value::Null) {
+                                params.push(item.clone());
+                            }
+                        }
+                    }
+                    Value::Null => {}
+                    _ => params.push(value.clone()),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        PgUriSslMode, PostgresDialect, PostgresDriver, inject_password_into_pg_uri,
-        parse_pg_uri_sslmode,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, PgUriSslMode, PostgresDialect,
+        PostgresDriver,
     };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, QueryLanguage, SqlDialect, Value,
@@ -2937,11 +3221,9 @@ mod tests {
     #[test]
     fn parse_uri_rejects_non_postgres_schemes() {
         let driver = PostgresDriver::new();
-        assert!(
-            driver
-                .parse_uri("mysql://root@localhost:3306/app")
-                .is_none()
-        );
+        assert!(driver
+            .parse_uri("mysql://root@localhost:3306/app")
+            .is_none());
     }
 
     #[test]

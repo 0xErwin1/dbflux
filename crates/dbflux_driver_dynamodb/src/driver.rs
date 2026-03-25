@@ -25,8 +25,8 @@ use dbflux_core::{
     DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DocumentConnection, DocumentDelete,
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities, Pagination,
-    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryLanguage, QueryRequest,
+    IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
+    Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryLanguage, QueryRequest,
     QueryResult, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
     TableInfo, TransactionCapabilities, ValidationResult, Value, WhereOperator,
 };
@@ -803,6 +803,92 @@ impl Connection for DynamoConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &dbflux_core::DefaultSqlDialect
+    }
+
+    fn build_select_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _filter: Option<&Value>,
+        _order_by: &[OrderByColumn],
+        _limit: u32,
+        _offset: u32,
+    ) -> String {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT * FROM table WHERE filter LIMIT offset".to_string()
+    }
+
+    fn build_insert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+    ) -> (String, Vec<Value>) {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        ("PutItem".to_string(), Vec::new())
+    }
+
+    fn build_update_sql(
+        &self,
+        _table: &str,
+        _set: &[(String, Value)],
+        _filter: Option<&Value>,
+    ) -> (String, Vec<Value>) {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        ("UpdateItem".to_string(), Vec::new())
+    }
+
+    fn build_delete_sql(&self, _table: &str, _filter: Option<&Value>) -> (String, Vec<Value>) {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        ("DeleteItem".to_string(), Vec::new())
+    }
+
+    fn build_upsert_sql(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_columns: &[String],
+    ) -> (String, Vec<Value>) {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        ("PutItem".to_string(), Vec::new())
+    }
+
+    fn build_count_sql(&self, _table: &str, _filter: Option<&Value>) -> String {
+        // DynamoDB doesn't use SQL - this is for SQL-based drivers
+        "SELECT COUNT(*) FROM table".to_string()
+    }
+
+    fn build_truncate_sql(&self, _table: &str) -> String {
+        // DynamoDB doesn't support TRUNCATE - use Scan + BatchWriteItem
+        "Scan + BatchWriteItem(delete)".to_string()
+    }
+
+    fn build_drop_index_sql(
+        &self,
+        _index_name: &str,
+        _table_name: Option<&str>,
+        _if_exists: bool,
+    ) -> String {
+        // DynamoDB uses UpdateTable to delete a GSI
+        "UpdateTable(delete GSI)".to_string()
+    }
+
+    fn version_query(&self) -> &'static str {
+        // DynamoDB local doesn't have a version query; use DescribeTable
+        "DescribeTable"
+    }
+
+    fn supports_transactional_ddl(&self) -> bool {
+        false
+    }
+
+    fn translate_filter(&self, _filter: &Value) -> Result<String, DbError> {
+        // DynamoDB uses FilterExpression and ExpressionAttributeValues, not SQL WHERE
+        Err(DbError::NotSupported(
+            "translate_filter is not applicable to DynamoDB - it uses key-based access and FilterExpression, not SQL".to_string(),
+        ))
     }
 }
 
