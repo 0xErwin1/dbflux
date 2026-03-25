@@ -10,16 +10,17 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, Diagnostic,
-    DiagnosticSeverity, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
-    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, DriverLimits, EditorDiagnostic,
-    FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
-    IndexData, IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
-    PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
-    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
-    detect_dangerous_mongo, sanitize_uri, DdlCapabilities,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, Diagnostic, DiagnosticSeverity, DocumentConnection, DocumentDelete,
+    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
+    KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities, PaginationStyle,
+    PlaceholderStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, SshTunnelConfig, TableInfo, TextPosition, TextPositionRange,
+    TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
+    detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};

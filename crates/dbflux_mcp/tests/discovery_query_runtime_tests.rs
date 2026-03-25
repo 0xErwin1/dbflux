@@ -5,7 +5,7 @@ use dbflux_mcp::handlers::discovery_schema::{
     ConnectionInfo, ConnectionMetadata, DescribeObjectRequest, DiscoverySchemaCatalog,
     ObjectDescription,
 };
-use dbflux_mcp::handlers::query::{handle_query_tool, QueryExecutionRequest};
+use dbflux_mcp::handlers::query::{QueryExecutionRequest, handle_query_tool};
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
     ToolPolicy,

@@ -8,18 +8,18 @@ use std::time::Instant;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
-    Connection, ConnectionExt, ConnectionProfile, ConstraintInfo,
-    ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DbSchemaInfo, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DropIndexRequest, DdlCapabilities, ExplainRequest, ForeignKeyInfo,
+    Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo,
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, QueryCapabilities,
+    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
     SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
-    Value, ViewInfo, WhereOperator, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_update_template,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo,
+    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 

@@ -5,12 +5,12 @@ use dbflux_mcp::handlers::discovery_schema::{
     ConnectionInfo, ConnectionMetadata, DiscoverySchemaCatalog,
 };
 use dbflux_mcp::handlers::query::{
-    handle_query_tool, QueryExecutionRequest, QueryExecutionResponse,
+    QueryExecutionRequest, QueryExecutionResponse, handle_query_tool,
 };
 use dbflux_mcp::server::bootstrap::{
-    validate_v1_transport_profile, BootstrapConfig, TransportKind,
+    BootstrapConfig, TransportKind, validate_v1_transport_profile,
 };
-use dbflux_mcp::server::router::{route_tool, RouteTarget};
+use dbflux_mcp::server::router::{RouteTarget, route_tool};
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyBindingScope, PolicyEngine,
     ToolPolicy,

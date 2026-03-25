@@ -7,20 +7,22 @@ use std::sync::Arc;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DefaultSqlDialect, Diagnostic,
-    DiagnosticSeverity, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    EditorDiagnostic, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest, KeyRenameRequest, KeyScanPage,
-    KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi,
-    KeyValueConnection, KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, MutationCapabilities, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition,
-    SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
+    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DefaultSqlDialect, Diagnostic, DiagnosticSeverity, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
+    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
+    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
+    ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
+    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
+    SchemaLoadingStrategy, SchemaSnapshot, SetAddRequest, SetCondition, SetRemoveRequest,
+    SqlDialect, SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId,
     TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ValueRepr,
-    ZSetAddRequest, ZSetRemoveRequest, sanitize_uri, DdlCapabilities,
+    ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 /// Redis driver metadata.

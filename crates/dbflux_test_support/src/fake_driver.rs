@@ -1,16 +1,16 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
-    Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, RedisLanguageService, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService, SyntaxInfo, TransactionCapabilities, DYNAMODB_FORM, MONGODB_FORM,
-    MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, SQLITE_FORM,
+    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
+    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, POSTGRES_FORM,
+    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
+    RedisLanguageService, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlLanguageService, SyntaxInfo, TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone)]

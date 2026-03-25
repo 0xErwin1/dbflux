@@ -10,7 +10,6 @@
 //! test infrastructure is fully set up.
 
 use dbflux_mcp_server::state::ServerState;
-use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Test setup helpers

@@ -52,9 +52,9 @@ pub use connection::{
 
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
-    ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter, DocumentConnection,
-    ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection, NoopCancelHandle,
-    QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaFeatures,
+    ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
+    DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
+    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaFeatures,
     SchemaLoadingStrategy, ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager,
     TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
 };
@@ -74,7 +74,7 @@ pub use driver::{
     DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
     FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
-    MutationCapabilities, MYSQL_FORM, OperationClassifier, PaginationStyle, POSTGRES_FORM,
+    MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM, PaginationStyle,
     QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
     TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
     ssh_tab,

@@ -4,17 +4,16 @@
 //! and returns properly formatted responses.
 
 use dbflux_mcp_server::McpServerArgs;
-use rmcp::{ServiceExt, model::*, transport::IntoTransport};
 use tokio::io::DuplexStream;
 
 /// Helper to create a test server with in-memory transport
 #[allow(dead_code)]
 async fn create_test_server() -> (Box<dyn std::any::Any>, DuplexStream) {
     // Create bidirectional in-memory stream
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (_client_stream, _server_stream) = tokio::io::duplex(8192);
 
     // Create server state
-    let args = McpServerArgs {
+    let _args = McpServerArgs {
         client_id: "test-client".to_string(),
         config_dir: None,
     };

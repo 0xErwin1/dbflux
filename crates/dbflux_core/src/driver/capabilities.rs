@@ -2290,12 +2290,16 @@ mod tests {
         .capabilities(caps)
         .build();
 
-        assert!(metadata
-            .capabilities
-            .contains(DriverCapabilities::RELATIONAL_BASE));
-        assert!(metadata
-            .capabilities
-            .contains(DriverCapabilities::RETURNING));
+        assert!(
+            metadata
+                .capabilities
+                .contains(DriverCapabilities::RELATIONAL_BASE)
+        );
+        assert!(
+            metadata
+                .capabilities
+                .contains(DriverCapabilities::RETURNING)
+        );
     }
 
     #[test]
@@ -2547,8 +2551,8 @@ mod tests {
             AdminDestructive,
         ];
         assert_eq!(all.len(), 7);
-        for variant in all {
-            assert!(matches!(variant, variant));
+        for _variant in all {
+            assert!(matches!(_variant, _));
         }
     }
 }
