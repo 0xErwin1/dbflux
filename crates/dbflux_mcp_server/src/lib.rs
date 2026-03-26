@@ -8,6 +8,8 @@ pub mod state;
 pub mod tools;
 
 use rmcp::{ServiceExt, transport::stdio};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::server::DbFluxServer;
@@ -20,9 +22,28 @@ pub struct McpServerArgs {
 }
 
 pub async fn run_mcp_server(args: McpServerArgs) -> anyhow::Result<()> {
-    // Setup logging to stderr (important: don't pollute stdout!)
-    // Note: env_logger writes to stderr by default, so we don't need to specify it
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // Setup logging to file (don't pollute stdout with logs)
+    let log_path = std::env::temp_dir().join("dbflux_mcp.log");
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", log_path.display(), e))?;
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{} [{}] {}: {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
+        .init();
 
     log::info!("dbflux-mcp-server starting, client_id={}", args.client_id);
 
