@@ -522,13 +522,52 @@ impl DbFluxServer {
         profile: &dbflux_core::ConnectionProfile,
     ) -> Result<ResolvedSecrets, String> {
         let password = if profile.save_password {
-            state.secret_manager.get_password(profile)
+            match state.secret_manager.get_password(profile) {
+                Some(pw) => {
+                    log::debug!(
+                        "Resolved password from keyring for profile '{}' (id={})",
+                        profile.name,
+                        profile.id
+                    );
+                    Some(pw)
+                }
+                None => {
+                    log::warn!(
+                        "No password found in keyring for profile '{}' (id={}, save_password={}). \
+                         Connection may fail with authentication error.",
+                        profile.name,
+                        profile.id,
+                        profile.save_password
+                    );
+                    None
+                }
+            }
         } else {
+            log::debug!(
+                "Profile '{}' has save_password=false, skipping keyring lookup",
+                profile.name
+            );
             None
         };
 
-        let ssh_secret = if profile.config.ssh_tunnel().is_some() {
-            state.secret_manager.get_ssh_password(profile)
+        let ssh_secret = if profile.config.has_ssh_tunnel() {
+            match state.secret_manager.get_ssh_password(profile) {
+                Some(ssh) => {
+                    log::debug!(
+                        "Resolved SSH password from keyring for profile '{}'",
+                        profile.name
+                    );
+                    Some(ssh)
+                }
+                None => {
+                    log::warn!(
+                        "No SSH password found in keyring for profile '{}' (has_ssh_tunnel=true). \
+                         SSH tunnel connection may fail.",
+                        profile.name
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
