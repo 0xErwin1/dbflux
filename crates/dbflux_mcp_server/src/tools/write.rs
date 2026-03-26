@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 
 use dbflux_core::{
-    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, QueryRequest, RowInsert,
-    TableRef, Value,
+    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
+    QueryRequest, RowInsert, SemanticRequest, SqlUpdateRequest, TableRef, Value,
+    parse_semantic_filter_json,
 };
 use rmcp::{
     ErrorData,
@@ -297,7 +298,7 @@ impl DbFluxServer {
         table: &str,
         filter: &serde_json::Value,
         set: &serde_json::Value,
-        _returning: Option<&[String]>,
+        returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
@@ -312,34 +313,48 @@ impl DbFluxServer {
             }));
         }
 
-        // Build SET clause as Vec<(String, Value)>
+        let mutation = Self::build_relational_update_mutation(table, filter, set, returning)?;
+        let result = connection
+            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
+            .map_err(|e| format!("Update error: {}", e))?;
+
+        Ok(serialize_mutation_result(
+            &result,
+            "updated",
+            returning.is_some(),
+        ))
+    }
+
+    fn build_relational_update_mutation(
+        table: &str,
+        filter: &serde_json::Value,
+        set: &serde_json::Value,
+        returning: Option<&[String]>,
+    ) -> Result<MutationRequest, String> {
+        let semantic_filter = parse_semantic_filter_json(filter)?
+            .ok_or_else(|| UpdateRecordsParams::UPDATE_WHERE_REQUIRED_ERROR.to_string())?;
+
         let set_obj = set
             .as_object()
             .ok_or_else(|| "SET must be a JSON object".to_string())?;
 
-        let set_pairs: Vec<(String, Value)> = set_obj
+        let changes: Vec<(String, Value)> = set_obj
             .iter()
             .map(|(col, val)| (col.clone(), json_to_db_value(val.clone())))
             .collect();
 
-        // Convert filter to dbflux_core::Value
-        let db_filter = json_to_db_value(filter.clone());
+        let table_ref = TableRef::from_qualified(table);
 
-        // Build SQL using driver abstraction
-        let (sql, params) = connection.build_update_sql(table, &set_pairs, Some(&db_filter));
+        let mut update =
+            SqlUpdateRequest::new(table_ref.name, table_ref.schema, semantic_filter, changes);
 
-        let request = QueryRequest {
-            sql,
-            params,
-            ..Default::default()
-        };
-        let result = connection
-            .execute(&request)
-            .map_err(|e| format!("Update error: {}", e))?;
+        if let Some(returning) = returning
+            && !returning.is_empty()
+        {
+            update = update.with_returning(returning.to_vec());
+        }
 
-        Ok(serde_json::json!({
-            "updated": result.rows.len() as u64,
-        }))
+        Ok(MutationRequest::sql_update_many(update))
     }
 
     fn build_document_update(
@@ -496,5 +511,28 @@ mod tests {
         .expect_err("non-object set should fail");
 
         assert_eq!(error, "SET must be a JSON object");
+    }
+
+    #[test]
+    fn test_build_relational_update_mutation_uses_semantic_filter_and_returning() {
+        let mutation = DbFluxServer::build_relational_update_mutation(
+            "public.users",
+            &serde_json::json!({"status": "active"}),
+            &serde_json::json!({"archived": true}),
+            Some(&["id".to_string(), "archived".to_string()]),
+        )
+        .expect("relational update mutation should build");
+
+        let MutationRequest::SqlUpdateMany(update) = mutation else {
+            panic!("expected a sql update-many mutation");
+        };
+
+        assert_eq!(update.table, "users");
+        assert_eq!(update.schema.as_deref(), Some("public"));
+        assert_eq!(update.changes.len(), 1);
+        assert_eq!(
+            update.returning.as_deref(),
+            Some(&["id".to_string(), "archived".to_string()][..])
+        );
     }
 }

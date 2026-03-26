@@ -10,7 +10,10 @@ use crate::{
     state::ServerState,
     tools::{DropDatabaseParams, DropTableParams},
 };
-use dbflux_core::{DatabaseCategory, DocumentDelete, DocumentFilter, QueryRequest, TableRef};
+use dbflux_core::{
+    DatabaseCategory, DocumentDelete, DocumentFilter, MutationRequest, QueryRequest,
+    SemanticRequest, SqlDeleteRequest, TableRef, parse_semantic_filter_json,
+};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -223,7 +226,7 @@ impl DbFluxServer {
         connection_id: &str,
         table: &str,
         filter: &serde_json::Value,
-        _returning: Option<&[String]>,
+        returning: Option<&[String]>,
     ) -> Result<serde_json::Value, String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
@@ -240,24 +243,37 @@ impl DbFluxServer {
             }));
         }
 
-        // Convert filter to dbflux_core::Value
-        let db_filter = json_to_db_value(filter.clone());
-
-        // Build SQL using driver abstraction
-        let (sql, params) = connection.build_delete_sql(table, Some(&db_filter));
-
-        let request = QueryRequest {
-            sql,
-            params,
-            ..Default::default()
-        };
+        let mutation = Self::build_relational_delete_mutation(table, filter, returning)?;
         let result = connection
-            .execute(&request)
+            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
             .map_err(|e| format!("Delete error: {}", e))?;
 
-        Ok(serde_json::json!({
-            "deleted": result.rows.len() as u64,
-        }))
+        Ok(serialize_mutation_result(
+            &result,
+            "deleted",
+            returning.is_some(),
+        ))
+    }
+
+    fn build_relational_delete_mutation(
+        table: &str,
+        filter: &serde_json::Value,
+        returning: Option<&[String]>,
+    ) -> Result<MutationRequest, String> {
+        let semantic_filter = parse_semantic_filter_json(filter)?
+            .ok_or_else(|| DELETE_WHERE_REQUIRED_ERROR.to_string())?;
+
+        let table_ref = TableRef::from_qualified(table);
+
+        let mut delete = SqlDeleteRequest::new(table_ref.name, table_ref.schema, semantic_filter);
+
+        if let Some(returning) = returning
+            && !returning.is_empty()
+        {
+            delete = delete.with_returning(returning.to_vec());
+        }
+
+        Ok(MutationRequest::sql_delete_many(delete))
     }
 
     async fn truncate_table_impl(
@@ -336,5 +352,28 @@ impl DbFluxServer {
             "dropped": true,
             "database": database,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_relational_delete_mutation_uses_semantic_filter_and_returning() {
+        let mutation = DbFluxServer::build_relational_delete_mutation(
+            "public.users",
+            &serde_json::json!({"status": "inactive"}),
+            Some(&["id".to_string()]),
+        )
+        .expect("relational delete mutation should build");
+
+        let MutationRequest::SqlDeleteMany(delete) = mutation else {
+            panic!("expected a sql delete-many mutation");
+        };
+
+        assert_eq!(delete.table, "users");
+        assert_eq!(delete.schema.as_deref(), Some("public"));
+        assert_eq!(delete.returning.as_deref(), Some(&["id".to_string()][..]));
     }
 }

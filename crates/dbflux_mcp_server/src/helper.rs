@@ -55,8 +55,19 @@ pub fn json_to_db_value(value: serde_json::Value) -> Value {
 #[allow(dead_code)]
 pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+    let rows = serialize_rows(result);
 
-    let rows: Vec<serde_json::Value> = result
+    serde_json::json!({
+        "columns": columns,
+        "rows": rows,
+        "row_count": result.rows.len(),
+    })
+}
+
+pub fn serialize_rows(result: &QueryResult) -> Vec<serde_json::Value> {
+    let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+
+    result
         .rows
         .iter()
         .map(|row| {
@@ -66,13 +77,32 @@ pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
             }
             serde_json::Value::Object(obj)
         })
-        .collect();
+        .collect()
+}
 
-    serde_json::json!({
-        "columns": columns,
-        "rows": rows,
-        "row_count": result.rows.len(),
-    })
+pub fn mutation_affected_rows(result: &QueryResult) -> u64 {
+    result.affected_rows.unwrap_or(result.rows.len() as u64)
+}
+
+pub fn serialize_mutation_result(
+    result: &QueryResult,
+    affected_key: &str,
+    include_records: bool,
+) -> serde_json::Value {
+    let mut response = serde_json::Map::new();
+    response.insert(
+        affected_key.to_string(),
+        serde_json::json!(mutation_affected_rows(result)),
+    );
+
+    if include_records {
+        response.insert(
+            "records".to_string(),
+            serde_json::Value::Array(serialize_rows(result)),
+        );
+    }
+
+    serde_json::Value::Object(response)
 }
 
 #[allow(dead_code)]
@@ -113,5 +143,36 @@ pub(crate) trait IntoErrorData {
 impl IntoErrorData for String {
     fn into_error_data(self) -> ErrorData {
         ErrorData::internal_error(self, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_core::{ColumnMeta, QueryResult, Value};
+    use std::time::Duration;
+
+    #[test]
+    fn mutation_affected_rows_prefers_driver_metadata() {
+        let result = QueryResult::table(Vec::new(), Vec::new(), Some(7), Duration::ZERO);
+
+        assert_eq!(mutation_affected_rows(&result), 7);
+    }
+
+    #[test]
+    fn mutation_affected_rows_falls_back_to_returned_row_count() {
+        let result = QueryResult::table(
+            vec![ColumnMeta {
+                name: "id".into(),
+                type_name: "int".into(),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+            None,
+            Duration::ZERO,
+        );
+
+        assert_eq!(mutation_affected_rows(&result), 2);
     }
 }

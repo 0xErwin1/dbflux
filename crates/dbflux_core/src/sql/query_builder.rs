@@ -1,5 +1,8 @@
 use crate::Value;
-use crate::data::crud::{RecordIdentity, RowDelete, RowInsert, RowPatch};
+use crate::data::crud::{
+    RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest, SqlUpdateRequest,
+};
+use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
 
 /// Builds CRUD SQL statements using a specific dialect.
@@ -32,6 +35,38 @@ impl<'a> SqlQueryBuilder<'a> {
 
         if with_returning && self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");
+        }
+
+        Some(sql)
+    }
+
+    /// Build UPDATE statement from a semantic filtered update request.
+    pub fn build_update_many(&self, update: &SqlUpdateRequest) -> Option<String> {
+        if update.changes.is_empty() {
+            return None;
+        }
+
+        let table = self
+            .dialect
+            .qualified_table(update.schema.as_deref(), &update.table);
+
+        let set_clause = self.build_set_clause(&update.changes);
+        let where_clause = render_semantic_filter_sql(&update.filter, self.dialect).ok()?;
+
+        let mut sql = format!("UPDATE {} SET {} WHERE {}", table, set_clause, where_clause);
+
+        if self.dialect.supports_returning() {
+            if let Some(returning) = update.returning.as_ref() {
+                if !returning.is_empty() {
+                    let columns = returning
+                        .iter()
+                        .map(|column| self.dialect.quote_identifier(column))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    sql.push_str(" RETURNING ");
+                    sql.push_str(&columns);
+                }
+            }
         }
 
         Some(sql)
@@ -91,6 +126,33 @@ impl<'a> SqlQueryBuilder<'a> {
 
         if with_returning && self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");
+        }
+
+        Some(sql)
+    }
+
+    /// Build DELETE statement from a semantic filtered delete request.
+    pub fn build_delete_many(&self, delete: &SqlDeleteRequest) -> Option<String> {
+        let table = self
+            .dialect
+            .qualified_table(delete.schema.as_deref(), &delete.table);
+
+        let where_clause = render_semantic_filter_sql(&delete.filter, self.dialect).ok()?;
+
+        let mut sql = format!("DELETE FROM {} WHERE {}", table, where_clause);
+
+        if self.dialect.supports_returning() {
+            if let Some(returning) = delete.returning.as_ref() {
+                if !returning.is_empty() {
+                    let columns = returning
+                        .iter()
+                        .map(|column| self.dialect.quote_identifier(column))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    sql.push_str(" RETURNING ");
+                    sql.push_str(&columns);
+                }
+            }
         }
 
         Some(sql)
@@ -261,6 +323,29 @@ mod tests {
     }
 
     #[test]
+    fn test_build_update_many() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let update = SqlUpdateRequest::new(
+            "users".to_string(),
+            Some("public".to_string()),
+            crate::SemanticFilter::compare(
+                "status",
+                crate::WhereOperator::Eq,
+                Value::Text("active".to_string()),
+            ),
+            vec![("archived".to_string(), Value::Bool(true))],
+        );
+
+        let sql = builder.build_update_many(&update).unwrap();
+        assert_eq!(
+            sql,
+            "UPDATE \"public\".\"users\" SET \"archived\" = TRUE WHERE \"status\" = 'active'"
+        );
+    }
+
+    #[test]
     fn test_build_insert() {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
@@ -292,6 +377,29 @@ mod tests {
 
         let sql = builder.build_delete(&delete, false).unwrap();
         assert_eq!(sql, "DELETE FROM \"users\" WHERE \"id\" = 42");
+    }
+
+    #[test]
+    fn test_build_delete_many() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let delete = SqlDeleteRequest::new(
+            "users".to_string(),
+            Some("public".to_string()),
+            crate::SemanticFilter::compare(
+                "status",
+                crate::WhereOperator::Eq,
+                Value::Text("inactive".to_string()),
+            ),
+        )
+        .with_returning(vec!["id".to_string()]);
+
+        let sql = builder.build_delete_many(&delete).unwrap();
+        assert_eq!(
+            sql,
+            "DELETE FROM \"public\".\"users\" WHERE \"status\" = 'inactive' RETURNING \"id\""
+        );
     }
 
     #[test]

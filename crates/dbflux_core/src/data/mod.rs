@@ -4,7 +4,8 @@ pub(crate) mod view;
 
 pub use crud::{
     CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
-    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
+    RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SqlDeleteRequest,
+    SqlUpdateRequest,
 };
 pub use key_value::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,

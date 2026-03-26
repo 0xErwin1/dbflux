@@ -80,8 +80,10 @@ impl QueryGenerator for SqlMutationGenerator {
 
         let text = match mutation {
             MutationRequest::SqlUpdate(patch) => builder.build_update(patch, false)?,
+            MutationRequest::SqlUpdateMany(update) => builder.build_update_many(update)?,
             MutationRequest::SqlInsert(insert) => builder.build_insert(insert, false)?,
             MutationRequest::SqlDelete(delete) => builder.build_delete(delete, false)?,
+            MutationRequest::SqlDeleteMany(delete) => builder.build_delete_many(delete)?,
             _ => return None,
         };
 
@@ -97,7 +99,8 @@ mod tests {
     use super::{MutationCategory, QueryGenerator, SqlMutationGenerator};
     use crate::{
         DefaultSqlDialect, DocumentFilter, DocumentUpdate, KeySetRequest, MutationRequest,
-        QueryLanguage, RowDelete, RowIdentity, RowInsert, RowPatch, SemanticPlanKind, Value,
+        QueryLanguage, RowDelete, RowIdentity, RowInsert, RowPatch, SemanticFilter,
+        SemanticPlanKind, SqlDeleteRequest, SqlUpdateRequest, Value, WhereOperator,
     };
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
@@ -154,6 +157,26 @@ mod tests {
             Some("public".to_string()),
         ));
 
+        let filtered_update = MutationRequest::sql_update_many(SqlUpdateRequest::new(
+            "users".to_string(),
+            Some("public".to_string()),
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            vec![("archived".to_string(), Value::Bool(true))],
+        ));
+
+        let filtered_delete = MutationRequest::sql_delete_many(
+            SqlDeleteRequest::new(
+                "users".to_string(),
+                Some("public".to_string()),
+                SemanticFilter::compare(
+                    "status",
+                    WhereOperator::Eq,
+                    Value::Text("inactive".into()),
+                ),
+            )
+            .with_returning(vec!["id".to_string()]),
+        );
+
         let doc = MutationRequest::document_update(DocumentUpdate::new(
             "users".to_string(),
             DocumentFilter::new(serde_json::json!({"_id": "a"})),
@@ -168,6 +191,22 @@ mod tests {
 
         let delete_query = generator.generate_mutation(&delete);
         assert!(delete_query.is_some());
+
+        let filtered_update_query = generator.generate_mutation(&filtered_update);
+        assert!(filtered_update_query.is_some());
+        assert!(
+            filtered_update_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("WHERE"))
+        );
+
+        let filtered_delete_query = generator.generate_mutation(&filtered_delete);
+        assert!(filtered_delete_query.is_some());
+        assert!(
+            filtered_delete_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("DELETE FROM"))
+        );
 
         let doc_query = generator.generate_mutation(&doc);
         assert!(doc_query.is_none());

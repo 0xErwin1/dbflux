@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Row, Value,
+    Row, SemanticFilter, Value,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeySetRequest, ListPushRequest,
         ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
@@ -169,6 +169,83 @@ pub struct RowDelete {
 
     /// Schema name.
     pub schema: Option<String>,
+}
+
+/// Changes to apply to rows selected by a semantic filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlUpdateRequest {
+    /// Table name.
+    pub table: String,
+
+    /// Schema name.
+    pub schema: Option<String>,
+
+    /// Shared filter contract selecting the target rows.
+    pub filter: SemanticFilter,
+
+    /// Column changes: (column_name, new_value).
+    pub changes: Vec<(String, Value)>,
+
+    /// Columns to return when the dialect supports RETURNING-style clauses.
+    pub returning: Option<Vec<String>>,
+}
+
+/// Deletes rows selected by a semantic filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlDeleteRequest {
+    /// Table name.
+    pub table: String,
+
+    /// Schema name.
+    pub schema: Option<String>,
+
+    /// Shared filter contract selecting the target rows.
+    pub filter: SemanticFilter,
+
+    /// Columns to return when the dialect supports RETURNING-style clauses.
+    pub returning: Option<Vec<String>>,
+}
+
+impl SqlUpdateRequest {
+    pub fn new(
+        table: String,
+        schema: Option<String>,
+        filter: SemanticFilter,
+        changes: Vec<(String, Value)>,
+    ) -> Self {
+        Self {
+            table,
+            schema,
+            filter,
+            changes,
+            returning: None,
+        }
+    }
+
+    pub fn with_returning(mut self, returning: Vec<String>) -> Self {
+        self.returning = Some(returning);
+        self
+    }
+
+    pub fn has_changes(&self) -> bool {
+        !self.changes.is_empty()
+    }
+}
+
+impl SqlDeleteRequest {
+    pub fn new(table: String, schema: Option<String>, filter: SemanticFilter) -> Self {
+        Self {
+            table,
+            schema,
+            filter,
+            returning: None,
+        }
+    }
+
+    pub fn with_returning(mut self, returning: Vec<String>) -> Self {
+        self.returning = Some(returning);
+        self
+    }
 }
 
 impl RowDelete {
@@ -437,8 +514,10 @@ impl DocumentDelete {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MutationRequest {
     SqlUpdate(RowPatch),
+    SqlUpdateMany(SqlUpdateRequest),
     SqlInsert(RowInsert),
     SqlDelete(RowDelete),
+    SqlDeleteMany(SqlDeleteRequest),
 
     DocumentUpdate(DocumentUpdate),
     DocumentInsert(DocumentInsert),
@@ -464,12 +543,20 @@ impl MutationRequest {
         Self::SqlUpdate(patch)
     }
 
+    pub fn sql_update_many(update: SqlUpdateRequest) -> Self {
+        Self::SqlUpdateMany(update)
+    }
+
     pub fn sql_insert(insert: RowInsert) -> Self {
         Self::SqlInsert(insert)
     }
 
     pub fn sql_delete(delete: RowDelete) -> Self {
         Self::SqlDelete(delete)
+    }
+
+    pub fn sql_delete_many(delete: SqlDeleteRequest) -> Self {
+        Self::SqlDeleteMany(delete)
     }
 
     pub fn document_update(update: DocumentUpdate) -> Self {
@@ -488,7 +575,11 @@ impl MutationRequest {
     pub fn is_sql(&self) -> bool {
         matches!(
             self,
-            Self::SqlUpdate(_) | Self::SqlInsert(_) | Self::SqlDelete(_)
+            Self::SqlUpdate(_)
+                | Self::SqlUpdateMany(_)
+                | Self::SqlInsert(_)
+                | Self::SqlDelete(_)
+                | Self::SqlDeleteMany(_)
         )
     }
 

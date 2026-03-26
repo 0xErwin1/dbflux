@@ -889,6 +889,15 @@ pub trait Connection: Send + Sync {
             })
     }
 
+    fn execute_semantic_request(&self, request: &SemanticRequest) -> Result<QueryResult, DbError> {
+        let plan = self.plan_semantic_request(request)?;
+        let planned_query = plan.primary_query().cloned().ok_or_else(|| {
+            DbError::query_failed("Semantic planning returned no executable query".to_string())
+        })?;
+
+        self.execute(&planned_query.into_query_request())
+    }
+
     /// Generate SQL using this connection's dialect.
     ///
     /// Default implementation delegates to `crate::generate_sql()`.

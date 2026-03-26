@@ -1,11 +1,12 @@
 use dbflux_core::{ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate, GeneratedQuery,
-    MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult, RowInsert,
-    SemanticFilter, SemanticRequest, SqlMutationGenerator, TableBrowseRequest, TableCountRequest,
-    TableRef, Value, WhereOperator,
+    Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate,
+    GeneratedQuery, MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult,
+    RowInsert, SemanticFilter, SemanticRequest, SqlMutationGenerator, SqlUpdateRequest,
+    TableBrowseRequest, TableCountRequest, TableRef, Value, WhereOperator,
 };
 use dbflux_test_support::FakeDriver;
+use std::sync::Mutex;
 use std::time::Duration;
 
 static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
@@ -25,9 +26,17 @@ fn mutation_request_category_is_consistent() {
         serde_json::json!({"$set": {"name": "alice"}}),
     ));
 
+    let filtered_update = MutationRequest::sql_update_many(SqlUpdateRequest::new(
+        "users".to_string(),
+        Some("public".to_string()),
+        SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+        vec![("archived".to_string(), Value::Bool(true))],
+    ));
+
     let key_value = MutationRequest::KeyValueSet(KeySetRequest::new("k", b"v".to_vec()));
 
     assert_eq!(sql.category(), MutationCategory::Sql);
+    assert_eq!(filtered_update.category(), MutationCategory::Sql);
     assert_eq!(document.category(), MutationCategory::Document);
     assert_eq!(key_value.category(), MutationCategory::KeyValue);
 }
@@ -223,5 +232,124 @@ fn semantic_planning_defaults_to_not_supported_when_connection_has_no_planner() 
         error
             .to_string()
             .contains("Semantic planning not supported")
+    );
+}
+
+struct PlannedExecutionConnection {
+    executed_queries: Mutex<Vec<String>>,
+}
+
+impl PlannedExecutionConnection {
+    fn new() -> Self {
+        Self {
+            executed_queries: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl dbflux_core::Connection for PlannedExecutionConnection {
+    fn metadata(&self) -> &dbflux_core::DriverMetadata {
+        static METADATA: std::sync::LazyLock<dbflux_core::DriverMetadata> =
+            std::sync::LazyLock::new(|| dbflux_core::DriverMetadata {
+                id: "planned-test".into(),
+                display_name: "Planned Test".into(),
+                description: "planned test".into(),
+                category: dbflux_core::DatabaseCategory::Relational,
+                query_language: QueryLanguage::Sql,
+                capabilities: dbflux_core::DriverCapabilities::empty(),
+                default_port: None,
+                uri_scheme: "planned-test".into(),
+                icon: dbflux_core::Icon::Database,
+                syntax: None,
+                query: None,
+                mutation: None,
+                ddl: None,
+                transactions: None,
+                limits: None,
+                classification_override: None,
+            });
+
+        &METADATA
+    }
+
+    fn ping(&self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        req: &dbflux_core::QueryRequest,
+    ) -> Result<QueryResult, dbflux_core::DbError> {
+        self.executed_queries
+            .lock()
+            .expect("executed queries mutex poisoned")
+            .push(req.sql.clone());
+
+        Ok(QueryResult::table(
+            Vec::new(),
+            Vec::new(),
+            Some(4),
+            Duration::ZERO,
+        ))
+    }
+
+    fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+        Ok(())
+    }
+
+    fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+        Ok(dbflux_core::SchemaSnapshot::default())
+    }
+
+    fn kind(&self) -> DbKind {
+        DbKind::Postgres
+    }
+
+    fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+        dbflux_core::SchemaLoadingStrategy::ConnectionPerDatabase
+    }
+
+    fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+        &DefaultSqlDialect
+    }
+
+    fn plan_semantic_request(
+        &self,
+        _request: &SemanticRequest,
+    ) -> Result<dbflux_core::SemanticPlan, dbflux_core::DbError> {
+        Ok(dbflux_core::SemanticPlan::single_query(
+            dbflux_core::SemanticPlanKind::MutationPreview,
+            dbflux_core::PlannedQuery::new(QueryLanguage::Sql, "UPDATE users SET active = TRUE"),
+        ))
+    }
+}
+
+#[test]
+fn execute_semantic_request_runs_the_primary_planned_query() {
+    let connection = PlannedExecutionConnection::new();
+    let request =
+        SemanticRequest::Mutation(MutationRequest::sql_update_many(SqlUpdateRequest::new(
+            "users".to_string(),
+            None,
+            SemanticFilter::compare("status", WhereOperator::Eq, Value::Text("active".into())),
+            vec![("archived".to_string(), Value::Bool(true))],
+        )));
+
+    let result = connection
+        .execute_semantic_request(&request)
+        .expect("planned semantic execution should succeed");
+
+    assert_eq!(result.affected_rows, Some(4));
+    assert_eq!(
+        connection
+            .executed_queries
+            .lock()
+            .expect("executed queries mutex poisoned")
+            .as_slice(),
+        ["UPDATE users SET active = TRUE"]
     );
 }
