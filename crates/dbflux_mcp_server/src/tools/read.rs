@@ -330,14 +330,16 @@ impl DbFluxServer {
         };
 
         // Build column list
+        // Pass empty vec to driver so it can properly expand * to all columns
+        // (passing ["*"] causes the asterisk to be quoted as a string literal)
         let column_list: Vec<String> = if let Some(cols) = columns {
             if cols.is_empty() {
-                vec!["*".to_string()]
+                Vec::new()
             } else {
                 cols.to_vec()
             }
         } else {
-            vec!["*".to_string()]
+            Vec::new()
         };
 
         // Convert filter to dbflux_core::Value
