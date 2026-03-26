@@ -424,13 +424,20 @@ impl DbFluxServer {
         }
 
         let conn = connection.clone();
+        log::debug!("select_data_table: spawning blocking task for browse_table");
         #[allow(clippy::result_large_err)]
         let query_result = tokio::task::spawn_blocking(move || conn.browse_table(&request))
             .await
             .map_err(|e| format!("Blocking task failed: {}", e))?
             .map_err(|e| format!("Select error: {}", e))?;
 
-        Self::serialize_selected_result(&query_result, columns)
+        log::debug!(
+            "select_data_table: query completed, serializing {} rows",
+            query_result.rows.len()
+        );
+        let result = Self::serialize_selected_result(&query_result, columns)?;
+        log::debug!("select_data_table: serialization complete");
+        Ok(result)
     }
 
     async fn count_records_impl(

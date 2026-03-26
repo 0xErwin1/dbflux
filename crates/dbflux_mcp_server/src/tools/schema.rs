@@ -211,6 +211,7 @@ impl DbFluxServer {
 
         let conn = connection.clone();
         let connection_id = connection_id.to_string();
+        log::debug!("list_databases_impl: spawning blocking task");
         let databases = tokio::task::spawn_blocking(move || -> Result<_, String> {
             #[allow(clippy::large_enum_variant)]
             conn.list_databases().map_err(|e| {
@@ -228,6 +229,10 @@ impl DbFluxServer {
         .map_err(|e| format!("Blocking task failed: {}", e))?;
 
         let databases = databases?;
+        log::debug!(
+            "list_databases_impl: got {} databases, serializing",
+            databases.len()
+        );
 
         let items: Vec<serde_json::Value> = databases
             .iter()
@@ -239,6 +244,7 @@ impl DbFluxServer {
             })
             .collect();
 
+        log::debug!("list_databases_impl: serialization complete, returning");
         Ok(serde_json::json!({ "databases": items }))
     }
 
