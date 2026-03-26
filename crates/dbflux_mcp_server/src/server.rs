@@ -110,18 +110,22 @@ impl DbFluxServer {
     }
 
     /// Get or establish a connection for the given connection_id
+    ///
+    /// IMPORTANT: This method creates a fresh connection for each request to avoid
+    /// lock contention issues when multiple concurrent requests share the same
+    /// connection object. The underlying drivers (PostgreSQL, SQLite, etc.) manage
+    /// their own internal locking, but sharing connections across concurrent
+    /// async contexts can lead to "poisoned lock" errors when one query panics
+    /// while holding the internal mutex.
+    ///
+    /// Connection caching at this level would require proper connection pooling
+    /// with per-request semantics (like deadpool-postgres), which is not
+    /// currently implemented.
     #[allow(dead_code)] // Used by tool implementations
     pub(crate) async fn get_or_connect(
         state: ServerState,
         connection_id: &str,
     ) -> Result<Arc<dyn Connection>, String> {
-        {
-            let cache = state.connection_cache.read().await;
-            if let Some(conn) = cache.get(connection_id) {
-                return Ok(conn);
-            }
-        }
-
         let profile_uuid = connection_id
             .parse::<uuid::Uuid>()
             .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
@@ -164,11 +168,6 @@ impl DbFluxServer {
         .map_err(|e| format!("Blocking task failed: {}", e))??;
 
         let connection: Arc<dyn Connection> = Arc::from(connection);
-
-        {
-            let mut cache = state.connection_cache.write().await;
-            cache.insert(connection_id.to_string(), connection.clone());
-        }
 
         Ok(connection)
     }
@@ -234,20 +233,14 @@ impl DbFluxServer {
     }
 
     /// Connect to a different database using the same profile
+    ///
+    /// IMPORTANT: Creates a fresh connection for each request to avoid lock
+    /// contention issues (see get_or_connect for details).
     pub(crate) async fn connect_with_database(
         state: ServerState,
         connection_id: &str,
         database: &str,
     ) -> Result<Arc<dyn Connection>, String> {
-        let cache_key = format!("{}:{}", connection_id, database);
-
-        {
-            let cache = state.connection_cache.read().await;
-            if let Some(conn) = cache.get(&cache_key) {
-                return Ok(conn);
-            }
-        }
-
         let profile_uuid = connection_id
             .parse::<uuid::Uuid>()
             .map_err(|_| error_messages::invalid_connection_id(connection_id))?;
@@ -275,7 +268,7 @@ impl DbFluxServer {
             .cloned()
             .ok_or_else(|| error_messages::driver_not_available(&driver_id, &available_drivers))?;
 
-        let cache_key_owned = cache_key.clone();
+        let cache_key_owned = format!("{}:{}", connection_id, database);
         let driver_id_owned = driver_id.clone();
         let profile_for_connect = new_profile.clone();
         let password = resolved_secrets.password;
@@ -292,11 +285,6 @@ impl DbFluxServer {
         .map_err(|e| format!("Blocking task failed: {}", e))??;
 
         let connection: Arc<dyn Connection> = Arc::from(connection);
-
-        {
-            let mut cache = state.connection_cache.write().await;
-            cache.insert(cache_key, connection.clone());
-        }
 
         Ok(connection)
     }
