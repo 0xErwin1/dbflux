@@ -771,7 +771,7 @@ mod tests {
         let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
             .expect("failed to create test audit service");
 
-        let mut profile_manager = dbflux_core::ProfileManager::new();
+        let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
         profile_manager.add(profile);
 
         ServerState {

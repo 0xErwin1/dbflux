@@ -65,7 +65,7 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
 }
 
 fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
-    let mut profile_manager = dbflux_core::ProfileManager::new();
+    let mut profile_manager = dbflux_core::ProfileManager::new_in_memory();
     let mut profile = dbflux_core::ConnectionProfile::new(
         "governed-test",
         dbflux_core::DbConfig::default_postgres(),

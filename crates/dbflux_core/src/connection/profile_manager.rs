@@ -28,6 +28,15 @@ impl ProfileManager {
         Self { profiles, store }
     }
 
+    /// Creates a new in-memory ProfileManager that does not persist to disk.
+    /// Use this for tests that should not pollute ~/.config/dbflux/.
+    pub fn new_in_memory() -> Self {
+        Self {
+            profiles: Vec::new(),
+            store: None,
+        }
+    }
+
     pub fn save(&self) {
         let Some(ref store) = self.store else {
             log::warn!("Cannot save profiles: profile store not available");
