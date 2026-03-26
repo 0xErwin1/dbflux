@@ -297,6 +297,56 @@ impl SqlDialect for MysqlDialect {
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::QuestionMark
     }
+
+    fn build_upsert_statement(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        _conflict_columns: &[String],
+        update_assignments: &[(String, Value)],
+    ) -> Option<String> {
+        if columns.is_empty() || columns.len() != values.len() {
+            return None;
+        }
+
+        let table = self.qualified_table(schema, table);
+        let columns = columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = values
+            .iter()
+            .map(|value| self.value_to_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if update_assignments.is_empty() {
+            return Some(format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                table, columns, values
+            ));
+        }
+
+        let update_clause = update_assignments
+            .iter()
+            .map(|(column, value)| {
+                format!(
+                    "{} = {}",
+                    self.quote_identifier(column),
+                    self.value_to_literal(value)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
+            table, columns, values, update_clause
+        ))
+    }
 }
 
 static MYSQL_DIALECT: MysqlDialect = MysqlDialect;

@@ -924,6 +924,225 @@ fn plan_mongo_collection_count(request: &CollectionCountRequest) -> Result<Seman
     ))
 }
 
+fn validate_mongo_output_field_name(name: &str, context: &str) -> Result<(), DbError> {
+    if name.is_empty() {
+        return Err(DbError::query_failed(format!(
+            "MongoDB aggregate {context} cannot be empty"
+        )));
+    }
+
+    if name.starts_with('$') || name.contains('.') {
+        return Err(DbError::NotSupported(format!(
+            "MongoDB aggregate {context} '{name}' is not supported because output field names cannot contain '.' or start with '$'"
+        )));
+    }
+
+    Ok(())
+}
+
+fn mongo_field_path_from_column(column: &dbflux_core::ColumnRef) -> String {
+    column.qualified_name()
+}
+
+fn mongo_field_path_from_semantic_field(field: &SemanticFieldRef) -> Result<String, DbError> {
+    match field {
+        SemanticFieldRef::Column(column) => Ok(mongo_field_path_from_column(column)),
+        SemanticFieldRef::Path(segments) => {
+            if segments.is_empty() {
+                return Err(DbError::query_failed(
+                    "MongoDB aggregate field path must contain at least one segment",
+                ));
+            }
+
+            Ok(segments.join("."))
+        }
+    }
+}
+
+fn mongo_aggregate_output_field_from_semantic(field: &SemanticFieldRef) -> Result<String, DbError> {
+    let name = mongo_field_path_from_semantic_field(field)?;
+    validate_mongo_output_field_name(&name, "field")?;
+    Ok(name)
+}
+
+fn mongo_aggregate_output_field_from_column(
+    column: &dbflux_core::ColumnRef,
+) -> Result<String, DbError> {
+    mongo_aggregate_output_field_from_semantic(&column.clone().into())
+}
+
+fn mongo_aggregate_accumulator(
+    aggregation: &dbflux_core::AggregateSpec,
+) -> Result<serde_json::Value, DbError> {
+    use dbflux_core::AggregateFunction;
+
+    let column_path = aggregation
+        .column
+        .as_ref()
+        .map(mongo_field_path_from_column);
+
+    match aggregation.function {
+        AggregateFunction::Count => {
+            if let Some(column_path) = column_path {
+                Ok(serde_json::json!({
+                    "$sum": {
+                        "$cond": [
+                            {
+                                "$ne": [
+                                    { "$ifNull": [format!("${column_path}"), serde_json::Value::Null] },
+                                    serde_json::Value::Null
+                                ]
+                            },
+                            1,
+                            0
+                        ]
+                    }
+                }))
+            } else {
+                Ok(serde_json::json!({ "$sum": 1 }))
+            }
+        }
+        AggregateFunction::Sum => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB SUM aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$sum": format!("${column_path}") }))
+        }
+        AggregateFunction::Avg => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB AVG aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$avg": format!("${column_path}") }))
+        }
+        AggregateFunction::Min => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB MIN aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$min": format!("${column_path}") }))
+        }
+        AggregateFunction::Max => {
+            let column_path = column_path
+                .ok_or_else(|| DbError::query_failed("MongoDB MAX aggregate requires a column"))?;
+            Ok(serde_json::json!({ "$max": format!("${column_path}") }))
+        }
+    }
+}
+
+fn plan_mongo_aggregate(request: &dbflux_core::AggregateRequest) -> Result<SemanticPlan, DbError> {
+    if request.aggregations.is_empty() {
+        return Err(DbError::query_failed(
+            "MongoDB aggregate request requires at least one aggregation",
+        ));
+    }
+
+    let mut pipeline = Vec::new();
+
+    if let Some(filter) = &request.filter {
+        pipeline.push(serde_json::json!({
+            "$match": mongo_filter_json_from_semantic(filter)?
+        }));
+    }
+
+    let mut group_id = serde_json::Map::new();
+    let mut project = serde_json::Map::new();
+    project.insert("_id".to_string(), serde_json::json!(0));
+
+    for column in &request.group_by {
+        let field_name = column.qualified_name();
+        validate_mongo_output_field_name(&field_name, "group-by column")?;
+
+        group_id.insert(
+            field_name.clone(),
+            serde_json::json!(format!("${field_name}")),
+        );
+        project.insert(
+            field_name.clone(),
+            serde_json::json!(format!("$_id.{field_name}")),
+        );
+    }
+
+    let mut group = serde_json::Map::new();
+    group.insert(
+        "_id".to_string(),
+        if group_id.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Object(group_id)
+        },
+    );
+
+    for aggregation in &request.aggregations {
+        validate_mongo_output_field_name(&aggregation.alias, "aggregation alias")?;
+        group.insert(
+            aggregation.alias.clone(),
+            mongo_aggregate_accumulator(aggregation)?,
+        );
+        project.insert(
+            aggregation.alias.clone(),
+            serde_json::json!(format!("${}", aggregation.alias)),
+        );
+    }
+
+    pipeline.push(serde_json::json!({ "$group": serde_json::Value::Object(group) }));
+    pipeline.push(serde_json::json!({ "$project": serde_json::Value::Object(project) }));
+
+    if let Some(having) = &request.having {
+        pipeline.push(serde_json::json!({
+            "$match": mongo_filter_json_from_semantic(having)?
+        }));
+    }
+
+    if !request.order_by.is_empty() {
+        let mut sort = serde_json::Map::new();
+
+        for order in &request.order_by {
+            let field_name = mongo_aggregate_output_field_from_column(&order.column)?;
+            sort.insert(
+                field_name,
+                serde_json::json!(match order.direction {
+                    dbflux_core::SortDirection::Ascending => 1,
+                    dbflux_core::SortDirection::Descending => -1,
+                }),
+            );
+        }
+
+        pipeline.push(serde_json::json!({ "$sort": serde_json::Value::Object(sort) }));
+    }
+
+    if let Some(limit) = request.limit {
+        pipeline.push(serde_json::json!({ "$limit": limit }));
+    }
+
+    let mut query = serde_json::Map::new();
+    query.insert(
+        "collection".to_string(),
+        serde_json::Value::String(request.table.name.clone()),
+    );
+    query.insert("aggregate".to_string(), serde_json::Value::Array(pipeline));
+
+    let target_database = request
+        .target_database
+        .clone()
+        .or_else(|| request.table.schema.clone());
+
+    if let Some(database) = &target_database {
+        query.insert(
+            "database".to_string(),
+            serde_json::Value::String(database.clone()),
+        );
+    }
+
+    let query_text =
+        serde_json::to_string_pretty(&serde_json::Value::Object(query)).map_err(|error| {
+            DbError::query_failed(format!(
+                "Failed to render MongoDB aggregate preview: {error}"
+            ))
+        })?;
+
+    Ok(SemanticPlan::single_query(
+        SemanticPlanKind::Query,
+        dbflux_core::PlannedQuery::new(QueryLanguage::MongoQuery, query_text)
+            .with_database(target_database),
+    ))
+}
+
 fn plan_mongo_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
     static GENERATOR: crate::query_generator::MongoShellGenerator =
         crate::query_generator::MongoShellGenerator;
@@ -937,9 +1156,7 @@ fn plan_mongo_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     match request {
         SemanticRequest::CollectionBrowse(request) => plan_mongo_collection_browse(request),
         SemanticRequest::CollectionCount(request) => plan_mongo_collection_count(request),
-        SemanticRequest::Aggregate(_) => Err(DbError::NotSupported(
-            "MongoDB semantic planning does not support aggregate requests yet".into(),
-        )),
+        SemanticRequest::Aggregate(request) => plan_mongo_aggregate(request),
         SemanticRequest::Mutation(mutation) => plan_mongo_mutation(mutation),
         _ => Err(DbError::NotSupported(
             "MongoDB semantic planning does not support this request".into(),
@@ -2920,13 +3137,43 @@ mod tests {
     }
 
     #[test]
-    fn semantic_planner_rejects_aggregate_requests_explicitly() {
-        let error = plan_mongo_semantic_request(&SemanticRequest::Aggregate(
-            dbflux_core::AggregateRequest::new(dbflux_core::TableRef::new("users")),
-        ))
-        .expect_err("mongo aggregate planning should stay explicitly unsupported");
+    fn semantic_planner_builds_aggregate_preview() {
+        let request = dbflux_core::AggregateRequest::new(dbflux_core::TableRef::new("orders"))
+            .with_filter(SemanticFilter::compare(
+                "status",
+                WhereOperator::Eq,
+                Value::Text("active".into()),
+            ))
+            .with_group_by(vec![dbflux_core::ColumnRef::new("customer_id")])
+            .with_aggregations(vec![
+                dbflux_core::AggregateSpec::count_all("total_orders"),
+                dbflux_core::AggregateSpec::new(
+                    dbflux_core::AggregateFunction::Sum,
+                    Some(dbflux_core::ColumnRef::new("amount")),
+                    "total_amount",
+                ),
+            ])
+            .with_having(SemanticFilter::compare(
+                "total_orders",
+                WhereOperator::Gt,
+                Value::Int(1),
+            ))
+            .with_order_by(vec![dbflux_core::OrderByColumn::desc("total_amount")])
+            .with_limit(Some(10))
+            .with_target_database(Some("app".into()));
 
-        assert!(matches!(error, DbError::NotSupported(_)));
-        assert!(error.to_string().contains("aggregate requests yet"));
+        let plan = plan_mongo_semantic_request(&SemanticRequest::Aggregate(request))
+            .expect("mongo aggregate request should plan");
+
+        assert_eq!(plan.kind, SemanticPlanKind::Query);
+        assert_eq!(plan.queries[0].language, QueryLanguage::MongoQuery);
+        assert_eq!(plan.queries[0].target_database.as_deref(), Some("app"));
+        assert!(plan.queries[0].text.contains("\"collection\": \"orders\""));
+        assert!(plan.queries[0].text.contains("\"$group\""));
+        assert!(plan.queries[0].text.contains("\"total_orders\""));
+        assert!(plan.queries[0].text.contains("\"total_amount\""));
+        assert!(plan.queries[0].text.contains("\"$match\""));
+        assert!(plan.queries[0].text.contains("\"$sort\""));
+        assert!(plan.queries[0].text.contains("\"$limit\""));
     }
 }

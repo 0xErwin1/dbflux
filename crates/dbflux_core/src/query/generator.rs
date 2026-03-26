@@ -82,6 +82,7 @@ impl QueryGenerator for SqlMutationGenerator {
             MutationRequest::SqlUpdate(patch) => builder.build_update(patch, false)?,
             MutationRequest::SqlUpdateMany(update) => builder.build_update_many(update)?,
             MutationRequest::SqlInsert(insert) => builder.build_insert(insert, false)?,
+            MutationRequest::SqlUpsert(upsert) => builder.build_upsert(upsert)?,
             MutationRequest::SqlDelete(delete) => builder.build_delete(delete, false)?,
             MutationRequest::SqlDeleteMany(delete) => builder.build_delete_many(delete)?,
             _ => return None,
@@ -100,7 +101,8 @@ mod tests {
     use crate::{
         DefaultSqlDialect, DocumentFilter, DocumentUpdate, KeySetRequest, MutationRequest,
         QueryLanguage, RowDelete, RowIdentity, RowInsert, RowPatch, SemanticFilter,
-        SemanticPlanKind, SqlDeleteRequest, SqlUpdateRequest, Value, WhereOperator,
+        SemanticPlanKind, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest, Value,
+        WhereOperator,
     };
 
     static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
@@ -134,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn sql_generator_handles_insert_update_delete_and_rejects_non_sql() {
+    fn sql_generator_handles_insert_update_delete_upsert_and_rejects_non_sql() {
         let generator = SqlMutationGenerator::new(&DIALECT);
 
         let insert = MutationRequest::sql_insert(RowInsert::new(
@@ -155,6 +157,15 @@ mod tests {
             RowIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
             "users".to_string(),
             Some("public".to_string()),
+        ));
+
+        let upsert = MutationRequest::sql_upsert(SqlUpsertRequest::new(
+            "users".to_string(),
+            Some("public".to_string()),
+            vec!["id".to_string(), "name".to_string()],
+            vec![Value::Int(1), Value::Text("alice".to_string())],
+            vec!["id".to_string()],
+            vec![("name".to_string(), Value::Text("bob".to_string()))],
         ));
 
         let filtered_update = MutationRequest::sql_update_many(SqlUpdateRequest::new(
@@ -191,6 +202,14 @@ mod tests {
 
         let delete_query = generator.generate_mutation(&delete);
         assert!(delete_query.is_some());
+
+        let upsert_query = generator.generate_mutation(&upsert);
+        assert!(upsert_query.is_some());
+        assert!(
+            upsert_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("INSERT INTO"))
+        );
 
         let filtered_update_query = generator.generate_mutation(&filtered_update);
         assert!(filtered_update_query.is_some());

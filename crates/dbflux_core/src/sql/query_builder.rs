@@ -1,6 +1,7 @@
 use crate::Value;
 use crate::data::crud::{
     RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest, SqlUpdateRequest,
+    SqlUpsertRequest,
 };
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
@@ -109,6 +110,22 @@ impl<'a> SqlQueryBuilder<'a> {
         }
 
         Some(sql)
+    }
+
+    /// Build an UPSERT statement from a semantic request.
+    pub fn build_upsert(&self, upsert: &SqlUpsertRequest) -> Option<String> {
+        if !upsert.is_valid() {
+            return None;
+        }
+
+        self.dialect.build_upsert_statement(
+            upsert.schema.as_deref(),
+            &upsert.table,
+            &upsert.columns,
+            &upsert.values,
+            &upsert.conflict_columns,
+            &upsert.update_assignments,
+        )
     }
 
     /// Build DELETE statement from RowDelete.

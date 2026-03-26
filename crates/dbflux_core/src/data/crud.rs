@@ -206,6 +206,28 @@ pub struct SqlDeleteRequest {
     pub returning: Option<Vec<String>>,
 }
 
+/// Inserts a row and updates matching rows when a conflict occurs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlUpsertRequest {
+    /// Table name.
+    pub table: String,
+
+    /// Schema name.
+    pub schema: Option<String>,
+
+    /// Column names for the values being inserted.
+    pub columns: Vec<String>,
+
+    /// Values to insert (same order as `columns`).
+    pub values: Vec<Value>,
+
+    /// Columns that define the conflict target.
+    pub conflict_columns: Vec<String>,
+
+    /// Column changes to apply when a conflict occurs.
+    pub update_assignments: Vec<(String, Value)>,
+}
+
 impl SqlUpdateRequest {
     pub fn new(
         table: String,
@@ -245,6 +267,38 @@ impl SqlDeleteRequest {
     pub fn with_returning(mut self, returning: Vec<String>) -> Self {
         self.returning = Some(returning);
         self
+    }
+}
+
+impl SqlUpsertRequest {
+    pub fn new(
+        table: String,
+        schema: Option<String>,
+        columns: Vec<String>,
+        values: Vec<Value>,
+        conflict_columns: Vec<String>,
+        update_assignments: Vec<(String, Value)>,
+    ) -> Self {
+        debug_assert_eq!(
+            columns.len(),
+            values.len(),
+            "SqlUpsertRequest: columns and values must have same length"
+        );
+
+        Self {
+            table,
+            schema,
+            columns,
+            values,
+            conflict_columns,
+            update_assignments,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.columns.is_empty()
+            && self.columns.len() == self.values.len()
+            && !self.conflict_columns.is_empty()
     }
 }
 
@@ -516,6 +570,7 @@ pub enum MutationRequest {
     SqlUpdate(RowPatch),
     SqlUpdateMany(SqlUpdateRequest),
     SqlInsert(RowInsert),
+    SqlUpsert(SqlUpsertRequest),
     SqlDelete(RowDelete),
     SqlDeleteMany(SqlDeleteRequest),
 
@@ -551,6 +606,10 @@ impl MutationRequest {
         Self::SqlInsert(insert)
     }
 
+    pub fn sql_upsert(upsert: SqlUpsertRequest) -> Self {
+        Self::SqlUpsert(upsert)
+    }
+
     pub fn sql_delete(delete: RowDelete) -> Self {
         Self::SqlDelete(delete)
     }
@@ -578,6 +637,7 @@ impl MutationRequest {
             Self::SqlUpdate(_)
                 | Self::SqlUpdateMany(_)
                 | Self::SqlInsert(_)
+                | Self::SqlUpsert(_)
                 | Self::SqlDelete(_)
                 | Self::SqlDeleteMany(_)
         )

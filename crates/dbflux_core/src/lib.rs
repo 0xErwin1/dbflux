@@ -66,8 +66,9 @@ pub use data::{
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
     RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,
-    SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, StreamAddRequest,
-    StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
+    ZSetRemoveRequest,
 };
 
 pub use driver::{

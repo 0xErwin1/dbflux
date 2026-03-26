@@ -59,6 +59,19 @@ pub trait SqlDialect: Send + Sync {
     fn json_filter_expr(&self, col_name: &str, op: &str, literal: &str, _col_type: &str) -> String {
         format!("{} {} {}", col_name, op, literal)
     }
+
+    /// Build an UPSERT statement for this dialect.
+    fn build_upsert_statement(
+        &self,
+        _schema: Option<&str>,
+        _table: &str,
+        _columns: &[String],
+        _values: &[Value],
+        _conflict_columns: &[String],
+        _update_assignments: &[(String, Value)],
+    ) -> Option<String> {
+        None
+    }
 }
 
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).
@@ -128,5 +141,60 @@ impl SqlDialect for DefaultSqlDialect {
 
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::QuestionMark
+    }
+
+    fn build_upsert_statement(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        values: &[Value],
+        conflict_columns: &[String],
+        update_assignments: &[(String, Value)],
+    ) -> Option<String> {
+        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+            return None;
+        }
+
+        let table = self.qualified_table(schema, table);
+        let columns = columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = values
+            .iter()
+            .map(|value| self.value_to_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let conflict_columns = conflict_columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        if update_assignments.is_empty() {
+            return Some(format!(
+                "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING",
+                table, columns, values, conflict_columns
+            ));
+        }
+
+        let update_clause = update_assignments
+            .iter()
+            .map(|(column, value)| {
+                format!(
+                    "{} = {}",
+                    self.quote_identifier(column),
+                    self.value_to_literal(value)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        Some(format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            table, columns, values, conflict_columns, update_clause
+        ))
     }
 }

@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use dbflux_core::{
-    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest,
-    QueryRequest, RowInsert, SemanticRequest, SqlUpdateRequest, TableRef, Value,
+    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowInsert,
+    SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableRef, Value,
     parse_semantic_filter_json,
 };
 use rmcp::{
@@ -382,53 +382,172 @@ impl DbFluxServer {
         conflict_columns: &[String],
         update_on_conflict: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state.clone(), connection_id).await?;
+        let connection = Self::get_or_connect(state, connection_id).await?;
 
+        let supports_upsert = connection
+            .metadata()
+            .mutation
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.supports_upsert);
+
+        if !supports_upsert {
+            return Err(format!(
+                "Upsert is not supported by the {} driver",
+                connection.metadata().display_name
+            ));
+        }
+
+        let mutation = match connection.metadata().category {
+            DatabaseCategory::Document => Self::build_document_upsert_mutation(
+                table,
+                record,
+                conflict_columns,
+                update_on_conflict,
+            )?,
+            DatabaseCategory::Relational => Self::build_relational_upsert_mutation(
+                table,
+                record,
+                conflict_columns,
+                update_on_conflict,
+            )?,
+            _ => {
+                return Err(format!(
+                    "Upsert is not supported for {:?} databases",
+                    connection.metadata().category
+                ));
+            }
+        };
+
+        let result = connection
+            .execute_semantic_request(&SemanticRequest::Mutation(mutation))
+            .map_err(|e| format!("Upsert error: {}", e))?;
+
+        Ok(serialize_mutation_result(&result, "upserted", false))
+    }
+
+    fn build_relational_upsert_mutation(
+        table: &str,
+        record: &serde_json::Value,
+        conflict_columns: &[String],
+        update_on_conflict: Option<&serde_json::Value>,
+    ) -> Result<MutationRequest, String> {
         let obj = record
             .as_object()
             .ok_or_else(|| "Record must be a JSON object".to_string())?;
 
-        let columns: Vec<String> = obj.keys().cloned().collect();
-        let values: Vec<Value> = obj.values().map(|v| json_to_db_value(v.clone())).collect();
+        if conflict_columns.is_empty() {
+            return Err("conflict_columns must not be empty".to_string());
+        }
 
-        // Determine update columns (exclude conflict columns if using record itself)
-        let update_columns: Vec<String> = if let Some(update) = update_on_conflict {
+        for column in conflict_columns {
+            if !obj.contains_key(column) {
+                return Err(format!(
+                    "conflict column '{}' must be present in record",
+                    column
+                ));
+            }
+        }
+
+        let columns: Vec<String> = obj.keys().cloned().collect();
+        let values: Vec<Value> = obj
+            .values()
+            .map(|value| json_to_db_value(value.clone()))
+            .collect();
+
+        let update_assignments =
+            Self::parse_upsert_assignments(obj, conflict_columns, update_on_conflict)?;
+
+        let table_ref = TableRef::from_qualified(table);
+
+        Ok(MutationRequest::sql_upsert(SqlUpsertRequest::new(
+            table_ref.name,
+            table_ref.schema,
+            columns,
+            values,
+            conflict_columns.to_vec(),
+            update_assignments,
+        )))
+    }
+
+    fn build_document_upsert_mutation(
+        table: &str,
+        record: &serde_json::Value,
+        conflict_columns: &[String],
+        update_on_conflict: Option<&serde_json::Value>,
+    ) -> Result<MutationRequest, String> {
+        let obj = record
+            .as_object()
+            .ok_or_else(|| "Record must be a JSON object".to_string())?;
+
+        if conflict_columns.is_empty() {
+            return Err("conflict_columns must not be empty".to_string());
+        }
+
+        let mut filter = serde_json::Map::new();
+        for column in conflict_columns {
+            let value = obj
+                .get(column)
+                .ok_or_else(|| format!("conflict column '{}' must be present in record", column))?;
+            filter.insert(column.clone(), value.clone());
+        }
+
+        let update_assignments =
+            Self::parse_upsert_assignment_json(obj, conflict_columns, update_on_conflict)?;
+
+        let mut update_doc = serde_json::Map::new();
+        if !update_assignments.is_empty() {
+            update_doc.insert(
+                "$set".to_string(),
+                serde_json::Value::Object(update_assignments),
+            );
+        }
+        update_doc.insert(
+            "$setOnInsert".to_string(),
+            serde_json::Value::Object(obj.clone()),
+        );
+
+        Ok(MutationRequest::document_update(
+            DocumentUpdate::new(
+                table.to_string(),
+                DocumentFilter::new(serde_json::Value::Object(filter)),
+                serde_json::Value::Object(update_doc),
+            )
+            .upsert(),
+        ))
+    }
+
+    fn parse_upsert_assignments(
+        record: &serde_json::Map<String, serde_json::Value>,
+        conflict_columns: &[String],
+        update_on_conflict: Option<&serde_json::Value>,
+    ) -> Result<Vec<(String, Value)>, String> {
+        let assignment_json =
+            Self::parse_upsert_assignment_json(record, conflict_columns, update_on_conflict)?;
+
+        Ok(assignment_json
+            .into_iter()
+            .map(|(column, value)| (column, json_to_db_value(value)))
+            .collect())
+    }
+
+    fn parse_upsert_assignment_json(
+        record: &serde_json::Map<String, serde_json::Value>,
+        conflict_columns: &[String],
+        update_on_conflict: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        if let Some(update) = update_on_conflict {
             let update_obj = update
                 .as_object()
                 .ok_or_else(|| "update_on_conflict must be a JSON object".to_string())?;
-            update_obj.keys().cloned().collect()
-        } else {
-            // If not specified, update all columns except conflict columns
-            columns
-                .iter()
-                .filter(|col| !conflict_columns.contains(col))
-                .cloned()
-                .collect()
-        };
 
-        // Build upsert SQL using driver abstraction
-        let (sql, params) = connection.build_upsert_sql(
-            table,
-            &columns,
-            &values,
-            conflict_columns,
-            &update_columns,
-        );
+            return Ok(update_obj.clone());
+        }
 
-        let request = QueryRequest {
-            sql,
-            params,
-            ..Default::default()
-        };
-
-        let result = connection
-            .execute(&request)
-            .map_err(|e| format!("Upsert error: {}", e))?;
-
-        Ok(serde_json::json!({
-            "upserted": result.rows.len() as u64,
-            "action": "upsert",
-        }))
+        Ok(record
+            .iter()
+            .filter(|(column, _)| !conflict_columns.contains(column))
+            .map(|(column, value)| (column.clone(), value.clone()))
+            .collect())
     }
 }
 
@@ -533,6 +652,68 @@ mod tests {
         assert_eq!(
             update.returning.as_deref(),
             Some(&["id".to_string(), "archived".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn test_build_relational_upsert_mutation_preserves_custom_update_values() {
+        let mutation = DbFluxServer::build_relational_upsert_mutation(
+            "public.users",
+            &serde_json::json!({"id": 1, "name": "Ada", "visits": 3}),
+            &["id".to_string()],
+            Some(&serde_json::json!({"name": "Grace", "visits": 4})),
+        )
+        .expect("relational upsert mutation should build");
+
+        let MutationRequest::SqlUpsert(upsert) = mutation else {
+            panic!("expected a sql upsert mutation");
+        };
+
+        assert_eq!(upsert.table, "users");
+        assert_eq!(upsert.schema.as_deref(), Some("public"));
+        assert_eq!(upsert.conflict_columns, vec!["id".to_string()]);
+        assert_eq!(upsert.update_assignments.len(), 2);
+        assert!(
+            upsert
+                .update_assignments
+                .contains(&("name".to_string(), Value::Text("Grace".to_string())))
+        );
+        assert!(
+            upsert
+                .update_assignments
+                .contains(&("visits".to_string(), Value::Int(4)))
+        );
+    }
+
+    #[test]
+    fn test_build_document_upsert_mutation_uses_set_and_set_on_insert() {
+        let mutation = DbFluxServer::build_document_upsert_mutation(
+            "users",
+            &serde_json::json!({"email": "ada@example.com", "name": "Ada", "visits": 3}),
+            &["email".to_string()],
+            Some(&serde_json::json!({"name": "Grace"})),
+        )
+        .expect("document upsert mutation should build");
+
+        let MutationRequest::DocumentUpdate(update) = mutation else {
+            panic!("expected a document update mutation");
+        };
+
+        assert!(update.upsert);
+        assert_eq!(
+            update.filter.filter,
+            serde_json::json!({"email": "ada@example.com"})
+        );
+        assert_eq!(
+            update.update,
+            serde_json::json!({
+                "$set": {"name": "Grace"},
+                "$setOnInsert": {
+                    "email": "ada@example.com",
+                    "name": "Ada",
+                    "visits": 3
+                }
+            })
         );
     }
 }
