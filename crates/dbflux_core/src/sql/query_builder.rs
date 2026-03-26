@@ -1,10 +1,10 @@
-use crate::Value;
 use crate::data::crud::{
     RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest, SqlUpdateRequest,
     SqlUpsertRequest,
 };
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
+use crate::Value;
 
 /// Builds CRUD SQL statements using a specific dialect.
 pub struct SqlQueryBuilder<'a> {
@@ -56,9 +56,9 @@ impl<'a> SqlQueryBuilder<'a> {
 
         let mut sql = format!("UPDATE {} SET {} WHERE {}", table, set_clause, where_clause);
 
-        if self.dialect.supports_returning() {
-            if let Some(returning) = update.returning.as_ref() {
-                if !returning.is_empty() {
+        if self.dialect.supports_returning()
+            && let Some(returning) = update.returning.as_ref()
+                && !returning.is_empty() {
                     let columns = returning
                         .iter()
                         .map(|column| self.dialect.quote_identifier(column))
@@ -67,8 +67,6 @@ impl<'a> SqlQueryBuilder<'a> {
                     sql.push_str(" RETURNING ");
                     sql.push_str(&columns);
                 }
-            }
-        }
 
         Some(sql)
     }
@@ -158,9 +156,9 @@ impl<'a> SqlQueryBuilder<'a> {
 
         let mut sql = format!("DELETE FROM {} WHERE {}", table, where_clause);
 
-        if self.dialect.supports_returning() {
-            if let Some(returning) = delete.returning.as_ref() {
-                if !returning.is_empty() {
+        if self.dialect.supports_returning()
+            && let Some(returning) = delete.returning.as_ref()
+                && !returning.is_empty() {
                     let columns = returning
                         .iter()
                         .map(|column| self.dialect.quote_identifier(column))
@@ -169,8 +167,6 @@ impl<'a> SqlQueryBuilder<'a> {
                     sql.push_str(" RETURNING ");
                     sql.push_str(&columns);
                 }
-            }
-        }
 
         Some(sql)
     }
@@ -401,6 +397,7 @@ mod tests {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
 
+        // DefaultSqlDialect does not support RETURNING, so the clause is omitted
         let delete = SqlDeleteRequest::new(
             "users".to_string(),
             Some("public".to_string()),
@@ -415,7 +412,7 @@ mod tests {
         let sql = builder.build_delete_many(&delete).unwrap();
         assert_eq!(
             sql,
-            "DELETE FROM \"public\".\"users\" WHERE \"status\" = 'inactive' RETURNING \"id\""
+            "DELETE FROM \"public\".\"users\" WHERE \"status\" = 'inactive'"
         );
     }
 
