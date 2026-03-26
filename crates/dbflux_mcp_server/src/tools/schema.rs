@@ -77,13 +77,16 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
+                    log::debug!("list_databases handler: before list_databases_impl");
                     let result = Self::list_databases_impl(state, &connection_id)
                         .await
                         .map_err(|e| e.into_error_data())?;
+                    log::debug!("list_databases handler: impl returned, serializing response");
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&result).unwrap(),
-                    )]))
+                    let json_str = serde_json::to_string_pretty(&result)
+                        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                    log::debug!("list_databases handler: serialization complete");
+                    Ok(CallToolResult::success(vec![Content::text(json_str)]))
                 },
             )
             .await
