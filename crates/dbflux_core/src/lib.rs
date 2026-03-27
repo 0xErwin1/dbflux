@@ -87,8 +87,10 @@ pub use query::{
     AggregateFunction, AggregateRequest, AggregateSpec, CollectionBrowseRequest,
     CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef, DangerousQueryKind,
     DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic, ExplainRequest,
-    GeneratedQuery, LanguageService, MutationCategory, OrderByColumn, Pagination, PlannedQuery,
-    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row,
+    GeneratedQuery, LanguageService, MutationCategory, MutationTemplateOperation,
+    MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery, QueryGenerator,
+    QueryHandle, QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation,
+    ReadTemplateRequest, Row,
     SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner,
     SemanticPredicate, SemanticRequest, SemanticRequestKind, SortDirection, SqlLanguageService,
     SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef, TextPosition,
@@ -127,7 +129,6 @@ pub use pipeline::{
     PipelineError, PipelineInput, PipelineOutput, PipelineState, StateSender, StateWatcher,
     pipeline_state_channel, resolve_profile_values, run_pipeline,
 };
-
 pub use values::{
     CachedValue, CompositeValueResolver, DynParameterProvider, DynSecretProvider, FieldValue,
     ParameterProvider, ProviderError, ResolveContext, ResolvedValue, SecretProvider, ValueCache,

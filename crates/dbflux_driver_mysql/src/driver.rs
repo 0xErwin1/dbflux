@@ -1263,34 +1263,6 @@ impl QueryCancelHandle for MysqlCancelHandle {
 fn mysql_code_generators() -> Vec<CodeGeneratorInfo> {
     vec![
         CodeGeneratorInfo {
-            id: "select_star".into(),
-            label: "SELECT *".into(),
-            scope: CodeGenScope::TableOrView,
-            order: 0,
-            destructive: false,
-        },
-        CodeGeneratorInfo {
-            id: "insert".into(),
-            label: "INSERT INTO".into(),
-            scope: CodeGenScope::Table,
-            order: 5,
-            destructive: false,
-        },
-        CodeGeneratorInfo {
-            id: "update".into(),
-            label: "UPDATE".into(),
-            scope: CodeGenScope::Table,
-            order: 6,
-            destructive: false,
-        },
-        CodeGeneratorInfo {
-            id: "delete".into(),
-            label: "DELETE".into(),
-            scope: CodeGenScope::Table,
-            order: 7,
-            destructive: false,
-        },
-        CodeGeneratorInfo {
             id: "create_table".into(),
             label: "CREATE TABLE".into(),
             scope: CodeGenScope::Table,

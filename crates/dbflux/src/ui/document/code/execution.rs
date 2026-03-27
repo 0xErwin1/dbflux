@@ -605,21 +605,11 @@ impl CodeDocument {
                     cx.notify();
                 }
                 DataGridEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
+                    context,
                     generation_type,
                 } => {
                     cx.emit(DocumentEvent::RequestSqlPreview {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
+                        context: context.clone(),
                         generation_type: *generation_type,
                     });
                 }

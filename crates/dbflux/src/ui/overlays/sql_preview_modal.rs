@@ -3,19 +3,21 @@ use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::{
-    ColumnInfo, QueryLanguage, SqlGenerationOptions, SqlGenerationRequest, SqlOperation,
-    SqlValueMode, TableInfo, Value,
+    ColumnInfo, MutationRequest, MutationTemplateOperation, MutationTemplateRequest, QueryLanguage,
+    ReadTemplateOperation, ReadTemplateRequest, SqlGenerationOptions, SqlGenerationRequest,
+    SqlOperation, SqlValueMode, TableInfo, Value,
 };
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use uuid::Uuid;
 
 /// Type of SQL statement to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlGenerationType {
+    SelectAll,
     SelectWhere,
     Insert,
     Update,
@@ -28,6 +30,7 @@ pub enum SqlGenerationType {
 impl SqlGenerationType {
     pub fn label(&self) -> &'static str {
         match self {
+            SqlGenerationType::SelectAll => "SELECT *",
             SqlGenerationType::SelectWhere => "SELECT WHERE",
             SqlGenerationType::Insert => "INSERT",
             SqlGenerationType::Update => "UPDATE",
@@ -42,7 +45,8 @@ impl SqlGenerationType {
     /// Returns None for generator types we don't support in the preview modal.
     pub fn from_generator_id(id: &str) -> Option<Self> {
         match id {
-            "select_star" => Some(SqlGenerationType::SelectWhere),
+            "select_star" => Some(SqlGenerationType::SelectAll),
+            "select_where" => Some(SqlGenerationType::SelectWhere),
             "insert" => Some(SqlGenerationType::Insert),
             "update" => Some(SqlGenerationType::Update),
             "delete" => Some(SqlGenerationType::Delete),
@@ -91,7 +95,7 @@ impl Default for SqlPreviewSettings {
 }
 
 /// Context for SQL generation - where the request came from.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum SqlPreviewContext {
     /// From data table: row data with values
@@ -102,6 +106,11 @@ pub enum SqlPreviewContext {
         column_names: Vec<String>,
         row_values: Vec<Value>,
         pk_indices: Vec<usize>,
+    },
+    /// From data table: a concrete mutation rendered by the driver.
+    DataMutation {
+        profile_id: Uuid,
+        mutation: MutationRequest,
     },
     /// From sidebar: table metadata
     SidebarTable {
@@ -115,6 +124,7 @@ impl SqlPreviewContext {
     pub fn profile_id(&self) -> Uuid {
         match self {
             SqlPreviewContext::DataTableRow { profile_id, .. } => *profile_id,
+            SqlPreviewContext::DataMutation { profile_id, .. } => *profile_id,
             SqlPreviewContext::SidebarTable { profile_id, .. } => *profile_id,
         }
     }
@@ -122,6 +132,12 @@ impl SqlPreviewContext {
     pub fn table_name(&self) -> &str {
         match self {
             SqlPreviewContext::DataTableRow { table_name, .. } => table_name,
+            SqlPreviewContext::DataMutation { mutation, .. } => match mutation {
+                MutationRequest::SqlInsert(insert) => &insert.table,
+                MutationRequest::SqlUpdate(patch) => &patch.table,
+                MutationRequest::SqlDelete(delete) => &delete.table,
+                _ => "",
+            },
             SqlPreviewContext::SidebarTable { table_info, .. } => &table_info.name,
         }
     }
@@ -129,6 +145,12 @@ impl SqlPreviewContext {
     pub fn schema_name(&self) -> Option<&str> {
         match self {
             SqlPreviewContext::DataTableRow { schema_name, .. } => schema_name.as_deref(),
+            SqlPreviewContext::DataMutation { mutation, .. } => match mutation {
+                MutationRequest::SqlInsert(insert) => insert.schema.as_deref(),
+                MutationRequest::SqlUpdate(patch) => patch.schema.as_deref(),
+                MutationRequest::SqlDelete(delete) => delete.schema.as_deref(),
+                _ => None,
+            },
             SqlPreviewContext::SidebarTable { table_info, .. } => table_info.schema.as_deref(),
         }
     }
@@ -265,6 +287,10 @@ impl SqlPreviewModal {
                 pk_indices,
                 cx,
             ),
+            SqlPreviewContext::DataMutation {
+                profile_id,
+                mutation,
+            } => self.generate_from_mutation(*profile_id, mutation, cx),
             SqlPreviewContext::SidebarTable {
                 profile_id,
                 table_info,
@@ -304,6 +330,9 @@ impl SqlPreviewModal {
             .collect();
 
         let operation = match self.generation_type {
+            SqlGenerationType::SelectAll => {
+                return "-- SELECT * is not supported from row context".to_string();
+            }
             SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
             SqlGenerationType::Insert => SqlOperation::Insert,
             SqlGenerationType::Update => SqlOperation::Update,
@@ -365,7 +394,99 @@ impl SqlPreviewModal {
             }
         }
 
-        // DML operations use SqlGenerationRequest
+        if matches!(
+            self.generation_type,
+            SqlGenerationType::Insert | SqlGenerationType::Update | SqlGenerationType::Delete
+        ) {
+            let Some(conn) = connection else {
+                return "-- Error: DML preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let Some(columns) = table_info.columns.as_deref() else {
+                return "-- Error: table columns are required for mutation preview".to_string();
+            };
+
+            let operation = match self.generation_type {
+                SqlGenerationType::Insert => MutationTemplateOperation::Insert,
+                SqlGenerationType::Update => MutationTemplateOperation::Update,
+                SqlGenerationType::Delete => MutationTemplateOperation::Delete,
+                _ => unreachable!(),
+            };
+
+            return match generator.generate_template(&MutationTemplateRequest {
+                operation,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this mutation preview".to_string(),
+            };
+        }
+
+        if self.generation_type == SqlGenerationType::SelectWhere {
+            let Some(conn) = connection else {
+                return "-- Error: query preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let Some(columns) = table_info.columns.as_deref() else {
+                return "-- Error: table columns are required for query preview".to_string();
+            };
+
+            return match generator.generate_read_template(&ReadTemplateRequest {
+                operation: ReadTemplateOperation::SelectWhere,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this query preview".to_string(),
+            };
+        }
+
+        if self.generation_type == SqlGenerationType::SelectAll {
+            let Some(conn) = connection else {
+                return "-- Error: query preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let columns = table_info.columns.as_deref().unwrap_or(&[]);
+
+            return match generator.generate_read_template(&ReadTemplateRequest {
+                operation: ReadTemplateOperation::SelectAll,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this query preview".to_string(),
+            };
+        }
+
+        // Legacy fallback path for non-DML/non-DDL SQL preview types.
         let columns: Vec<ColumnInfo> = table_info.columns.clone().unwrap_or_else(|| {
             vec![
                 ColumnInfo {
@@ -395,6 +516,12 @@ impl SqlPreviewModal {
             .collect();
 
         let operation = match self.generation_type {
+            SqlGenerationType::SelectAll => {
+                log::error!(
+                    "[SQL Preview] Unexpected SelectAll generation type in legacy generator path"
+                );
+                return "-- Error: unsupported SQL generation type for this preview".to_string();
+            }
             SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
             SqlGenerationType::Insert => SqlOperation::Insert,
             SqlGenerationType::Update => SqlOperation::Update,
@@ -431,6 +558,28 @@ impl SqlPreviewModal {
             }
         } else {
             dbflux_core::generate_sql(&dbflux_core::DefaultSqlDialect, &request)
+        }
+    }
+
+    fn generate_from_mutation(
+        &self,
+        profile_id: Uuid,
+        mutation: &MutationRequest,
+        cx: &App,
+    ) -> String {
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+
+        let Some(conn) = connection else {
+            return "-- Error: DML preview requires an active connection".to_string();
+        };
+
+        let Some(generator) = conn.query_generator() else {
+            return "-- Error: query generation is not supported for this driver".to_string();
+        };
+
+        match generator.generate_mutation(mutation) {
+            Some(generated) => generated.text,
+            None => "-- Error: driver could not generate this mutation preview".to_string(),
         }
     }
 
@@ -507,7 +656,12 @@ impl Render for SqlPreviewModal {
 
         // -- Options (SQL mode, DML only) --
 
-        if !is_generic && !self.generation_type.is_ddl() {
+        let supports_sql_options = matches!(
+            self.context,
+            Some(SqlPreviewContext::DataTableRow { .. } | SqlPreviewContext::SidebarTable { .. })
+        );
+
+        if !is_generic && !self.generation_type.is_ddl() && supports_sql_options {
             let use_fqn = self.settings.use_fully_qualified_names;
             let compact = self.settings.compact_sql;
 

@@ -3358,7 +3358,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         use crate::ui::components::data_table::model::VisualRowSource;
-        use crate::ui::overlays::sql_preview_modal::SqlGenerationType;
+        use crate::ui::overlays::sql_preview_modal::{SqlGenerationType, SqlPreviewContext};
 
         let (profile_id, table_ref) = match &self.source {
             DataSource::Table {
@@ -3427,14 +3427,41 @@ impl DataGridPanel {
             SqlGenerateKind::Delete => SqlGenerationType::Delete,
         };
 
-        // Emit event for SQL preview modal
+        let context = match generation_type {
+            SqlGenerationType::Insert | SqlGenerationType::Update | SqlGenerationType::Delete => {
+                let action = match generation_type {
+                    SqlGenerationType::Insert => ContextMenuAction::CopyAsInsert,
+                    SqlGenerationType::Update => ContextMenuAction::CopyAsUpdate,
+                    SqlGenerationType::Delete => ContextMenuAction::CopyAsDelete,
+                    _ => unreachable!(),
+                };
+
+                let Some(mutation) = self.build_sql_mutation(visual_row, &table_ref, action, cx)
+                else {
+                    return;
+                };
+
+                SqlPreviewContext::DataMutation {
+                    profile_id,
+                    mutation,
+                }
+            }
+            SqlGenerationType::SelectWhere => SqlPreviewContext::DataTableRow {
+                profile_id,
+                schema_name: table_ref.schema.clone(),
+                table_name: table_ref.name.clone(),
+                column_names: col_names,
+                row_values,
+                pk_indices,
+            },
+            SqlGenerationType::SelectAll => return,
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => return,
+        };
+
         cx.emit(DataGridEvent::RequestSqlPreview {
-            profile_id,
-            schema_name: table_ref.schema.clone(),
-            table_name: table_ref.name.clone(),
-            column_names: col_names,
-            row_values,
-            pk_indices,
+            context: Box::new(context),
             generation_type,
         });
     }

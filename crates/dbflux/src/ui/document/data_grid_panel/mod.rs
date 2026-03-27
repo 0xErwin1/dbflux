@@ -23,6 +23,7 @@ use crate::ui::overlays::cell_editor_modal::{
 use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
+use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::{
     CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
     Value,
@@ -128,12 +129,7 @@ pub enum DataGridEvent {
     Focused,
     /// Request to show SQL preview modal.
     RequestSqlPreview {
-        profile_id: Uuid,
-        schema_name: Option<String>,
-        table_name: String,
-        column_names: Vec<String>,
-        row_values: Vec<Value>,
-        pk_indices: Vec<usize>,
+        context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }

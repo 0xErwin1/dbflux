@@ -5,7 +5,8 @@ use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
 use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
-use dbflux_core::{RefreshPolicy, Value};
+use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
+use dbflux_core::RefreshPolicy;
 use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
@@ -273,20 +274,10 @@ impl DocumentHandle {
                     DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
                     DataDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
                     DataDocumentEvent::RequestSqlPreview {
-                        profile_id,
-                        schema_name,
-                        table_name,
-                        column_names,
-                        row_values,
-                        pk_indices,
+                        context,
                         generation_type,
                     } => DocumentEvent::RequestSqlPreview {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
+                        context: context.clone(),
                         generation_type: *generation_type,
                     },
                 };
@@ -314,12 +305,7 @@ pub enum DocumentEvent {
     RequestFocus,
     /// Request to show SQL preview modal (from DataGridPanel).
     RequestSqlPreview {
-        profile_id: uuid::Uuid,
-        schema_name: Option<String>,
-        table_name: String,
-        column_names: Vec<String>,
-        row_values: Vec<Value>,
-        pk_indices: Vec<usize>,
+        context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }

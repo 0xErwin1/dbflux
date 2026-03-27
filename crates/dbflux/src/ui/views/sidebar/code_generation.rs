@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::overlays::sql_preview_modal::SqlGenerationType;
+use dbflux_core::MutationCategory;
 
 impl Sidebar {
     pub(super) fn get_code_generators_for_item(
@@ -34,11 +35,12 @@ impl Sidebar {
         let mut generators: Vec<_> = all_generators
             .iter()
             .filter(|g| scope_filter(g.scope))
+            .filter(|g| g.id != "select_star")
             .collect();
 
         generators.sort_by_key(|g| g.order);
 
-        generators
+        let mut items_with_order: Vec<_> = generators
             .into_iter()
             .map(|g| {
                 let label = if g.destructive {
@@ -46,11 +48,48 @@ impl Sidebar {
                 } else {
                     g.label.to_string()
                 };
-                ContextMenuItem {
-                    label,
-                    action: ContextMenuAction::GenerateCode(g.id.to_string()),
-                }
+                (
+                    g.order,
+                    ContextMenuItem {
+                        label,
+                        action: ContextMenuAction::GenerateCode(g.id.to_string()),
+                    },
+                )
             })
+            .collect();
+
+        if let Some(generator) = conn.connection.query_generator()
+            && generator
+                .supported_categories()
+                .contains(&MutationCategory::Sql)
+        {
+            let query_items: &[(u32, &str, &str)] = match node_kind {
+                SchemaNodeKind::Table => &[
+                    (0, "select_where", "SELECT WHERE"),
+                    (5, "insert", "INSERT INTO"),
+                    (6, "update", "UPDATE"),
+                    (7, "delete", "DELETE"),
+                ],
+                SchemaNodeKind::View => &[(0, "select_star", "SELECT *")],
+                _ => &[],
+            };
+
+            for (order, generator_id, label) in query_items.iter().copied() {
+                items_with_order.push((
+                    order,
+                    ContextMenuItem {
+                        label: label.to_string(),
+                        action: ContextMenuAction::GenerateCode(generator_id.to_string()),
+                    },
+                ));
+            }
+        }
+
+        items_with_order.sort_by_key(|(order, _)| *order);
+
+        items_with_order
+            .into_iter()
+            .map(|(_, item)| item)
             .collect()
     }
 
@@ -143,6 +182,15 @@ impl Sidebar {
             constraints: None,
             sample_fields: None,
         };
+
+        if let Some(gen_type) = SqlGenerationType::from_generator_id(generator_id) {
+            cx.emit(SidebarEvent::RequestSqlPreview {
+                profile_id: parts.profile_id,
+                table_info,
+                generation_type: gen_type,
+            });
+            return;
+        }
 
         match conn.connection.generate_code(generator_id, &table_info) {
             Ok(sql) => cx.emit(SidebarEvent::GenerateSql(sql)),

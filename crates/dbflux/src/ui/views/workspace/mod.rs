@@ -405,25 +405,11 @@ impl Workspace {
                         this.set_focus(FocusTarget::Document, window, cx);
                     }
                     TabManagerEvent::RequestSqlPreview {
-                        profile_id,
-                        schema_name,
-                        table_name,
-                        column_names,
-                        row_values,
-                        pk_indices,
+                        context,
                         generation_type,
                     } => {
-                        use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
-                        let context = SqlPreviewContext::DataTableRow {
-                            profile_id: *profile_id,
-                            schema_name: schema_name.clone(),
-                            table_name: table_name.clone(),
-                            column_names: column_names.clone(),
-                            row_values: row_values.clone(),
-                            pk_indices: pk_indices.clone(),
-                        };
                         this.sql_preview_modal.update(cx, |modal, cx| {
-                            modal.open(context, *generation_type, window, cx);
+                            modal.open(context.as_ref().clone(), *generation_type, window, cx);
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {

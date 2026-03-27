@@ -3,7 +3,6 @@
 
 use super::handle::DocumentHandle;
 use super::types::DocumentId;
-use dbflux_core::Value;
 use gpui::{App, Context, EventEmitter, Subscription};
 use std::collections::HashMap;
 
@@ -52,21 +51,11 @@ impl TabManager {
                     cx.emit(TabManagerEvent::DocumentRequestedFocus);
                 }
                 DocumentEvent::RequestSqlPreview {
-                    profile_id,
-                    schema_name,
-                    table_name,
-                    column_names,
-                    row_values,
-                    pk_indices,
+                    context,
                     generation_type,
                 } => {
                     cx.emit(TabManagerEvent::RequestSqlPreview {
-                        profile_id: *profile_id,
-                        schema_name: schema_name.clone(),
-                        table_name: table_name.clone(),
-                        column_names: column_names.clone(),
-                        row_values: row_values.clone(),
-                        pk_indices: pk_indices.clone(),
+                        context: context.clone(),
                         generation_type: *generation_type,
                     });
                 }
@@ -372,19 +361,14 @@ pub enum TabManagerEvent {
     DocumentRequestedFocus,
     /// A document requested SQL preview modal.
     RequestSqlPreview {
-        profile_id: uuid::Uuid,
-        schema_name: Option<String>,
-        table_name: String,
-        column_names: Vec<String>,
-        row_values: Vec<Value>,
-        pk_indices: Vec<usize>,
+        context: Box<crate::ui::overlays::sql_preview_modal::SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DocumentId, ids_to_close_left, ids_to_close_others, ids_to_close_right};
+    use super::{ids_to_close_left, ids_to_close_others, ids_to_close_right, DocumentId};
     use uuid::Uuid;
 
     fn make_ids(n: usize) -> Vec<DocumentId> {

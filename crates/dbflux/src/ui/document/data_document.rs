@@ -2,7 +2,8 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use crate::app::AppState;
 use crate::keymap::{Command, ContextId};
-use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef, Value};
+use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
+use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -27,12 +28,7 @@ pub enum DataDocumentEvent {
     RequestFocus,
     /// Request to show SQL preview modal.
     RequestSqlPreview {
-        profile_id: Uuid,
-        schema_name: Option<String>,
-        table_name: String,
-        column_names: Vec<String>,
-        row_values: Vec<Value>,
-        pk_indices: Vec<usize>,
+        context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
 }
@@ -59,21 +55,11 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::RequestFocus);
                     }
                     DataGridEvent::RequestSqlPreview {
-                        profile_id,
-                        schema_name,
-                        table_name,
-                        column_names,
-                        row_values,
-                        pk_indices,
+                        context,
                         generation_type,
                     } => {
                         cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            profile_id: *profile_id,
-                            schema_name: schema_name.clone(),
-                            table_name: table_name.clone(),
-                            column_names: column_names.clone(),
-                            row_values: row_values.clone(),
-                            pk_indices: pk_indices.clone(),
+                            context: context.clone(),
                             generation_type: *generation_type,
                         });
                     }
@@ -111,21 +97,11 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::RequestFocus);
                     }
                     DataGridEvent::RequestSqlPreview {
-                        profile_id,
-                        schema_name,
-                        table_name,
-                        column_names,
-                        row_values,
-                        pk_indices,
+                        context,
                         generation_type,
                     } => {
                         cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            profile_id: *profile_id,
-                            schema_name: schema_name.clone(),
-                            table_name: table_name.clone(),
-                            column_names: column_names.clone(),
-                            row_values: row_values.clone(),
-                            pk_indices: pk_indices.clone(),
+                            context: context.clone(),
                             generation_type: *generation_type,
                         });
                     }
@@ -163,21 +139,11 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::RequestFocus);
                     }
                     DataGridEvent::RequestSqlPreview {
-                        profile_id,
-                        schema_name,
-                        table_name,
-                        column_names,
-                        row_values,
-                        pk_indices,
+                        context,
                         generation_type,
                     } => {
                         cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            profile_id: *profile_id,
-                            schema_name: schema_name.clone(),
-                            table_name: table_name.clone(),
-                            column_names: column_names.clone(),
-                            row_values: row_values.clone(),
-                            pk_indices: pk_indices.clone(),
+                            context: context.clone(),
                             generation_type: *generation_type,
                         });
                     }
