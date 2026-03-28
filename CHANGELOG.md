@@ -2,6 +2,26 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.11] – 2026-03-27
+
+### Added
+
+* MCP governance foundation crates for policy evaluation, approval queues, and SQLite-backed audit logging
+* Standalone MCP server runtime, CLI integration, canonical tool catalog, and in-app governance/settings surfaces
+* Rich typed driver metadata and capability models, plus semantic planning and driver-owned query generation across the supported databases
+
+### Changed
+
+* Query execution and SQL/query previews now route through driver planning abstractions instead of raw, UI-owned generation paths
+* Connection and access plumbing now expose the metadata and governance hooks needed to keep MCP behavior aligned with app-managed connections
+* Connection Manager and Settings gained MCP-specific controls and reusable multi-select UI for governance configuration
+
+### Fixed
+
+* MCP tool safety rules were hardened so unsupported operations are rejected explicitly and preview flows stay read-only
+* PostgreSQL, MongoDB, SQLite, MySQL, Redis, and DynamoDB driver paths received follow-up fixes for connection stability, schema inspection, filter translation, pagination, and aggregate handling
+* Test isolation and governance/runtime coverage were expanded to catch regressions in the new MCP flow before release
+
 ## [0.4.0-dev.9] – 2026-03-17
 
 ### Fixed

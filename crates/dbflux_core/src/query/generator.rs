@@ -323,21 +323,27 @@ mod tests {
 
         let upsert_query = generator.generate_mutation(&upsert);
         assert!(upsert_query.is_some());
-        assert!(upsert_query
-            .as_ref()
-            .is_some_and(|query| query.text.contains("INSERT INTO")));
+        assert!(
+            upsert_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("INSERT INTO"))
+        );
 
         let filtered_update_query = generator.generate_mutation(&filtered_update);
         assert!(filtered_update_query.is_some());
-        assert!(filtered_update_query
-            .as_ref()
-            .is_some_and(|query| query.text.contains("WHERE")));
+        assert!(
+            filtered_update_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("WHERE"))
+        );
 
         let filtered_delete_query = generator.generate_mutation(&filtered_delete);
         assert!(filtered_delete_query.is_some());
-        assert!(filtered_delete_query
-            .as_ref()
-            .is_some_and(|query| query.text.contains("DELETE FROM")));
+        assert!(
+            filtered_delete_query
+                .as_ref()
+                .is_some_and(|query| query.text.contains("DELETE FROM"))
+        );
 
         let doc_query = generator.generate_mutation(&doc);
         assert!(doc_query.is_none());

@@ -87,10 +87,7 @@ impl Sidebar {
 
         items_with_order.sort_by_key(|(order, _)| *order);
 
-        items_with_order
-            .into_iter()
-            .map(|(_, item)| item)
-            .collect()
+        items_with_order.into_iter().map(|(_, item)| item).collect()
     }
 
     pub(super) fn generate_code(

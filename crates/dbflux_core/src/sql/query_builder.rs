@@ -1,10 +1,10 @@
+use crate::Value;
 use crate::data::crud::{
     RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest, SqlUpdateRequest,
     SqlUpsertRequest,
 };
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
-use crate::Value;
 
 /// Builds CRUD SQL statements using a specific dialect.
 pub struct SqlQueryBuilder<'a> {
@@ -58,15 +58,16 @@ impl<'a> SqlQueryBuilder<'a> {
 
         if self.dialect.supports_returning()
             && let Some(returning) = update.returning.as_ref()
-                && !returning.is_empty() {
-                    let columns = returning
-                        .iter()
-                        .map(|column| self.dialect.quote_identifier(column))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    sql.push_str(" RETURNING ");
-                    sql.push_str(&columns);
-                }
+            && !returning.is_empty()
+        {
+            let columns = returning
+                .iter()
+                .map(|column| self.dialect.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" RETURNING ");
+            sql.push_str(&columns);
+        }
 
         Some(sql)
     }
@@ -158,15 +159,16 @@ impl<'a> SqlQueryBuilder<'a> {
 
         if self.dialect.supports_returning()
             && let Some(returning) = delete.returning.as_ref()
-                && !returning.is_empty() {
-                    let columns = returning
-                        .iter()
-                        .map(|column| self.dialect.quote_identifier(column))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    sql.push_str(" RETURNING ");
-                    sql.push_str(&columns);
-                }
+            && !returning.is_empty()
+        {
+            let columns = returning
+                .iter()
+                .map(|column| self.dialect.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(" RETURNING ");
+            sql.push_str(&columns);
+        }
 
         Some(sql)
     }

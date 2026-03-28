@@ -368,7 +368,7 @@ pub enum TabManagerEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{ids_to_close_left, ids_to_close_others, ids_to_close_right, DocumentId};
+    use super::{DocumentId, ids_to_close_left, ids_to_close_others, ids_to_close_right};
     use uuid::Uuid;
 
     fn make_ids(n: usize) -> Vec<DocumentId> {
