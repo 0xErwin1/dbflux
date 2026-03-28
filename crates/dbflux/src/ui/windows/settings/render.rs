@@ -3,14 +3,14 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Heights;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::Dialog;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::{
-    SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
-    SettingsCoordinator, SettingsFocus,
+    SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH,
+    SETTINGS_SIDEBAR_MIN_WIDTH,
 };
 
 const INDENT_PX: f32 = 16.0;
@@ -171,6 +171,8 @@ impl SettingsCoordinator {
             .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.sidebar_tree.select_by_id(row_id.as_ref());
+
+                let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
             .child(inner)

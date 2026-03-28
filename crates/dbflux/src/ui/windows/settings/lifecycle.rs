@@ -327,6 +327,12 @@ impl SettingsCoordinator {
                 self.sidebar_tree.move_prev();
                 cx.notify();
             }
+            ("left", modifiers) if modifiers == Modifiers::none() => {
+                self.collapse_sidebar_group(cx);
+            }
+            ("right", modifiers) if modifiers == Modifiers::none() => {
+                self.expand_sidebar_group(cx);
+            }
             ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
                 self.activate_sidebar_cursor(window, cx);
             }
@@ -335,18 +341,42 @@ impl SettingsCoordinator {
     }
 
     fn activate_sidebar_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.sidebar_tree.activate() {
+            TreeNavAction::Selected(id) => {
+                if let Some(section) = Self::section_for_tree_id(id.as_ref()) {
+                    self.request_section_transition(section, window, cx);
+                }
+            }
+            TreeNavAction::Toggled { .. } => {
+                cx.notify();
+            }
+            TreeNavAction::None => {}
+        }
+    }
+
+    fn collapse_sidebar_group(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.sidebar_tree.cursor_item() else {
             return;
         };
 
-        if !row.selectable {
+        if !row.has_children || row.selectable || !row.expanded {
             return;
         }
 
-        if let TreeNavAction::Selected(id) = self.sidebar_tree.activate()
-            && let Some(section) = Self::section_for_tree_id(id.as_ref())
-        {
-            self.request_section_transition(section, window, cx);
+        let _ = self.sidebar_tree.activate();
+        cx.notify();
+    }
+
+    fn expand_sidebar_group(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.sidebar_tree.cursor_item() else {
+            return;
+        };
+
+        if !row.has_children || row.selectable || row.expanded {
+            return;
         }
+
+        let _ = self.sidebar_tree.activate();
+        cx.notify();
     }
 }
