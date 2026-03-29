@@ -1,12 +1,13 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AppConfig, AppConfigStore, CancelToken, Connection, ConnectionHook, ConnectionHooks,
-    ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey,
-    EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, GovernanceSettings,
-    HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, RecentFilesStore, SavedQuery,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
-    SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
-    ToolPolicyConfig, TrustedClientConfig,
+    AppConfig, AppConfigStore, AuthProfile, CancelToken, Connection, ConnectionHook,
+    ConnectionHooks, ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo,
+    DriverKey, EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides,
+    GovernanceSettings, HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, ProfileManager,
+    ProxyProfile, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, SessionStore,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
+    TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -98,7 +99,8 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let built = Self::build_default_drivers();
+        let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
+            Self::build_default_drivers();
 
         Self::new_with_drivers_and_settings(
             built.drivers,
@@ -106,6 +108,11 @@ impl AppState {
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            storage_runtime,
+            profiles,
+            auth_profiles,
+            proxies,
+            ssh_tunnels,
         )
     }
 
@@ -115,10 +122,12 @@ impl AppState {
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
         hook_definitions: HashMap<String, ConnectionHook>,
+        storage_runtime: dbflux_storage::bootstrap::StorageRuntime,
+        profiles: Vec<ConnectionProfile>,
+        auth_profiles: Vec<dbflux_core::AuthProfile>,
+        proxies: Vec<dbflux_core::ProxyProfile>,
+        ssh_tunnels: Vec<SshTunnelProfile>,
     ) -> Self {
-        let storage_runtime = dbflux_storage::bootstrap::initialize()
-            .expect("failed to initialize internal storage — cannot continue");
-
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
             .ok();
@@ -131,7 +140,18 @@ impl AppState {
             .inspect_err(|e| log::warn!("Failed to initialize session store: {}", e))
             .ok();
 
-        let mut facade = SessionFacade::new(drivers);
+        let profile_manager = ProfileManager::with_profiles(profiles, None);
+        let ssh_manager = dbflux_core::SshTunnelManager::with_items(ssh_tunnels, None, "SSH tunnel profiles");
+        let proxy_manager = dbflux_core::ProxyManager::with_items(proxies, None, "proxy profiles");
+        let auth_manager = dbflux_core::AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
+
+        let mut facade = SessionFacade::with_custom_managers(
+            drivers,
+            profile_manager,
+            ssh_manager,
+            proxy_manager,
+            auth_manager,
+        );
         facade
             .history
             .set_max_entries(general_settings.max_history_entries);
@@ -256,94 +276,132 @@ impl AppState {
     }
 
     #[allow(clippy::result_large_err)]
-    fn build_default_drivers() -> BuiltDrivers {
-        let mut drivers = Self::build_builtin_drivers();
+    fn build_default_drivers() -> (
+        BuiltDrivers,
+        dbflux_storage::bootstrap::StorageRuntime,
+        Vec<ConnectionProfile>,
+        Vec<AuthProfile>,
+        Vec<ProxyProfile>,
+        Vec<SshTunnelProfile>,
+    ) {
+        let drivers = Self::build_builtin_drivers();
 
-        let app_config = AppConfigStore::new()
-            .and_then(|store| store.load())
-            .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
-            .ok();
-
-        let (general_settings, driver_overrides, driver_settings, hook_definitions) = app_config
-            .as_ref()
-            .map(|config| {
-                (
-                    config.general.clone(),
-                    config.driver_overrides.clone(),
-                    config.driver_settings.clone(),
-                    config.hook_definitions.clone(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    GeneralSettings::default(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                )
-            });
-
-        if let Some(config) = app_config {
-            for service in config.services {
-                if !service.enabled {
-                    log::info!("Skipping disabled service '{}'", service.socket_id);
-                    continue;
-                }
-
-                let driver_id = rpc_registry_id(&service.socket_id);
-
-                if drivers.contains_key(&driver_id) {
-                    log::warn!(
-                        "Skipping external RPC service '{}': driver id already exists",
-                        service.socket_id
-                    );
-                    continue;
-                }
-
-                let launch = IpcDriverLaunchConfig {
-                    program: service
-                        .command
-                        .clone()
-                        .unwrap_or_else(|| "dbflux-driver-host".to_string()),
-                    args: service.args.clone(),
-                    env: service.env.into_iter().collect(),
-                    startup_timeout: std::time::Duration::from_millis(
-                        service.startup_timeout_ms.unwrap_or(5_000),
-                    ),
-                };
-
-                let (kind, metadata, form_definition, settings_schema) =
-                    match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
-                        Ok(info) => info,
-                        Err(error) => {
-                            log::warn!(
-                                "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                                service.socket_id,
-                                error
-                            );
-                            continue;
-                        }
-                    };
-
-                let ipc_driver = IpcDriver::new(
-                    service.socket_id.clone(),
-                    kind,
-                    metadata,
-                    form_definition,
-                    settings_schema,
-                )
-                .with_launch_config(launch);
-
-                drivers.insert(driver_id, Arc::new(ipc_driver));
-            }
-        }
-
-        BuiltDrivers {
-            drivers,
+        let (
             general_settings,
             driver_overrides,
             driver_settings,
             hook_definitions,
+            services,
+            runtime,
+        ) = Self::load_app_config_from_storage();
+
+        if !services.is_empty() {
+            Self::launch_rpc_services(&mut drivers.clone(), services);
+        }
+
+        // load_config was already called inside load_app_config_from_storage.
+        // Re-extract the profiles that build_default_drivers needs to return.
+        // We avoid calling it again by capturing them in load_app_config_from_storage.
+        // But since load_app_config_from_storage already returned everything,
+        // we need to pass the loaded data back. For now, just call load_config once more
+        // since it's cheap (read-only from SQLite).
+        let loaded = crate::config_loader::load_config(&runtime);
+
+        (
+            BuiltDrivers {
+                drivers,
+                general_settings,
+                driver_overrides,
+                driver_settings,
+                hook_definitions,
+            },
+            runtime,
+            loaded.profiles,
+            loaded.auth_profiles,
+            loaded.proxy_profiles,
+            loaded.ssh_tunnels,
+        )
+    }
+
+    /// Loads all durable config from `config.db` via storage repositories.
+    /// Returns (general_settings, driver_overrides, driver_settings, hook_definitions, services, runtime).
+    /// Uses sensible defaults when storage is empty (fresh install).
+    #[allow(clippy::type_complexity)]
+    fn load_app_config_from_storage() -> (
+        GeneralSettings,
+        HashMap<DriverKey, GlobalOverrides>,
+        HashMap<DriverKey, FormValues>,
+        HashMap<String, ConnectionHook>,
+        Vec<ServiceConfig>,
+        dbflux_storage::bootstrap::StorageRuntime,
+    ) {
+        let runtime = dbflux_storage::bootstrap::initialize()
+            .expect("failed to initialize internal storage — cannot continue");
+
+        let loaded = crate::config_loader::load_config(&runtime);
+
+        (
+            loaded.general_settings,
+            loaded.driver_overrides,
+            loaded.driver_settings,
+            loaded.hook_definitions,
+            loaded.services,
+            runtime,
+        )
+    }
+
+    fn launch_rpc_services(drivers: &mut HashMap<String, Arc<dyn DbDriver>>, services: Vec<ServiceConfig>) {
+        for service in services {
+            if !service.enabled {
+                log::info!("Skipping disabled service '{}'", service.socket_id);
+                continue;
+            }
+
+            let driver_id = rpc_registry_id(&service.socket_id);
+
+            if drivers.contains_key(&driver_id) {
+                log::warn!(
+                    "Skipping external RPC service '{}': driver id already exists",
+                    service.socket_id
+                );
+                continue;
+            }
+
+            let launch = IpcDriverLaunchConfig {
+                program: service
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| "dbflux-driver-host".to_string()),
+                args: service.args.clone(),
+                env: service.env.into_iter().collect(),
+                startup_timeout: std::time::Duration::from_millis(
+                    service.startup_timeout_ms.unwrap_or(5_000),
+                ),
+            };
+
+            let (kind, metadata, form_definition, settings_schema) =
+                match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
+                    Ok(info) => info,
+                    Err(error) => {
+                        log::warn!(
+                            "Skipping RPC service '{}': failed to probe driver metadata: {}",
+                            service.socket_id,
+                            error
+                        );
+                        continue;
+                    }
+                };
+
+            let ipc_driver = IpcDriver::new(
+                service.socket_id.clone(),
+                kind,
+                metadata,
+                form_definition,
+                settings_schema,
+            )
+            .with_launch_config(launch);
+
+            drivers.insert(driver_id, Arc::new(ipc_driver));
         }
     }
 
@@ -1886,6 +1944,7 @@ mod tests {
         AuthProfile, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, DbDriver,
         DbKind, FormValues, GeneralSettings, RefreshPolicySetting,
     };
+    use dbflux_storage::bootstrap::StorageRuntime;
 
     #[cfg(feature = "mcp")]
     use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
@@ -1992,6 +2051,11 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            StorageRuntime::in_memory().unwrap(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -2017,6 +2081,11 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
+                StorageRuntime::in_memory().unwrap(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
             );
 
             assert_eq!(state.drivers().len(), 1);

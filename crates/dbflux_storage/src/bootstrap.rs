@@ -1,32 +1,164 @@
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use log::info;
 
 use crate::error::StorageError;
+use crate::migrations;
 use crate::paths;
+use crate::repositories::auth_profiles::AuthProfileRepository;
+use crate::repositories::connection_profiles::ConnectionProfileRepository;
+use crate::repositories::driver_settings::DriverSettingsRepository;
+use crate::repositories::hook_definitions::HookDefinitionRepository;
+use crate::repositories::proxy_profiles::ProxyProfileRepository;
+use crate::repositories::services::ServiceRepository;
+use crate::repositories::settings::SettingsRepository;
+use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
 use crate::sqlite;
+
+/// An owned database connection wrapped in Arc for shared access.
+pub type OwnedConnection = Arc<rusqlite::Connection>;
 
 /// Holds the open connections for every internal DBFlux database.
 ///
 /// Obtained exclusively via [`initialize`] — callers never construct this
 /// directly.
 pub struct StorageRuntime {
-    app_db_path: PathBuf,
+    config_db_path: PathBuf,
+    state_db_path: PathBuf,
+    config_db: OwnedConnection,
 }
 
 impl StorageRuntime {
-    /// Returns the path to the main application database.
-    pub fn app_db_path(&self) -> &std::path::Path {
-        &self.app_db_path
+    /// Creates a runtime pointing at the given config and state database paths.
+    ///
+    /// The caller is responsible for ensuring the parent directories exist.
+    /// Migrations are applied on first open.
+    #[allow(clippy::result_large_err)]
+    pub fn for_path(config_db_path: PathBuf, state_db_path: PathBuf) -> Result<Self, StorageError> {
+        // Open and validate config.db - apply migrations if needed
+        let config_conn = crate::sqlite::open_database(&config_db_path)?;
+        migrations::run_config_migrations(&config_conn)?;
+        info!("Config database ready at {}", config_db_path.display());
+
+        // Open and validate state.db - apply migrations if needed
+        let state_conn = crate::sqlite::open_database(&state_db_path)?;
+        migrations::run_state_migrations(&state_conn)?;
+        info!("State database ready at {}", state_db_path.display());
+
+        // Wrap connection in Arc for shared access
+        let config_db = Arc::new(config_conn);
+
+        Ok(StorageRuntime {
+            config_db_path,
+            state_db_path,
+            config_db,
+        })
     }
 
-    /// Opens a **new** connection to the application database.
+    /// Creates a runtime with both databases in temporary directories.
+    ///
+    /// Useful for tests. The directories are created under `std::env::temp_dir()`
+    /// with unique names to avoid collisions between parallel test runs.
+    #[allow(clippy::result_large_err)]
+    pub fn in_memory() -> Result<Self, StorageError> {
+        let temp_label = format!(
+            "dbflux_storage_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        let temp_dir = std::env::temp_dir().join(&temp_label);
+        std::fs::create_dir_all(&temp_dir).map_err(|source| StorageError::Io {
+            path: temp_dir.clone(),
+            source,
+        })?;
+
+        let config_db_path = temp_dir.join("config.db");
+        let state_db_path = temp_dir.join("state.db");
+
+        Self::for_path(config_db_path, state_db_path)
+    }
+
+    /// Returns the path to the config database.
+    pub fn config_db_path(&self) -> &Path {
+        &self.config_db_path
+    }
+
+    /// Returns the path to the state database (runtime state).
+    pub fn state_db_path(&self) -> &Path {
+        &self.state_db_path
+    }
+
+    /// Opens a **new** connection to the config database.
     ///
     /// Each call creates a fresh `rusqlite::Connection`; the PRAGMA set is
     /// re-applied. This keeps `StorageRuntime` cheaply-cloneable (it only
     /// stores a path) and avoids sharing a single connection across threads.
-    pub fn open_app_db(&self) -> Result<rusqlite::Connection, StorageError> {
-        sqlite::open_database(&self.app_db_path)
+    pub fn open_config_db(&self) -> Result<rusqlite::Connection, StorageError> {
+        sqlite::open_database(&self.config_db_path)
+    }
+
+    /// Opens a **new** connection to the state database.
+    ///
+    /// Each call creates a fresh `rusqlite::Connection`; the PRAGMA set is
+    /// re-applied. This keeps `StorageRuntime` cheaply-cloneable (it only
+    /// stores a path) and avoids sharing a single connection across threads.
+    pub fn open_state_db(&self) -> Result<rusqlite::Connection, StorageError> {
+        sqlite::open_database(&self.state_db_path)
+    }
+
+    /// Returns an owned reference to the config database connection.
+    ///
+    /// This is a cloneable reference stored in the Runtime.
+    pub fn config_db(&self) -> OwnedConnection {
+        self.config_db.clone()
+    }
+
+    // --- Repository convenience constructors ---
+
+    /// Creates a connection profile repository.
+    pub fn connection_profiles(&self) -> ConnectionProfileRepository {
+        ConnectionProfileRepository::new(self.config_db())
+    }
+
+    /// Creates an auth profile repository.
+    pub fn auth_profiles(&self) -> AuthProfileRepository {
+        AuthProfileRepository::new(self.config_db())
+    }
+
+    /// Creates a proxy profile repository.
+    pub fn proxy_profiles(&self) -> ProxyProfileRepository {
+        ProxyProfileRepository::new(self.config_db())
+    }
+
+    /// Creates an SSH tunnel profile repository.
+    pub fn ssh_tunnels(&self) -> SshTunnelProfileRepository {
+        SshTunnelProfileRepository::new(self.config_db())
+    }
+
+    /// Creates a hook definition repository.
+    pub fn hook_definitions(&self) -> HookDefinitionRepository {
+        HookDefinitionRepository::new(self.config_db())
+    }
+
+    /// Creates a service repository.
+    pub fn services(&self) -> ServiceRepository {
+        ServiceRepository::new(self.config_db())
+    }
+
+    /// Creates a driver settings repository.
+    pub fn driver_settings(&self) -> DriverSettingsRepository {
+        DriverSettingsRepository::new(self.config_db())
+    }
+
+    /// Creates a settings repository.
+    pub fn settings(&self) -> SettingsRepository {
+        SettingsRepository::new(self.config_db())
     }
 }
 
@@ -36,19 +168,19 @@ impl StorageRuntime {
 /// the application should abort — internal storage is mandatory.
 ///
 /// What it does:
-/// 1. Resolves `~/.config/dbflux/`, creating directories as needed.
-/// 2. Opens (or creates) `dbflux.sqlite` with the standard PRAGMA set.
-/// 3. Returns a [`StorageRuntime`] that can hand out connections on demand.
+/// 1. Resolves `~/.config/dbflux/` (creating if needed) and `~/.local/share/dbflux/` (creating if needed).
+/// 2. Opens (or creates) `config.db` in the config directory with migrations applied.
+/// 3. Opens (or creates) `state.db` in the data directory with migrations applied.
+/// 4. Returns a [`StorageRuntime`] that can hand out connections on demand.
+#[allow(clippy::result_large_err)]
 pub fn initialize() -> Result<StorageRuntime, StorageError> {
-    let app_db_path = paths::app_db_path()?;
-    info!("Internal storage path: {}", app_db_path.display());
+    let config_db_path = paths::config_db_path()?;
+    let state_db_path = paths::state_db_path()?;
 
-    // Open and immediately drop — validates the file is a valid SQLite DB and
-    // PRAGMAs can be applied.  The runtime will hand out fresh connections.
-    let _conn = sqlite::open_database(&app_db_path)?;
-    info!("Internal application database ready");
+    info!("Config database path: {}", config_db_path.display());
+    info!("State database path: {}", state_db_path.display());
 
-    Ok(StorageRuntime { app_db_path })
+    StorageRuntime::for_path(config_db_path, state_db_path)
 }
 
 #[cfg(test)]
@@ -73,14 +205,16 @@ mod tests {
 
     #[test]
     fn initialize_succeeds_with_default_paths() {
-        let runtime = initialize().expect("bootstrap should succeed");
-        assert!(runtime.app_db_path().exists());
+        // Use in-memory storage for tests to avoid polluting ~/.config/dbflux
+        let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
+        assert!(runtime.state_db_path().exists());
     }
 
     #[test]
-    fn storage_runtime_opens_app_db() {
-        let runtime = initialize().expect("bootstrap should succeed");
-        let conn = runtime.open_app_db().expect("should open app db");
+    fn storage_runtime_opens_state_db() {
+        // Use in-memory storage for tests to avoid polluting ~/.config/dbflux
+        let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
+        let conn = runtime.open_state_db().expect("should open state db");
 
         // Quick sanity: we can query.
         let version: i64 = conn

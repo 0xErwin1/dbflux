@@ -8,8 +8,8 @@ use crate::storage::history_manager::HistoryManager;
 use crate::storage::saved_query_manager::SavedQueryManager;
 use crate::storage::secret_manager::SecretManager;
 use crate::{
-    ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator, ShutdownPhase,
-    TaskManager, create_secret_store,
+    create_secret_store, ConnectionProfile, DangerousQueryKind, DbDriver, ShutdownCoordinator,
+    ShutdownPhase, TaskManager,
 };
 use log::info;
 use std::collections::HashMap;
@@ -96,27 +96,40 @@ pub struct SessionFacade {
 
 impl SessionFacade {
     pub fn new(drivers: HashMap<String, Arc<dyn DbDriver>>) -> Self {
+        Self::with_custom_managers(
+            drivers,
+            ProfileManager::new(),
+            SshTunnelManager::default(),
+            ProxyManager::default(),
+            AuthProfileManager::default(),
+        )
+    }
+
+    /// Creates a facade with caller-supplied managers (profiles, SSH tunnels, proxies, auth).
+    pub fn with_custom_managers(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profile_manager: ProfileManager,
+        ssh_manager: SshTunnelManager,
+        proxy_manager: ProxyManager,
+        auth_manager: AuthProfileManager,
+    ) -> Self {
         let secret_store = create_secret_store();
         info!("Secret store available: {}", secret_store.is_available());
 
         let secrets = SecretManager::new(secret_store);
-        let profiles = ProfileManager::new();
-        let ssh_tunnels = SshTunnelManager::default();
-        let proxies = ProxyManager::default();
-        let auth_profiles = AuthProfileManager::default();
         let history = HistoryManager::new();
         let saved_queries = SavedQueryManager::new();
         let mut tree = ConnectionTreeManager::new();
 
-        tree.sync_with_profiles(&profiles.profile_ids());
+        tree.sync_with_profiles(&profile_manager.profile_ids());
 
         Self {
             connections: ConnectionManager::new(drivers),
-            profiles,
+            profiles: profile_manager,
             secrets,
-            ssh_tunnels,
-            proxies,
-            auth_profiles,
+            ssh_tunnels: ssh_manager,
+            proxies: proxy_manager,
+            auth_profiles: auth_manager,
             history,
             saved_queries,
             tree,

@@ -1,8 +1,8 @@
 use crate::auth::AuthProfile;
 use crate::{ConnectionProfile, JsonStore, ProxyProfile, SshTunnelProfile};
 use log::{error, info};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use uuid::Uuid;
 
 pub trait Identifiable {
@@ -33,6 +33,15 @@ impl<T: Identifiable + Serialize + DeserializeOwned> ItemManager<T> {
             }
         };
 
+        Self {
+            items,
+            store,
+            label,
+        }
+    }
+
+    /// Creates a manager with pre-loaded items and an optional store.
+    pub fn with_items(items: Vec<T>, store: Option<JsonStore<T>>, label: &'static str) -> Self {
         Self {
             items,
             store,

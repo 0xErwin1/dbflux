@@ -2524,7 +2524,11 @@ dependencies = [
  "dirs 5.0.1",
  "log",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

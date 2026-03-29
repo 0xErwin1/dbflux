@@ -743,6 +743,37 @@ impl ConnectionProfile {
         }
     }
 
+    /// Creates a profile preserving id, kind, and driver_id from stored data.
+    ///
+    /// This is the primary constructor used when loading profiles from a
+    /// repository, where the id and driver_id must be preserved rather than
+    /// generated fresh.
+    pub(crate) fn with_id_and_driver(
+        id: Uuid,
+        name: String,
+        kind: DbKind,
+        driver_id: String,
+        config: DbConfig,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            kind: Some(kind),
+            driver_id: Some(driver_id),
+            config,
+            save_password: true,
+            settings_overrides: None,
+            connection_settings: None,
+            hooks: None,
+            hook_bindings: None,
+            proxy_profile_id: None,
+            auth_profile_id: None,
+            value_refs: HashMap::new(),
+            access_kind: None,
+            mcp_governance: None,
+        }
+    }
+
     /// Returns the database kind for this profile.
     ///
     /// This is the authoritative source for driver selection.
@@ -839,10 +870,10 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RefreshPolicySetting;
     use crate::config::app::GlobalOverrides;
     use crate::driver::form::FormValues;
     use crate::values::ValueRef;
+    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())

@@ -8,24 +8,15 @@ pub struct ProfileManager {
 }
 
 impl ProfileManager {
-    pub fn new() -> Self {
-        let (store, profiles) = match ProfileStore::profiles() {
-            Ok(store) => {
-                let profiles = store.load().unwrap_or_else(|e| {
-                    error!("Failed to load profiles: {:?}", e);
-                    Vec::new()
-                });
-                info!("Loaded {} profiles from disk", profiles.len());
-                (Some(store), profiles)
-            }
-            Err(e) => {
-                error!("Failed to create profile store: {:?}", e);
-                error!("Application will run without persistent profile storage");
-                (None, Vec::new())
-            }
-        };
-
+    /// Creates a manager with pre-loaded profiles and an optional store.
+    pub fn with_profiles(profiles: Vec<ConnectionProfile>, store: Option<ProfileStore>) -> Self {
         Self { profiles, store }
+    }
+
+    /// Loads profiles from the JSON store (legacy path). Returns an empty manager
+    /// if the store cannot be created or loaded.
+    pub fn new() -> Self {
+        Self::with_profiles(Vec::new(), None)
     }
 
     /// Creates a new in-memory ProfileManager that does not persist to disk.

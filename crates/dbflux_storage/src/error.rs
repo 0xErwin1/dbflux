@@ -18,4 +18,7 @@ pub enum StorageError {
 
     #[error("config directory not found — cannot resolve storage path")]
     ConfigDirUnavailable,
+
+    #[error("data directory not found — cannot resolve state database path")]
+    DataDirUnavailable,
 }
