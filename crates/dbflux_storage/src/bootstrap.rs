@@ -72,7 +72,9 @@ impl StorageRuntime {
         );
 
         // Wrap connections in Arc for shared access
+        #[allow(clippy::arc_with_non_send_sync)]
         let config_db = Arc::new(config_conn);
+        #[allow(clippy::arc_with_non_send_sync)]
         let state_db = Arc::new(state_conn);
 
         Ok(StorageRuntime {
@@ -240,11 +242,7 @@ impl StorageRuntime {
     /// The directories are used only to locate legacy JSON source files.
     /// This method is exposed on `StorageRuntime` so tests and bootstrap code
     /// can call it with arbitrary roots (avoiding global `dirs::*` lookups).
-    pub fn run_legacy_import(
-        &self,
-        config_dir: &PathBuf,
-        data_dir: &PathBuf,
-    ) -> LegacyImportResult {
+    pub fn run_legacy_import(&self, config_dir: &Path, data_dir: &Path) -> LegacyImportResult {
         crate::legacy::run_legacy_import(
             self.config_db.clone(),
             self.state_db.clone(),

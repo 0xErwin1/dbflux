@@ -3,7 +3,7 @@
 //! Stores individual query executions with timing, results, and favorites.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -373,6 +373,7 @@ pub struct QueryHistoryDto {
 }
 
 impl QueryHistoryDto {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         query_text: String,
         connection_profile_id: Option<String>,

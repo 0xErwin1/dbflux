@@ -327,19 +327,20 @@ pub fn export_to_file(
         source,
     })?;
 
-    let mut counts = ExportDomainCounts::default();
-    counts.settings = export.domains.settings.len();
-    counts.profiles = export.domains.connection_profiles.len();
-    counts.auth_profiles = export.domains.auth_profiles.len();
-    counts.proxies = export.domains.proxy_profiles.len();
-    counts.ssh_tunnels = export.domains.ssh_tunnels.len();
-    counts.hooks = export.domains.hook_definitions.len();
-    counts.services = export.domains.services.len();
-    counts.driver_settings = export.domains.driver_settings.len();
-    counts.history = export.domains.history.len();
-    counts.saved_queries = export.domains.saved_queries.len();
-    counts.recent_items = export.domains.recent_items.len();
-    counts.ui_state = export.domains.ui_state.len();
+    let counts = ExportDomainCounts {
+        settings: export.domains.settings.len(),
+        profiles: export.domains.connection_profiles.len(),
+        auth_profiles: export.domains.auth_profiles.len(),
+        proxies: export.domains.proxy_profiles.len(),
+        ssh_tunnels: export.domains.ssh_tunnels.len(),
+        hooks: export.domains.hook_definitions.len(),
+        services: export.domains.services.len(),
+        driver_settings: export.domains.driver_settings.len(),
+        history: export.domains.history.len(),
+        saved_queries: export.domains.saved_queries.len(),
+        recent_items: export.domains.recent_items.len(),
+        ui_state: export.domains.ui_state.len(),
+    };
 
     let total = counts.total();
 
@@ -370,8 +371,7 @@ fn collect_all_domains(
     let driver_repo = DriverSettingsRepository::new(config_conn.clone());
 
     let settings = settings_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| SettingEntry {
             key: e.key,
@@ -380,8 +380,7 @@ fn collect_all_domains(
         .collect();
 
     let profiles = profiles_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| ConnectionProfileEntry {
             id: e.id,
@@ -408,8 +407,7 @@ fn collect_all_domains(
         .collect();
 
     let auth_profiles = auth_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| AuthProfileEntry {
             id: e.id,
@@ -423,8 +421,7 @@ fn collect_all_domains(
         .collect();
 
     let proxy_profiles = proxy_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| ProxyProfileEntry {
             id: e.id,
@@ -442,8 +439,7 @@ fn collect_all_domains(
         .collect();
 
     let ssh_tunnels = ssh_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| SshTunnelEntry {
             id: e.id,
@@ -456,8 +452,7 @@ fn collect_all_domains(
         .collect();
 
     let hooks = hooks_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| HookDefinitionEntry {
             id: e.id,
@@ -479,8 +474,7 @@ fn collect_all_domains(
         .collect();
 
     let services = services_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| ServiceEntry {
             socket_id: e.socket_id,
@@ -495,8 +489,7 @@ fn collect_all_domains(
         .collect();
 
     let driver_settings = driver_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| DriverSettingsEntry {
             driver_key: e.driver_key,
@@ -513,8 +506,7 @@ fn collect_all_domains(
     let ui_state_repo = UiStateRepository::new(state_conn.clone());
 
     let history = history_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| HistoryEntry {
             id: e.id,
@@ -533,8 +525,7 @@ fn collect_all_domains(
         .collect();
 
     let saved_queries = saved_queries_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| SavedQueryEntry {
             id: e.id,
@@ -549,8 +540,7 @@ fn collect_all_domains(
         .collect();
 
     let recent_items = recent_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|e| RecentItemEntry {
             id: e.id,
@@ -563,8 +553,7 @@ fn collect_all_domains(
         .collect();
 
     let ui_state = ui_state_repo
-        .all()
-        .map_err(StorageError::from)?
+        .all()?
         .into_iter()
         .map(|(key, value_json)| UiStateEntry { key, value_json })
         .collect();
