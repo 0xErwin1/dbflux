@@ -6,6 +6,10 @@ pub mod repositories;
 pub mod sqlite;
 
 pub use bootstrap::OwnedConnection;
+pub use repositories::state::{
+    query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
+    saved_queries::SavedQueriesRepository, ui_state::UiStateRepository,
+};
 pub use repositories::{
     auth_profiles::AuthProfileRepository, connection_profiles::ConnectionProfileRepository,
     driver_settings::DriverSettingsRepository, hook_definitions::HookDefinitionRepository,

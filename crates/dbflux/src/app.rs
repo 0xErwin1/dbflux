@@ -4,7 +4,7 @@ use dbflux_core::{
     ConnectionHooks, ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo,
     DriverKey, EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides,
     GovernanceSettings, HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, ProfileManager,
-    ProxyProfile, RecentFilesStore, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
+    ProxyProfile, SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, SessionStore,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
     TrustedClientConfig,
@@ -68,6 +68,8 @@ pub use dbflux_core::{
     FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
+// Storage-backed modules (state.db) - declared in main.rs at crate root level.
+
 fn rpc_registry_id(socket_id: &str) -> String {
     format!("rpc:{}", socket_id)
 }
@@ -80,22 +82,22 @@ struct BuiltDrivers {
     hook_definitions: HashMap<String, ConnectionHook>,
 }
 
-pub struct AppState {
-    pub facade: SessionFacade,
-    pub settings_window: Option<WindowHandle<Root>>,
-    general_settings: GeneralSettings,
-    driver_overrides: HashMap<DriverKey, GlobalOverrides>,
-    driver_settings: HashMap<DriverKey, FormValues>,
-    hook_definitions: HashMap<String, ConnectionHook>,
-    detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
-    auth_provider_registry: AuthProviderRegistry,
-    recent_files: Option<RecentFilesStore>,
-    scripts_directory: Option<ScriptsDirectory>,
-    session_store: Option<SessionStore>,
-    storage_runtime: StorageRuntime,
-    #[cfg(feature = "mcp")]
-    mcp_runtime: McpRuntime,
-}
+    pub struct AppState {
+        pub facade: SessionFacade,
+        pub settings_window: Option<WindowHandle<Root>>,
+        general_settings: GeneralSettings,
+        driver_overrides: HashMap<DriverKey, GlobalOverrides>,
+        driver_settings: HashMap<DriverKey, FormValues>,
+        hook_definitions: HashMap<String, ConnectionHook>,
+        detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
+        auth_provider_registry: AuthProviderRegistry,
+        history_manager: super::history_manager_sqlite::HistoryManager,
+        scripts_directory: Option<ScriptsDirectory>,
+        session_store: Option<SessionStore>,
+        storage_runtime: StorageRuntime,
+        #[cfg(feature = "mcp")]
+        mcp_runtime: McpRuntime,
+    }
 
 impl AppState {
     pub fn new() -> Self {
@@ -128,10 +130,6 @@ impl AppState {
         proxies: Vec<dbflux_core::ProxyProfile>,
         ssh_tunnels: Vec<SshTunnelProfile>,
     ) -> Self {
-        let recent_files = RecentFilesStore::new()
-            .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
-            .ok();
-
         let scripts_directory = ScriptsDirectory::new()
             .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
             .ok();
@@ -145,16 +143,17 @@ impl AppState {
         let proxy_manager = dbflux_core::ProxyManager::with_items(proxies, None, "proxy profiles");
         let auth_manager = dbflux_core::AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
 
-        let mut facade = SessionFacade::with_custom_managers(
+        let facade = SessionFacade::with_custom_managers(
             drivers,
             profile_manager,
             ssh_manager,
             proxy_manager,
             auth_manager,
         );
-        facade
-            .history
-            .set_max_entries(general_settings.max_history_entries);
+
+        let mut history_manager =
+            super::history_manager_sqlite::HistoryManager::new(&storage_runtime);
+        history_manager.set_max_entries(general_settings.max_history_entries);
 
         let mut auth_provider_registry = AuthProviderRegistry::new();
         #[cfg(feature = "aws")]
@@ -196,7 +195,7 @@ impl AppState {
             hook_definitions,
             detached_hook_tasks: HashMap::new(),
             auth_provider_registry,
-            recent_files,
+            history_manager,
             scripts_directory,
             session_store,
             storage_runtime,
@@ -305,7 +304,7 @@ impl AppState {
         // But since load_app_config_from_storage already returned everything,
         // we need to pass the loaded data back. For now, just call load_config once more
         // since it's cheap (read-only from SQLite).
-        let loaded = crate::config_loader::load_config(&runtime);
+        let loaded = super::config_loader::load_config(&runtime);
 
         (
             BuiltDrivers {
@@ -338,7 +337,7 @@ impl AppState {
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 
-        let loaded = crate::config_loader::load_config(&runtime);
+        let loaded = super::config_loader::load_config(&runtime);
 
         (
             loaded.general_settings,
@@ -1004,93 +1003,87 @@ impl AppState {
         self.facade.tree.set_folder_collapsed(folder_id, collapsed);
     }
 
-    // --- HistoryManager ---
+    // --- HistoryManager (SQLite-backed via history_manager_sqlite) ---
 
     pub fn history_entries(&self) -> &[HistoryEntry] {
-        self.facade.history.entries()
+        self.history_manager.entries()
     }
 
     pub fn add_history_entry(&mut self, entry: HistoryEntry) {
-        self.facade.history.add(entry);
+        self.history_manager.add(entry);
     }
 
     #[allow(dead_code)]
     pub fn toggle_history_favorite(&mut self, id: Uuid) -> bool {
-        self.facade.history.toggle_favorite(id)
+        self.history_manager.toggle_favorite(id)
     }
 
     #[allow(dead_code)]
     pub fn remove_history_entry(&mut self, id: Uuid) {
-        self.facade.history.remove(id);
+        self.history_manager.remove(id);
     }
 
-    // --- SavedQueryManager ---
+    // --- SavedQueryManager (SQLite-backed via history_manager_sqlite) ---
 
     #[allow(dead_code)]
     pub fn take_saved_query_warning(&mut self) -> Option<String> {
-        self.facade.saved_queries.take_warning()
+        // No warning in SQLite-backed path (no corruption fallback needed)
+        None
     }
 
     pub fn add_saved_query(&mut self, query: SavedQuery) {
-        self.facade.saved_queries.add(query);
+        self.history_manager.add_saved_query(query);
     }
 
     pub fn update_saved_query(&mut self, id: Uuid, name: String, sql: String) -> bool {
-        self.facade.saved_queries.update(id, name, sql)
+        self.history_manager.update_saved_query(id, name, sql)
     }
 
     pub fn remove_saved_query(&mut self, id: Uuid) -> bool {
-        self.facade.saved_queries.remove(id)
+        self.history_manager.remove_saved_query(id)
     }
 
     pub fn toggle_saved_query_favorite(&mut self, id: Uuid) -> bool {
-        self.facade.saved_queries.toggle_favorite(id)
+        self.history_manager.toggle_saved_query_favorite(id)
     }
 
     pub fn update_saved_query_last_used(&mut self, id: Uuid) -> bool {
-        self.facade.saved_queries.update_last_used(id)
+        self.history_manager.update_saved_query_last_used(id)
     }
 
     #[allow(dead_code)]
     pub fn update_saved_query_sql(&mut self, id: Uuid, sql: &str) -> bool {
-        self.facade.saved_queries.update_sql(id, sql)
+        self.history_manager.update_saved_query_sql(id, sql)
     }
 
     #[allow(dead_code)]
     pub fn update_saved_query_name(&mut self, id: Uuid, name: &str) -> bool {
-        self.facade.saved_queries.update_name(id, name)
+        self.history_manager.update_saved_query_name(id, name)
     }
 
     #[allow(dead_code)]
     pub fn get_saved_query(&self, id: Uuid) -> Option<&SavedQuery> {
-        self.facade.saved_queries.get(id)
+        self.history_manager.get_saved_query(id)
     }
 
     pub fn saved_queries(&self) -> &[SavedQuery] {
-        self.facade.saved_queries.queries()
+        self.history_manager.saved_queries_list()
     }
 
-    // --- RecentFilesStore ---
+    // --- RecentFiles (SQLite-backed) ---
 
     #[allow(dead_code)]
     pub fn recent_files(&self) -> &[dbflux_core::RecentFile] {
-        self.recent_files
-            .as_ref()
-            .map(|store| store.entries())
-            .unwrap_or(&[])
+        self.history_manager.recent_files_entries()
     }
 
     pub fn record_recent_file(&mut self, path: PathBuf) {
-        if let Some(store) = self.recent_files.as_mut() {
-            store.record_open(path);
-        }
+        self.history_manager.record_recent_file(path);
     }
 
     #[allow(dead_code)]
     pub fn remove_recent_file(&mut self, path: &PathBuf) {
-        if let Some(store) = self.recent_files.as_mut() {
-            store.remove(path);
-        }
+        self.history_manager.remove_recent_file(path);
     }
 
     // --- ScriptsDirectory ---
@@ -1481,9 +1474,8 @@ impl AppState {
     }
 
     pub fn update_general_settings(&mut self, settings: GeneralSettings) {
-        self.facade
-            .history
-            .set_max_entries(settings.max_history_entries);
+        // Apply max_history_entries to the SQLite-backed history manager
+        self.history_manager.set_max_entries(settings.max_history_entries);
 
         self.general_settings = settings;
     }
@@ -2633,3 +2625,4 @@ mod tests {
         });
     }
 }
+// test_hello module was accidentally appended above - remove it if it exists
