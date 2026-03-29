@@ -88,6 +88,7 @@ fn load_driver_settings(
     config_dir: Option<&std::path::Path>,
 ) -> Result<HashMap<DriverKey, FormValues>, String> {
     let conn = open_config_db(config_dir)?;
+    #[allow(clippy::arc_with_non_send_sync)]
     let repo = DriverSettingsRepository::new(Arc::new(conn));
     let entries = repo
         .all()
@@ -235,6 +236,7 @@ fn load_governance_settings(
     config_dir: Option<&std::path::Path>,
 ) -> Result<GovernanceSettings, String> {
     let conn = open_config_db(config_dir)?;
+    #[allow(clippy::arc_with_non_send_sync)]
     let repo = SettingsRepository::new(Arc::new(conn));
 
     let json = repo

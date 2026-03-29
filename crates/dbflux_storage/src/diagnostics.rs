@@ -3,7 +3,7 @@
 //! Provides reporting for storage paths, integrity status, and migration/import
 //! status. Intended for debugging, support, and Settings UI integration.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::migrations;
 use crate::paths;
@@ -71,10 +71,10 @@ pub struct TableCount {
 ///
 /// This is useful for testing and for callers that already have paths resolved.
 pub fn run_diagnostics_for_paths(
-    config_db_path: &PathBuf,
-    state_db_path: &PathBuf,
-    config_dir: &PathBuf,
-    data_dir: &PathBuf,
+    config_db_path: &Path,
+    state_db_path: &Path,
+    config_dir: &Path,
+    data_dir: &Path,
 ) -> DiagnosticsReport {
     let config_db = collect_config_db_diagnostics(config_db_path);
     let state_db = collect_state_db_diagnostics(state_db_path);
@@ -114,13 +114,13 @@ pub fn run_diagnostics() -> DiagnosticsReport {
     run_diagnostics_for_paths(
         &config_db_path,
         &state_db_path,
-        &config_db_path.parent().unwrap().to_path_buf(),
+        config_db_path.parent().unwrap(),
         &data_dir_path,
     )
 }
 
 /// Collects diagnostics for the config database.
-fn collect_config_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
+fn collect_config_db_diagnostics(path: &Path) -> DatabaseDiagnostics {
     let exists = path.exists();
     let size_bytes = exists
         .then(|| std::fs::metadata(path).ok())
@@ -149,7 +149,7 @@ fn collect_config_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
     };
 
     DatabaseDiagnostics {
-        path: path.clone(),
+        path: path.to_path_buf(),
         exists,
         size_bytes,
         integrity_ok,
@@ -160,7 +160,7 @@ fn collect_config_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
 }
 
 /// Collects diagnostics for the state database.
-fn collect_state_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
+fn collect_state_db_diagnostics(path: &Path) -> DatabaseDiagnostics {
     let exists = path.exists();
     let size_bytes = exists
         .then(|| std::fs::metadata(path).ok())
@@ -189,7 +189,7 @@ fn collect_state_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
     };
 
     DatabaseDiagnostics {
-        path: path.clone(),
+        path: path.to_path_buf(),
         exists,
         size_bytes,
         integrity_ok,
@@ -200,7 +200,7 @@ fn collect_state_db_diagnostics(path: &PathBuf) -> DatabaseDiagnostics {
 }
 
 /// Collects diagnostics for the artifact store.
-fn collect_artifact_diagnostics(data_dir: &PathBuf) -> ArtifactDiagnostics {
+fn collect_artifact_diagnostics(data_dir: &Path) -> ArtifactDiagnostics {
     // Artifact store root is <data_dir>/sessions/ (data_dir already includes "dbflux" suffix)
     let sessions_dir = data_dir.join("sessions");
     let exists = sessions_dir.is_dir();
@@ -236,7 +236,7 @@ fn collect_artifact_diagnostics(data_dir: &PathBuf) -> ArtifactDiagnostics {
 }
 
 /// Collects status for all legacy JSON files.
-fn collect_legacy_file_statuses(config_dir: &PathBuf, data_dir: &PathBuf) -> Vec<LegacyFileStatus> {
+fn collect_legacy_file_statuses(config_dir: &Path, data_dir: &Path) -> Vec<LegacyFileStatus> {
     let legacy_files = vec![
         (
             "profiles.json",
@@ -338,15 +338,13 @@ fn collect_table_counts(conn: &rusqlite::Connection) -> Vec<TableCount> {
                 Ok(s) => s,
                 Err(_) => return Vec::new(),
             };
-                let mut rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+                let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
                     Ok(r) => r,
                     Err(_) => return Vec::new(),
                 };
                 let mut names = Vec::new();
-                while let Some(row) = rows.next() {
-                    if let Ok(name) = row {
-                        names.push(name);
-                    }
+                for name in rows.flatten() {
+                    names.push(name);
                 }
                 names
             }

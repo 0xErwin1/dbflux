@@ -8,7 +8,7 @@ use dbflux_core::{
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
     TrustedClientConfig,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -116,6 +116,7 @@ impl AppState {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_drivers_and_settings(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         general_settings: GeneralSettings,
@@ -2051,7 +2052,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
 
     #[cfg(feature = "mcp")]
-    use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
+    use dbflux_mcp::server::authorization::{authorize_request, AuthorizationRequest};
     #[cfg(feature = "mcp")]
     use dbflux_mcp::server::request_context::RequestIdentity;
     #[cfg(feature = "mcp")]
@@ -2485,11 +2486,9 @@ mod tests {
             assert_eq!(clients.len(), 1);
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
         });
     }
 
@@ -2510,11 +2509,9 @@ mod tests {
             assert_eq!(pending.actor_id, "agent-a");
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated)));
         });
     }
 

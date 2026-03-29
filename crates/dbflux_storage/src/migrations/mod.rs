@@ -308,8 +308,6 @@ pub fn run_state_migrations(conn: &Connection) -> Result<(), StorageError> {
 }
 
 /// Verifies that a database is in a consistent state by running integrity check.
-
-/// Verifies that a database is in a consistent state by running integrity check.
 pub fn verify_integrity(conn: &Connection) -> Result<bool, StorageError> {
     let result: String = conn
         .pragma_query_value(None, "integrity_check", |row| row.get(0))

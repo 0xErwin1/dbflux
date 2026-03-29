@@ -9,7 +9,7 @@
 //! so that callers in `actions.rs` and elsewhere don't need to change.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -154,20 +154,28 @@ impl SessionRepository {
                 source,
             })?;
 
-        let session_row: Option<(String, String, String, Option<i64>, String, String, String)> =
-            session_stmt
-                .query_row([id], |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                })
-                .ok();
+        #[allow(clippy::type_complexity)]
+        let session_row: Option<(
+            String,
+            String,
+            String,
+            Option<i64>,
+            String,
+            String,
+            String,
+        )> = session_stmt
+            .query_row([id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })
+            .ok();
 
         let Some((session_id, name, kind, db_active_index, _created_at, _updated_at, _last_opened)) =
             session_row
@@ -230,7 +238,7 @@ impl SessionRepository {
                 )) => {
                     let language: String = serde_json::from_str(&restore_payload_json)
                         .ok()
-                        .and_then(|p: TabRestorePayload| Some(p.language))
+                        .map(|p: TabRestorePayload| p.language)
                         .unwrap_or_else(|| "sql".to_string());
 
                     tabs.push(FullTab {
@@ -600,7 +608,7 @@ impl SessionRepository {
             };
 
             let payload_json = serde_json::to_string(&payload)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                .map_err(std::io::Error::other)
                 .map_err(|source| StorageError::Io {
                     path: PathBuf::from("state.db"),
                     source,

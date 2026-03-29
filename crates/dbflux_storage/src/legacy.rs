@@ -12,14 +12,14 @@
 //!    are not duplicated on retry.
 
 use dbflux_core::{
-    AppConfig, ConnectionHook, ConnectionProfile, DriverKey, FormValues, GeneralSettings,
-    GlobalOverrides, GovernanceSettings, SavedQuery, SshTunnelProfile, migrate_app_config,
+    migrate_app_config, AppConfig, ConnectionHook, ConnectionProfile, DriverKey, FormValues,
+    GeneralSettings, GlobalOverrides, GovernanceSettings, SavedQuery, SshTunnelProfile,
 };
 use log::warn;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bootstrap::OwnedConnection;
 use crate::repositories::connection_profiles::ConnectionProfileDto;
@@ -120,9 +120,13 @@ fn set_import_status(conn: &rusqlite::Connection, source_file: &str, status: Imp
 
 /// Returns the path to a legacy JSON file if it exists, otherwise None.
 /// Takes the root directory (config dir for most files, data dir for state.json).
-fn legacy_path_if_exists(root: &PathBuf, filename: &str) -> Option<PathBuf> {
+fn legacy_path_if_exists(root: &Path, filename: &str) -> Option<PathBuf> {
     let path = root.join(filename);
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 /// Runs all legacy JSON imports for the domains migrated in previous batches.
@@ -137,8 +141,8 @@ fn legacy_path_if_exists(root: &PathBuf, filename: &str) -> Option<PathBuf> {
 pub fn run_legacy_import(
     config_conn: OwnedConnection,
     state_conn: OwnedConnection,
-    config_dir: &PathBuf,
-    data_dir: &PathBuf,
+    config_dir: &Path,
+    data_dir: &Path,
 ) -> LegacyImportResult {
     let mut result = LegacyImportResult::default();
 
@@ -165,7 +169,7 @@ pub fn run_legacy_import(
 /// Imports connection profiles from legacy `profiles.json`.
 fn import_profiles_with_status(
     config_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "profiles.json";
@@ -302,7 +306,7 @@ fn import_profiles_with_status(
 /// Imports auth profiles from legacy `auth_profiles.json`.
 fn import_auth_profiles_with_status(
     config_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "auth_profiles.json";
@@ -393,7 +397,7 @@ fn import_auth_profiles_with_status(
 /// Imports proxy profiles from legacy `proxies.json`.
 fn import_proxy_profiles_with_status(
     config_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "proxies.json";
@@ -505,7 +509,7 @@ fn import_proxy_profiles_with_status(
 /// Imports SSH tunnel profiles from legacy `ssh_tunnels.json`.
 fn import_ssh_tunnels_with_status(
     config_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "ssh_tunnels.json";
@@ -624,7 +628,7 @@ fn import_ssh_tunnels_with_status(
 /// so the runtime's `AppConfigStore` path can find them.
 fn import_config_json_with_status(
     config_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "config.json";
@@ -691,15 +695,15 @@ fn import_config_json_with_status(
     // Issue #4: Validate governance roles for legacy shape that would cause data loss.
     // The legacy role format had `name`, `description`, and `permissions` fields
     // that are silently dropped by serde. Fail loudly rather than silently losing permissions.
-    if let Some(governance_json) = json.get("governance") {
-        if let Err(e) = validate_governance_roles_json(governance_json) {
-            result.errors.push(format!(
-                "config.json: governance role conversion error: {}",
-                e
-            ));
-            set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
-            return;
-        }
+    if let Some(governance_json) = json.get("governance")
+        && let Err(e) = validate_governance_roles_json(governance_json)
+    {
+        result.errors.push(format!(
+            "config.json: governance role conversion error: {}",
+            e
+        ));
+        set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+        return;
     }
 
     // Start transaction BEFORE marking as failed (issue #3 fix).
@@ -1059,7 +1063,7 @@ fn normalize_driver_key(key: &str) -> String {
 /// Imports query history entries from legacy `history.json`.
 fn import_history_entries_with_status(
     state_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "history.json";
@@ -1203,7 +1207,7 @@ fn import_history_entries_with_status(
 /// Imports saved queries from legacy `saved_queries.json`.
 fn import_saved_queries_with_status(
     state_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "saved_queries.json";
@@ -1310,7 +1314,7 @@ fn import_saved_queries_with_status(
 /// Imports recent files from legacy `recent_files.json`.
 fn import_recent_items_with_status(
     state_conn: &OwnedConnection,
-    config_dir: &PathBuf,
+    config_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "recent_files.json";
@@ -1450,7 +1454,7 @@ fn derive_stable_id(path: &str) -> String {
     let hash1 = hasher.finish();
 
     let mut hasher2 = DefaultHasher::new();
-    (hash1 as u64).hash(&mut hasher2);
+    hash1.hash(&mut hasher2);
     let hash2 = hasher2.finish();
 
     // Format as UUID-like string: first 16 hex chars from hash1, next 16 from hash2
@@ -1460,7 +1464,7 @@ fn derive_stable_id(path: &str) -> String {
 /// Restores UI state from legacy `state.json` in the XDG data directory.
 fn import_ui_state_with_status(
     state_conn: &OwnedConnection,
-    data_dir: &PathBuf,
+    data_dir: &Path,
     result: &mut LegacyImportResult,
 ) {
     let source = "state.json";
