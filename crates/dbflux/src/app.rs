@@ -9,6 +9,7 @@ use dbflux_core::{
     ToolPolicyConfig, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -90,6 +91,7 @@ pub struct AppState {
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
+    storage_runtime: StorageRuntime,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 }
@@ -114,6 +116,9 @@ impl AppState {
         driver_settings: HashMap<DriverKey, FormValues>,
         hook_definitions: HashMap<String, ConnectionHook>,
     ) -> Self {
+        let storage_runtime = dbflux_storage::bootstrap::initialize()
+            .expect("failed to initialize internal storage — cannot continue");
+
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
             .ok();
@@ -174,6 +179,7 @@ impl AppState {
             recent_files,
             scripts_directory,
             session_store,
+            storage_runtime,
             #[cfg(feature = "mcp")]
             mcp_runtime,
         };
@@ -1218,6 +1224,10 @@ impl AppState {
 
     pub fn drivers(&self) -> &HashMap<String, Arc<dyn DbDriver>> {
         &self.facade.connections.drivers
+    }
+
+    pub fn storage_runtime(&self) -> &StorageRuntime {
+        &self.storage_runtime
     }
 
     pub fn driver_for_profile(&self, profile: &ConnectionProfile) -> Option<Arc<dyn DbDriver>> {

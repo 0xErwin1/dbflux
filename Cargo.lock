@@ -2174,6 +2174,7 @@ dependencies = [
  "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_ssm",
+ "dbflux_storage",
  "dbflux_test_support",
  "dirs 5.0.1",
  "env_logger",
@@ -2514,6 +2515,16 @@ dependencies = [
  "dbflux_tunnel_core",
  "env_logger",
  "log",
+]
+
+[[package]]
+name = "dbflux_storage"
+version = "0.4.0-dev.11"
+dependencies = [
+ "dirs 5.0.1",
+ "log",
+ "rusqlite",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

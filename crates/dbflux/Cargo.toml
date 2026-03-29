@@ -16,6 +16,7 @@ path = "src/main.rs"
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_core.workspace = true
+dbflux_storage.workspace = true
 dbflux_lua = { workspace = true, optional = true }
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true

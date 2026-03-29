@@ -1,0 +1,21 @@
+[package]
+name = "dbflux_storage"
+publish = false
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dirs.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
