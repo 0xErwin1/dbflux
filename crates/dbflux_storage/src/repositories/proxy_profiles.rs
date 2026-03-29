@@ -3,7 +3,7 @@
 //! Proxy profiles store SOCKS5/HTTP proxy configurations.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -197,6 +197,48 @@ impl ProxyProfileRepository {
             info!("Updated proxy profile: {}", profile.name);
         }
 
+        Ok(())
+    }
+
+    /// Upserts a proxy profile (insert or update).
+    pub fn upsert(&self, profile: &ProxyProfileDto) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                r#"
+                INSERT INTO proxy_profiles (
+                    id, name, kind, host, port, auth_json, no_proxy, enabled, save_secret, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now')
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    kind = excluded.kind,
+                    host = excluded.host,
+                    port = excluded.port,
+                    auth_json = excluded.auth_json,
+                    no_proxy = excluded.no_proxy,
+                    enabled = excluded.enabled,
+                    save_secret = excluded.save_secret,
+                    updated_at = datetime('now')
+                "#,
+                params![
+                    profile.id,
+                    profile.name,
+                    profile.kind,
+                    profile.host,
+                    profile.port,
+                    profile.auth_json,
+                    profile.no_proxy,
+                    profile.enabled as i32,
+                    profile.save_secret as i32,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        info!("Upserted proxy profile: {}", profile.name);
         Ok(())
     }
 

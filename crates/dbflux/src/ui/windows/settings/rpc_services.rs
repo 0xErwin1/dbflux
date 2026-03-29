@@ -1,7 +1,8 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
-use dbflux_core::{AppConfig, AppConfigStore, ServiceConfig};
+use dbflux_core::ServiceConfig;
+use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -85,48 +86,9 @@ impl ServicesSection {
             || !self.svc_enabled
     }
 
-    pub(super) fn load_services(&mut self) {
-        let store = match AppConfigStore::new() {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to create config store: {}", e);
-                self.svc_services = Vec::new();
-                self.svc_config_store = None;
-                return;
-            }
-        };
-
-        self.svc_services = match store.load() {
-            Ok(config) => config.services,
-            Err(e) => {
-                log::error!("Failed to load config: {}", e);
-                Vec::new()
-            }
-        };
-
-        self.svc_config_store = Some(store);
-    }
-
-    fn persist_services(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ref store) = self.svc_config_store else {
-            cx.toast_error("Cannot save: config store unavailable", window);
-            return;
-        };
-
-        let mut config = match store.load() {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("Failed to load config before save: {}", e);
-                AppConfig::default()
-            }
-        };
-
-        config.services = self.svc_services.clone();
-
-        if let Err(e) = store.save(&config) {
-            log::error!("Failed to save config: {}", e);
-            cx.toast_error(format!("Failed to save config: {}", e), window);
-        }
+    pub(super) fn load_services(&mut self, runtime: &StorageRuntime) {
+        let config = crate::config_loader::load_config(runtime);
+        self.svc_services = config.services;
     }
 
     // --- Form lifecycle ---
@@ -292,7 +254,12 @@ impl ServicesSection {
             self.svc_services.len() - 1
         };
 
-        self.persist_services(window, cx);
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_services(runtime, &self.svc_services) {
+            log::error!("Failed to save services to SQLite: {}", e);
+            cx.toast_error(format!("Failed to save config: {}", e), window);
+            return;
+        }
         cx.toast_info("Service saved. Restart required to apply changes.", window);
 
         self.svc_selected_idx = Some(saved_idx);
@@ -336,7 +303,12 @@ impl ServicesSection {
             }
         }
 
-        self.persist_services(window, cx);
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_services(runtime, &self.svc_services) {
+            log::error!("Failed to save services to SQLite: {}", e);
+            cx.toast_error(format!("Failed to save config: {}", e), window);
+            return;
+        }
         cx.toast_info(
             "Service deleted. Restart required to apply changes.",
             window,

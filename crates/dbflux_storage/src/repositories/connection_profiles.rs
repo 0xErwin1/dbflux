@@ -4,7 +4,7 @@
 //! create to connect to various databases.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -259,6 +259,72 @@ impl ConnectionProfileRepository {
             info!("Updated connection profile: {}", profile.name);
         }
 
+        Ok(())
+    }
+
+    /// Upserts a connection profile (insert or update).
+    pub fn upsert(&self, profile: &ConnectionProfileDto) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                r#"
+                INSERT INTO connection_profiles (
+                    id, name, driver_id, description, favorite, color, icon,
+                    config_json, auth_profile_id, proxy_profile_id,
+                    ssh_tunnel_profile_id, access_profile_id,
+                    settings_overrides_json, connection_settings_json,
+                    hooks_json, hook_bindings_json, value_refs_json,
+                    mcp_governance_json, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'), datetime('now')
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    driver_id = excluded.driver_id,
+                    description = excluded.description,
+                    favorite = excluded.favorite,
+                    color = excluded.color,
+                    icon = excluded.icon,
+                    config_json = excluded.config_json,
+                    auth_profile_id = excluded.auth_profile_id,
+                    proxy_profile_id = excluded.proxy_profile_id,
+                    ssh_tunnel_profile_id = excluded.ssh_tunnel_profile_id,
+                    access_profile_id = excluded.access_profile_id,
+                    settings_overrides_json = excluded.settings_overrides_json,
+                    connection_settings_json = excluded.connection_settings_json,
+                    hooks_json = excluded.hooks_json,
+                    hook_bindings_json = excluded.hook_bindings_json,
+                    value_refs_json = excluded.value_refs_json,
+                    mcp_governance_json = excluded.mcp_governance_json,
+                    updated_at = datetime('now')
+                "#,
+                params![
+                    profile.id,
+                    profile.name,
+                    profile.driver_id,
+                    profile.description,
+                    profile.favorite as i32,
+                    profile.color,
+                    profile.icon,
+                    profile.config_json,
+                    profile.auth_profile_id,
+                    profile.proxy_profile_id,
+                    profile.ssh_tunnel_profile_id,
+                    profile.access_profile_id,
+                    profile.settings_overrides_json,
+                    profile.connection_settings_json,
+                    profile.hooks_json,
+                    profile.hook_bindings_json,
+                    profile.value_refs_json,
+                    profile.mcp_governance_json,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        info!("Upserted connection profile: {}", profile.name);
         Ok(())
     }
 

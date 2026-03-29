@@ -147,10 +147,10 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::SshTunnels(section), vec![focus_sub])
             }
-            SettingsSectionId::Services => (
-                ActiveSettingsSection::Services(cx.new(|cx| ServicesSection::new(window, cx))),
-                vec![],
-            ),
+            SettingsSectionId::Services => {
+                let section = cx.new(|cx| ServicesSection::new(app_state, window, cx));
+                (ActiveSettingsSection::Services(section), vec![])
+            }
             SettingsSectionId::Hooks => {
                 let section = cx.new(|cx| HooksSection::new(app_state, window, cx));
                 let subscription = cx.subscribe(&section, |this, _, event: &SettingsEvent, cx| {
