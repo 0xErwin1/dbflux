@@ -1,12 +1,12 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AppConfig, AppConfigStore, AuthProfile, CancelToken, Connection, ConnectionHook,
-    ConnectionHooks, ConnectionMcpGovernance, ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey,
-    EffectiveSettings, FormValues, GeneralSettings, GlobalOverrides, GovernanceSettings,
-    HistoryEntry, HookContext, HookPhase, PolicyRoleConfig, ProfileManager, ProxyProfile,
-    SavedQuery, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
-    SecretStore, ServiceConfig, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
-    TaskSnapshot, ToolPolicyConfig, TrustedClientConfig,
+    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
+    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
+    GeneralSettings, GlobalOverrides, GovernanceSettings, HistoryEntry, HookContext, HookPhase,
+    PolicyRoleConfig, ProfileManager, ProxyProfile, SavedQuery, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
+    TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -206,34 +206,39 @@ impl AppState {
 
     #[cfg(feature = "mcp")]
     fn bootstrap_mcp_runtime_from_persistence(&mut self) {
-        if let Ok(store) = AppConfigStore::new()
-            && let Ok(config) = store.load()
-        {
-            for client in config.governance.trusted_clients {
-                let _ = self
-                    .mcp_runtime
-                    .upsert_trusted_client_mut(TrustedClientDto {
-                        id: client.id,
-                        name: client.name,
-                        issuer: client.issuer,
-                        active: client.active,
-                    });
-            }
+        let governance = self
+            .storage_runtime
+            .settings()
+            .get("governance_settings")
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<GovernanceSettings>(&json).ok())
+            .unwrap_or_default();
 
-            for role in config.governance.roles {
-                let _ = self.mcp_runtime.upsert_role_mut(PolicyRoleDto {
-                    id: role.id,
-                    policy_ids: role.policy_ids,
+        for client in governance.trusted_clients {
+            let _ = self
+                .mcp_runtime
+                .upsert_trusted_client_mut(TrustedClientDto {
+                    id: client.id,
+                    name: client.name,
+                    issuer: client.issuer,
+                    active: client.active,
                 });
-            }
+        }
 
-            for policy in config.governance.policies {
-                let _ = self.mcp_runtime.upsert_policy_mut(ToolPolicyDto {
-                    id: policy.id,
-                    allowed_tools: policy.allowed_tools,
-                    allowed_classes: policy.allowed_classes,
-                });
-            }
+        for role in governance.roles {
+            let _ = self.mcp_runtime.upsert_role_mut(PolicyRoleDto {
+                id: role.id,
+                policy_ids: role.policy_ids,
+            });
+        }
+
+        for policy in governance.policies {
+            let _ = self.mcp_runtime.upsert_policy_mut(ToolPolicyDto {
+                id: policy.id,
+                allowed_tools: policy.allowed_tools,
+                allowed_classes: policy.allowed_classes,
+            });
         }
 
         for profile in self.facade.profiles.profiles.clone() {
@@ -896,9 +901,10 @@ impl AppState {
     }
 
     pub fn save_profiles(&self) {
-        if let Err(e) =
-            crate::config_loader::save_profiles(&self.storage_runtime, &self.facade.profiles.profiles)
-        {
+        if let Err(e) = crate::config_loader::save_profiles(
+            &self.storage_runtime,
+            &self.facade.profiles.profiles,
+        ) {
             log::error!("Failed to save connection profiles: {}", e);
         }
     }
@@ -908,7 +914,10 @@ impl AppState {
     pub fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.ssh_tunnels.items.push(tunnel.clone());
-        if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+        if let Err(e) = crate::config_loader::save_ssh_tunnels(
+            &self.storage_runtime,
+            &self.facade.ssh_tunnels.items,
+        ) {
             log::error!("Failed to save SSH tunnel profiles: {}", e);
         }
     }
@@ -916,7 +925,10 @@ impl AppState {
     #[allow(dead_code)]
     pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<SshTunnelProfile> {
         let removed = self.facade.remove_ssh_tunnel(idx)?;
-        if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+        if let Err(e) = crate::config_loader::save_ssh_tunnels(
+            &self.storage_runtime,
+            &self.facade.ssh_tunnels.items,
+        ) {
             log::error!("Failed to save SSH tunnel profiles after remove: {}", e);
         }
         Some(removed)
@@ -924,9 +936,18 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn update_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
-        if let Some(existing) = self.facade.ssh_tunnels.items.iter_mut().find(|t| t.id == tunnel.id) {
+        if let Some(existing) = self
+            .facade
+            .ssh_tunnels
+            .items
+            .iter_mut()
+            .find(|t| t.id == tunnel.id)
+        {
             *existing = tunnel.clone();
-            if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+            if let Err(e) = crate::config_loader::save_ssh_tunnels(
+                &self.storage_runtime,
+                &self.facade.ssh_tunnels.items,
+            ) {
                 log::error!("Failed to save SSH tunnel profiles: {}", e);
             }
         }
@@ -937,23 +958,38 @@ impl AppState {
     pub fn add_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.proxies.items.push(proxy.clone());
-        if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+        if let Err(e) = crate::config_loader::save_proxy_profiles(
+            &self.storage_runtime,
+            &self.facade.proxies.items,
+        ) {
             log::error!("Failed to save proxy profiles: {}", e);
         }
     }
 
     pub fn remove_proxy(&mut self, idx: usize) -> Option<dbflux_core::ProxyProfile> {
         let removed = self.facade.remove_proxy(idx)?;
-        if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+        if let Err(e) = crate::config_loader::save_proxy_profiles(
+            &self.storage_runtime,
+            &self.facade.proxies.items,
+        ) {
             log::error!("Failed to save proxy profiles after remove: {}", e);
         }
         Some(removed)
     }
 
     pub fn update_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
-        if let Some(existing) = self.facade.proxies.items.iter_mut().find(|p| p.id == proxy.id) {
+        if let Some(existing) = self
+            .facade
+            .proxies
+            .items
+            .iter_mut()
+            .find(|p| p.id == proxy.id)
+        {
             *existing = proxy.clone();
-            if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+            if let Err(e) = crate::config_loader::save_proxy_profiles(
+                &self.storage_runtime,
+                &self.facade.proxies.items,
+            ) {
                 log::error!("Failed to save proxy profiles: {}", e);
             }
         }
@@ -976,7 +1012,10 @@ impl AppState {
     pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.auth_profiles.items.push(profile.clone());
-        if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+        if let Err(e) = crate::config_loader::save_auth_profiles(
+            &self.storage_runtime,
+            &self.facade.auth_profiles.items,
+        ) {
             log::error!("Failed to save auth profiles: {}", e);
         }
     }
@@ -984,7 +1023,10 @@ impl AppState {
     pub fn remove_auth_profile(&mut self, idx: usize) -> Option<dbflux_core::AuthProfile> {
         if idx < self.facade.auth_profiles.items.len() {
             let removed = self.facade.auth_profiles.items.remove(idx);
-            if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+            if let Err(e) = crate::config_loader::save_auth_profiles(
+                &self.storage_runtime,
+                &self.facade.auth_profiles.items,
+            ) {
                 log::error!("Failed to save auth profiles after remove: {}", e);
             }
             Some(removed)
@@ -994,9 +1036,18 @@ impl AppState {
     }
 
     pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
-        if let Some(existing) = self.facade.auth_profiles.items.iter_mut().find(|i| i.id == profile.id) {
+        if let Some(existing) = self
+            .facade
+            .auth_profiles
+            .items
+            .iter_mut()
+            .find(|i| i.id == profile.id)
+        {
             *existing = profile.clone();
-            if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+            if let Err(e) = crate::config_loader::save_auth_profiles(
+                &self.storage_runtime,
+                &self.facade.auth_profiles.items,
+            ) {
                 log::error!("Failed to save auth profiles: {}", e);
             }
         }
@@ -1802,19 +1853,28 @@ impl AppState {
             })
             .collect();
 
-        let mut config = AppConfigStore::new()
-            .and_then(|store| store.load())
-            .unwrap_or_else(|_| AppConfig::default());
+        let mcp_enabled_by_default = self
+            .storage_runtime
+            .settings()
+            .get("governance_settings")
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<GovernanceSettings>(&json).ok())
+            .map(|settings| settings.mcp_enabled_by_default)
+            .unwrap_or(false);
 
-        config.governance = GovernanceSettings {
-            mcp_enabled_by_default: false,
+        let governance = GovernanceSettings {
+            mcp_enabled_by_default,
             trusted_clients,
             roles,
             policies,
         };
 
-        if let Ok(store) = AppConfigStore::new() {
-            let _ = store.save(&config);
+        if let Ok(json) = serde_json::to_string(&governance) {
+            let _ = self
+                .storage_runtime
+                .settings()
+                .set("governance_settings", &json);
         }
 
         self.save_profiles();

@@ -27,7 +27,7 @@ pub use config::{
     GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
     ScriptEntry, ScriptsDirectory, ServiceConfig, StartupFocus, ThemeSetting, ToolPolicyConfig,
     TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
-    hook_script_path, is_openable_script,
+    hook_script_path, is_openable_script, migrate_app_config,
 };
 
 pub use connection::{

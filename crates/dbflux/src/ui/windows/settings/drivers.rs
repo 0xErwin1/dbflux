@@ -8,8 +8,7 @@ use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides,
-    RefreshPolicySetting,
+    DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -593,7 +592,11 @@ impl DriversSection {
         self.drv_settings.retain(|_, values| !values.is_empty());
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_driver_settings(runtime, &self.drv_overrides, &self.drv_settings) {
+        if let Err(e) = crate::config_loader::save_driver_settings(
+            runtime,
+            &self.drv_overrides,
+            &self.drv_settings,
+        ) {
             log::error!("Failed to save driver settings to SQLite: {}", e);
             cx.toast_error(format!("Failed to save: {}", e), window);
             return;

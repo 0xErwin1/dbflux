@@ -477,23 +477,23 @@ pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
 fn load_general_settings(
     repo: &dbflux_storage::repositories::settings::SettingsRepository,
 ) -> GeneralSettings {
-    if let Ok(Some(json)) = repo.get("general_settings") {
-        if let Ok(settings) = serde_json::from_str::<GeneralSettings>(&json) {
-            return settings;
-        }
+    if let Ok(Some(json)) = repo.get("general_settings")
+        && let Ok(settings) = serde_json::from_str::<GeneralSettings>(&json)
+    {
+        return settings;
     }
 
     let theme = load_enum::<String>(repo, "theme")
-        .and_then(|s| match s.as_str() {
-            "light" => Some(dbflux_core::ThemeSetting::Light),
-            _ => Some(dbflux_core::ThemeSetting::Dark),
+        .map(|s| match s.as_str() {
+            "light" => dbflux_core::ThemeSetting::Light,
+            _ => dbflux_core::ThemeSetting::Dark,
         })
         .unwrap_or(dbflux_core::ThemeSetting::Dark);
 
     let default_focus = load_enum::<String>(repo, "default_focus")
-        .and_then(|s| match s.as_str() {
-            "last_tab" => Some(dbflux_core::StartupFocus::LastTab),
-            _ => Some(dbflux_core::StartupFocus::Sidebar),
+        .map(|s| match s.as_str() {
+            "last_tab" => dbflux_core::StartupFocus::LastTab,
+            _ => dbflux_core::StartupFocus::Sidebar,
         })
         .unwrap_or(dbflux_core::StartupFocus::Sidebar);
 
@@ -505,9 +505,9 @@ fn load_general_settings(
         max_history_entries: load_usize(repo, "max_history_entries").unwrap_or(1000),
         auto_save_interval_ms: load_u64(repo, "auto_save_interval_ms").unwrap_or(2000),
         default_refresh_policy: load_enum::<String>(repo, "default_refresh_policy")
-            .and_then(|s| match s.as_str() {
-                "interval" => Some(dbflux_core::RefreshPolicySetting::Interval),
-                _ => Some(dbflux_core::RefreshPolicySetting::Manual),
+            .map(|s| match s.as_str() {
+                "interval" => dbflux_core::RefreshPolicySetting::Interval,
+                _ => dbflux_core::RefreshPolicySetting::Manual,
             })
             .unwrap_or(dbflux_core::RefreshPolicySetting::Manual),
         default_refresh_interval_secs: load_u32(repo, "default_refresh_interval_secs").unwrap_or(5),
@@ -706,14 +706,13 @@ fn load_proxy_profiles(
         entries
             .into_iter()
             .filter_map(|dto| {
-                let auth: dbflux_core::ProxyAuth = serde_json::from_str(&dto.auth_json)
-                    .unwrap_or_else(|_| dbflux_core::ProxyAuth::None);
+                let auth: dbflux_core::ProxyAuth =
+                    serde_json::from_str(&dto.auth_json).unwrap_or(dbflux_core::ProxyAuth::None);
                 let id = uuid::Uuid::parse_str(&dto.id).ok()?;
                 Some(ProxyProfile {
                     id,
                     name: dto.name,
-                    kind: serde_json::from_str(&dto.kind)
-                        .unwrap_or_else(|_| dbflux_core::ProxyKind::Http),
+                    kind: serde_json::from_str(&dto.kind).unwrap_or(dbflux_core::ProxyKind::Http),
                     host: dto.host,
                     port: dto.port as u16,
                     auth,

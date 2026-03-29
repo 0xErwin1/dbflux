@@ -4,7 +4,7 @@
 //! cloud-hosted databases (e.g., AWS SSO, Azure AD).
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

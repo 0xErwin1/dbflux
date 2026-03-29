@@ -4,7 +4,7 @@
 //! environment variables) for launching managed driver hosts.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;

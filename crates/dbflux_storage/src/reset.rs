@@ -161,9 +161,11 @@ mod tests {
         let result = clear_state_db(&conn);
 
         assert!(result.tables_cleared.contains(&"query_history".to_string()));
-        assert!(result
-            .tables_cleared
-            .contains(&"app_runtime_state".to_string()));
+        assert!(
+            result
+                .tables_cleared
+                .contains(&"app_runtime_state".to_string())
+        );
         assert!(result.rows_deleted >= 2);
 
         // Verify data is gone
@@ -236,17 +238,21 @@ mod tests {
 
         // All 9 migrated tables should be in tables_cleared
         assert!(result.tables_cleared.contains(&"query_history".to_string()));
-        assert!(result
-            .tables_cleared
-            .contains(&"app_runtime_state".to_string()));
+        assert!(
+            result
+                .tables_cleared
+                .contains(&"app_runtime_state".to_string())
+        );
         assert!(result.tables_cleared.contains(&"recent_items".to_string()));
         assert!(result.tables_cleared.contains(&"saved_queries".to_string()));
         assert!(result.tables_cleared.contains(&"sessions".to_string()));
         assert!(result.tables_cleared.contains(&"event_log".to_string()));
         assert!(result.tables_cleared.contains(&"schema_cache".to_string()));
-        assert!(result
-            .tables_cleared
-            .contains(&"saved_query_folders".to_string()));
+        assert!(
+            result
+                .tables_cleared
+                .contains(&"saved_query_folders".to_string())
+        );
         assert!(result.tables_cleared.contains(&"session_tabs".to_string()));
 
         // Verify data is gone

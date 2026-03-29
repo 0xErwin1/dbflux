@@ -28,6 +28,7 @@ dbflux_mcp = { workspace = true }
 dbflux_policy = { workspace = true }
 dbflux_approval = { workspace = true }
 dbflux_audit = { workspace = true }
+dbflux_storage = { workspace = true }
 
 # Optional driver crates
 dbflux_driver_sqlite = { workspace = true, optional = true }
@@ -56,6 +57,7 @@ anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
+rusqlite.workspace = true
 
 # Logging (keeping existing, will migrate to tracing later)
 log.workspace = true

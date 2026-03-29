@@ -3,7 +3,7 @@
 //! SSH tunnel profiles store SSH tunnel configurations for secure database access.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

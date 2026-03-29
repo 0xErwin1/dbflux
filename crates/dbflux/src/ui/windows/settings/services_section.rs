@@ -1,7 +1,7 @@
-use super::form_section::FormSection;
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::form_section::FormSection;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppState;
 use crate::keymap::{KeyChord, Modifiers};
 use dbflux_core::ServiceConfig;
