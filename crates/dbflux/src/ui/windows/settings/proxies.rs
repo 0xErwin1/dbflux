@@ -292,6 +292,11 @@ impl ProxiesSection {
             cx.emit(AppStateChanged);
         });
 
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_proxy_profiles(runtime, &self.app_state.read(cx).proxies().to_vec()) {
+            log::error!("Failed to save proxy profiles: {}", e);
+        }
+
         self.proxy_selected_idx = self
             .app_state
             .read(cx)

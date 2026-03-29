@@ -280,6 +280,11 @@ impl SshTunnelsSection {
             cx.emit(AppStateChanged);
         });
 
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_ssh_tunnels(runtime, &self.app_state.read(cx).ssh_tunnels().to_vec()) {
+            log::error!("Failed to save SSH tunnel profiles: {}", e);
+        }
+
         self.ssh_selected_idx = self
             .app_state
             .read(cx)

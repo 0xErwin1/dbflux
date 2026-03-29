@@ -1,9 +1,10 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
+use crate::app::AppState;
 use crate::keymap::{KeyChord, Modifiers};
-use dbflux_core::{AppConfigStore, ServiceConfig};
+use dbflux_core::ServiceConfig;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
@@ -36,8 +37,8 @@ pub(super) enum ServiceFormRow {
 }
 
 pub(super) struct ServicesSection {
+    pub(super) app_state: Entity<AppState>,
     pub(super) svc_services: Vec<ServiceConfig>,
-    pub(super) svc_config_store: Option<AppConfigStore>,
 
     pub(super) svc_focus: ServiceFocus,
     pub(super) svc_selected_idx: Option<usize>,
@@ -65,7 +66,11 @@ pub(super) struct ServicesSection {
 impl EventEmitter<SectionFocusEvent> for ServicesSection {}
 
 impl ServicesSection {
-    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        app_state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input_socket_id =
             cx.new(|cx| InputState::new(window, cx).placeholder("my-driver.sock"));
         let input_svc_command =
@@ -73,8 +78,8 @@ impl ServicesSection {
         let input_svc_timeout = cx.new(|cx| InputState::new(window, cx).placeholder("5000"));
 
         let mut section = Self {
+            app_state,
             svc_services: Vec::new(),
-            svc_config_store: None,
             svc_focus: ServiceFocus::List,
             svc_selected_idx: None,
             svc_list_scroll_handle: ScrollHandle::new(),
@@ -95,7 +100,8 @@ impl ServicesSection {
             content_focused: false,
         };
 
-        section.load_services();
+        let runtime = section.app_state.read(cx).storage_runtime();
+        section.load_services(runtime);
         section
     }
 }

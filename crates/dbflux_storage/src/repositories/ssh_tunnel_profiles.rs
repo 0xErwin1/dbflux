@@ -3,7 +3,7 @@
 //! SSH tunnel profiles store SSH tunnel configurations for secure database access.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -172,6 +172,38 @@ impl SshTunnelProfileRepository {
             info!("Updated SSH tunnel profile: {}", profile.name);
         }
 
+        Ok(())
+    }
+
+    /// Upserts an SSH tunnel profile (insert or update).
+    pub fn upsert(&self, profile: &SshTunnelProfileDto) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                r#"
+                INSERT INTO ssh_tunnel_profiles (
+                    id, name, config_json, save_secret, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    config_json = excluded.config_json,
+                    save_secret = excluded.save_secret,
+                    updated_at = datetime('now')
+                "#,
+                params![
+                    profile.id,
+                    profile.name,
+                    profile.config_json,
+                    profile.save_secret as i32,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        info!("Upserted SSH tunnel profile: {}", profile.name);
         Ok(())
     }
 

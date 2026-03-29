@@ -3,7 +3,7 @@ use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    AppConfig, AppConfigStore, ConnectionHook, HookExecutionMode, HookFailureMode, HookKind,
+    ConnectionHook, HookExecutionMode, HookFailureMode, HookKind,
     ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
@@ -668,27 +668,10 @@ impl HooksSection {
     }
 
     fn persist_hooks(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let store = match AppConfigStore::new() {
-            Ok(store) => store,
-            Err(error) => {
-                cx.toast_error(format!("Cannot save: {}", error), window);
-                return;
-            }
-        };
-
-        let mut config = match store.load() {
-            Ok(config) => config,
-            Err(error) => {
-                log::error!("Failed to load config before hooks save: {}", error);
-                AppConfig::default()
-            }
-        };
-
-        config.hook_definitions = self.hook_definitions.clone();
-
-        if let Err(error) = store.save(&config) {
-            log::error!("Failed to save hooks: {}", error);
-            cx.toast_error(format!("Failed to save hooks: {}", error), window);
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_hook_definitions(runtime, &self.hook_definitions) {
+            log::error!("Failed to save hooks to SQLite: {}", e);
+            cx.toast_error(format!("Failed to save hooks: {}", e), window);
             return;
         }
 

@@ -8,7 +8,7 @@ use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    AppConfig, AppConfigStore, DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides,
+    DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides,
     RefreshPolicySetting,
 };
 use gpui::prelude::FluentBuilder;
@@ -592,31 +592,10 @@ impl DriversSection {
             .retain(|_, overrides| !overrides.is_empty());
         self.drv_settings.retain(|_, values| !values.is_empty());
 
-        let store = match AppConfigStore::new() {
-            Ok(store) => store,
-            Err(error) => {
-                cx.toast_error(format!("Cannot save: {}", error), window);
-                return;
-            }
-        };
-
-        let mut config = match store.load() {
-            Ok(config) => config,
-            Err(error) => {
-                log::error!(
-                    "Failed to load config before driver settings save: {}",
-                    error
-                );
-                AppConfig::default()
-            }
-        };
-
-        config.driver_overrides = self.drv_overrides.clone();
-        config.driver_settings = self.drv_settings.clone();
-
-        if let Err(error) = store.save(&config) {
-            log::error!("Failed to save driver settings: {}", error);
-            cx.toast_error(format!("Failed to save: {}", error), window);
+        let runtime = self.app_state.read(cx).storage_runtime();
+        if let Err(e) = crate::config_loader::save_driver_settings(runtime, &self.drv_overrides, &self.drv_settings) {
+            log::error!("Failed to save driver settings to SQLite: {}", e);
+            cx.toast_error(format!("Failed to save: {}", e), window);
             return;
         }
 

@@ -896,37 +896,67 @@ impl AppState {
     }
 
     pub fn save_profiles(&self) {
-        self.facade.profiles.save();
+        if let Err(e) =
+            crate::config_loader::save_profiles(&self.storage_runtime, &self.facade.profiles.profiles)
+        {
+            log::error!("Failed to save connection profiles: {}", e);
+        }
     }
 
     // --- SshTunnelManager ---
 
     pub fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
-        self.facade.ssh_tunnels.add(tunnel);
+        // Directly push to facade items (store is None so auto-save is a no-op).
+        self.facade.ssh_tunnels.items.push(tunnel.clone());
+        if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+            log::error!("Failed to save SSH tunnel profiles: {}", e);
+        }
     }
 
     #[allow(dead_code)]
     pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<SshTunnelProfile> {
-        self.facade.remove_ssh_tunnel(idx)
+        let removed = self.facade.remove_ssh_tunnel(idx)?;
+        if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+            log::error!("Failed to save SSH tunnel profiles after remove: {}", e);
+        }
+        Some(removed)
     }
 
     #[allow(dead_code)]
     pub fn update_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
-        self.facade.ssh_tunnels.update(tunnel);
+        if let Some(existing) = self.facade.ssh_tunnels.items.iter_mut().find(|t| t.id == tunnel.id) {
+            *existing = tunnel.clone();
+            if let Err(e) = crate::config_loader::save_ssh_tunnels(&self.storage_runtime, &self.facade.ssh_tunnels.items) {
+                log::error!("Failed to save SSH tunnel profiles: {}", e);
+            }
+        }
     }
 
     // --- ProxyManager ---
 
     pub fn add_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
-        self.facade.proxies.add(proxy);
+        // Directly push to facade items (store is None so auto-save is a no-op).
+        self.facade.proxies.items.push(proxy.clone());
+        if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+            log::error!("Failed to save proxy profiles: {}", e);
+        }
     }
 
     pub fn remove_proxy(&mut self, idx: usize) -> Option<dbflux_core::ProxyProfile> {
-        self.facade.remove_proxy(idx)
+        let removed = self.facade.remove_proxy(idx)?;
+        if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+            log::error!("Failed to save proxy profiles after remove: {}", e);
+        }
+        Some(removed)
     }
 
     pub fn update_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
-        self.facade.proxies.update(proxy);
+        if let Some(existing) = self.facade.proxies.items.iter_mut().find(|p| p.id == proxy.id) {
+            *existing = proxy.clone();
+            if let Err(e) = crate::config_loader::save_proxy_profiles(&self.storage_runtime, &self.facade.proxies.items) {
+                log::error!("Failed to save proxy profiles: {}", e);
+            }
+        }
     }
 
     pub fn get_proxy_secret(&self, proxy: &dbflux_core::ProxyProfile) -> Option<SecretString> {
@@ -944,15 +974,32 @@ impl AppState {
     // --- AuthProfileManager ---
 
     pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
-        self.facade.auth_profiles.add(profile);
+        // Directly push to facade items (store is None so auto-save is a no-op).
+        self.facade.auth_profiles.items.push(profile.clone());
+        if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+            log::error!("Failed to save auth profiles: {}", e);
+        }
     }
 
     pub fn remove_auth_profile(&mut self, idx: usize) -> Option<dbflux_core::AuthProfile> {
-        self.facade.auth_profiles.remove(idx)
+        if idx < self.facade.auth_profiles.items.len() {
+            let removed = self.facade.auth_profiles.items.remove(idx);
+            if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+                log::error!("Failed to save auth profiles after remove: {}", e);
+            }
+            Some(removed)
+        } else {
+            None
+        }
     }
 
     pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
-        self.facade.auth_profiles.update(profile);
+        if let Some(existing) = self.facade.auth_profiles.items.iter_mut().find(|i| i.id == profile.id) {
+            *existing = profile.clone();
+            if let Err(e) = crate::config_loader::save_auth_profiles(&self.storage_runtime, &self.facade.auth_profiles.items) {
+                log::error!("Failed to save auth profiles: {}", e);
+            }
+        }
     }
 
     pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
