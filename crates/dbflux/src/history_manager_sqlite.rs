@@ -139,10 +139,8 @@ impl HistoryManager {
         self.saved_queries.retain(|e| e.id != id);
         let removed = self.saved_queries.len() != before;
 
-        if removed {
-            if let Err(e) = self.saved_queries_repo.delete(&id.to_string()) {
-                error!("Failed to remove saved query: {:?}", e);
-            }
+        if removed && let Err(e) = self.saved_queries_repo.delete(&id.to_string()) {
+            error!("Failed to remove saved query: {:?}", e);
         }
         removed
     }
@@ -224,7 +222,7 @@ impl HistoryManager {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        self.recent_files.retain(|e| &e.path != &path);
+        self.recent_files.retain(|e| e.path != path);
 
         self.recent_files.insert(
             0,

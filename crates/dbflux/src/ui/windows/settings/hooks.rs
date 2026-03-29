@@ -3,8 +3,7 @@ use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
-    ConnectionHook, HookExecutionMode, HookFailureMode, HookKind,
-    ScriptLanguage, ScriptSource,
+    ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -669,7 +668,8 @@ impl HooksSection {
 
     fn persist_hooks(&self, window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_hook_definitions(runtime, &self.hook_definitions) {
+        if let Err(e) = crate::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
+        {
             log::error!("Failed to save hooks to SQLite: {}", e);
             cx.toast_error(format!("Failed to save hooks: {}", e), window);
             return;

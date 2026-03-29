@@ -7,13 +7,17 @@ use tokio::sync::{Mutex, RwLock};
 use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
-    AppConfigStore, AuthProfileManager, ConnectionProfile, DbDriver, DriverKey, FormValues,
+    AuthProfileManager, ConnectionProfile, DbDriver, DriverKey, FormValues, GovernanceSettings,
     KeyringSecretStore, ProfileManager, SecretManager,
 };
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,
 };
+use dbflux_storage::paths as storage_paths;
+use dbflux_storage::repositories::driver_settings::DriverSettingsRepository;
+use dbflux_storage::repositories::settings::SettingsRepository;
+use dbflux_storage::sqlite as storage_sqlite;
 
 use crate::connection_cache::ConnectionCache;
 use crate::error_messages;
@@ -41,7 +45,7 @@ impl ServerState {
     ///
     /// `config_dir` overrides the default `~/.config/dbflux` location.
     pub fn new(client_id: String, config_dir: Option<PathBuf>) -> Result<Self, String> {
-        let runtime = build_runtime(config_dir.as_deref())?;
+        let (runtime, governance_settings) = build_runtime(config_dir.as_deref())?;
 
         // Validate that the client_id exists as a trusted client
         validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
@@ -64,7 +68,7 @@ impl ServerState {
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             connection_setup_lock: Arc::new(Mutex::new(())),
             secret_manager,
-            mcp_enabled_by_default: false,
+            mcp_enabled_by_default: governance_settings.mcp_enabled_by_default,
         };
 
         // Load connection policy assignments
@@ -83,21 +87,28 @@ impl ServerState {
 fn load_driver_settings(
     config_dir: Option<&std::path::Path>,
 ) -> Result<HashMap<DriverKey, FormValues>, String> {
-    let config_store = match config_dir {
-        Some(dir) => AppConfigStore::from_dir(dir)
-            .map_err(|e| error_messages::config_error("open config store", Some(dir), e))?,
-        None => AppConfigStore::new()
-            .map_err(|e| error_messages::config_error("open config store", None, e))?,
-    };
+    let conn = open_config_db(config_dir)?;
+    let repo = DriverSettingsRepository::new(Arc::new(conn));
+    let entries = repo
+        .all()
+        .map_err(|e| format!("Failed to load driver settings from config.db: {}", e))?;
 
-    let config = config_store
-        .load()
-        .map_err(|e| error_messages::config_error("load config", None, e))?;
+    let mut settings = HashMap::new();
 
-    Ok(config.driver_settings)
+    for entry in entries {
+        if let Some(json) = entry.settings_json
+            && let Ok(values) = serde_json::from_str::<FormValues>(&json)
+        {
+            settings.insert(entry.driver_key, values);
+        }
+    }
+
+    Ok(settings)
 }
 
-fn build_runtime(config_dir: Option<&std::path::Path>) -> Result<McpRuntime, String> {
+fn build_runtime(
+    config_dir: Option<&std::path::Path>,
+) -> Result<(McpRuntime, GovernanceSettings), String> {
     let audit_service = match config_dir {
         Some(dir) => {
             let audit_path = dir.join("mcp_audit.sqlite");
@@ -112,12 +123,12 @@ fn build_runtime(config_dir: Option<&std::path::Path>) -> Result<McpRuntime, Str
 
     let mut runtime = McpRuntime::new(audit_service);
 
-    load_governance_into_runtime(&mut runtime, config_dir)?;
+    let governance_settings = load_governance_into_runtime(&mut runtime, config_dir)?;
 
     // Drain startup events — governance load is not observable to callers.
     runtime.drain_events();
 
-    Ok(runtime)
+    Ok((runtime, governance_settings))
 }
 
 fn validate_client_id(
@@ -165,7 +176,7 @@ fn validate_client_id(
 fn load_governance_into_runtime(
     runtime: &mut McpRuntime,
     config_dir: Option<&std::path::Path>,
-) -> Result<(), String> {
+) -> Result<GovernanceSettings, String> {
     // Inject immutable built-ins first so they are always present.
     for role in builtin_roles() {
         let _ = runtime.upsert_role_mut(role);
@@ -175,19 +186,9 @@ fn load_governance_into_runtime(
         let _ = runtime.upsert_policy_mut(policy);
     }
 
-    // Load user-defined governance from AppConfig.
-    let config_store = match config_dir {
-        Some(dir) => AppConfigStore::from_dir(dir)
-            .map_err(|e| error_messages::config_error("open config store", Some(dir), e))?,
-        None => AppConfigStore::new()
-            .map_err(|e| error_messages::config_error("open config store", None, e))?,
-    };
+    let governance = load_governance_settings(config_dir)?;
 
-    let config = config_store
-        .load()
-        .map_err(|e| error_messages::config_error("load config", None, e))?;
-
-    for client in config.governance.trusted_clients {
+    for client in governance.trusted_clients.clone() {
         let _ = runtime.upsert_trusted_client_mut(TrustedClientDto {
             id: client.id,
             name: client.name,
@@ -196,14 +197,14 @@ fn load_governance_into_runtime(
         });
     }
 
-    for role in config.governance.roles {
+    for role in governance.roles.clone() {
         let _ = runtime.upsert_role_mut(PolicyRoleDto {
             id: role.id,
             policy_ids: role.policy_ids,
         });
     }
 
-    for policy in config.governance.policies {
+    for policy in governance.policies.clone() {
         let _ = runtime.upsert_policy_mut(ToolPolicyDto {
             id: policy.id,
             allowed_tools: policy.allowed_tools,
@@ -216,7 +217,35 @@ fn load_governance_into_runtime(
     // (e.g., list_connections, list_scripts, query_audit_logs)
     create_global_assignments(runtime)?;
 
-    Ok(())
+    Ok(governance)
+}
+
+fn open_config_db(config_dir: Option<&std::path::Path>) -> Result<rusqlite::Connection, String> {
+    let path = match config_dir {
+        Some(dir) => dir.join("config.db"),
+        None => storage_paths::config_db_path()
+            .map_err(|e| format!("Failed to resolve config.db path: {}", e))?,
+    };
+
+    storage_sqlite::open_database(&path)
+        .map_err(|e| error_messages::config_error("open config database", Some(&path), e))
+}
+
+fn load_governance_settings(
+    config_dir: Option<&std::path::Path>,
+) -> Result<GovernanceSettings, String> {
+    let conn = open_config_db(config_dir)?;
+    let repo = SettingsRepository::new(Arc::new(conn));
+
+    let json = repo
+        .get("governance_settings")
+        .map_err(|e| format!("Failed to load governance settings from config.db: {}", e))?;
+
+    match json {
+        Some(value) => serde_json::from_str::<GovernanceSettings>(&value)
+            .map_err(|e| format!("Failed to deserialize governance settings: {}", e)),
+        None => Ok(GovernanceSettings::default()),
+    }
 }
 
 /// Creates a global policy assignment (connection_id = "") for each trusted client.

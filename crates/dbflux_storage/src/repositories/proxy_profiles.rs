@@ -3,7 +3,7 @@
 //! Proxy profiles store SOCKS5/HTTP proxy configurations.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

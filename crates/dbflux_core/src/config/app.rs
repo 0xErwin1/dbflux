@@ -16,6 +16,37 @@ const CONFIG_VERSION_1: u32 = 1;
 const CONFIG_VERSION_2: u32 = 2;
 const CONFIG_VERSION_3: u32 = 3;
 
+/// Migrates `AppConfig` from older schema versions to the current version.
+///
+/// This applies in-place changes to `config` based on `legacy_allow_redis_flush`
+/// (extracted from the raw JSON before deserialization).
+///
+/// Returns `true` if any migration was applied.
+pub fn migrate_app_config(config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
+    let mut changed = false;
+
+    if config.version <= CONFIG_VERSION_1 {
+        if legacy_allow_redis_flush {
+            config
+                .driver_settings
+                .entry("builtin:redis".to_string())
+                .or_default()
+                .entry("allow_flush".to_string())
+                .or_insert_with(|| "true".to_string());
+        }
+
+        config.version = CONFIG_VERSION_2;
+        changed = true;
+    }
+
+    if config.version <= CONFIG_VERSION_2 {
+        config.version = CONFIG_VERSION_3;
+        changed = true;
+    }
+
+    changed
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_config_version")]
@@ -491,28 +522,7 @@ impl AppConfigStore {
     }
 
     fn migrate(&self, config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
-        let mut changed = false;
-
-        if config.version <= CONFIG_VERSION_1 {
-            if legacy_allow_redis_flush {
-                config
-                    .driver_settings
-                    .entry("builtin:redis".to_string())
-                    .or_default()
-                    .entry("allow_flush".to_string())
-                    .or_insert_with(|| "true".to_string());
-            }
-
-            config.version = CONFIG_VERSION_2;
-            changed = true;
-        }
-
-        if config.version <= CONFIG_VERSION_2 {
-            config.version = CONFIG_VERSION_3;
-            changed = true;
-        }
-
-        changed
+        migrate_app_config(config, legacy_allow_redis_flush)
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), DbError> {

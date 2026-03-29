@@ -3,7 +3,7 @@
 //! App settings store key-value pairs for global configuration.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
