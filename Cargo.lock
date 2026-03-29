@@ -2521,6 +2521,7 @@ dependencies = [
 name = "dbflux_storage"
 version = "0.4.0-dev.11"
 dependencies = [
+ "chrono",
  "dirs 5.0.1",
  "log",
  "rusqlite",

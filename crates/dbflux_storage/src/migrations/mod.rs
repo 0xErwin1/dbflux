@@ -12,6 +12,8 @@ use rusqlite::Connection;
 
 use crate::error::StorageError;
 
+pub mod state;
+
 /// Current migration versions for each database.
 pub mod config_migrations {
     /// Initial migration version for config.db.
@@ -246,24 +248,8 @@ fn run_config_initial_migration_in(conn: &Connection) -> Result<(), StorageError
 }
 
 /// Runs migrations for the state database.
-///
-/// Currently validates accessibility only; full schema migration will be
-/// implemented in a later batch.
 pub fn run_state_migrations(conn: &Connection) -> Result<(), StorageError> {
-    let current_version =
-        match conn.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0)) {
-            Ok(v) => v,
-            Err(rusqlite::Error::InvalidQuery) => 0u32,
-            Err(e) => {
-                return Err(StorageError::Sqlite {
-                    path: "state.db".into(),
-                    source: e,
-                });
-            }
-        };
-
-    info!("State database current schema version: {}", current_version);
-    Ok(())
+    state::run_state_migrations(conn)
 }
 
 /// Verifies that a database is in a consistent state by running integrity check.

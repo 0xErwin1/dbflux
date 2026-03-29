@@ -15,6 +15,10 @@ use crate::repositories::proxy_profiles::ProxyProfileRepository;
 use crate::repositories::services::ServiceRepository;
 use crate::repositories::settings::SettingsRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
+use crate::repositories::state::{
+    query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
+    saved_queries::SavedQueriesRepository, ui_state::UiStateRepository,
+};
 use crate::sqlite;
 
 /// An owned database connection wrapped in Arc for shared access.
@@ -28,6 +32,7 @@ pub struct StorageRuntime {
     config_db_path: PathBuf,
     state_db_path: PathBuf,
     config_db: OwnedConnection,
+    state_db: OwnedConnection,
 }
 
 impl StorageRuntime {
@@ -47,13 +52,15 @@ impl StorageRuntime {
         migrations::run_state_migrations(&state_conn)?;
         info!("State database ready at {}", state_db_path.display());
 
-        // Wrap connection in Arc for shared access
+        // Wrap connections in Arc for shared access
         let config_db = Arc::new(config_conn);
+        let state_db = Arc::new(state_conn);
 
         Ok(StorageRuntime {
             config_db_path,
             state_db_path,
             config_db,
+            state_db,
         })
     }
 
@@ -119,6 +126,11 @@ impl StorageRuntime {
         self.config_db.clone()
     }
 
+    /// Returns an owned reference to the state database connection.
+    pub fn state_db(&self) -> OwnedConnection {
+        self.state_db.clone()
+    }
+
     // --- Repository convenience constructors ---
 
     /// Creates a connection profile repository.
@@ -159,6 +171,28 @@ impl StorageRuntime {
     /// Creates a settings repository.
     pub fn settings(&self) -> SettingsRepository {
         SettingsRepository::new(self.config_db())
+    }
+
+    // --- State repositories ---
+
+    /// Creates a UI state repository.
+    pub fn ui_state(&self) -> UiStateRepository {
+        UiStateRepository::new(self.state_db())
+    }
+
+    /// Creates a recent items repository.
+    pub fn recent_items(&self) -> RecentItemsRepository {
+        RecentItemsRepository::new(self.state_db())
+    }
+
+    /// Creates a query history repository.
+    pub fn query_history(&self) -> QueryHistoryRepository {
+        QueryHistoryRepository::new(self.state_db())
+    }
+
+    /// Creates a saved queries repository.
+    pub fn saved_queries(&self) -> SavedQueriesRepository {
+        SavedQueriesRepository::new(self.state_db())
     }
 }
 
@@ -216,11 +250,11 @@ mod tests {
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
         let conn = runtime.open_state_db().expect("should open state db");
 
-        // Quick sanity: we can query.
+        // State db migrations have run, so user_version should be 1 (INITIAL_VERSION)
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 0);
+        assert_eq!(version, 1);
     }
 
     #[test]

@@ -21,5 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 
+# For timestamp formatting in state repositories (without pulling full chrono from workspace)
+chrono = "0.4"
+
 [dev-dependencies]
 tempfile = "3"

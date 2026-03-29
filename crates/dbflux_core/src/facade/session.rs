@@ -139,6 +139,43 @@ impl SessionFacade {
         }
     }
 
+    /// Creates a facade with caller-supplied managers AND pre-built history/saved queries managers.
+    ///
+    /// This allows the app crate to inject repository-backed managers that use `StorageRuntime`,
+    /// replacing the default JSON-backed managers.
+    pub fn with_all_custom_managers(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profile_manager: ProfileManager,
+        ssh_manager: SshTunnelManager,
+        proxy_manager: ProxyManager,
+        auth_manager: AuthProfileManager,
+        history: HistoryManager,
+        saved_queries: SavedQueryManager,
+    ) -> Self {
+        let secret_store = create_secret_store();
+        info!("Secret store available: {}", secret_store.is_available());
+
+        let secrets = SecretManager::new(secret_store);
+        let mut tree = ConnectionTreeManager::new();
+
+        tree.sync_with_profiles(&profile_manager.profile_ids());
+
+        Self {
+            connections: ConnectionManager::new(drivers),
+            profiles: profile_manager,
+            secrets,
+            ssh_tunnels: ssh_manager,
+            proxies: proxy_manager,
+            auth_profiles: auth_manager,
+            history,
+            saved_queries,
+            tree,
+            tasks: TaskManager::new(),
+            shutdown: ShutdownCoordinator::new(),
+            dangerous_query_suppressions: DangerousQuerySuppressions::default(),
+        }
+    }
+
     // --- Cross-cutting orchestration ---
 
     /// Adds a profile and places it in a folder in the connection tree.

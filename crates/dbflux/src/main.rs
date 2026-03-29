@@ -7,6 +7,7 @@ mod assets;
 mod auth_provider_registry;
 mod cli;
 mod config_loader;
+mod history_manager_sqlite;
 mod hook_executor;
 mod ipc_server;
 mod keymap;
