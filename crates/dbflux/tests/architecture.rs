@@ -92,8 +92,9 @@ fn postgres_config_pattern_is_confined_to_core_and_driver() {
     let allowed_connection_form =
         workspace.join("crates/dbflux/src/ui/windows/connection_manager/form.rs");
     let allowed_test_support = workspace.join("crates/dbflux_test_support");
-    // dbflux_mcp_server may use DbConfig::Postgres directly in tests only
+    // dbflux_mcp_server and dbflux_storage may use DbConfig::Postgres directly in tests only
     let allowed_mcp_server = workspace.join("crates/dbflux_mcp_server");
+    let allowed_dbflux_storage = workspace.join("crates/dbflux_storage");
 
     let mut violations = Vec::new();
 
@@ -115,7 +116,8 @@ fn postgres_config_pattern_is_confined_to_core_and_driver() {
             || file.starts_with(&allowed_postgres_driver)
             || file.starts_with(&allowed_test_support)
             || file == allowed_connection_form
-            || file.starts_with(&allowed_mcp_server);
+            || file.starts_with(&allowed_mcp_server)
+            || file.starts_with(&allowed_dbflux_storage);
 
         if !allowed {
             violations.push(file);
