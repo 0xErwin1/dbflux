@@ -131,11 +131,14 @@ fn collect_config_db_diagnostics(path: &Path) -> DatabaseDiagnostics {
         match crate::sqlite::open_database(path) {
             Ok(conn) => {
                 let integrity_ok = migrations::verify_integrity(&conn).unwrap_or(false);
+                // Config db now uses name-based migrations via the `migrations` table.
+                // user_version is no longer used for config db (kept for compatibility).
                 let schema_version = conn
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .ok();
+                // Use `migrations` table for migration count (name-based tracking)
                 let migration_count = conn
-                    .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                    .query_row("SELECT COUNT(*) FROM migrations", [], |row| {
                         row.get::<_, i64>(0)
                     })
                     .unwrap_or(0) as usize;
@@ -510,13 +513,17 @@ mod tests {
         assert!(report.state_db.integrity_ok);
         assert!(matches!(report.overall_status, OverallStatus::Healthy));
 
-        // Schema version should be 2 (INITIAL_VERSION + SYSTEM_METADATA_VERSION)
-        assert_eq!(report.config_db.schema_version, Some(2));
-        assert_eq!(report.state_db.schema_version, Some(2));
+        // Schema version for config is no longer meaningful (user_version not used).
+        // Config now uses name-based migrations via the `migrations` table.
+        // State still uses user_version-based migrations.
+        assert_eq!(report.config_db.schema_version, Some(0)); // user_version is 0 for new install
+        assert_eq!(report.state_db.schema_version, Some(3));
 
-        // Migration count should be 2 for each (0001_initial + 0002_system_metadata)
-        assert_eq!(report.config_db.migration_count, 2);
-        assert_eq!(report.state_db.migration_count, 2);
+        // Migration count: new installations use run_config_initial_migration_in() which
+        // creates the complete final schema directly and records 1 migration (0001_initial_final).
+        // State DB has 3 migrations (0001_initial + 0002_system_metadata + 0003_event_session_native_columns)
+        assert_eq!(report.config_db.migration_count, 1);
+        assert_eq!(report.state_db.migration_count, 3);
 
         let _ = std::fs::remove_dir_all(&base);
     }

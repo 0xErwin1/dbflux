@@ -20,6 +20,7 @@ pub use repositories::state::{
 pub use repositories::{
     auth_profiles::AuthProfileRepository, connection_profiles::ConnectionProfileRepository,
     driver_settings::DriverSettingsRepository, hook_definitions::HookDefinitionRepository,
-    proxy_profiles::ProxyProfileRepository, services::ServiceRepository,
-    settings::SettingsRepository, ssh_tunnel_profiles::SshTunnelProfileRepository,
+    legacy_imports::LegacyImportsRepository, proxy_profiles::ProxyProfileRepository,
+    services::ServiceRepository, settings::SettingsRepository,
+    ssh_tunnel_profiles::SshTunnelProfileRepository,
 };

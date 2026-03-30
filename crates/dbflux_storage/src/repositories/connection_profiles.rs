@@ -4,12 +4,26 @@
 //! create to connect to various databases.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
+
+pub use super::connection_driver_configs::ConnectionDriverConfigsRepository;
+pub use super::connection_profile_access_params::ConnectionProfileAccessParamsRepository;
+pub use super::connection_profile_configs::ConnectionProfileConfigsRepository;
+pub use super::connection_profile_governance::ConnectionProfileGovernanceRepository;
+pub use super::connection_profile_governance_binding_policies::ConnectionProfileGovernanceBindingPoliciesRepository;
+pub use super::connection_profile_governance_binding_roles::ConnectionProfileGovernanceBindingRolesRepository;
+pub use super::connection_profile_governance_bindings::ConnectionProfileGovernanceBindingsRepository;
+pub use super::connection_profile_hook_args::ConnectionProfileHookArgsRepository;
+pub use super::connection_profile_hook_bindings::ConnectionProfileHookBindingsRepository;
+pub use super::connection_profile_hook_envs::ConnectionProfileHookEnvsRepository;
+pub use super::connection_profile_hooks::ConnectionProfileHooksRepository;
+pub use super::connection_profile_settings::ConnectionProfileSettingsRepository;
+pub use super::connection_profile_value_refs::ConnectionProfileValueRefsRepository;
 
 /// Repository for managing connection profiles.
 pub struct ConnectionProfileRepository {
@@ -27,6 +41,73 @@ impl ConnectionProfileRepository {
         &self.conn
     }
 
+    /// Returns a configs repository for this profile.
+    pub fn configs(&self) -> ConnectionProfileConfigsRepository {
+        ConnectionProfileConfigsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a driver configs repository for this profile (native columns for DbConfig).
+    pub fn driver_configs(&self) -> ConnectionDriverConfigsRepository {
+        ConnectionDriverConfigsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a settings repository for this profile.
+    pub fn settings(&self) -> ConnectionProfileSettingsRepository {
+        ConnectionProfileSettingsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a value refs repository for this profile.
+    pub fn value_refs(&self) -> ConnectionProfileValueRefsRepository {
+        ConnectionProfileValueRefsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a hooks repository for this profile.
+    pub fn hooks(&self) -> ConnectionProfileHooksRepository {
+        ConnectionProfileHooksRepository::new(self.conn.clone())
+    }
+
+    /// Returns a hook bindings repository for this profile.
+    pub fn hook_bindings(&self) -> ConnectionProfileHookBindingsRepository {
+        ConnectionProfileHookBindingsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a governance repository for this profile.
+    pub fn governance(&self) -> ConnectionProfileGovernanceRepository {
+        ConnectionProfileGovernanceRepository::new(self.conn.clone())
+    }
+
+    /// Returns a hook args repository for this profile.
+    pub fn hook_args(&self) -> ConnectionProfileHookArgsRepository {
+        ConnectionProfileHookArgsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a hook envs repository for this profile.
+    pub fn hook_envs(&self) -> ConnectionProfileHookEnvsRepository {
+        ConnectionProfileHookEnvsRepository::new(self.conn.clone())
+    }
+
+    /// Returns an access params repository for this profile.
+    pub fn access_params(&self) -> ConnectionProfileAccessParamsRepository {
+        ConnectionProfileAccessParamsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a governance bindings repository for this profile.
+    pub fn governance_bindings(&self) -> ConnectionProfileGovernanceBindingsRepository {
+        ConnectionProfileGovernanceBindingsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a governance binding roles repository.
+    pub fn governance_binding_roles(&self) -> ConnectionProfileGovernanceBindingRolesRepository {
+        ConnectionProfileGovernanceBindingRolesRepository::new(self.conn.clone())
+    }
+
+    /// Returns a governance binding policies repository.
+    pub fn governance_binding_policies(
+        &self,
+    ) -> ConnectionProfileGovernanceBindingPoliciesRepository {
+        ConnectionProfileGovernanceBindingPoliciesRepository::new(self.conn.clone())
+    }
+
     /// Fetches all connection profiles.
     pub fn all(&self) -> Result<Vec<ConnectionProfileDto>, StorageError> {
         let mut stmt = self
@@ -34,11 +115,10 @@ impl ConnectionProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, driver_id, description, favorite, color, icon,
-                       config_json, auth_profile_id, proxy_profile_id,
+                       save_password, kind, access_kind, access_provider,
+                       auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id, access_profile_id,
-                       settings_overrides_json, connection_settings_json,
-                       hooks_json, hook_bindings_json, value_refs_json,
-                       mcp_governance_json, created_at, updated_at
+                       created_at, updated_at
                 FROM connection_profiles
                 ORDER BY name ASC
                 "#,
@@ -58,19 +138,16 @@ impl ConnectionProfileRepository {
                     favorite: row.get::<_, i32>(4)? != 0,
                     color: row.get(5)?,
                     icon: row.get(6)?,
-                    config_json: row.get(7)?,
-                    auth_profile_id: row.get(8)?,
-                    proxy_profile_id: row.get(9)?,
-                    ssh_tunnel_profile_id: row.get(10)?,
-                    access_profile_id: row.get(11)?,
-                    settings_overrides_json: row.get(12)?,
-                    connection_settings_json: row.get(13)?,
-                    hooks_json: row.get(14)?,
-                    hook_bindings_json: row.get(15)?,
-                    value_refs_json: row.get(16)?,
-                    mcp_governance_json: row.get(17)?,
-                    created_at: row.get(18)?,
-                    updated_at: row.get(19)?,
+                    save_password: row.get::<_, i32>(7)? != 0,
+                    kind: row.get(8)?,
+                    access_kind: row.get(9)?,
+                    access_provider: row.get(10)?,
+                    auth_profile_id: row.get(11)?,
+                    proxy_profile_id: row.get(12)?,
+                    ssh_tunnel_profile_id: row.get(13)?,
+                    access_profile_id: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -104,11 +181,10 @@ impl ConnectionProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, driver_id, description, favorite, color, icon,
-                       config_json, auth_profile_id, proxy_profile_id,
+                       save_password, kind, access_kind, access_provider,
+                       auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id, access_profile_id,
-                       settings_overrides_json, connection_settings_json,
-                       hooks_json, hook_bindings_json, value_refs_json,
-                       mcp_governance_json, created_at, updated_at
+                       created_at, updated_at
                 FROM connection_profiles
                 WHERE id = ?1
                 "#,
@@ -127,19 +203,16 @@ impl ConnectionProfileRepository {
                 favorite: row.get::<_, i32>(4)? != 0,
                 color: row.get(5)?,
                 icon: row.get(6)?,
-                config_json: row.get(7)?,
-                auth_profile_id: row.get(8)?,
-                proxy_profile_id: row.get(9)?,
-                ssh_tunnel_profile_id: row.get(10)?,
-                access_profile_id: row.get(11)?,
-                settings_overrides_json: row.get(12)?,
-                connection_settings_json: row.get(13)?,
-                hooks_json: row.get(14)?,
-                hook_bindings_json: row.get(15)?,
-                value_refs_json: row.get(16)?,
-                mcp_governance_json: row.get(17)?,
-                created_at: row.get(18)?,
-                updated_at: row.get(19)?,
+                save_password: row.get::<_, i32>(7)? != 0,
+                kind: row.get(8)?,
+                access_kind: row.get(9)?,
+                access_provider: row.get(10)?,
+                auth_profile_id: row.get(11)?,
+                proxy_profile_id: row.get(12)?,
+                ssh_tunnel_profile_id: row.get(13)?,
+                access_profile_id: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         });
 
@@ -160,14 +233,13 @@ impl ConnectionProfileRepository {
                 r#"
                 INSERT INTO connection_profiles (
                     id, name, driver_id, description, favorite, color, icon,
-                    config_json, auth_profile_id, proxy_profile_id,
+                    save_password, kind, access_kind, access_provider,
+                    auth_profile_id, proxy_profile_id,
                     ssh_tunnel_profile_id, access_profile_id,
-                    settings_overrides_json, connection_settings_json,
-                    hooks_json, hook_bindings_json, value_refs_json,
-                    mcp_governance_json, created_at, updated_at
+                    created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'), datetime('now')
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    datetime('now'), datetime('now')
                 )
                 "#,
                 params![
@@ -178,17 +250,14 @@ impl ConnectionProfileRepository {
                     profile.favorite as i32,
                     profile.color,
                     profile.icon,
-                    profile.config_json,
+                    profile.save_password as i32,
+                    profile.kind,
+                    profile.access_kind,
+                    profile.access_provider,
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.access_profile_id,
-                    profile.settings_overrides_json,
-                    profile.connection_settings_json,
-                    profile.hooks_json,
-                    profile.hook_bindings_json,
-                    profile.value_refs_json,
-                    profile.mcp_governance_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -213,17 +282,14 @@ impl ConnectionProfileRepository {
                     favorite = ?5,
                     color = ?6,
                     icon = ?7,
-                    config_json = ?8,
-                    auth_profile_id = ?9,
-                    proxy_profile_id = ?10,
-                    ssh_tunnel_profile_id = ?11,
-                    access_profile_id = ?12,
-                    settings_overrides_json = ?13,
-                    connection_settings_json = ?14,
-                    hooks_json = ?15,
-                    hook_bindings_json = ?16,
-                    value_refs_json = ?17,
-                    mcp_governance_json = ?18,
+                    save_password = ?8,
+                    kind = ?9,
+                    access_kind = ?10,
+                    access_provider = ?11,
+                    auth_profile_id = ?12,
+                    proxy_profile_id = ?13,
+                    ssh_tunnel_profile_id = ?14,
+                    access_profile_id = ?15,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -235,17 +301,14 @@ impl ConnectionProfileRepository {
                     profile.favorite as i32,
                     profile.color,
                     profile.icon,
-                    profile.config_json,
+                    profile.save_password as i32,
+                    profile.kind,
+                    profile.access_kind,
+                    profile.access_provider,
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.access_profile_id,
-                    profile.settings_overrides_json,
-                    profile.connection_settings_json,
-                    profile.hooks_json,
-                    profile.hook_bindings_json,
-                    profile.value_refs_json,
-                    profile.mcp_governance_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -269,14 +332,13 @@ impl ConnectionProfileRepository {
                 r#"
                 INSERT INTO connection_profiles (
                     id, name, driver_id, description, favorite, color, icon,
-                    config_json, auth_profile_id, proxy_profile_id,
+                    save_password, kind, access_kind, access_provider,
+                    auth_profile_id, proxy_profile_id,
                     ssh_tunnel_profile_id, access_profile_id,
-                    settings_overrides_json, connection_settings_json,
-                    hooks_json, hook_bindings_json, value_refs_json,
-                    mcp_governance_json, created_at, updated_at
+                    created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'), datetime('now')
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                    datetime('now'), datetime('now')
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
@@ -285,17 +347,14 @@ impl ConnectionProfileRepository {
                     favorite = excluded.favorite,
                     color = excluded.color,
                     icon = excluded.icon,
-                    config_json = excluded.config_json,
+                    save_password = excluded.save_password,
+                    kind = excluded.kind,
+                    access_kind = excluded.access_kind,
+                    access_provider = excluded.access_provider,
                     auth_profile_id = excluded.auth_profile_id,
                     proxy_profile_id = excluded.proxy_profile_id,
                     ssh_tunnel_profile_id = excluded.ssh_tunnel_profile_id,
                     access_profile_id = excluded.access_profile_id,
-                    settings_overrides_json = excluded.settings_overrides_json,
-                    connection_settings_json = excluded.connection_settings_json,
-                    hooks_json = excluded.hooks_json,
-                    hook_bindings_json = excluded.hook_bindings_json,
-                    value_refs_json = excluded.value_refs_json,
-                    mcp_governance_json = excluded.mcp_governance_json,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -306,17 +365,14 @@ impl ConnectionProfileRepository {
                     profile.favorite as i32,
                     profile.color,
                     profile.icon,
-                    profile.config_json,
+                    profile.save_password as i32,
+                    profile.kind,
+                    profile.access_kind,
+                    profile.access_provider,
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
                     profile.access_profile_id,
-                    profile.settings_overrides_json,
-                    profile.connection_settings_json,
-                    profile.hooks_json,
-                    profile.hook_bindings_json,
-                    profile.value_refs_json,
-                    profile.mcp_governance_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -367,24 +423,21 @@ pub struct ConnectionProfileDto {
     pub favorite: bool,
     pub color: Option<String>,
     pub icon: Option<String>,
-    pub config_json: String,
+    pub save_password: bool,
+    pub kind: Option<String>,
+    pub access_kind: Option<String>,
+    pub access_provider: Option<String>,
     pub auth_profile_id: Option<String>,
     pub proxy_profile_id: Option<String>,
     pub ssh_tunnel_profile_id: Option<String>,
     pub access_profile_id: Option<String>,
-    pub settings_overrides_json: Option<String>,
-    pub connection_settings_json: Option<String>,
-    pub hooks_json: Option<String>,
-    pub hook_bindings_json: Option<String>,
-    pub value_refs_json: Option<String>,
-    pub mcp_governance_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 impl ConnectionProfileDto {
     /// Creates a new DTO with the given ID and name.
-    pub fn new(id: Uuid, name: String, config_json: String) -> Self {
+    pub fn new(id: Uuid, name: String) -> Self {
         Self {
             id: id.to_string(),
             name,
@@ -393,17 +446,14 @@ impl ConnectionProfileDto {
             favorite: false,
             color: None,
             icon: None,
-            config_json,
+            save_password: false,
+            kind: None,
+            access_kind: None,
+            access_provider: None,
             auth_profile_id: None,
             proxy_profile_id: None,
             ssh_tunnel_profile_id: None,
             access_profile_id: None,
-            settings_overrides_json: None,
-            connection_settings_json: None,
-            hooks_json: None,
-            hook_bindings_json: None,
-            value_refs_json: None,
-            mcp_governance_json: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -434,12 +484,7 @@ mod tests {
         run_config_migrations(&conn).expect("migration should run");
 
         // Insert a profile
-        let dto = ConnectionProfileDto::new(
-            Uuid::new_v4(),
-            "Test Profile".to_string(),
-            r#"{"Postgres":{"host":"localhost","port":5432,"user":"test","database":"testdb"}}"#
-                .to_string(),
-        );
+        let dto = ConnectionProfileDto::new(Uuid::new_v4(), "Test Profile".to_string());
 
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
@@ -463,8 +508,7 @@ mod tests {
         run_config_migrations(&conn).expect("migration should run");
 
         let id = Uuid::new_v4();
-        let dto =
-            ConnectionProfileDto::new(id, "Original".to_string(), r#"{"Postgres":{}}"#.to_string());
+        let dto = ConnectionProfileDto::new(id, "Original".to_string());
 
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
@@ -507,7 +551,7 @@ mod tests {
         assert_eq!(repo.count().expect("count should work"), 0);
 
         // After insert
-        let dto = ConnectionProfileDto::new(Uuid::new_v4(), "Test".to_string(), "{}".to_string());
+        let dto = ConnectionProfileDto::new(Uuid::new_v4(), "Test".to_string());
         repo.insert(&dto).expect("should insert");
         assert_eq!(repo.count().expect("count should work"), 1);
 

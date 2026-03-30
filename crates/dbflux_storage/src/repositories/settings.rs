@@ -1,9 +1,18 @@
 //! Repository for general app settings in config.db.
 //!
-//! App settings store key-value pairs for global configuration.
+//! # Deprecation Notice
+//!
+//! This repository is DEPRECATED after migration v16 normalized all data to native typed tables.
+//!
+//! - `app_settings` table has been DROPped
+//! - Use `GeneralSettingsRepository` for general settings
+//! - Use `GovernanceSettingsRepository` for governance settings
+//!
+//! This module is kept for backward compatibility during migration but will be removed
+//! once all callers migrate to the new repositories.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
@@ -144,51 +153,4 @@ pub struct SettingDto {
     pub key: String,
     pub value_json: String,
     pub updated_at: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::migrations::run_config_migrations;
-    use crate::sqlite::open_database;
-    use std::sync::Arc;
-
-    fn temp_db(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "dbflux_repo_settings_{}_{}",
-            name,
-            std::process::id()
-        ))
-    }
-
-    #[test]
-    fn settings_set_and_get() {
-        let path = temp_db("settings_set");
-        let _ = std::fs::remove_file(&path);
-
-        let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
-
-        let repo = SettingsRepository::new(Arc::new(conn));
-
-        // Set a value
-        repo.set("test_key", r#"{"value":"test"}"#)
-            .expect("should set");
-
-        // Get it back
-        let got = repo
-            .get("test_key")
-            .expect("should get")
-            .expect("should exist");
-        assert!(got.contains("test"));
-
-        // Delete it
-        repo.delete("test_key").expect("should delete");
-        let after_delete = repo.get("test_key").expect("should get");
-        assert!(after_delete.is_none());
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
-    }
 }

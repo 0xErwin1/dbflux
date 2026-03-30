@@ -15,8 +15,8 @@ use dbflux_mcp::{
     builtin_policies, builtin_roles,
 };
 use dbflux_storage::paths as storage_paths;
-use dbflux_storage::repositories::driver_settings::DriverSettingsRepository;
-use dbflux_storage::repositories::settings::SettingsRepository;
+use dbflux_storage::repositories::governance_settings::GovernanceSettingsRepository;
+use dbflux_storage::repositories::driver_setting_values::DriverSettingValuesRepository;
 use dbflux_storage::sqlite as storage_sqlite;
 
 use crate::connection_cache::ConnectionCache;
@@ -88,19 +88,38 @@ fn load_driver_settings(
     config_dir: Option<&std::path::Path>,
 ) -> Result<HashMap<DriverKey, FormValues>, String> {
     let conn = open_config_db(config_dir)?;
+
+    // Get all driver keys from driver_overrides table (use conn directly)
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT driver_key FROM driver_overrides")
+        .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+    let driver_keys: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| format!("Failed to query driver keys: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    drop(stmt);
+
     #[allow(clippy::arc_with_non_send_sync)]
-    let repo = DriverSettingsRepository::new(Arc::new(conn));
-    let entries = repo
-        .all()
-        .map_err(|e| format!("Failed to load driver settings from config.db: {}", e))?;
+    let repo = DriverSettingValuesRepository::new(Arc::new(conn));
 
     let mut settings = HashMap::new();
 
-    for entry in entries {
-        if let Some(json) = entry.settings_json
-            && let Ok(values) = serde_json::from_str::<FormValues>(&json)
-        {
-            settings.insert(entry.driver_key, values);
+    for driver_key in driver_keys {
+        let values = repo
+            .get_for_driver(&driver_key)
+            .map_err(|e| format!("Failed to load driver settings for {}: {}", driver_key, e))?;
+
+        let mut form_values = FormValues::new();
+        for v in values {
+            if let Some(val) = v.setting_value {
+                form_values.insert(v.setting_key, val);
+            }
+        }
+        if !form_values.is_empty() {
+            settings.insert(driver_key, form_values);
         }
     }
 
@@ -237,17 +256,57 @@ fn load_governance_settings(
 ) -> Result<GovernanceSettings, String> {
     let conn = open_config_db(config_dir)?;
     #[allow(clippy::arc_with_non_send_sync)]
-    let repo = SettingsRepository::new(Arc::new(conn));
+    let repo = GovernanceSettingsRepository::new(Arc::new(conn));
 
-    let json = repo
-        .get("governance_settings")
+    // Load governance settings (mcp_enabled_by_default)
+    let dto = repo
+        .get()
         .map_err(|e| format!("Failed to load governance settings from config.db: {}", e))?;
 
-    match json {
-        Some(value) => serde_json::from_str::<GovernanceSettings>(&value)
-            .map_err(|e| format!("Failed to deserialize governance settings: {}", e)),
-        None => Ok(GovernanceSettings::default()),
-    }
+    let mcp_enabled_by_default = dto.map(|d| d.mcp_enabled_by_default != 0).unwrap_or(false);
+
+    // Load trusted clients
+    let trusted_clients = repo
+        .get_trusted_clients()
+        .map_err(|e| format!("Failed to load trusted clients from config.db: {}", e))?
+        .into_iter()
+        .map(|c| dbflux_core::TrustedClientConfig {
+            id: c.client_id,
+            name: c.name,
+            issuer: c.issuer,
+            active: c.active != 0,
+        })
+        .collect();
+
+    // Load policy roles
+    let roles = repo
+        .get_policy_roles()
+        .map_err(|e| format!("Failed to load policy roles from config.db: {}", e))?
+        .into_iter()
+        .map(|r| dbflux_core::PolicyRoleConfig {
+            id: r.role_id,
+            policy_ids: vec![], // roles don't store policy_ids in the repo DTO
+        })
+        .collect();
+
+    // Load tool policies
+    let policies = repo
+        .get_tool_policies()
+        .map_err(|e| format!("Failed to load tool policies from config.db: {}", e))?
+        .into_iter()
+        .map(|p| dbflux_core::ToolPolicyConfig {
+            id: p.policy_id,
+            allowed_tools: p.allowed_tools.map(|t| serde_json::from_str(&t).unwrap_or_default()).unwrap_or_default(),
+            allowed_classes: p.allowed_classes.map(|c| serde_json::from_str(&c).unwrap_or_default()).unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(GovernanceSettings {
+        mcp_enabled_by_default,
+        trusted_clients,
+        roles,
+        policies,
+    })
 }
 
 /// Creates a global policy assignment (connection_id = "") for each trusted client.

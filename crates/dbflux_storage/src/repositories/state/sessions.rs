@@ -18,8 +18,10 @@ use crate::artifacts::ArtifactStore;
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
 
-/// Payload stored in `session_tabs.restore_payload_json` — enough to reconstruct a `SessionTab`.
+/// Payload structure for session tab restore — used only in test fixtures.
+/// Kept for any potential test fixture use; the actual storage uses native columns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct TabRestorePayload {
     id: String,
     tab_kind: String, // "Scratch" or "FileBacked"
@@ -44,6 +46,7 @@ pub(crate) struct FullSession {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct FullTab {
     pub id: String,
     pub title: String,
@@ -53,9 +56,12 @@ pub(crate) struct FullTab {
     pub is_pinned: bool,
     pub scratch_file_path: Option<String>,
     pub shadow_file_path: Option<String>,
-    /// Raw JSON stored in the `restore_payload_json` column, so callers can
-    /// fully deserialize the tab metadata (including `file_path` and `exec_ctx_json`).
-    pub restore_payload_json: Option<String>,
+    pub file_path: Option<String>,
+    /// Execution context fields (extracted from exec_ctx_json, stored as native columns)
+    pub exec_ctx_connection_id: Option<String>,
+    pub exec_ctx_database: Option<String>,
+    pub exec_ctx_schema: Option<String>,
+    pub exec_ctx_container: Option<String>,
 }
 
 /// Session repository — manages session and tab metadata in state.db.
@@ -190,8 +196,10 @@ impl SessionRepository {
         let mut tab_stmt = self
             .conn()
             .prepare(
-                "SELECT id, tab_kind, title, position, is_pinned, restore_payload_json,
-                        scratch_file_path, shadow_file_path, created_at, updated_at
+                "SELECT id, tab_kind, title, position, is_pinned,
+                        scratch_file_path, shadow_file_path, language, file_path,
+                        exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema,
+                        exec_ctx_container, created_at, updated_at
                  FROM session_tabs WHERE session_id = ?1 ORDER BY position ASC",
             )
             .map_err(|source| StorageError::Sqlite {
@@ -207,11 +215,16 @@ impl SessionRepository {
                     row.get::<_, String>(2)?,
                     row.get::<_, i32>(3)?,
                     row.get::<_, i32>(4)? != 0,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             })
             .map_err(|source| StorageError::Sqlite {
@@ -230,17 +243,18 @@ impl SessionRepository {
                     title,
                     position,
                     is_pinned,
-                    restore_payload_json,
                     scratch_file_path,
                     shadow_file_path,
+                    language,
+                    file_path,
+                    exec_ctx_connection_id,
+                    exec_ctx_database,
+                    exec_ctx_schema,
+                    exec_ctx_container,
                     _tab_created,
                     _tab_updated,
                 )) => {
-                    let language: String = serde_json::from_str(&restore_payload_json)
-                        .ok()
-                        .map(|p: TabRestorePayload| p.language)
-                        .unwrap_or_else(|| "sql".to_string());
-
+                    // Native columns hold the data previously extracted from JSON.
                     tabs.push(FullTab {
                         id: tab_id,
                         title,
@@ -250,7 +264,11 @@ impl SessionRepository {
                         is_pinned,
                         scratch_file_path,
                         shadow_file_path,
-                        restore_payload_json: Some(restore_payload_json),
+                        file_path,
+                        exec_ctx_connection_id,
+                        exec_ctx_database,
+                        exec_ctx_schema,
+                        exec_ctx_container,
                     });
                 }
                 Err(e) => last_err = Some(e),
@@ -319,23 +337,31 @@ impl SessionRepository {
         Ok(())
     }
 
-    /// Inserts or updates a session tab. Replaces the full restore payload.
+    /// Inserts or updates a session tab. All tab state is stored in native columns.
     pub fn upsert_tab(&self, dto: &SessionTabDto) -> Result<(), StorageError> {
         self.conn()
             .execute(
                 r#"
                 INSERT INTO session_tabs (id, session_id, tab_kind, title, position, is_pinned,
-                                         restore_payload_json, scratch_file_path, shadow_file_path,
+                                         scratch_file_path, shadow_file_path,
+                                         language, file_path, exec_ctx_connection_id,
+                                         exec_ctx_database, exec_ctx_schema, exec_ctx_container,
                                          created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                        datetime('now'), datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     tab_kind = excluded.tab_kind,
                     title = excluded.title,
                     position = excluded.position,
                     is_pinned = excluded.is_pinned,
-                    restore_payload_json = excluded.restore_payload_json,
                     scratch_file_path = excluded.scratch_file_path,
                     shadow_file_path = excluded.shadow_file_path,
+                    language = excluded.language,
+                    file_path = excluded.file_path,
+                    exec_ctx_connection_id = excluded.exec_ctx_connection_id,
+                    exec_ctx_database = excluded.exec_ctx_database,
+                    exec_ctx_schema = excluded.exec_ctx_schema,
+                    exec_ctx_container = excluded.exec_ctx_container,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -345,9 +371,14 @@ impl SessionRepository {
                     dto.title,
                     dto.position as i32,
                     dto.is_pinned as i32,
-                    dto.restore_payload_json,
                     dto.scratch_file_path,
                     dto.shadow_file_path,
+                    dto.language,
+                    dto.file_path,
+                    dto.exec_ctx_connection_id,
+                    dto.exec_ctx_database,
+                    dto.exec_ctx_schema,
+                    dto.exec_ctx_container,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -456,11 +487,18 @@ impl SessionRepository {
                 .tabs
                 .into_iter()
                 .map(|tab| {
-                    // Deserialize the full restore payload so we can extract file_path,
-                    // exec_ctx_json, and all other metadata that was saved.
-                    let payload: TabRestorePayload =
-                        serde_json::from_str(tab.restore_payload_json.as_deref().unwrap_or("{}"))
-                            .unwrap_or_else(|_| TabRestorePayload::default());
+                    // Reconstruct exec_ctx_json from native columns.
+                    let exec_ctx = dbflux_core::ExecutionContext {
+                        connection_id: tab
+                            .exec_ctx_connection_id
+                            .as_ref()
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                        database: tab.exec_ctx_database.clone(),
+                        schema: tab.exec_ctx_schema.clone(),
+                        container: tab.exec_ctx_container.clone(),
+                    };
+                    let exec_ctx_json =
+                        serde_json::to_string(&exec_ctx).unwrap_or_else(|_| "{}".to_string());
 
                     RestoredTab {
                         id: tab.id,
@@ -469,8 +507,8 @@ impl SessionRepository {
                         language: tab.language,
                         scratch_path: tab.scratch_file_path.map(PathBuf::from),
                         shadow_path: tab.shadow_file_path.map(PathBuf::from),
-                        file_path: payload.file_path.map(PathBuf::from),
-                        exec_ctx_json: payload.exec_ctx_json,
+                        file_path: tab.file_path.clone().map(PathBuf::from),
+                        exec_ctx_json,
                         position: tab.position,
                         is_pinned: tab.is_pinned,
                     }
@@ -591,35 +629,21 @@ impl SessionRepository {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string());
 
-            let exec_ctx_json =
-                serde_json::to_string(&tab.exec_ctx).unwrap_or_else(|_| "{}".to_string());
-
-            let payload = TabRestorePayload {
-                id: tab.id.clone(),
-                tab_kind: tab.tab_kind.clone(),
-                language: tab.language.clone(),
-                exec_ctx_json: exec_ctx_json.clone(),
-                title: tab.title.clone(),
-                scratch_path: scratch_path_str.clone(),
-                shadow_path: shadow_path_str.clone(),
-                file_path: file_path_str.clone(),
-                position: tab.position as i32,
-                is_pinned: tab.is_pinned,
-            };
-
-            let payload_json = serde_json::to_string(&payload)
-                .map_err(std::io::Error::other)
-                .map_err(|source| StorageError::Io {
-                    path: PathBuf::from("state.db"),
-                    source,
-                })?;
+            // Extract exec_ctx fields for native columns
+            let exec_ctx_connection_id = tab.exec_ctx.connection_id.map(|u| u.to_string());
+            let exec_ctx_database = tab.exec_ctx.database.clone();
+            let exec_ctx_schema = tab.exec_ctx.schema.clone();
+            let exec_ctx_container = tab.exec_ctx.container.clone();
 
             tx.execute(
                 r#"
                 INSERT INTO session_tabs (id, session_id, tab_kind, title, position, is_pinned,
-                                         restore_payload_json, scratch_file_path, shadow_file_path,
+                                         scratch_file_path, shadow_file_path,
+                                         language, file_path, exec_ctx_connection_id,
+                                         exec_ctx_database, exec_ctx_schema, exec_ctx_container,
                                          created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                        datetime('now'), datetime('now'))
                 "#,
                 params![
                     tab.id,
@@ -628,9 +652,14 @@ impl SessionRepository {
                     tab.title,
                     tab.position as i32,
                     tab.is_pinned as i32,
-                    payload_json,
                     scratch_path_str,
                     shadow_path_str,
+                    tab.language,
+                    file_path_str,
+                    exec_ctx_connection_id,
+                    exec_ctx_database,
+                    exec_ctx_schema,
+                    exec_ctx_container,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -689,9 +718,14 @@ pub struct SessionTabDto {
     pub title: String,
     pub position: usize,
     pub is_pinned: bool,
-    pub restore_payload_json: String,
     pub scratch_file_path: Option<String>,
     pub shadow_file_path: Option<String>,
+    pub language: Option<String>,
+    pub exec_ctx_connection_id: Option<String>,
+    pub exec_ctx_database: Option<String>,
+    pub exec_ctx_schema: Option<String>,
+    pub exec_ctx_container: Option<String>,
+    pub file_path: Option<String>,
 }
 
 /// A session manifest restored from state.db.
@@ -873,10 +907,16 @@ mod tests {
             title: "Query 1".to_string(),
             position: 0,
             is_pinned: false,
-            restore_payload_json: r#"{"id":"tab-1","tab_kind":"Scratch","language":"sql","exec_ctx_json":"{}","title":"Query 1","scratch_path":null,"shadow_path":null,"file_path":null,"position":0,"is_pinned":false}"#.to_string(),
             scratch_file_path: Some(scratch_path.to_string()),
             shadow_file_path: None,
-        }).expect("upsert tab");
+            language: Some("sql".to_string()),
+            exec_ctx_connection_id: None,
+            exec_ctx_database: None,
+            exec_ctx_schema: None,
+            exec_ctx_container: None,
+            file_path: None,
+        })
+        .expect("upsert tab");
 
         let full = repo
             .get_full_session(&session_id)
@@ -995,10 +1035,16 @@ mod tests {
             title: "Test Tab".to_string(),
             position: 0,
             is_pinned: false,
-            restore_payload_json: r#"{"id":"tab-1","tab_kind":"Scratch","language":"sql","exec_ctx_json":"{}","title":"Test Tab","scratch_path":null,"shadow_path":null,"file_path":null,"position":0,"is_pinned":false}"#.to_string(),
             scratch_file_path: Some(scratch_file.to_string_lossy().to_string()),
             shadow_file_path: None,
-        }).expect("upsert tab");
+            language: Some("sql".to_string()),
+            exec_ctx_connection_id: None,
+            exec_ctx_database: None,
+            exec_ctx_schema: None,
+            exec_ctx_container: None,
+            file_path: None,
+        })
+        .expect("upsert tab");
 
         // Add an orphan file that is NOT referenced by any tab
         let orphan_file = store.scratch_path("tab-orphan", "sql");

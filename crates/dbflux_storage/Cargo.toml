@@ -21,6 +21,8 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 # For timestamp formatting in state repositories (without pulling full chrono from workspace)
 chrono = "0.4"

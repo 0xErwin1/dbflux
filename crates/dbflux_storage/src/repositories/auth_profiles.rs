@@ -2,14 +2,20 @@
 //!
 //! Auth profiles store authentication configurations for connecting to
 //! cloud-hosted databases (e.g., AWS SSO, Azure AD).
+//!
+//! This repository supports both legacy fields_json column and the normalized
+//! auth_profile_fields child table with EAV pattern for the transition period.
 
 use log::info;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
+
+use super::auth_profile_fields::{AuthProfileFieldDto, AuthProfileFieldsRepository};
 
 /// Repository for managing auth profiles.
 pub struct AuthProfileRepository {
@@ -27,13 +33,55 @@ impl AuthProfileRepository {
         &self.conn
     }
 
+    /// Returns an AuthProfileFieldsRepository for managing EAV field values.
+    pub fn fields_repo(&self) -> AuthProfileFieldsRepository {
+        AuthProfileFieldsRepository::new(self.conn.clone())
+    }
+
+    /// Gets the fields for a profile as a HashMap<String, String> (text values only).
+    /// Reads from native auth_profile_fields table (fields_json column dropped in v10).
+    pub fn get_fields(&self, id: &str) -> Result<HashMap<String, String>, StorageError> {
+        let native_fields = self.fields_repo().get_for_profile(id)?;
+        let mut result = HashMap::new();
+        for field in native_fields {
+            if field.value_kind == "text"
+                && let Some(text) = field.value_text
+            {
+                result.insert(field.field_key, text);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Sets the fields for a profile from a HashMap.
+    /// Writes to native auth_profile_fields table only (fields_json column dropped in v10).
+    pub fn set_fields(
+        &self,
+        id: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        // Write to native child table - all values as text for simplicity
+        let repo = self.fields_repo();
+        repo.delete_for_profile(id)?;
+
+        for (key, value) in fields.iter() {
+            repo.insert(&AuthProfileFieldDto::new_text(
+                id.to_string(),
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+
+        Ok(())
+    }
+
     /// Fetches all auth profiles.
     pub fn all(&self) -> Result<Vec<AuthProfileDto>, StorageError> {
         let mut stmt = self
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, fields_json, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at
                 FROM auth_profiles
                 ORDER BY name ASC
                 "#,
@@ -49,10 +97,9 @@ impl AuthProfileRepository {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     provider_id: row.get(2)?,
-                    fields_json: row.get(3)?,
-                    enabled: row.get::<_, i32>(4)? != 0,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    enabled: row.get::<_, i32>(3)? != 0,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -85,7 +132,7 @@ impl AuthProfileRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, fields_json, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at
                 FROM auth_profiles
                 WHERE id = ?1
                 "#,
@@ -100,10 +147,9 @@ impl AuthProfileRepository {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 provider_id: row.get(2)?,
-                fields_json: row.get(3)?,
-                enabled: row.get::<_, i32>(4)? != 0,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                enabled: row.get::<_, i32>(3)? != 0,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         });
 
@@ -119,27 +165,39 @@ impl AuthProfileRepository {
 
     /// Inserts a new auth profile.
     pub fn insert(&self, profile: &AuthProfileDto) -> Result<(), StorageError> {
-        self.conn()
-            .execute(
-                r#"
-                INSERT INTO auth_profiles (
-                    id, name, provider_id, fields_json, enabled, created_at, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now')
-                )
-                "#,
-                params![
-                    profile.id,
-                    profile.name,
-                    profile.provider_id,
-                    profile.fields_json,
-                    profile.enabled as i32,
-                ],
-            )
+        // Start transaction for atomic write
+        let tx = self
+            .conn()
+            .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
                 path: "config.db".into(),
                 source,
             })?;
+
+        tx.execute(
+            r#"
+                INSERT INTO auth_profiles (
+                    id, name, provider_id, enabled, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                )
+                "#,
+            params![
+                profile.id,
+                profile.name,
+                profile.provider_id,
+                profile.enabled as i32,
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
 
         info!("Inserted auth profile: {}", profile.name);
         Ok(())
@@ -147,15 +205,22 @@ impl AuthProfileRepository {
 
     /// Updates an existing auth profile.
     pub fn update(&self, profile: &AuthProfileDto) -> Result<(), StorageError> {
-        let rows_affected = self
+        // Start transaction for atomic write
+        let tx = self
             .conn()
+            .unchecked_transaction()
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        let rows_affected = tx
             .execute(
                 r#"
                 UPDATE auth_profiles SET
                     name = ?2,
                     provider_id = ?3,
-                    fields_json = ?4,
-                    enabled = ?5,
+                    enabled = ?4,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -163,7 +228,6 @@ impl AuthProfileRepository {
                     profile.id,
                     profile.name,
                     profile.provider_id,
-                    profile.fields_json,
                     profile.enabled as i32,
                 ],
             )
@@ -173,11 +237,17 @@ impl AuthProfileRepository {
             })?;
 
         if rows_affected == 0 {
+            tx.rollback().ok();
             info!("No auth profile found to update: {}", profile.id);
-        } else {
-            info!("Updated auth profile: {}", profile.name);
+            return Ok(());
         }
 
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        info!("Updated auth profile: {}", profile.name);
         Ok(())
     }
 
@@ -186,23 +256,29 @@ impl AuthProfileRepository {
         &self,
         profile: &dbflux_core::AuthProfile,
     ) -> Result<(), StorageError> {
-        let fields_json =
-            serde_json::to_string(&profile.fields).map_err(|e| StorageError::Sqlite {
-                path: "config.db".into(),
-                source: rusqlite::Error::InvalidParameterName(e.to_string()),
-            })?;
-
         let dto = AuthProfileDto {
             id: profile.id.to_string(),
             name: profile.name.clone(),
             provider_id: profile.provider_id.clone(),
-            fields_json,
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
         };
 
-        self.insert(&dto)
+        // Insert the profile
+        self.insert(&dto)?;
+
+        // Then write the fields to the child table
+        let repo = self.fields_repo();
+        for (key, value) in profile.fields.iter() {
+            repo.insert(&AuthProfileFieldDto::new_text(
+                profile.id.to_string(),
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+
+        Ok(())
     }
 
     /// Deletes an auth profile by ID.
@@ -233,12 +309,13 @@ impl AuthProfileRepository {
 }
 
 /// DTO for auth profile storage.
+/// Note: fields are stored in auth_profile_fields child table.
+/// The fields_json column was dropped in migration v10.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthProfileDto {
     pub id: String,
     pub name: String,
     pub provider_id: String,
-    pub fields_json: String,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -246,12 +323,11 @@ pub struct AuthProfileDto {
 
 impl AuthProfileDto {
     /// Creates a new DTO.
-    pub fn new(id: Uuid, name: String, provider_id: String, fields_json: String) -> Self {
+    pub fn new(id: Uuid, name: String, provider_id: String) -> Self {
         Self {
             id: id.to_string(),
             name,
             provider_id,
-            fields_json,
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
@@ -278,12 +354,7 @@ mod tests {
         let conn = open_database(&path).expect("should open");
         run_config_migrations(&conn).expect("migration should run");
 
-        let dto = AuthProfileDto::new(
-            Uuid::new_v4(),
-            "AWS SSO".to_string(),
-            "aws-sso".to_string(),
-            r#"{"sso_start_url":"https://example.awsapps.com"}"#.to_string(),
-        );
+        let dto = AuthProfileDto::new(Uuid::new_v4(), "AWS SSO".to_string(), "aws-sso".to_string());
 
         let repo = AuthProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
