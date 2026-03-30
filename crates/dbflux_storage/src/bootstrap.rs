@@ -11,7 +11,11 @@ use crate::migrations;
 use crate::paths;
 use crate::repositories::auth_profiles::AuthProfileRepository;
 use crate::repositories::connection_profiles::ConnectionProfileRepository;
+use crate::repositories::driver_overrides::DriverOverridesRepository;
+use crate::repositories::driver_setting_values::DriverSettingValuesRepository;
 use crate::repositories::driver_settings::DriverSettingsRepository;
+use crate::repositories::general_settings::GeneralSettingsRepository;
+use crate::repositories::governance_settings::GovernanceSettingsRepository;
 use crate::repositories::hook_definitions::HookDefinitionRepository;
 use crate::repositories::proxy_profiles::ProxyProfileRepository;
 use crate::repositories::services::ServiceRepository;
@@ -195,6 +199,26 @@ impl StorageRuntime {
         SettingsRepository::new(self.config_db())
     }
 
+    /// Creates a general settings repository.
+    pub fn general_settings(&self) -> GeneralSettingsRepository {
+        GeneralSettingsRepository::new(self.config_db())
+    }
+
+    /// Creates a governance settings repository.
+    pub fn governance_settings(&self) -> GovernanceSettingsRepository {
+        GovernanceSettingsRepository::new(self.config_db())
+    }
+
+    /// Creates a driver overrides repository.
+    pub fn driver_overrides(&self) -> DriverOverridesRepository {
+        DriverOverridesRepository::new(self.config_db())
+    }
+
+    /// Creates a driver setting values repository.
+    pub fn driver_setting_values(&self) -> DriverSettingValuesRepository {
+        DriverSettingValuesRepository::new(self.config_db())
+    }
+
     // --- State repositories ---
 
     /// Creates a UI state repository.
@@ -327,11 +351,11 @@ mod tests {
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
         let conn = runtime.open_state_db().expect("should open state db");
 
-        // State db migrations have run, so user_version should be 2 (INITIAL_VERSION + SYSTEM_METADATA_VERSION)
+        // State db migrations have run, so user_version should be 3 (INITIAL_VERSION + SYSTEM_METADATA_VERSION + STATE_EVENT_SESSION_COLUMNS_VERSION)
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]

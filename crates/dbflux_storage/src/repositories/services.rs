@@ -2,13 +2,20 @@
 //!
 //! Services store external RPC driver configurations (e.g., socket IDs, commands,
 //! environment variables) for launching managed driver hosts.
+//!
+//! This repository supports both legacy args_json/env_json columns and the normalized
+//! service_args and service_env child tables for the transition period.
 
 use log::info;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
+
+use super::service_args::ServiceArgsRepository;
+use super::service_env::ServiceEnvRepository;
 
 /// Repository for managing service/RPC definitions.
 pub struct ServiceRepository {
@@ -26,13 +33,57 @@ impl ServiceRepository {
         &self.conn
     }
 
+    /// Returns a ServiceArgsRepository for managing command arguments.
+    pub fn args_repo(&self) -> ServiceArgsRepository {
+        ServiceArgsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a ServiceEnvRepository for managing environment variables.
+    pub fn env_repo(&self) -> ServiceEnvRepository {
+        ServiceEnvRepository::new(self.conn.clone())
+    }
+
+    /// Gets the command arguments for a service as a Vec<String>.
+    /// Reads from native service_args table (args_json column dropped in v10).
+    pub fn get_args(&self, socket_id: &str) -> Result<Vec<String>, StorageError> {
+        let native_args = self.args_repo().get_for_service(socket_id)?;
+        Ok(native_args.into_iter().map(|a| a.value).collect())
+    }
+
+    /// Gets the environment variables for a service as a HashMap.
+    /// Reads from native service_env table (env_json column dropped in v10).
+    pub fn get_env(&self, socket_id: &str) -> Result<HashMap<String, String>, StorageError> {
+        let native_env = self.env_repo().get_map_for_service(socket_id)?;
+        Ok(native_env)
+    }
+
+    /// Sets the command arguments for a service.
+    /// Writes to native service_args table only (args_json column dropped in v10).
+    pub fn set_args(&self, socket_id: &str, args: &[String]) -> Result<(), StorageError> {
+        // Write to native child table
+        self.args_repo().insert_many(socket_id, args)?;
+        Ok(())
+    }
+
+    /// Sets the environment variables for a service.
+    /// Writes to native service_env table only (env_json column dropped in v10).
+    pub fn set_env(
+        &self,
+        socket_id: &str,
+        env_vars: &HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        // Write to native child table
+        self.env_repo().insert_many(socket_id, env_vars)?;
+        Ok(())
+    }
+
     /// Fetches all services.
     pub fn all(&self) -> Result<Vec<ServiceDto>, StorageError> {
         let mut stmt = self
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, args_json, env_json, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
                 FROM services
                 ORDER BY socket_id ASC
                 "#,
@@ -48,11 +99,9 @@ impl ServiceRepository {
                     socket_id: row.get(0)?,
                     enabled: row.get::<_, i32>(1)? != 0,
                     command: row.get(2)?,
-                    args_json: row.get(3)?,
-                    env_json: row.get(4)?,
-                    startup_timeout_ms: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
+                    startup_timeout_ms: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -85,7 +134,7 @@ impl ServiceRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, args_json, env_json, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
                 FROM services
                 WHERE socket_id = ?1
                 "#,
@@ -100,11 +149,9 @@ impl ServiceRepository {
                 socket_id: row.get(0)?,
                 enabled: row.get::<_, i32>(1)? != 0,
                 command: row.get(2)?,
-                args_json: row.get(3)?,
-                env_json: row.get(4)?,
-                startup_timeout_ms: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                startup_timeout_ms: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         });
 
@@ -120,28 +167,39 @@ impl ServiceRepository {
 
     /// Inserts a new service.
     pub fn insert(&self, service: &ServiceDto) -> Result<(), StorageError> {
-        self.conn()
-            .execute(
-                r#"
-                INSERT INTO services (
-                    socket_id, enabled, command, args_json, env_json, startup_timeout_ms, created_at, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now')
-                )
-                "#,
-                params![
-                    service.socket_id,
-                    service.enabled as i32,
-                    service.command,
-                    service.args_json,
-                    service.env_json,
-                    service.startup_timeout_ms,
-                ],
-            )
+        // Start transaction for atomic write
+        let tx = self
+            .conn()
+            .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
                 path: "config.db".into(),
                 source,
             })?;
+
+        tx.execute(
+            r#"
+                INSERT INTO services (
+                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                )
+                "#,
+            params![
+                service.socket_id,
+                service.enabled as i32,
+                service.command,
+                service.startup_timeout_ms,
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
 
         info!("Inserted service: {}", service.socket_id);
         Ok(())
@@ -149,16 +207,22 @@ impl ServiceRepository {
 
     /// Updates an existing service.
     pub fn update(&self, service: &ServiceDto) -> Result<(), StorageError> {
-        let rows_affected = self
+        // Start transaction for atomic write
+        let tx = self
             .conn()
+            .unchecked_transaction()
+            .map_err(|source| StorageError::Sqlite {
+                path: "config.db".into(),
+                source,
+            })?;
+
+        let rows_affected = tx
             .execute(
                 r#"
                 UPDATE services SET
                     enabled = ?2,
                     command = ?3,
-                    args_json = ?4,
-                    env_json = ?5,
-                    startup_timeout_ms = ?6,
+                    startup_timeout_ms = ?4,
                     updated_at = datetime('now')
                 WHERE socket_id = ?1
                 "#,
@@ -166,8 +230,6 @@ impl ServiceRepository {
                     service.socket_id,
                     service.enabled as i32,
                     service.command,
-                    service.args_json,
-                    service.env_json,
                     service.startup_timeout_ms,
                 ],
             )
@@ -177,43 +239,59 @@ impl ServiceRepository {
             })?;
 
         if rows_affected == 0 {
+            tx.rollback().ok();
             info!("No service found to update: {}", service.socket_id);
-        } else {
-            info!("Updated service: {}", service.socket_id);
+            return Ok(());
         }
 
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        info!("Updated service: {}", service.socket_id);
         Ok(())
     }
 
     /// Upserts a service (insert or update).
     pub fn upsert(&self, service: &ServiceDto) -> Result<(), StorageError> {
-        self.conn()
-            .execute(
-                r#"
-                INSERT INTO services (
-                    socket_id, enabled, command, args_json, env_json, startup_timeout_ms, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-                ON CONFLICT(socket_id) DO UPDATE SET
-                    enabled = excluded.enabled,
-                    command = excluded.command,
-                    args_json = excluded.args_json,
-                    env_json = excluded.env_json,
-                    startup_timeout_ms = excluded.startup_timeout_ms,
-                    updated_at = datetime('now')
-                "#,
-                params![
-                    service.socket_id,
-                    service.enabled as i32,
-                    service.command,
-                    service.args_json,
-                    service.env_json,
-                    service.startup_timeout_ms,
-                ],
-            )
+        // Start transaction for atomic write
+        let tx = self
+            .conn()
+            .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
                 path: "config.db".into(),
                 source,
             })?;
+
+        tx.execute(
+            r#"
+                INSERT INTO services (
+                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+                ON CONFLICT(socket_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    command = excluded.command,
+                    startup_timeout_ms = excluded.startup_timeout_ms,
+                    updated_at = datetime('now')
+                "#,
+            params![
+                service.socket_id,
+                service.enabled as i32,
+                service.command,
+                service.startup_timeout_ms,
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
+        tx.commit().map_err(|source| StorageError::Sqlite {
+            path: "config.db".into(),
+            source,
+        })?;
+
         info!("Upserted service: {}", service.socket_id);
         Ok(())
     }
@@ -246,13 +324,13 @@ impl ServiceRepository {
 }
 
 /// DTO for service storage.
+/// Note: args and env are stored in child tables (service_args, service_env).
+/// The args_json and env_json columns were dropped in migration v10.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceDto {
     pub socket_id: String,
     pub enabled: bool,
     pub command: Option<String>,
-    pub args_json: Option<String>,
-    pub env_json: Option<String>,
     pub startup_timeout_ms: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
@@ -265,8 +343,6 @@ impl ServiceDto {
             socket_id,
             enabled: true,
             command: None,
-            args_json: None,
-            env_json: None,
             startup_timeout_ms: None,
             created_at: String::new(),
             updated_at: String::new(),

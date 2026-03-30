@@ -273,8 +273,8 @@ mod tests {
             })
             .expect("query");
         assert_eq!(
-            migration_count, 2,
-            "schema_migrations should be preserved (2 migrations)"
+            migration_count, 3,
+            "schema_migrations should be preserved (3 migrations: v1_initial, v2_system_metadata, v3_event_session_native_columns)"
         );
 
         let _ = std::fs::remove_file(&path);
@@ -339,11 +339,11 @@ mod tests {
         let new_conn = open_database(&state_db_path).expect("recreate");
         crate::migrations::run_state_migrations(&new_conn).expect("re-migrate");
 
-        // Verify state.db is fresh with migrations (version 2 = INITIAL_VERSION + SYSTEM_METADATA_VERSION)
+        // Verify state.db is fresh with migrations (version 3 = INITIAL_VERSION + SYSTEM_METADATA_VERSION + STATE_EVENT_SESSION_COLUMNS_VERSION)
         let version: i32 = new_conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         // Config.db should still exist (not deleted)
         assert!(config_db_path.exists());

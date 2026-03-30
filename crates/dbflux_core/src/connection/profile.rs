@@ -607,7 +607,7 @@ pub struct ConnectionProfile {
     /// This is the authoritative source for driver selection.
     /// For legacy profiles without this field, falls back to `config.kind()`.
     #[serde(default)]
-    kind: Option<DbKind>,
+    pub kind: Option<DbKind>,
 
     /// Driver identifier used to resolve the runtime driver implementation.
     ///
@@ -618,7 +618,7 @@ pub struct ConnectionProfile {
     /// Legacy profiles may not have this field. In that case we derive it from
     /// `kind` for backward compatibility.
     #[serde(default)]
-    driver_id: Option<String>,
+    pub driver_id: Option<String>,
 
     /// Database-specific connection parameters.
     pub config: DbConfig,
@@ -871,10 +871,10 @@ impl ConnectionProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RefreshPolicySetting;
     use crate::config::app::GlobalOverrides;
     use crate::driver::form::FormValues;
     use crate::values::ValueRef;
+    use crate::RefreshPolicySetting;
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())

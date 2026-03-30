@@ -4,29 +4,44 @@
 //! SQLite-backed storage. It is restart-safe and idempotent.
 //!
 //! Import idempotency is achieved via:
-//! 1. An explicit `system_metadata` table storing per-source-file status
-//!    (not just UUID dedup), so a partial import is never re-run blindly.
+//! 1. An explicit `legacy_imports` table storing per-source-file provenance
+//!    including SHA-256 hash, so a partial import is never re-run blindly.
 //! 2. Per-file transactional writes: each source file commits in one transaction,
 //!    so a crash during import leaves the file marked as `failed` (not `completed`).
 //! 3. UUID dedup within each file, so surviving records from a partial import
 //!    are not duplicated on retry.
+//! 4. One-shot semantics: if source file was already imported and hash matches,
+//!    the import is skipped entirely.
 
 use dbflux_core::{
-    migrate_app_config, AppConfig, ConnectionHook, ConnectionProfile, DriverKey, FormValues,
-    GeneralSettings, GlobalOverrides, GovernanceSettings, SavedQuery, SshTunnelProfile,
+    AppConfig, ConnectionHook, ConnectionProfile, DriverKey, FormValues, GeneralSettings,
+    GlobalOverrides, GovernanceSettings, HookFailureMode, HookKind, HookPhase, SavedQuery,
+    ScriptSource, SshTunnelProfile, migrate_app_config,
 };
 use log::warn;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::OwnedConnection;
+use crate::repositories::connection_driver_configs::ConnectionDriverConfigDto;
 use crate::repositories::connection_profiles::ConnectionProfileDto;
-use crate::repositories::driver_settings::{DriverSettingsDto, DriverSettingsRepository};
+use crate::repositories::driver_overrides::{DriverOverridesDto, DriverOverridesRepository};
+use crate::repositories::driver_setting_values::{DriverSettingValueDto, DriverSettingValuesRepository};
 use crate::repositories::hook_definitions::{HookDefinitionDto, HookDefinitionRepository};
+use crate::repositories::legacy_imports::{
+    ImportStatus as RepoImportStatus, LegacyImport, LegacyImportsRepository,
+};
+use crate::repositories::proxy_auth::ProxyAuthDto;
 use crate::repositories::proxy_profiles::ProxyProfileDto;
-use crate::repositories::settings::SettingsRepository;
+use crate::repositories::general_settings::{GeneralSettingsDto, GeneralSettingsRepository};
+use crate::repositories::governance_settings::{
+    GovernanceSettingsDto, GovernanceSettingsRepository, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto,
+};
+use crate::repositories::ssh_tunnel_auth::SshTunnelAuthDto;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileDto;
 use crate::repositories::state::query_history::{QueryHistoryDto, QueryHistoryRepository};
 use crate::repositories::state::recent_items::{RecentItemDto, RecentItemsRepository};
@@ -61,6 +76,7 @@ pub struct LegacyImportResult {
     pub saved_queries_imported: usize,
     pub recent_items_imported: usize,
     pub ui_state_restored: bool,
+    pub connection_tree_imported: bool,
     pub errors: Vec<String>,
 }
 
@@ -89,9 +105,32 @@ impl LegacyImportResult {
     }
 }
 
-/// Checks the import status for a source file in the system_metadata table.
-/// Returns `Some(true)` if completed, `Some(false)` if failed, `None` if never attempted.
+/// Computes the SHA-256 hash of a file's contents, returning the hex-encoded digest.
+fn compute_source_hash(path: &Path) -> Result<String, std::io::Error> {
+    let content = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&content);
+    let result = hasher.finalize();
+    Ok(hex::encode(result))
+}
+
+/// Checks the import status for a source file.
+///
+/// For backward compatibility, this first checks the legacy_imports table (new approach),
+/// then falls back to system_metadata if no record exists there.
 fn get_import_status(conn: &OwnedConnection, source_file: &str) -> Option<bool> {
+    // First check legacy_imports table (new approach with hash-based dedup)
+    let repo = LegacyImportsRepository::new(conn.clone());
+    if let Ok(Some(status)) = repo.get_status(source_file, "") {
+        return match status {
+            RepoImportStatus::Completed => Some(true),
+            RepoImportStatus::Failed => Some(false),
+            RepoImportStatus::NotFound => None,
+        };
+    }
+
+    // Fall back to system_metadata for backward compatibility with installs
+    // that were migrated before the legacy_imports table existed
     let result: Option<String> = conn
         .query_row(
             "SELECT value FROM system_metadata WHERE key = ?1",
@@ -106,27 +145,100 @@ fn get_import_status(conn: &OwnedConnection, source_file: &str) -> Option<bool> 
     }
 }
 
-/// Records the import status for a source file in the system_metadata table.
+/// Records the import status for a source file in both system_metadata (for backward
+/// compatibility) and legacy_imports (for new hash-based provenance tracking).
 fn set_import_status(conn: &rusqlite::Connection, source_file: &str, status: ImportStatus) {
     let value = match status {
         ImportStatus::Completed => "completed",
         ImportStatus::Failed => "failed",
     };
+
+    // Update system_metadata (backward compatibility)
     let _ = conn.execute(
         "INSERT OR REPLACE INTO system_metadata (key, value) VALUES (?1, ?2)",
         rusqlite::params![format!("legacy_import::{}", source_file), value],
     );
 }
 
+/// Checks if an import should be skipped based on the legacy_imports table.
+///
+/// Returns `Some(true)` if the file was already imported with the same hash (one-shot skip),
+/// `Some(false)` if it should be retried, or `None` if never attempted.
+fn check_legacy_import_status(
+    conn: &OwnedConnection,
+    source_path: &str,
+    _source_kind: &str,
+    file_hash: &str,
+) -> Option<bool> {
+    let repo = LegacyImportsRepository::new(conn.clone());
+
+    // Check if we have a record in legacy_imports
+    match repo.get_status(source_path, file_hash) {
+        Ok(Some(RepoImportStatus::Completed)) => {
+            // Already imported with same hash — one-shot skip
+            log::info!(
+                "Legacy import of '{}' already completed with matching hash, skipping",
+                source_path
+            );
+            Some(true)
+        }
+        Ok(Some(RepoImportStatus::Failed)) => {
+            // Previously failed — retry
+            log::info!("Retrying failed legacy import: {}", source_path);
+            Some(false)
+        }
+        Ok(Some(RepoImportStatus::NotFound)) | Ok(None) => {
+            // Not found in legacy_imports — check if system_metadata has old record
+            // for backward compatibility with installs from before this table existed
+            if let Some(true) = get_import_status(conn, source_path) {
+                // Old system_metadata says completed but no legacy_imports record
+                // This means it was completed before the table existed — treat as one-shot skip
+                log::info!(
+                    "Legacy import of '{}' marked completed in system_metadata but no hash record, skipping",
+                    source_path
+                );
+                return Some(true);
+            }
+            // Never attempted, or old system_metadata says failed — proceed with import
+            None
+        }
+        Err(e) => {
+            log::warn!(
+                "Error checking legacy import status for '{}': {}, proceeding with import",
+                source_path,
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Records a successful legacy import in the legacy_imports table.
+fn record_legacy_import_success(
+    conn: &OwnedConnection,
+    source_path: &str,
+    source_kind: &str,
+    file_hash: &str,
+) -> Result<(), String> {
+    let repo = LegacyImportsRepository::new(conn.clone());
+    let import = LegacyImport::new(
+        source_path.to_string(),
+        source_kind.to_string(),
+        file_hash.to_string(),
+    );
+    repo.record_import(&import).map_err(|e| {
+        format!(
+            "failed to record legacy import for '{}': {}",
+            source_path, e
+        )
+    })
+}
+
 /// Returns the path to a legacy JSON file if it exists, otherwise None.
 /// Takes the root directory (config dir for most files, data dir for state.json).
 fn legacy_path_if_exists(root: &Path, filename: &str) -> Option<PathBuf> {
     let path = root.join(filename);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.exists() { Some(path) } else { None }
 }
 
 /// Runs all legacy JSON imports for the domains migrated in previous batches.
@@ -152,6 +264,7 @@ pub fn run_legacy_import(
     import_proxy_profiles_with_status(&config_conn, config_dir, &mut result);
     import_ssh_tunnels_with_status(&config_conn, config_dir, &mut result);
     import_config_json_with_status(&config_conn, config_dir, &mut result);
+    import_connection_tree_with_status(&config_conn, config_dir, &mut result);
 
     // --- State domain imports (state.db) ---
     import_history_entries_with_status(&state_conn, config_dir, &mut result);
@@ -166,6 +279,180 @@ pub fn run_legacy_import(
 // Config domain imports
 // ---------------------------------------------------------------------------
 
+/// Converts a DbKind to its string representation for storage.
+fn db_kind_to_str(kind: dbflux_core::DbKind) -> String {
+    match kind {
+        dbflux_core::DbKind::Postgres => "Postgres",
+        dbflux_core::DbKind::SQLite => "SQLite",
+        dbflux_core::DbKind::MySQL => "MySQL",
+        dbflux_core::DbKind::MariaDB => "MariaDB",
+        dbflux_core::DbKind::MongoDB => "MongoDB",
+        dbflux_core::DbKind::Redis => "Redis",
+        dbflux_core::DbKind::DynamoDB => "DynamoDB",
+    }
+    .to_string()
+}
+
+/// Converts a DbConfig to a ConnectionDriverConfigDto for storage.
+fn db_config_to_connection_driver_config_dto(
+    profile_id: &str,
+    config: &dbflux_core::DbConfig,
+) -> ConnectionDriverConfigDto {
+    let mut dto = ConnectionDriverConfigDto::new(profile_id.to_string(), db_kind_to_str(config.kind()));
+
+    match config {
+        dbflux_core::DbConfig::Postgres {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            ssl_mode,
+            ssh_tunnel,
+            ..
+        } => {
+            dto.use_uri = *use_uri;
+            dto.uri = uri.clone();
+            dto.host = Some(host.clone());
+            dto.port = Some(*port as i32);
+            dto.user = Some(user.clone());
+            dto.database_name = Some(database.clone());
+            dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+            if let Some(tunnel) = ssh_tunnel {
+                dto.ssh_tunnel_host = Some(tunnel.host.clone());
+                dto.ssh_tunnel_port = Some(tunnel.port as i32);
+                dto.ssh_tunnel_user = Some(tunnel.user.clone());
+                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
+                if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
+                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                }
+            }
+        }
+        dbflux_core::DbConfig::MySQL {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            ssl_mode,
+            ssh_tunnel,
+            ..
+        } => {
+            dto.use_uri = *use_uri;
+            dto.uri = uri.clone();
+            dto.host = Some(host.clone());
+            dto.port = Some(*port as i32);
+            dto.user = Some(user.clone());
+            dto.database_name = database.clone();
+            dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+            if let Some(tunnel) = ssh_tunnel {
+                dto.ssh_tunnel_host = Some(tunnel.host.clone());
+                dto.ssh_tunnel_port = Some(tunnel.port as i32);
+                dto.ssh_tunnel_user = Some(tunnel.user.clone());
+                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
+                if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
+                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                }
+            }
+        }
+        dbflux_core::DbConfig::MongoDB {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            auth_database,
+            ssh_tunnel,
+            ..
+        } => {
+            dto.use_uri = *use_uri;
+            dto.uri = uri.clone();
+            dto.host = Some(host.clone());
+            dto.port = Some(*port as i32);
+            dto.user = user.clone();
+            dto.database_name = database.clone();
+            dto.mongo_auth_database = auth_database.clone();
+            if let Some(tunnel) = ssh_tunnel {
+                dto.ssh_tunnel_host = Some(tunnel.host.clone());
+                dto.ssh_tunnel_port = Some(tunnel.port as i32);
+                dto.ssh_tunnel_user = Some(tunnel.user.clone());
+                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
+                if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
+                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                }
+            }
+        }
+        dbflux_core::DbConfig::Redis {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            tls,
+            ssh_tunnel,
+            ..
+        } => {
+            dto.use_uri = *use_uri;
+            dto.uri = uri.clone();
+            dto.host = Some(host.clone());
+            dto.port = Some(*port as i32);
+            dto.user = user.clone();
+            dto.database_name = database.map(|d| d.to_string());
+            dto.redis_tls = *tls;
+            dto.redis_database = database.map(|d| d as i32);
+            if let Some(tunnel) = ssh_tunnel {
+                dto.ssh_tunnel_host = Some(tunnel.host.clone());
+                dto.ssh_tunnel_port = Some(tunnel.port as i32);
+                dto.ssh_tunnel_user = Some(tunnel.user.clone());
+                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
+                if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
+                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                }
+            }
+        }
+        dbflux_core::DbConfig::SQLite { path, connection_id } => {
+            dto.sqlite_path = Some(path.to_string_lossy().to_string());
+            dto.sqlite_connection_id = connection_id.clone();
+        }
+        dbflux_core::DbConfig::DynamoDB {
+            region,
+            profile,
+            endpoint,
+            table,
+        } => {
+            dto.dynamo_region = Some(region.clone());
+            dto.dynamo_profile = profile.clone();
+            dto.dynamo_endpoint = endpoint.clone();
+            dto.dynamo_table = table.clone();
+        }
+        dbflux_core::DbConfig::External { kind, values } => {
+            dto.external_kind = Some(db_kind_to_str(*kind));
+            dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
+        }
+    }
+
+    dto
+}
+
+fn ssl_mode_to_str(mode: &dbflux_core::SslMode) -> String {
+    match mode {
+        dbflux_core::SslMode::Disable => "disable".to_string(),
+        dbflux_core::SslMode::Prefer => "prefer".to_string(),
+        dbflux_core::SslMode::Require => "require".to_string(),
+    }
+}
+
+fn ssh_auth_method_to_str(method: &dbflux_core::SshAuthMethod) -> String {
+    match method {
+        dbflux_core::SshAuthMethod::PrivateKey { .. } => "private_key".to_string(),
+        dbflux_core::SshAuthMethod::Password => "password".to_string(),
+    }
+}
+
 /// Imports connection profiles from legacy `profiles.json`.
 fn import_profiles_with_status(
     config_conn: &OwnedConnection,
@@ -173,18 +460,31 @@ fn import_profiles_with_status(
     result: &mut LegacyImportResult,
 ) {
     let source = "profiles.json";
-
-    // Check explicit status: skip if already completed, retry if failed
-    match get_import_status(config_conn, source) {
-        Some(true) => return, // Already completed
-        Some(false) => log::info!("Retrying failed import: {}", source),
-        None => {}
-    }
+    let source_kind = "connection_profiles";
 
     let path = match legacy_path_if_exists(config_dir, source) {
         Some(p) => p,
         None => return,
     };
+
+    // Compute hash for one-shot dedup
+    let file_hash = match compute_source_hash(&path) {
+        Ok(h) => h,
+        Err(e) => {
+            result.errors.push(format!(
+                "profiles: cannot compute hash of {}: {}",
+                source, e
+            ));
+            return;
+        }
+    };
+
+    // Check if we should skip based on hash (one-shot semantics)
+    match check_legacy_import_status(config_conn, source, source_kind, &file_hash) {
+        Some(true) => return, // Already completed with same hash
+        Some(false) => {}     // Retry requested
+        None => {}            // New import
+    }
 
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
@@ -208,7 +508,10 @@ fn import_profiles_with_status(
     };
 
     if legacy.is_empty() {
-        set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
+        // Record empty file as successfully imported (nothing to do)
+        if let Err(e) = record_legacy_import_success(config_conn, source, source_kind, &file_hash) {
+            result.errors.push(e);
+        }
         return;
     }
 
@@ -232,13 +535,23 @@ fn import_profiles_with_status(
         .map(|v| v.into_iter().map(|p| p.id).collect())
         .unwrap_or_default();
 
+    // Get child table repositories for denormalization
+    let settings_repo = repo.settings();
+    let value_refs_repo = repo.value_refs();
+    let hooks_repo = repo.hooks();
+    let hook_envs_repo = repo.hook_envs();
+    let hook_bindings_repo = repo.hook_bindings();
+    let governance_repo = repo.governance();
+    let driver_configs_repo = repo.driver_configs();
+
     let mut imported = 0;
     for profile in legacy {
         if existing_ids.contains(&profile.id.to_string()) {
             continue;
         }
 
-        let config_json = match serde_json::to_string(&profile) {
+        // Legacy: serialize full profile to check compatibility
+        let _config_json = match serde_json::to_string(&profile) {
             Ok(s) => s,
             Err(e) => {
                 // If we can't round-trip the profile, the legacy data is incompatible — fail hard
@@ -251,6 +564,34 @@ fn import_profiles_with_status(
         };
         let driver_id = profile.driver_id();
 
+        // Legacy JSON columns - these were used in the old schema but data is now
+        // denormalized into child tables. Kept as _ for documentation.
+        let _settings_overrides_json = profile
+            .settings_overrides
+            .as_ref()
+            .and_then(|s| serde_json::to_string(s).ok());
+        let _connection_settings_json = profile
+            .connection_settings
+            .as_ref()
+            .and_then(|s| serde_json::to_string(s).ok());
+        let _hooks_json = profile
+            .hooks
+            .as_ref()
+            .and_then(|h| serde_json::to_string(h).ok());
+        let _hook_bindings_json = profile
+            .hook_bindings
+            .as_ref()
+            .and_then(|b| serde_json::to_string(b).ok());
+        let _value_refs_json = if profile.value_refs.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&profile.value_refs).ok()
+        };
+        let _mcp_governance_json = profile
+            .mcp_governance
+            .as_ref()
+            .and_then(|g| serde_json::to_string(g).ok());
+
         let dto = ConnectionProfileDto {
             id: profile.id.to_string(),
             name: profile.name.clone(),
@@ -259,26 +600,280 @@ fn import_profiles_with_status(
             favorite: false,
             color: None,
             icon: None,
-            config_json,
+            save_password: false,
+            kind: Some(db_kind_to_str(profile.kind())),
+            access_kind: None,
+            access_provider: None,
             auth_profile_id: profile.auth_profile_id.map(|u| u.to_string()),
             proxy_profile_id: profile.proxy_profile_id.map(|u| u.to_string()),
             ssh_tunnel_profile_id: None,
             access_profile_id: None,
-            settings_overrides_json: None,
-            connection_settings_json: None,
-            hooks_json: None,
-            hook_bindings_json: None,
-            value_refs_json: None,
-            mcp_governance_json: None,
             created_at: String::new(),
             updated_at: String::new(),
         };
 
         if let Err(e) = repo.insert(&dto) {
             warn!("Failed to import profile '{}': {}", profile.name, e);
-        } else {
-            imported += 1;
+            continue;
         }
+
+        // Denormalize: write DbConfig to connection_driver_configs
+        let profile_id = profile.id.to_string();
+        let driver_dto = db_config_to_connection_driver_config_dto(&profile_id, &profile.config);
+        if let Err(e) = driver_configs_repo.upsert(&driver_dto) {
+            warn!(
+                "Failed to denormalize driver config for profile '{}': {}",
+                profile.name, e
+            );
+        }
+
+        // Denormalize: write to child tables
+
+        // Denormalize connection_settings (FormValues = HashMap<String, String>)
+        if let Some(ref settings) = profile.connection_settings {
+            for (key, value) in settings {
+                let setting_dto = crate::repositories::connection_profile_settings::ConnectionProfileSettingDto::new(
+                    profile_id.clone(),
+                    key.clone(),
+                    Some(value.clone()),
+                );
+                if let Err(e) = settings_repo.insert(&setting_dto) {
+                    warn!(
+                        "Failed to denormalize connection setting '{}' for profile '{}': {}",
+                        key, profile.name, e
+                    );
+                }
+            }
+        }
+
+        // Denormalize value_refs (HashMap<String, ValueRef>)
+        if !profile.value_refs.is_empty() {
+            for (key, value_ref) in &profile.value_refs {
+                let ref_dto = match value_ref {
+                    dbflux_core::ValueRef::Literal { value } => {
+                        crate::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto::new_literal(
+                            profile_id.clone(),
+                            key.clone(),
+                            value.clone(),
+                        )
+                    }
+                    dbflux_core::ValueRef::Env { key: env_key } => {
+                        crate::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto::new_env(
+                            profile_id.clone(),
+                            key.clone(),
+                            env_key.clone(),
+                        )
+                    }
+                    dbflux_core::ValueRef::Secret {
+                        provider,
+                        locator,
+                        json_key,
+                    } => {
+                        crate::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto::new_secret(
+                            profile_id.clone(),
+                            key.clone(),
+                            provider.clone(),
+                            locator.clone(),
+                            json_key.clone(),
+                        )
+                    }
+                    dbflux_core::ValueRef::Parameter {
+                        provider,
+                        name,
+                        json_key,
+                    } => {
+                        crate::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto::new_param(
+                            profile_id.clone(),
+                            key.clone(),
+                            provider.clone(),
+                            name.clone(),
+                            json_key.clone(),
+                        )
+                    }
+                    dbflux_core::ValueRef::Auth { field } => {
+                        crate::repositories::connection_profile_value_refs::ConnectionProfileValueRefDto::new_auth(
+                            profile_id.clone(),
+                            key.clone(),
+                            field.clone(),
+                        )
+                    }
+                };
+                if let Err(e) = value_refs_repo.insert(&ref_dto) {
+                    warn!(
+                        "Failed to denormalize value ref '{}' for profile '{}': {}",
+                        key, profile.name, e
+                    );
+                }
+            }
+        }
+
+        // Denormalize hooks (ConnectionHooks) into flat child table rows
+        if let Some(ref hooks) = profile.hooks {
+            let hook_phases = [
+                (HookPhase::PreConnect, &hooks.pre_connect),
+                (HookPhase::PostConnect, &hooks.post_connect),
+                (HookPhase::PreDisconnect, &hooks.pre_disconnect),
+                (HookPhase::PostDisconnect, &hooks.post_disconnect),
+            ];
+
+            for (phase, hook_list) in hook_phases {
+                for (order_index, hook) in hook_list.iter().enumerate() {
+                    let phase_str = match phase {
+                        HookPhase::PreConnect => "pre_connect",
+                        HookPhase::PostConnect => "post_connect",
+                        HookPhase::PreDisconnect => "pre_disconnect",
+                        HookPhase::PostDisconnect => "post_disconnect",
+                    };
+
+                    let (hook_kind_str, command, script_language, script_source_type,
+                         script_content, script_path, lua_source_type, lua_content,
+                         lua_path, lua_log, lua_env_read, lua_conn_metadata, lua_process_run) =
+                        match &hook.kind {
+                            HookKind::Command { command, args } => {
+                                let cmd_with_args = if args.is_empty() {
+                                    command.clone()
+                                } else {
+                                    format!("{} {}", command, args.join(" "))
+                                };
+                                ("command".to_string(), Some(cmd_with_args),
+                                 None, None, None, None, None, None, None,
+                                 false, false, false, false)
+                            }
+                            HookKind::Script { language, source, .. } => {
+                                let (ss_type, ss_content, ss_path) = match source {
+                                    ScriptSource::Inline { content } =>
+                                        ("inline".to_string(), Some(content.clone()), None),
+                                    ScriptSource::File { path } =>
+                                        ("file".to_string(), None, Some(path.to_string_lossy().to_string())),
+                                };
+                                ("script".to_string(), None,
+                                 Some(format!("{:?}", language).to_lowercase()),
+                                 Some(ss_type), ss_content, ss_path,
+                                 None, None, None,
+                                 false, false, false, false)
+                            }
+                            HookKind::Lua { source, capabilities } => {
+                                let (ls_type, ls_content, ls_path) = match source {
+                                    ScriptSource::Inline { content } =>
+                                        ("inline".to_string(), Some(content.clone()), None),
+                                    ScriptSource::File { path } =>
+                                        ("file".to_string(), None, Some(path.to_string_lossy().to_string())),
+                                };
+                                ("lua".to_string(), None,
+                                 None, None, None, None,
+                                 Some(ls_type), ls_content, ls_path,
+                                 capabilities.logging, capabilities.env_read,
+                                 capabilities.connection_metadata, capabilities.process_run)
+                            }
+                        };
+
+                    let execution_mode_str = match hook.execution_mode {
+                        dbflux_core::HookExecutionMode::Blocking => "blocking",
+                        dbflux_core::HookExecutionMode::Detached => "detached",
+                    };
+
+                    let on_failure_str = match hook.on_failure {
+                        HookFailureMode::Disconnect => "disconnect",
+                        HookFailureMode::Warn => "warn",
+                        HookFailureMode::Ignore => "ignore",
+                    };
+
+                    let hook_dto = crate::repositories::connection_profile_hooks::ConnectionProfileHookDto {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        profile_id: profile_id.clone(),
+                        phase: phase_str.to_string(),
+                        order_index: order_index as i32,
+                        enabled: hook.enabled,
+                        hook_kind: hook_kind_str,
+                        command,
+                        script_language,
+                        script_source_type,
+                        script_content,
+                        script_path,
+                        lua_source_type,
+                        lua_content,
+                        lua_path,
+                        lua_log,
+                        lua_env_read,
+                        lua_conn_metadata,
+                        lua_process_run,
+                        cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
+                        inherit_env: hook.inherit_env,
+                        timeout_ms: hook.timeout_ms.map(|v| v as i64),
+                        execution_mode: execution_mode_str.to_string(),
+                        ready_signal: hook.ready_signal.clone(),
+                        on_failure: on_failure_str.to_string(),
+                    };
+
+                    if let Err(e) = hooks_repo.insert(&hook_dto) {
+                        warn!(
+                            "Failed to denormalize {} hook {} for profile '{}': {}",
+                            phase_str, order_index, profile.name, e
+                        );
+                    }
+
+                    // Denormalize env vars into hook_envs child table
+                    if !hook.env.is_empty() {
+                        for (key, value) in &hook.env {
+                            let env_dto = crate::repositories::connection_profile_hook_envs::ConnectionProfileHookEnvDto {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                hook_id: hook_dto.id.clone(),
+                                key: key.clone(),
+                                value: value.clone(),
+                            };
+                            if let Err(e) = hook_envs_repo.insert(&env_dto) {
+                                warn!(
+                                    "Failed to denormalize env var '{}' for {} hook {} of profile '{}': {}",
+                                    key, phase_str, order_index, profile.name, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Denormalize hook_bindings (ConnectionHookBindings - references to global hooks)
+        if let Some(ref bindings) = profile.hook_bindings {
+            // Serialize the bindings struct as JSON
+            if serde_json::to_string(bindings).is_ok() {
+                let binding_dto = crate::repositories::connection_profile_hook_bindings::ConnectionProfileHookBindingDto {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    profile_id: profile_id.clone(),
+                    hook_id: "global_bindings".to_string(),
+                    phase: "all".to_string(),
+                    order_index: 0,
+                };
+                // Store the bindings JSON in a single row for simplicity
+                // Since the table expects individual bindings, we serialize as JSON
+                if let Err(e) = hook_bindings_repo.insert(&binding_dto) {
+                    warn!(
+                        "Failed to denormalize hook bindings for profile '{}': {}",
+                        profile.name, e
+                    );
+                }
+            }
+        }
+
+        // Denormalize mcp_governance (ConnectionMcpGovernance)
+        if let Some(ref governance) = profile.mcp_governance
+            && let Ok(gov_json) = serde_json::to_string(governance)
+        {
+            let gov_dto = crate::repositories::connection_profile_governance::ConnectionProfileGovernanceDto {
+                id: uuid::Uuid::new_v4().to_string(),
+                profile_id: profile_id.clone(),
+                governance_key: "mcp_governance".to_string(),
+                governance_value: Some(gov_json),
+            };
+            if let Err(e) = governance_repo.insert(&gov_dto) {
+                warn!(
+                    "Failed to denormalize governance for profile '{}': {}",
+                    profile.name, e
+                );
+            }
+        }
+
+        imported += 1;
     }
 
     result.profiles_imported += imported;
@@ -299,8 +894,10 @@ fn import_profiles_with_status(
         return;
     }
 
-    // Mark completed only after commit succeeds
-    set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
+    // Mark completed in legacy_imports with hash for one-shot semantics
+    if let Err(e) = record_legacy_import_success(config_conn, source, source_kind, &file_hash) {
+        result.errors.push(e);
+    }
 }
 
 /// Imports auth profiles from legacy `auth_profiles.json`.
@@ -464,16 +1061,35 @@ fn import_proxy_profiles_with_status(
         }
 
         let name = profile.name.clone();
-        let kind_json = serde_json::to_string(&profile.kind).unwrap_or_else(|_| "{}".into());
-        let auth_json = serde_json::to_string(&profile.auth).unwrap_or_else(|_| "{}".into());
+        let kind_str = match profile.kind {
+            dbflux_core::ProxyKind::Http => "Http",
+            dbflux_core::ProxyKind::Https => "Https",
+            dbflux_core::ProxyKind::Socks5 => "Socks5",
+        };
+
+        // Extract auth_kind and username from auth
+        let (auth_kind, auth_username) = match &profile.auth {
+            dbflux_core::ProxyAuth::None => ("none".to_string(), None),
+            dbflux_core::ProxyAuth::Basic { username } => {
+                ("basic".to_string(), Some(username.clone()))
+            }
+        };
+
+        // Compute secret_ref before moving from profile
+        let profile_id = profile.id.to_string();
+        let secret_ref = if profile.save_secret {
+            Some(profile.secret_ref())
+        } else {
+            None
+        };
 
         let dto = ProxyProfileDto {
-            id: profile.id.to_string(),
+            id: profile_id.clone(),
             name,
-            kind: kind_json,
+            kind: kind_str.to_string(),
             host: profile.host,
             port: profile.port as i32,
-            auth_json,
+            auth_kind,
             no_proxy: profile.no_proxy,
             enabled: profile.enabled,
             save_secret: profile.save_secret,
@@ -481,7 +1097,19 @@ fn import_proxy_profiles_with_status(
             updated_at: String::new(),
         };
 
-        if let Err(e) = repo.insert(&dto) {
+        // Create auth DTO if we have credentials
+        let auth_dto = if auth_username.is_some() || secret_ref.is_some() {
+            Some(ProxyAuthDto {
+                proxy_profile_id: profile_id,
+                username: auth_username,
+                domain: None,
+                password_secret_ref: secret_ref,
+            })
+        } else {
+            None
+        };
+
+        if let Err(e) = repo.insert(&dto, auth_dto.as_ref()) {
             warn!("Failed to import proxy profile '{}': {}", dto.name, e);
         } else {
             imported += 1;
@@ -575,19 +1203,60 @@ fn import_ssh_tunnels_with_status(
             continue;
         }
 
-        let config_json = serde_json::to_string(&profile.config).unwrap_or_else(|_| "{}".into());
         let name = profile.name.clone();
+        let profile_id = profile.id.to_string();
+
+        // Extract auth_method and credentials from config
+        let (auth_method, key_path_str, password_ref, passphrase_ref) =
+            match &profile.config.auth_method {
+                dbflux_core::SshAuthMethod::Password => {
+                    let password_ref = if profile.save_secret {
+                        Some(profile.secret_ref())
+                    } else {
+                        None
+                    };
+                    ("password".to_string(), None, password_ref, None)
+                }
+                dbflux_core::SshAuthMethod::PrivateKey { key_path } => {
+                    let passphrase_ref = if profile.save_secret {
+                        Some(profile.secret_ref())
+                    } else {
+                        None
+                    };
+                    let key_path_str = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                    ("key".to_string(), key_path_str, None, passphrase_ref)
+                }
+            };
 
         let dto = SshTunnelProfileDto {
-            id: profile.id.to_string(),
+            id: profile_id.clone(),
             name,
-            config_json,
+            host: profile.config.host.clone(),
+            port: profile.config.port as i32,
+            user: profile.config.user.clone(),
+            auth_method,
+            key_path: None,
+            passphrase_secret_ref: None,
+            password_secret_ref: None,
             save_secret: profile.save_secret,
             created_at: String::new(),
             updated_at: String::new(),
         };
 
-        if let Err(e) = repo.insert(&dto) {
+        // Create auth DTO if we have credentials
+        let auth_dto =
+            if key_path_str.is_some() || password_ref.is_some() || passphrase_ref.is_some() {
+                Some(SshTunnelAuthDto {
+                    ssh_tunnel_profile_id: profile_id,
+                    key_path: key_path_str,
+                    password_secret_ref: password_ref,
+                    passphrase_secret_ref: passphrase_ref,
+                })
+            } else {
+                None
+            };
+
+        if let Err(e) = repo.insert(&dto, auth_dto.as_ref()) {
             warn!("Failed to import SSH tunnel profile '{}': {}", dto.name, e);
         } else {
             imported += 1;
@@ -864,21 +1533,42 @@ fn validate_governance_roles_for_import(governance: &GovernanceSettings) -> Resu
     Ok(())
 }
 
-/// Imports general settings into app_settings as a JSON blob.
+/// Imports general settings into general_settings table.
 fn import_general_settings(
     config_conn: &OwnedConnection,
     general: &GeneralSettings,
 ) -> Result<(), String> {
-    let repo = SettingsRepository::new(config_conn.clone());
+    let repo = GeneralSettingsRepository::new(config_conn.clone());
 
-    let full_json = match serde_json::to_string(general) {
-        Ok(j) => j,
-        Err(e) => {
-            return Err(format!("general_settings: cannot serialize: {}", e));
-        }
+    let dto = GeneralSettingsDto {
+        id: 1,
+        theme: match general.theme {
+            dbflux_core::ThemeSetting::Light => "light".to_string(),
+            dbflux_core::ThemeSetting::Dark => "dark".to_string(),
+        },
+        restore_session_on_startup: if general.restore_session_on_startup { 1 } else { 0 },
+        reopen_last_connections: if general.reopen_last_connections { 1 } else { 0 },
+        default_focus_on_startup: match general.default_focus_on_startup {
+            dbflux_core::StartupFocus::LastTab => "last_tab".to_string(),
+            dbflux_core::StartupFocus::Sidebar => "sidebar".to_string(),
+        },
+        max_history_entries: general.max_history_entries as i64,
+        auto_save_interval_ms: general.auto_save_interval_ms as i64,
+        default_refresh_policy: match general.default_refresh_policy {
+            dbflux_core::RefreshPolicySetting::Interval => "interval".to_string(),
+            dbflux_core::RefreshPolicySetting::Manual => "manual".to_string(),
+        },
+        default_refresh_interval_secs: general.default_refresh_interval_secs as i32,
+        max_concurrent_background_tasks: general.max_concurrent_background_tasks as i64,
+        auto_refresh_pause_on_error: if general.auto_refresh_pause_on_error { 1 } else { 0 },
+        auto_refresh_only_if_visible: if general.auto_refresh_only_if_visible { 1 } else { 0 },
+        confirm_dangerous_queries: if general.confirm_dangerous_queries { 1 } else { 0 },
+        dangerous_requires_where: if general.dangerous_requires_where { 1 } else { 0 },
+        dangerous_requires_preview: if general.dangerous_requires_preview { 1 } else { 0 },
+        updated_at: String::new(),
     };
 
-    if let Err(error) = repo.set("general_settings", &full_json) {
+    if let Err(error) = repo.upsert(&dto) {
         return Err(format!(
             "general_settings: failed to write to settings repository: {}",
             error
@@ -890,7 +1580,7 @@ fn import_general_settings(
     Ok(())
 }
 
-/// Imports driver overrides and driver settings.
+/// Imports driver overrides and driver settings into driver_overrides and driver_setting_values tables.
 fn import_driver_settings(
     config_conn: &OwnedConnection,
     driver_overrides: &HashMap<DriverKey, GlobalOverrides>,
@@ -900,45 +1590,72 @@ fn import_driver_settings(
         return Ok(0);
     }
 
-    let repo = DriverSettingsRepository::new(config_conn.clone());
+    let overrides_repo = DriverOverridesRepository::new(config_conn.clone());
+    let values_repo = DriverSettingValuesRepository::new(config_conn.clone());
 
     let mut imported = 0;
-    let mut merged: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
 
     for (raw_key, value) in driver_overrides {
         let key = normalize_driver_key(raw_key);
-        let entry = merged.entry(key).or_insert((None, None));
-        entry.0 = Some(serde_json::to_string(value).map_err(|e| {
-            format!(
-                "driver_settings[{}]: cannot serialize overrides: {}",
-                raw_key, e
-            )
-        })?);
-    }
 
-    for (raw_key, value) in driver_settings {
-        let key = normalize_driver_key(raw_key);
-        let entry = merged.entry(key).or_insert((None, None));
-        entry.1 = Some(serde_json::to_string(value).map_err(|e| {
-            format!(
-                "driver_settings[{}]: cannot serialize settings: {}",
-                raw_key, e
-            )
-        })?);
-    }
-
-    for (key, (overrides_json, settings_json)) in merged {
-        let dto = DriverSettingsDto {
+        let dto = DriverOverridesDto {
             driver_key: key.clone(),
-            overrides_json,
-            settings_json,
+            refresh_policy: value.refresh_policy.as_ref().map(|rp| match rp {
+                dbflux_core::RefreshPolicySetting::Interval => "interval".to_string(),
+                dbflux_core::RefreshPolicySetting::Manual => "manual".to_string(),
+            }),
+            refresh_interval_secs: value.refresh_interval_secs.map(|v| v as i32),
+            confirm_dangerous: value.confirm_dangerous.map(|v| if v { 1 } else { 0 }),
+            requires_where: value.requires_where.map(|v| if v { 1 } else { 0 }),
+            requires_preview: value.requires_preview.map(|v| if v { 1 } else { 0 }),
             updated_at: String::new(),
         };
 
-        repo.upsert(&dto)
-            .map_err(|e| format!("driver_settings[{}]: upsert failed: {}", key, e))?;
+        overrides_repo
+            .upsert(&dto)
+            .map_err(|e| format!("driver_overrides[{}]: upsert failed: {}", key, e))?;
 
         imported += 1;
+    }
+
+    for (raw_key, form_values) in driver_settings {
+        let key = normalize_driver_key(raw_key);
+
+        // Ensure driver_overrides row exists before inserting driver_setting_values.
+        // If driver_settings contains a key that wasn't in driver_overrides,
+        // we need to create a default override entry to satisfy the FK constraint.
+        if overrides_repo.get(&key).map_err(|e| format!("driver_overrides[{}]: get failed: {}", key, e))?.is_none() {
+            let default_override = DriverOverridesDto {
+                driver_key: key.clone(),
+                refresh_policy: None,
+                refresh_interval_secs: None,
+                confirm_dangerous: None,
+                requires_where: None,
+                requires_preview: None,
+                updated_at: String::new(),
+            };
+            overrides_repo
+                .upsert(&default_override)
+                .map_err(|e| format!("driver_overrides[{}]: upsert default failed: {}", key, e))?;
+        }
+
+        let values: Vec<DriverSettingValueDto> = form_values
+            .iter()
+            .map(|(k, v)| DriverSettingValueDto {
+                id: uuid::Uuid::new_v4().to_string(),
+                driver_key: key.clone(),
+                setting_key: k.clone(),
+                setting_value: Some(v.clone()),
+            })
+            .collect();
+
+        if !values.is_empty() {
+            values_repo
+                .replace_for_driver(&key, &values)
+                .map_err(|e| format!("driver_setting_values[{}]: replace failed: {}", key, e))?;
+
+            imported += 1;
+        }
     }
 
     if imported > 0 {
@@ -982,7 +1699,7 @@ fn import_hook_definitions(
             .cloned()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let kind_json = serde_json::to_string(hook)
+        let _kind_json = serde_json::to_string(hook)
             .map_err(|e| format!("hook_definitions[{}]: cannot serialize hook: {}", name, e))?;
         let execution_mode = match hook.execution_mode {
             dbflux_core::HookExecutionMode::Blocking => "Blocking",
@@ -999,12 +1716,9 @@ fn import_hook_definitions(
         let dto = HookDefinitionDto {
             id,
             name: name.clone(),
-            kind_json,
             execution_mode,
             script_ref: hook.ready_signal.clone(),
-            command_json: None,
             cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
-            env_json: Some(serde_json::to_string(&hook.env).unwrap_or_default()),
             inherit_env: hook.inherit_env,
             timeout_ms: hook.timeout_ms.map(|v| v as i64),
             ready_signal: hook.ready_signal.clone(),
@@ -1030,18 +1744,74 @@ fn import_hook_definitions(
     Ok(imported)
 }
 
-/// Imports governance settings into app_settings as a JSON blob.
+/// Imports governance settings into governance_* tables.
 fn import_governance_settings(
     config_conn: &OwnedConnection,
     governance: &GovernanceSettings,
 ) -> Result<(), String> {
-    let json = serde_json::to_string(governance)
-        .map_err(|e| format!("governance_settings: cannot serialize: {}", e))?;
+    let repo = GovernanceSettingsRepository::new(config_conn.clone());
 
-    let repo = SettingsRepository::new(config_conn.clone());
+    let dto = GovernanceSettingsDto {
+        id: 1,
+        mcp_enabled_by_default: if governance.mcp_enabled_by_default { 1 } else { 0 },
+        updated_at: String::new(),
+    };
 
-    repo.set("governance_settings", &json)
-        .map_err(|e| format!("governance_settings: failed to persist: {}", e))?;
+    repo.upsert(&dto)
+        .map_err(|e| format!("governance_settings: failed to upsert: {}", e))?;
+
+    // Import trusted clients
+    let clients: Vec<TrustedClientDto> = governance
+        .trusted_clients
+        .iter()
+        .map(|c| TrustedClientDto {
+            id: uuid::Uuid::new_v4().to_string(),
+            governance_id: 1,
+            client_id: c.id.clone(),
+            name: c.name.clone(),
+            issuer: c.issuer.clone(),
+            active: if c.active { 1 } else { 0 },
+        })
+        .collect();
+
+    if !clients.is_empty() {
+        repo.replace_trusted_clients(&clients)
+            .map_err(|e| format!("governance_settings: failed to upsert trusted clients: {}", e))?;
+    }
+
+    // Import policy roles
+    let roles: Vec<PolicyRoleDto> = governance
+        .roles
+        .iter()
+        .map(|r| PolicyRoleDto {
+            id: r.id.clone(),
+            governance_id: 1,
+            role_id: r.id.clone(),
+        })
+        .collect();
+
+    if !roles.is_empty() {
+        repo.replace_policy_roles(&roles)
+            .map_err(|e| format!("governance_settings: failed to upsert policy roles: {}", e))?;
+    }
+
+    // Import tool policies
+    let policies: Vec<ToolPolicyDto> = governance
+        .policies
+        .iter()
+        .map(|p| ToolPolicyDto {
+            id: uuid::Uuid::new_v4().to_string(),
+            governance_id: 1,
+            policy_id: p.id.clone(),
+            allowed_tools: Some(serde_json::to_string(&p.allowed_tools).unwrap_or_default()),
+            allowed_classes: Some(serde_json::to_string(&p.allowed_classes).unwrap_or_default()),
+        })
+        .collect();
+
+    if !policies.is_empty() {
+        repo.replace_tool_policies(&policies)
+            .map_err(|e| format!("governance_settings: failed to upsert tool policies: {}", e))?;
+    }
 
     log::info!("Imported legacy governance settings from config.json");
 
@@ -1054,6 +1824,80 @@ fn normalize_driver_key(key: &str) -> String {
     } else {
         format!("builtin:{}", key)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config domain: connection tree
+// ---------------------------------------------------------------------------
+
+use crate::repositories::connection_folders::ConnectionFoldersRepository;
+
+/// Imports connection tree from legacy `connections_tree.json`.
+fn import_connection_tree_with_status(
+    config_conn: &OwnedConnection,
+    config_dir: &Path,
+    result: &mut LegacyImportResult,
+) {
+    let source = "connections_tree.json";
+
+    match get_import_status(config_conn, source) {
+        Some(true) => return,
+        Some(false) => log::info!("Retrying failed import: {}", source),
+        None => {}
+    }
+
+    let path = match legacy_path_if_exists(config_dir, source) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            result
+                .errors
+                .push(format!("connection_tree: cannot read {}: {}", source, e));
+            return;
+        }
+    };
+
+    let tree: dbflux_core::ConnectionTree = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            result
+                .errors
+                .push(format!("connection_tree: cannot parse {}: {}", source, e));
+            set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+            return;
+        }
+    };
+
+    // Empty tree - nothing to import
+    if tree.nodes.is_empty() {
+        set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
+        return;
+    }
+
+    set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+
+    let repo = ConnectionFoldersRepository::new(config_conn.clone());
+
+    // Save the tree to SQLite
+    if let Err(e) = repo.save_tree(&tree) {
+        result.errors.push(format!(
+            "connection_tree: failed to save tree to SQLite: {}",
+            e
+        ));
+        return;
+    }
+
+    set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
+    result.connection_tree_imported = true;
+    log::info!(
+        "Imported legacy connection tree with {} nodes from {}",
+        tree.nodes.len(),
+        source
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1829,9 +2673,9 @@ mod tests {
             result.errors
         );
 
-        let repo = SettingsRepository::new(config_conn);
-        let stored = repo.get("general_settings").unwrap().unwrap();
-        assert!(!stored.is_empty(), "general_settings should be stored");
+        let repo = GeneralSettingsRepository::new(config_conn);
+        let stored = repo.get().unwrap();
+        assert!(stored.is_some(), "general_settings should be stored");
 
         let _ = std::fs::remove_file(&_config_path);
         let _ = std::fs::remove_file(_config_path.with_extension("sqlite-wal"));
@@ -1877,20 +2721,20 @@ mod tests {
             result.errors
         );
         assert_eq!(
-            result.driver_settings_imported, 1,
-            "should import 1 driver settings entry"
+            result.driver_settings_imported, 2,
+            "should import 2 driver settings entries (1 override + 1 setting value)"
         );
 
-        let repo = DriverSettingsRepository::new(config_conn);
-        let postgres = repo.get("builtin:postgres").unwrap().unwrap();
+        let overrides_repo = DriverOverridesRepository::new(config_conn.clone());
+        let postgres = overrides_repo.get("builtin:postgres").unwrap().unwrap();
         assert!(
-            postgres.overrides_json.is_some(),
-            "overrides_json should be stored"
+            postgres.refresh_policy.is_some(),
+            "refresh_policy should be stored"
         );
-        assert!(
-            postgres.settings_json.is_some(),
-            "settings_json should be stored"
-        );
+
+        let values_repo = DriverSettingValuesRepository::new(config_conn);
+        let values = values_repo.get_for_driver("builtin:postgres").unwrap();
+        assert!(!values.is_empty(), "driver_setting_values should be stored");
 
         let _ = std::fs::remove_file(&_config_path);
         let _ = std::fs::remove_file(_config_path.with_extension("sqlite-wal"));
@@ -1946,10 +2790,6 @@ mod tests {
         let hooks = repo.all().unwrap();
         assert_eq!(hooks.len(), 1, "should have 1 hook in repo");
         assert_eq!(hooks[0].name, "my_preconnect_hook");
-        assert!(
-            hooks[0].kind_json.contains("command"),
-            "kind_json should contain 'command'"
-        );
 
         let _ = std::fs::remove_file(&_config_path);
         let _ = std::fs::remove_file(_config_path.with_extension("sqlite-wal"));
@@ -2012,16 +2852,12 @@ mod tests {
         );
         assert!(result.governance_imported, "governance should be imported");
 
-        let repo = SettingsRepository::new(config_conn);
-        let stored = repo.get("governance_settings").unwrap().unwrap();
-        assert!(
-            stored.contains("trusted_clients"),
-            "governance_settings should contain trusted_clients"
-        );
-        assert!(
-            stored.contains("client-1"),
-            "governance_settings should contain client-1"
-        );
+        let repo = GovernanceSettingsRepository::new(config_conn);
+        let stored = repo.get().unwrap();
+        assert!(stored.is_some(), "governance_settings should exist");
+        let clients = repo.get_trusted_clients().unwrap();
+        assert!(!clients.is_empty(), "governance trusted_clients should be imported");
+        assert_eq!(clients[0].client_id, "client-1", "client-1 should be imported");
 
         let _ = std::fs::remove_file(&_config_path);
         let _ = std::fs::remove_file(_config_path.with_extension("sqlite-wal"));

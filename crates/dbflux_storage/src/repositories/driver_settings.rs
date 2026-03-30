@@ -1,10 +1,18 @@
 //! Repository for driver-level settings in config.db.
 //!
-//! Driver settings store per-driver overrides and configuration from both
-//! global settings and driver-specific settings schemas.
+//! # Deprecation Notice
+//!
+//! This repository is DEPRECATED after migration v16 normalized all data to native typed tables.
+//!
+//! - `driver_settings` table has been DROPped
+//! - Use `DriverOverridesRepository` for driver overrides
+//! - Use `DriverSettingValuesRepository` for driver setting values
+//!
+//! This module is kept for backward compatibility during migration but will be removed
+//! once all callers migrate to the new repositories.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
@@ -185,53 +193,5 @@ impl DriverSettingsDto {
             settings_json: None,
             updated_at: String::new(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::migrations::run_config_migrations;
-    use crate::sqlite::open_database;
-    use std::sync::Arc;
-
-    fn temp_db(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "dbflux_repo_driver_{}_{}",
-            name,
-            std::process::id()
-        ))
-    }
-
-    #[test]
-    fn driver_settings_upsert() {
-        let path = temp_db("driver_upsert");
-        let _ = std::fs::remove_file(&path);
-
-        let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
-
-        let dto = DriverSettingsDto {
-            driver_key: "builtin:postgres".to_string(),
-            overrides_json: Some(
-                r#"{"refresh_policy":"Interval","refresh_interval_secs":30}"#.to_string(),
-            ),
-            settings_json: Some(r#"{"scan_batch_size":1000}"#.to_string()),
-            updated_at: String::new(),
-        };
-
-        let repo = DriverSettingsRepository::new(Arc::new(conn));
-        repo.upsert(&dto).expect("should upsert");
-
-        let fetched = repo
-            .get("builtin:postgres")
-            .expect("should fetch")
-            .expect("should exist");
-        assert!(fetched.overrides_json.is_some());
-        assert!(fetched.settings_json.is_some());
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 }
