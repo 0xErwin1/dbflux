@@ -29,18 +29,20 @@ use crate::bootstrap::OwnedConnection;
 use crate::repositories::connection_driver_configs::ConnectionDriverConfigDto;
 use crate::repositories::connection_profiles::ConnectionProfileDto;
 use crate::repositories::driver_overrides::{DriverOverridesDto, DriverOverridesRepository};
-use crate::repositories::driver_setting_values::{DriverSettingValueDto, DriverSettingValuesRepository};
+use crate::repositories::driver_setting_values::{
+    DriverSettingValueDto, DriverSettingValuesRepository,
+};
+use crate::repositories::general_settings::{GeneralSettingsDto, GeneralSettingsRepository};
+use crate::repositories::governance_settings::{
+    GovernanceSettingsDto, GovernanceSettingsRepository, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto,
+};
 use crate::repositories::hook_definitions::{HookDefinitionDto, HookDefinitionRepository};
 use crate::repositories::legacy_imports::{
     ImportStatus as RepoImportStatus, LegacyImport, LegacyImportsRepository,
 };
 use crate::repositories::proxy_auth::ProxyAuthDto;
 use crate::repositories::proxy_profiles::ProxyProfileDto;
-use crate::repositories::general_settings::{GeneralSettingsDto, GeneralSettingsRepository};
-use crate::repositories::governance_settings::{
-    GovernanceSettingsDto, GovernanceSettingsRepository, PolicyRoleDto, ToolPolicyDto,
-    TrustedClientDto,
-};
 use crate::repositories::ssh_tunnel_auth::SshTunnelAuthDto;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileDto;
 use crate::repositories::state::query_history::{QueryHistoryDto, QueryHistoryRepository};
@@ -298,7 +300,8 @@ fn db_config_to_connection_driver_config_dto(
     profile_id: &str,
     config: &dbflux_core::DbConfig,
 ) -> ConnectionDriverConfigDto {
-    let mut dto = ConnectionDriverConfigDto::new(profile_id.to_string(), db_kind_to_str(config.kind()));
+    let mut dto =
+        ConnectionDriverConfigDto::new(profile_id.to_string(), db_kind_to_str(config.kind()));
 
     match config {
         dbflux_core::DbConfig::Postgres {
@@ -325,7 +328,8 @@ fn db_config_to_connection_driver_config_dto(
                 dto.ssh_tunnel_user = Some(tunnel.user.clone());
                 dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
                 if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                    dto.ssh_tunnel_key_path =
+                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
                 }
             }
         }
@@ -353,7 +357,8 @@ fn db_config_to_connection_driver_config_dto(
                 dto.ssh_tunnel_user = Some(tunnel.user.clone());
                 dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
                 if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                    dto.ssh_tunnel_key_path =
+                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
                 }
             }
         }
@@ -381,7 +386,8 @@ fn db_config_to_connection_driver_config_dto(
                 dto.ssh_tunnel_user = Some(tunnel.user.clone());
                 dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
                 if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                    dto.ssh_tunnel_key_path =
+                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
                 }
             }
         }
@@ -410,11 +416,15 @@ fn db_config_to_connection_driver_config_dto(
                 dto.ssh_tunnel_user = Some(tunnel.user.clone());
                 dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
                 if let dbflux_core::SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                    dto.ssh_tunnel_key_path =
+                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
                 }
             }
         }
-        dbflux_core::DbConfig::SQLite { path, connection_id } => {
+        dbflux_core::DbConfig::SQLite {
+            path,
+            connection_id,
+        } => {
             dto.sqlite_path = Some(path.to_string_lossy().to_string());
             dto.sqlite_connection_id = connection_id.clone();
         }
@@ -725,66 +735,8 @@ fn import_profiles_with_status(
                         HookPhase::PostDisconnect => "post_disconnect",
                     };
 
-                    let (hook_kind_str, command, script_language, script_source_type,
-                         script_content, script_path, lua_source_type, lua_content,
-                         lua_path, lua_log, lua_env_read, lua_conn_metadata, lua_process_run) =
-                        match &hook.kind {
-                            HookKind::Command { command, args } => {
-                                let cmd_with_args = if args.is_empty() {
-                                    command.clone()
-                                } else {
-                                    format!("{} {}", command, args.join(" "))
-                                };
-                                ("command".to_string(), Some(cmd_with_args),
-                                 None, None, None, None, None, None, None,
-                                 false, false, false, false)
-                            }
-                            HookKind::Script { language, source, .. } => {
-                                let (ss_type, ss_content, ss_path) = match source {
-                                    ScriptSource::Inline { content } =>
-                                        ("inline".to_string(), Some(content.clone()), None),
-                                    ScriptSource::File { path } =>
-                                        ("file".to_string(), None, Some(path.to_string_lossy().to_string())),
-                                };
-                                ("script".to_string(), None,
-                                 Some(format!("{:?}", language).to_lowercase()),
-                                 Some(ss_type), ss_content, ss_path,
-                                 None, None, None,
-                                 false, false, false, false)
-                            }
-                            HookKind::Lua { source, capabilities } => {
-                                let (ls_type, ls_content, ls_path) = match source {
-                                    ScriptSource::Inline { content } =>
-                                        ("inline".to_string(), Some(content.clone()), None),
-                                    ScriptSource::File { path } =>
-                                        ("file".to_string(), None, Some(path.to_string_lossy().to_string())),
-                                };
-                                ("lua".to_string(), None,
-                                 None, None, None, None,
-                                 Some(ls_type), ls_content, ls_path,
-                                 capabilities.logging, capabilities.env_read,
-                                 capabilities.connection_metadata, capabilities.process_run)
-                            }
-                        };
-
-                    let execution_mode_str = match hook.execution_mode {
-                        dbflux_core::HookExecutionMode::Blocking => "blocking",
-                        dbflux_core::HookExecutionMode::Detached => "detached",
-                    };
-
-                    let on_failure_str = match hook.on_failure {
-                        HookFailureMode::Disconnect => "disconnect",
-                        HookFailureMode::Warn => "warn",
-                        HookFailureMode::Ignore => "ignore",
-                    };
-
-                    let hook_dto = crate::repositories::connection_profile_hooks::ConnectionProfileHookDto {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        profile_id: profile_id.clone(),
-                        phase: phase_str.to_string(),
-                        order_index: order_index as i32,
-                        enabled: hook.enabled,
-                        hook_kind: hook_kind_str,
+                    let (
+                        hook_kind_str,
                         command,
                         script_language,
                         script_source_type,
@@ -797,13 +749,128 @@ fn import_profiles_with_status(
                         lua_env_read,
                         lua_conn_metadata,
                         lua_process_run,
-                        cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
-                        inherit_env: hook.inherit_env,
-                        timeout_ms: hook.timeout_ms.map(|v| v as i64),
-                        execution_mode: execution_mode_str.to_string(),
-                        ready_signal: hook.ready_signal.clone(),
-                        on_failure: on_failure_str.to_string(),
+                    ) = match &hook.kind {
+                        HookKind::Command { command, args } => {
+                            let cmd_with_args = if args.is_empty() {
+                                command.clone()
+                            } else {
+                                format!("{} {}", command, args.join(" "))
+                            };
+                            (
+                                "command".to_string(),
+                                Some(cmd_with_args),
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                false,
+                                false,
+                            )
+                        }
+                        HookKind::Script {
+                            language, source, ..
+                        } => {
+                            let (ss_type, ss_content, ss_path) = match source {
+                                ScriptSource::Inline { content } => {
+                                    ("inline".to_string(), Some(content.clone()), None)
+                                }
+                                ScriptSource::File { path } => (
+                                    "file".to_string(),
+                                    None,
+                                    Some(path.to_string_lossy().to_string()),
+                                ),
+                            };
+                            (
+                                "script".to_string(),
+                                None,
+                                Some(format!("{:?}", language).to_lowercase()),
+                                Some(ss_type),
+                                ss_content,
+                                ss_path,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                false,
+                                false,
+                            )
+                        }
+                        HookKind::Lua {
+                            source,
+                            capabilities,
+                        } => {
+                            let (ls_type, ls_content, ls_path) = match source {
+                                ScriptSource::Inline { content } => {
+                                    ("inline".to_string(), Some(content.clone()), None)
+                                }
+                                ScriptSource::File { path } => (
+                                    "file".to_string(),
+                                    None,
+                                    Some(path.to_string_lossy().to_string()),
+                                ),
+                            };
+                            (
+                                "lua".to_string(),
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                Some(ls_type),
+                                ls_content,
+                                ls_path,
+                                capabilities.logging,
+                                capabilities.env_read,
+                                capabilities.connection_metadata,
+                                capabilities.process_run,
+                            )
+                        }
                     };
+
+                    let execution_mode_str = match hook.execution_mode {
+                        dbflux_core::HookExecutionMode::Blocking => "blocking",
+                        dbflux_core::HookExecutionMode::Detached => "detached",
+                    };
+
+                    let on_failure_str = match hook.on_failure {
+                        HookFailureMode::Disconnect => "disconnect",
+                        HookFailureMode::Warn => "warn",
+                        HookFailureMode::Ignore => "ignore",
+                    };
+
+                    let hook_dto =
+                        crate::repositories::connection_profile_hooks::ConnectionProfileHookDto {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            profile_id: profile_id.clone(),
+                            phase: phase_str.to_string(),
+                            order_index: order_index as i32,
+                            enabled: hook.enabled,
+                            hook_kind: hook_kind_str,
+                            command,
+                            script_language,
+                            script_source_type,
+                            script_content,
+                            script_path,
+                            lua_source_type,
+                            lua_content,
+                            lua_path,
+                            lua_log,
+                            lua_env_read,
+                            lua_conn_metadata,
+                            lua_process_run,
+                            cwd: hook.cwd.as_ref().map(|p| p.to_string_lossy().to_string()),
+                            inherit_env: hook.inherit_env,
+                            timeout_ms: hook.timeout_ms.map(|v| v as i64),
+                            execution_mode: execution_mode_str.to_string(),
+                            ready_signal: hook.ready_signal.clone(),
+                            on_failure: on_failure_str.to_string(),
+                        };
 
                     if let Err(e) = hooks_repo.insert(&hook_dto) {
                         warn!(
@@ -1546,8 +1613,16 @@ fn import_general_settings(
             dbflux_core::ThemeSetting::Light => "light".to_string(),
             dbflux_core::ThemeSetting::Dark => "dark".to_string(),
         },
-        restore_session_on_startup: if general.restore_session_on_startup { 1 } else { 0 },
-        reopen_last_connections: if general.reopen_last_connections { 1 } else { 0 },
+        restore_session_on_startup: if general.restore_session_on_startup {
+            1
+        } else {
+            0
+        },
+        reopen_last_connections: if general.reopen_last_connections {
+            1
+        } else {
+            0
+        },
         default_focus_on_startup: match general.default_focus_on_startup {
             dbflux_core::StartupFocus::LastTab => "last_tab".to_string(),
             dbflux_core::StartupFocus::Sidebar => "sidebar".to_string(),
@@ -1560,11 +1635,31 @@ fn import_general_settings(
         },
         default_refresh_interval_secs: general.default_refresh_interval_secs as i32,
         max_concurrent_background_tasks: general.max_concurrent_background_tasks as i64,
-        auto_refresh_pause_on_error: if general.auto_refresh_pause_on_error { 1 } else { 0 },
-        auto_refresh_only_if_visible: if general.auto_refresh_only_if_visible { 1 } else { 0 },
-        confirm_dangerous_queries: if general.confirm_dangerous_queries { 1 } else { 0 },
-        dangerous_requires_where: if general.dangerous_requires_where { 1 } else { 0 },
-        dangerous_requires_preview: if general.dangerous_requires_preview { 1 } else { 0 },
+        auto_refresh_pause_on_error: if general.auto_refresh_pause_on_error {
+            1
+        } else {
+            0
+        },
+        auto_refresh_only_if_visible: if general.auto_refresh_only_if_visible {
+            1
+        } else {
+            0
+        },
+        confirm_dangerous_queries: if general.confirm_dangerous_queries {
+            1
+        } else {
+            0
+        },
+        dangerous_requires_where: if general.dangerous_requires_where {
+            1
+        } else {
+            0
+        },
+        dangerous_requires_preview: if general.dangerous_requires_preview {
+            1
+        } else {
+            0
+        },
         updated_at: String::new(),
     };
 
@@ -1624,7 +1719,11 @@ fn import_driver_settings(
         // Ensure driver_overrides row exists before inserting driver_setting_values.
         // If driver_settings contains a key that wasn't in driver_overrides,
         // we need to create a default override entry to satisfy the FK constraint.
-        if overrides_repo.get(&key).map_err(|e| format!("driver_overrides[{}]: get failed: {}", key, e))?.is_none() {
+        if overrides_repo
+            .get(&key)
+            .map_err(|e| format!("driver_overrides[{}]: get failed: {}", key, e))?
+            .is_none()
+        {
             let default_override = DriverOverridesDto {
                 driver_key: key.clone(),
                 refresh_policy: None,
@@ -1753,7 +1852,11 @@ fn import_governance_settings(
 
     let dto = GovernanceSettingsDto {
         id: 1,
-        mcp_enabled_by_default: if governance.mcp_enabled_by_default { 1 } else { 0 },
+        mcp_enabled_by_default: if governance.mcp_enabled_by_default {
+            1
+        } else {
+            0
+        },
         updated_at: String::new(),
     };
 
@@ -1775,8 +1878,12 @@ fn import_governance_settings(
         .collect();
 
     if !clients.is_empty() {
-        repo.replace_trusted_clients(&clients)
-            .map_err(|e| format!("governance_settings: failed to upsert trusted clients: {}", e))?;
+        repo.replace_trusted_clients(&clients).map_err(|e| {
+            format!(
+                "governance_settings: failed to upsert trusted clients: {}",
+                e
+            )
+        })?;
     }
 
     // Import policy roles
@@ -2856,8 +2963,14 @@ mod tests {
         let stored = repo.get().unwrap();
         assert!(stored.is_some(), "governance_settings should exist");
         let clients = repo.get_trusted_clients().unwrap();
-        assert!(!clients.is_empty(), "governance trusted_clients should be imported");
-        assert_eq!(clients[0].client_id, "client-1", "client-1 should be imported");
+        assert!(
+            !clients.is_empty(),
+            "governance trusted_clients should be imported"
+        );
+        assert_eq!(
+            clients[0].client_id, "client-1",
+            "client-1 should be imported"
+        );
 
         let _ = std::fs::remove_file(&_config_path);
         let _ = std::fs::remove_file(_config_path.with_extension("sqlite-wal"));

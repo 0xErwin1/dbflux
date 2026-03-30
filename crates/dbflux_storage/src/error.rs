@@ -44,3 +44,21 @@ impl From<rusqlite::Error> for StorageError {
         }
     }
 }
+
+impl From<StorageError> for dbflux_core::DbError {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::Sqlite { source, .. } => {
+                dbflux_core::DbError::query_failed(source.to_string())
+            }
+            StorageError::Io { source, .. } => dbflux_core::DbError::IoError(source),
+            StorageError::ConfigDirUnavailable => {
+                dbflux_core::DbError::InvalidProfile("config directory not available".to_string())
+            }
+            StorageError::DataDirUnavailable => {
+                dbflux_core::DbError::InvalidProfile("data directory not available".to_string())
+            }
+            StorageError::LegacyImportFailed(msg) => dbflux_core::DbError::InvalidProfile(msg),
+        }
+    }
+}

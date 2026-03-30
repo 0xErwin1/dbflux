@@ -1,30 +1,42 @@
+use crate::connection::TreeStore;
 use crate::{ConnectionTree, ConnectionTreeNode, ConnectionTreeStore};
 use log::{error, info};
 use uuid::Uuid;
 
 pub struct ConnectionTreeManager {
     pub tree: ConnectionTree,
-    store: Option<ConnectionTreeStore>,
+    store: Option<Box<dyn TreeStore>>,
 }
 
 impl ConnectionTreeManager {
+    /// Creates a manager with a JSON file store (legacy, for testing only).
+    /// New code should use `with_store()`.
     pub fn new() -> Self {
-        let (store, tree) = match ConnectionTreeStore::new() {
-            Ok(store) => {
-                let tree = store.load().unwrap_or_else(|e| {
-                    error!("Failed to load connection tree: {:?}", e);
-                    ConnectionTree::new()
-                });
-                info!("Loaded connection tree with {} nodes", tree.nodes.len());
-                (Some(store), tree)
-            }
-            Err(e) => {
-                error!("Failed to create connection tree store: {:?}", e);
-                (None, ConnectionTree::new())
-            }
-        };
-
+        let store = ConnectionTreeStore::new()
+            .ok()
+            .map(|s| Box::new(s) as Box<dyn TreeStore>);
+        let tree = store
+            .as_ref()
+            .and_then(|s| s.load().ok())
+            .unwrap_or_else(|| {
+                error!("Failed to load connection tree, using empty tree");
+                ConnectionTree::new()
+            });
+        info!("Loaded connection tree with {} nodes", tree.nodes.len());
         Self { tree, store }
+    }
+
+    /// Creates a manager with a caller-supplied store.
+    pub fn with_store(store: Box<dyn TreeStore>) -> Self {
+        let tree = store.load().unwrap_or_else(|e| {
+            error!("Failed to load connection tree: {:?}", e);
+            ConnectionTree::new()
+        });
+        info!("Loaded connection tree with {} nodes", tree.nodes.len());
+        Self {
+            tree,
+            store: Some(store),
+        }
     }
 
     pub fn sync_with_profiles(&mut self, profile_ids: &[Uuid]) {
@@ -42,15 +54,14 @@ impl ConnectionTreeManager {
     }
 
     pub fn save(&self) {
-        let Some(ref store) = self.store else {
-            log::warn!("Cannot save connection tree: store not available");
-            return;
-        };
-
-        if let Err(e) = store.save(&self.tree) {
-            error!("Failed to save connection tree: {:?}", e);
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.save(&self.tree) {
+                error!("Failed to save connection tree: {:?}", e);
+            } else {
+                info!("Saved connection tree with {} nodes", self.tree.nodes.len());
+            }
         } else {
-            info!("Saved connection tree with {} nodes", self.tree.nodes.len());
+            log::warn!("Cannot save connection tree: store not available");
         }
     }
 

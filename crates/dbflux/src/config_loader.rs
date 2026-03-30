@@ -7,10 +7,9 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionMcpGovernance,
-    ConnectionMcpPolicyBinding, ConnectionProfile, DbConfig, DbKind, DriverKey, FormValues,
-    GeneralSettings, GlobalOverrides, HookExecutionMode, HookFailureMode, HookKind, HookPhase,
-    ProxyProfile, ScriptLanguage, ScriptSource, ServiceConfig, SshAuthMethod, SshTunnelConfig,
-    SshTunnelProfile, SslMode, ValueRef,
+    ConnectionMcpPolicyBinding, ConnectionProfile, DbKind, DriverKey, FormValues, GeneralSettings,
+    GlobalOverrides, HookExecutionMode, HookFailureMode, HookKind, HookPhase, ProxyProfile,
+    ScriptLanguage, ScriptSource, ServiceConfig, SshTunnelProfile, ValueRef,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::connection_driver_configs::ConnectionDriverConfigDto;
@@ -335,7 +334,8 @@ pub fn save_profiles(
         // DbConfig → connection_driver_configs (native columns)
         let driver_configs_repo = repo.driver_configs();
         driver_configs_repo.delete_for_profile(profile_id)?;
-        let driver_dto = db_config_to_dto(profile_id, &profile.config);
+        let driver_dto =
+            ConnectionDriverConfigDto::from_db_config(profile_id.to_string(), &profile.config);
         driver_configs_repo.upsert(&driver_dto)?;
 
         // settings_overrides → connection_profile_settings with "overrides." prefix
@@ -474,278 +474,6 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
         _ => dbflux_core::DbConfig::default_postgres(),
-    }
-}
-
-fn ssl_mode_to_str(mode: &SslMode) -> String {
-    match mode {
-        SslMode::Disable => "disable".to_string(),
-        SslMode::Prefer => "prefer".to_string(),
-        SslMode::Require => "require".to_string(),
-    }
-}
-
-fn str_to_ssl_mode(s: &str) -> SslMode {
-    match s {
-        "disable" => SslMode::Disable,
-        "require" => SslMode::Require,
-        _ => SslMode::Prefer,
-    }
-}
-
-fn ssh_auth_method_to_str(method: &SshAuthMethod) -> String {
-    match method {
-        SshAuthMethod::PrivateKey { .. } => "private_key".to_string(),
-        SshAuthMethod::Password => "password".to_string(),
-    }
-}
-
-fn str_to_ssh_auth_method(s: &str) -> SshAuthMethod {
-    match s {
-        "password" => SshAuthMethod::Password,
-        _ => SshAuthMethod::PrivateKey { key_path: None },
-    }
-}
-
-/// Converts a DbConfig to a ConnectionDriverConfigDto for storage.
-fn db_config_to_dto(profile_id: &str, config: &DbConfig) -> ConnectionDriverConfigDto {
-    let mut dto =
-        ConnectionDriverConfigDto::new(profile_id.to_string(), db_kind_to_str(config.kind()));
-
-    match config {
-        DbConfig::Postgres {
-            use_uri,
-            uri,
-            host,
-            port,
-            user,
-            database,
-            ssl_mode,
-            ssh_tunnel,
-            ..
-        } => {
-            dto.use_uri = *use_uri;
-            dto.uri = uri.clone();
-            dto.host = Some(host.clone());
-            dto.port = Some(*port as i32);
-            dto.user = Some(user.clone());
-            dto.database_name = Some(database.clone());
-            dto.ssl_mode = ssl_mode_to_str(ssl_mode);
-            if let Some(tunnel) = ssh_tunnel {
-                dto.ssh_tunnel_host = Some(tunnel.host.clone());
-                dto.ssh_tunnel_port = Some(tunnel.port as i32);
-                dto.ssh_tunnel_user = Some(tunnel.user.clone());
-                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
-                if let SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path =
-                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                }
-            }
-        }
-        DbConfig::MySQL {
-            use_uri,
-            uri,
-            host,
-            port,
-            user,
-            database,
-            ssl_mode,
-            ssh_tunnel,
-            ..
-        } => {
-            dto.use_uri = *use_uri;
-            dto.uri = uri.clone();
-            dto.host = Some(host.clone());
-            dto.port = Some(*port as i32);
-            dto.user = Some(user.clone());
-            dto.database_name = database.clone();
-            dto.ssl_mode = ssl_mode_to_str(ssl_mode);
-            if let Some(tunnel) = ssh_tunnel {
-                dto.ssh_tunnel_host = Some(tunnel.host.clone());
-                dto.ssh_tunnel_port = Some(tunnel.port as i32);
-                dto.ssh_tunnel_user = Some(tunnel.user.clone());
-                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
-                if let SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path =
-                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                }
-            }
-        }
-        DbConfig::MongoDB {
-            use_uri,
-            uri,
-            host,
-            port,
-            user,
-            database,
-            auth_database,
-            ssh_tunnel,
-            ..
-        } => {
-            dto.use_uri = *use_uri;
-            dto.uri = uri.clone();
-            dto.host = Some(host.clone());
-            dto.port = Some(*port as i32);
-            dto.user = user.clone();
-            dto.database_name = database.clone();
-            dto.mongo_auth_database = auth_database.clone();
-            // Note: MongoDB doesn't have ssl_mode in DbConfig
-            if let Some(tunnel) = ssh_tunnel {
-                dto.ssh_tunnel_host = Some(tunnel.host.clone());
-                dto.ssh_tunnel_port = Some(tunnel.port as i32);
-                dto.ssh_tunnel_user = Some(tunnel.user.clone());
-                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
-                if let SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path =
-                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                }
-            }
-        }
-        DbConfig::Redis {
-            use_uri,
-            uri,
-            host,
-            port,
-            user,
-            database,
-            tls,
-            ssh_tunnel,
-            ..
-        } => {
-            dto.use_uri = *use_uri;
-            dto.uri = uri.clone();
-            dto.host = Some(host.clone());
-            dto.port = Some(*port as i32);
-            dto.user = user.clone();
-            dto.database_name = database.map(|d| d.to_string());
-            dto.redis_tls = *tls;
-            dto.redis_database = database.map(|d| d as i32);
-            if let Some(tunnel) = ssh_tunnel {
-                dto.ssh_tunnel_host = Some(tunnel.host.clone());
-                dto.ssh_tunnel_port = Some(tunnel.port as i32);
-                dto.ssh_tunnel_user = Some(tunnel.user.clone());
-                dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
-                if let SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
-                    dto.ssh_tunnel_key_path =
-                        key_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                }
-            }
-        }
-        DbConfig::SQLite {
-            path,
-            connection_id,
-        } => {
-            dto.sqlite_path = Some(path.to_string_lossy().to_string());
-            dto.sqlite_connection_id = connection_id.clone();
-        }
-        DbConfig::DynamoDB {
-            region,
-            profile,
-            endpoint,
-            table,
-        } => {
-            dto.dynamo_region = Some(region.clone());
-            dto.dynamo_profile = profile.clone();
-            dto.dynamo_endpoint = endpoint.clone();
-            dto.dynamo_table = table.clone();
-        }
-        DbConfig::External { kind, values } => {
-            dto.external_kind = Some(db_kind_to_str(*kind));
-            dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
-        }
-    }
-
-    dto
-}
-
-/// Converts a ConnectionDriverConfigDto to a DbConfig for loading.
-fn dto_to_db_config(dto: &ConnectionDriverConfigDto) -> Option<DbConfig> {
-    let kind = str_to_db_kind(&dto.config_key)?;
-
-    match kind {
-        DbKind::Postgres | DbKind::MySQL => {
-            let ssh_tunnel = if dto.ssh_tunnel_host.is_some() {
-                Some(SshTunnelConfig {
-                    host: dto.ssh_tunnel_host.clone()?,
-                    port: dto.ssh_tunnel_port? as u16,
-                    user: dto.ssh_tunnel_user.clone()?,
-                    auth_method: str_to_ssh_auth_method(&dto.ssh_tunnel_auth_method),
-                })
-            } else {
-                None
-            };
-
-            Some(DbConfig::Postgres {
-                use_uri: dto.use_uri,
-                uri: dto.uri.clone(),
-                host: dto.host.clone().unwrap_or_default(),
-                port: dto.port.unwrap_or(5432) as u16,
-                user: dto.user.clone().unwrap_or_default(),
-                database: dto.database_name.clone().unwrap_or_default(),
-                ssl_mode: str_to_ssl_mode(&dto.ssl_mode),
-                ssh_tunnel,
-                ssh_tunnel_profile_id: None,
-            })
-        }
-        DbKind::MongoDB => {
-            let ssh_tunnel = if dto.ssh_tunnel_host.is_some() {
-                Some(SshTunnelConfig {
-                    host: dto.ssh_tunnel_host.clone()?,
-                    port: dto.ssh_tunnel_port? as u16,
-                    user: dto.ssh_tunnel_user.clone()?,
-                    auth_method: str_to_ssh_auth_method(&dto.ssh_tunnel_auth_method),
-                })
-            } else {
-                None
-            };
-
-            Some(DbConfig::MongoDB {
-                use_uri: dto.use_uri,
-                uri: dto.uri.clone(),
-                host: dto.host.clone().unwrap_or_default(),
-                port: dto.port.unwrap_or(27017) as u16,
-                user: dto.user.clone(),
-                database: dto.database_name.clone(),
-                auth_database: dto.mongo_auth_database.clone(),
-                ssh_tunnel,
-                ssh_tunnel_profile_id: None,
-            })
-        }
-        DbKind::Redis => {
-            let ssh_tunnel = if dto.ssh_tunnel_host.is_some() {
-                Some(SshTunnelConfig {
-                    host: dto.ssh_tunnel_host.clone()?,
-                    port: dto.ssh_tunnel_port? as u16,
-                    user: dto.ssh_tunnel_user.clone()?,
-                    auth_method: str_to_ssh_auth_method(&dto.ssh_tunnel_auth_method),
-                })
-            } else {
-                None
-            };
-
-            Some(DbConfig::Redis {
-                use_uri: dto.use_uri,
-                uri: dto.uri.clone(),
-                host: dto.host.clone().unwrap_or_default(),
-                port: dto.port.unwrap_or(6379) as u16,
-                user: dto.user.clone(),
-                database: dto.redis_database.map(|d| d as u32),
-                tls: dto.redis_tls,
-                ssh_tunnel,
-                ssh_tunnel_profile_id: None,
-            })
-        }
-        DbKind::SQLite => Some(DbConfig::SQLite {
-            path: std::path::PathBuf::from(dto.sqlite_path.clone().unwrap_or_default()),
-            connection_id: dto.sqlite_connection_id.clone(),
-        }),
-        DbKind::DynamoDB => Some(DbConfig::DynamoDB {
-            region: dto.dynamo_region.clone().unwrap_or_default(),
-            profile: dto.dynamo_profile.clone(),
-            endpoint: dto.dynamo_endpoint.clone(),
-            table: dto.dynamo_table.clone(),
-        }),
-        _ => None,
     }
 }
 
@@ -1608,7 +1336,7 @@ fn load_profiles(
             let driver_configs_repo = repo.driver_configs();
             let driver_dto = driver_configs_repo.get_for_profile(profile_id).ok().flatten();
             let config = driver_dto
-                .and_then(|d| dto_to_db_config(&d))
+                .and_then(|d| d.to_db_config())
                 .or_else(|| {
                     // Fallback: construct default config based on kind if driver config is missing
                     dto.kind.as_ref().and_then(|kind_str| {

@@ -11,6 +11,16 @@ pub(crate) mod tree;
 pub mod tree_manager;
 pub(crate) mod tree_store;
 
+use crate::DbError;
+
+/// Backend for persisting a connection tree.
+pub trait TreeStore {
+    /// Loads the connection tree from the store.
+    fn load(&self) -> Result<ConnectionTree, DbError>;
+    /// Saves the connection tree to the store.
+    fn save(&self, tree: &ConnectionTree) -> Result<(), DbError>;
+}
+
 pub use context::ExecutionContext;
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,

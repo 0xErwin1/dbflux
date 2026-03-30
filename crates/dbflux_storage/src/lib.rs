@@ -9,6 +9,7 @@ pub mod paths;
 pub mod repositories;
 pub mod reset;
 pub mod sqlite;
+pub mod sqlite_tree_store;
 
 pub use artifacts::ArtifactStore;
 pub use bootstrap::{OwnedConnection, StorageRuntime};

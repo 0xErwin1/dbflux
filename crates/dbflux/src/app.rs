@@ -2,11 +2,11 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
     ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, GovernanceSettings, HistoryEntry, HookContext, HookPhase,
-    PolicyRoleConfig, ProfileManager, ProxyProfile, SavedQuery, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot, ToolPolicyConfig,
-    TrustedClientConfig,
+    GeneralSettings, GlobalOverrides, GovernanceSettings, HistoryEntry, HistoryManager,
+    HookContext, HookPhase, PolicyRoleConfig, ProfileManager, ProxyProfile, SavedQuery,
+    SavedQueryManager, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory,
+    SecretStore, ServiceConfig, SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind,
+    TaskSnapshot, ToolPolicyConfig, TrustedClientConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -140,12 +140,20 @@ impl AppState {
         let auth_manager =
             dbflux_core::AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
 
-        let facade = SessionFacade::with_custom_managers(
+        let tree_store: Box<dyn dbflux_core::TreeStore> =
+            Box::new(dbflux_storage::sqlite_tree_store::SqliteTreeStore::new(
+                storage_runtime.config_db_path().to_path_buf(),
+            ));
+
+        let facade = SessionFacade::with_all_custom_managers_and_tree_store(
             drivers,
             profile_manager,
             ssh_manager,
             proxy_manager,
             auth_manager,
+            HistoryManager::new(),
+            SavedQueryManager::new(),
+            tree_store,
         );
 
         let mut history_manager =

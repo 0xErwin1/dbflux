@@ -1,4 +1,4 @@
-use crate::{ConnectionTree, DbError};
+use crate::{ConnectionTree, DbError, TreeStore};
 use std::fs;
 use std::path::PathBuf;
 
@@ -27,12 +27,14 @@ impl ConnectionTreeStore {
             path: app_dir.join("connections_tree.json"),
         })
     }
+}
 
+impl TreeStore for ConnectionTreeStore {
     /// Loads the connection tree from disk.
     ///
     /// Returns an empty tree if the file doesn't exist or is corrupted.
     /// Corruption is logged but doesn't fail the load.
-    pub fn load(&self) -> Result<ConnectionTree, DbError> {
+    fn load(&self) -> Result<ConnectionTree, DbError> {
         if !self.path.exists() {
             return Ok(ConnectionTree::new());
         }
@@ -58,7 +60,7 @@ impl ConnectionTreeStore {
     }
 
     /// Saves the connection tree to disk.
-    pub fn save(&self, tree: &ConnectionTree) -> Result<(), DbError> {
+    fn save(&self, tree: &ConnectionTree) -> Result<(), DbError> {
         let content = serde_json::to_string_pretty(tree)
             .map_err(|e| DbError::InvalidProfile(e.to_string()))?;
 

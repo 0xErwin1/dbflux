@@ -9,7 +9,7 @@
 //! so that callers in `actions.rs` and elsewhere don't need to change.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;

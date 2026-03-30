@@ -15,8 +15,8 @@ use dbflux_mcp::{
     builtin_policies, builtin_roles,
 };
 use dbflux_storage::paths as storage_paths;
-use dbflux_storage::repositories::governance_settings::GovernanceSettingsRepository;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValuesRepository;
+use dbflux_storage::repositories::governance_settings::GovernanceSettingsRepository;
 use dbflux_storage::sqlite as storage_sqlite;
 
 use crate::connection_cache::ConnectionCache;
@@ -296,8 +296,14 @@ fn load_governance_settings(
         .into_iter()
         .map(|p| dbflux_core::ToolPolicyConfig {
             id: p.policy_id,
-            allowed_tools: p.allowed_tools.map(|t| serde_json::from_str(&t).unwrap_or_default()).unwrap_or_default(),
-            allowed_classes: p.allowed_classes.map(|c| serde_json::from_str(&c).unwrap_or_default()).unwrap_or_default(),
+            allowed_tools: p
+                .allowed_tools
+                .map(|t| serde_json::from_str(&t).unwrap_or_default())
+                .unwrap_or_default(),
+            allowed_classes: p
+                .allowed_classes
+                .map(|c| serde_json::from_str(&c).unwrap_or_default())
+                .unwrap_or_default(),
         })
         .collect();
 

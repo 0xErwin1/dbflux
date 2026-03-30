@@ -4,8 +4,10 @@
 //! which stores typed native columns for DbConfig variants instead of JSON.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+
+use dbflux_core::{DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SslMode};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
@@ -93,6 +95,274 @@ impl ConnectionDriverConfigDto {
             external_kind: None,
             external_values_json: None,
         }
+    }
+
+    /// Converts a DbConfig to this DTO.
+    pub fn from_db_config(profile_id: String, config: &DbConfig) -> Self {
+        let mut dto = Self::new(profile_id, db_kind_to_str(config.kind()));
+
+        match config {
+            DbConfig::Postgres {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                ssl_mode,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = Some(user.clone());
+                dto.database_name = Some(database.clone());
+                dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
+            DbConfig::MySQL {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                ssl_mode,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = Some(user.clone());
+                dto.database_name = database.clone();
+                dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
+            DbConfig::MongoDB {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                auth_database,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = user.clone();
+                dto.database_name = database.clone();
+                dto.mongo_auth_database = auth_database.clone();
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
+            DbConfig::Redis {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                tls,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = user.clone();
+                dto.database_name = database.map(|d| d.to_string());
+                dto.redis_tls = *tls;
+                dto.redis_database = database.map(|d| d as i32);
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
+            DbConfig::SQLite {
+                path,
+                connection_id,
+            } => {
+                dto.sqlite_path = Some(path.to_string_lossy().to_string());
+                dto.sqlite_connection_id = connection_id.clone();
+            }
+            DbConfig::DynamoDB {
+                region,
+                profile,
+                endpoint,
+                table,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+                dto.dynamo_table = table.clone();
+            }
+            DbConfig::External { kind, values } => {
+                dto.external_kind = Some(db_kind_to_str(*kind));
+                dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
+            }
+        }
+
+        dto
+    }
+
+    /// Converts this DTO back to a DbConfig.
+    pub fn to_db_config(&self) -> Option<DbConfig> {
+        let kind = str_to_db_kind(&self.config_key)?;
+
+        match kind {
+            DbKind::Postgres | DbKind::MySQL => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::Postgres {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(5432) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self.database_name.clone().unwrap_or_default(),
+                    ssl_mode: str_to_ssl_mode(&self.ssl_mode),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::MongoDB => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::MongoDB {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(27017) as u16,
+                    user: self.user.clone(),
+                    database: self.database_name.clone(),
+                    auth_database: self.mongo_auth_database.clone(),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::Redis => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::Redis {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(6379) as u16,
+                    user: self.user.clone(),
+                    database: self.redis_database.map(|d| d as u32),
+                    tls: self.redis_tls,
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::SQLite => Some(DbConfig::SQLite {
+                path: std::path::PathBuf::from(self.sqlite_path.clone().unwrap_or_default()),
+                connection_id: self.sqlite_connection_id.clone(),
+            }),
+            DbKind::DynamoDB => Some(DbConfig::DynamoDB {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+                table: self.dynamo_table.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers for DbConfig <-> DTO conversion
+// ---------------------------------------------------------------------------
+
+fn db_kind_to_str(kind: DbKind) -> String {
+    match kind {
+        DbKind::Postgres => "Postgres",
+        DbKind::SQLite => "SQLite",
+        DbKind::MySQL => "MySQL",
+        DbKind::MariaDB => "MariaDB",
+        DbKind::MongoDB => "MongoDB",
+        DbKind::Redis => "Redis",
+        DbKind::DynamoDB => "DynamoDB",
+    }
+    .to_string()
+}
+
+fn str_to_db_kind(s: &str) -> Option<DbKind> {
+    match s {
+        "Postgres" => Some(DbKind::Postgres),
+        "SQLite" => Some(DbKind::SQLite),
+        "MySQL" => Some(DbKind::MySQL),
+        "MariaDB" => Some(DbKind::MariaDB),
+        "MongoDB" => Some(DbKind::MongoDB),
+        "Redis" => Some(DbKind::Redis),
+        "DynamoDB" => Some(DbKind::DynamoDB),
+        _ => None,
+    }
+}
+
+fn ssl_mode_to_str(mode: &SslMode) -> String {
+    match mode {
+        SslMode::Disable => "disable".to_string(),
+        SslMode::Prefer => "prefer".to_string(),
+        SslMode::Require => "require".to_string(),
+    }
+}
+
+fn str_to_ssl_mode(s: &str) -> SslMode {
+    match s {
+        "disable" => SslMode::Disable,
+        "require" => SslMode::Require,
+        _ => SslMode::Prefer,
+    }
+}
+
+fn ssh_auth_method_to_str(method: &SshAuthMethod) -> String {
+    match method {
+        SshAuthMethod::PrivateKey { .. } => "private_key".to_string(),
+        SshAuthMethod::Password => "password".to_string(),
+    }
+}
+
+fn str_to_ssh_auth_method(s: &str) -> SshAuthMethod {
+    match s {
+        "password" => SshAuthMethod::Password,
+        _ => SshAuthMethod::PrivateKey { key_path: None },
+    }
+}
+
+fn fill_ssh_tunnel_fields(dto: &mut ConnectionDriverConfigDto, tunnel: &SshTunnelConfig) {
+    dto.ssh_tunnel_host = Some(tunnel.host.clone());
+    dto.ssh_tunnel_port = Some(tunnel.port as i32);
+    dto.ssh_tunnel_user = Some(tunnel.user.clone());
+    dto.ssh_tunnel_auth_method = ssh_auth_method_to_str(&tunnel.auth_method);
+    if let SshAuthMethod::PrivateKey { key_path } = &tunnel.auth_method {
+        dto.ssh_tunnel_key_path = key_path.as_ref().map(|p| p.to_string_lossy().to_string());
+    }
+}
+
+fn build_ssh_tunnel(dto: &ConnectionDriverConfigDto) -> Option<SshTunnelConfig> {
+    if dto.ssh_tunnel_host.is_some() {
+        Some(SshTunnelConfig {
+            host: dto.ssh_tunnel_host.clone()?,
+            port: dto.ssh_tunnel_port? as u16,
+            user: dto.ssh_tunnel_user.clone()?,
+            auth_method: str_to_ssh_auth_method(&dto.ssh_tunnel_auth_method),
+        })
+    } else {
+        None
     }
 }
 

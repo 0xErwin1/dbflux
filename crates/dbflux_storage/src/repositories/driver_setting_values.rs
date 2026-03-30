@@ -4,7 +4,7 @@
 //! replacing the JSON blob previously stored in driver_settings.settings_json.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;

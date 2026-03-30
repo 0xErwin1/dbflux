@@ -47,7 +47,8 @@ pub use connection::{
     ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
     RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
     SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
-    SwitchDatabaseResult, detached_process_channel, execute_streaming_process, output_channel,
+    SwitchDatabaseResult, TreeStore, detached_process_channel, execute_streaming_process,
+    output_channel,
 };
 
 pub use core::{

@@ -7,7 +7,7 @@
 //! was dropped in migration v10. Column names were fixed in migration v13.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

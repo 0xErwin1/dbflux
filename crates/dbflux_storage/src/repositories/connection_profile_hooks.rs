@@ -162,11 +162,9 @@ impl ConnectionProfileHooksRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM connection_profile_hooks",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM connection_profile_hooks", [], |row| {
+                row.get(0)
+            })
             .map_err(|source| StorageError::Sqlite {
                 path: "config.db".into(),
                 source,

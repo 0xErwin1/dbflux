@@ -4,7 +4,7 @@
 //! which stores value references (secrets, params, auth) for connection profiles.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;

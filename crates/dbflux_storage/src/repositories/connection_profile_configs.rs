@@ -4,7 +4,7 @@
 //! which stores typed EAV (Entity-Attribute-Value) config values for connection profiles.
 
 use log::info;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::OwnedConnection;
