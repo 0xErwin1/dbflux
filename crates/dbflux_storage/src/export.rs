@@ -146,14 +146,17 @@ pub struct PolicyRoleExport {
 pub struct ToolPolicyExport {
     pub id: String,
     pub policy_id: String,
-    pub allowed_tools: Option<String>,
-    pub allowed_classes: Option<String>,
+    /// Allowed tool names (normalized from tool_policy_allowed_tools child table)
+    pub allowed_tools: Vec<String>,
+    /// Allowed class names (normalized from tool_policy_allowed_classes child table)
+    pub allowed_classes: Vec<String>,
 }
 
 /// Connection profile entry.
 /// Note: config_json, settings_overrides_json, connection_settings_json, hooks_json,
 /// hook_bindings_json, value_refs_json, mcp_governance_json all dropped in v10/v12.
 /// Driver config is now stored in connection_profile_configs child table.
+/// Note: access_profile_id removed - it was dead code (never populated).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionProfileEntry {
     pub id: String,
@@ -170,7 +173,6 @@ pub struct ConnectionProfileEntry {
     pub auth_profile_id: Option<String>,
     pub proxy_profile_id: Option<String>,
     pub ssh_tunnel_profile_id: Option<String>,
-    pub access_profile_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -538,7 +540,6 @@ fn collect_all_domains(
             auth_profile_id: e.auth_profile_id,
             proxy_profile_id: e.proxy_profile_id,
             ssh_tunnel_profile_id: e.ssh_tunnel_profile_id,
-            access_profile_id: e.access_profile_id,
             created_at: e.created_at,
             updated_at: e.updated_at,
         })
@@ -966,7 +967,6 @@ pub fn import_from_file(
             auth_profile_id: entry.auth_profile_id.clone(),
             proxy_profile_id: entry.proxy_profile_id.clone(),
             ssh_tunnel_profile_id: entry.ssh_tunnel_profile_id.clone(),
-            access_profile_id: entry.access_profile_id.clone(),
             created_at: entry.created_at.clone(),
             updated_at: entry.updated_at.clone(),
         };

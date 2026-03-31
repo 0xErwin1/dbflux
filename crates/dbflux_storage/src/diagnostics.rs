@@ -519,10 +519,10 @@ mod tests {
         assert_eq!(report.config_db.schema_version, Some(0)); // user_version is 0 for new install
         assert_eq!(report.state_db.schema_version, Some(3));
 
-        // Migration count: new installations use run_config_initial_migration_in() which
-        // creates the complete final schema directly and records 1 migration (0001_initial_final).
+        // Migration count: new installations run all 3 config migrations (0001_initial,
+        // 0004_connection_profiles_fk, 0005_governance_normalize_tool_policies).
         // State DB has 3 migrations (0001_initial + 0002_system_metadata + 0003_event_session_native_columns)
-        assert_eq!(report.config_db.migration_count, 1);
+        assert_eq!(report.config_db.migration_count, 3);
         assert_eq!(report.state_db.migration_count, 3);
 
         let _ = std::fs::remove_dir_all(&base);

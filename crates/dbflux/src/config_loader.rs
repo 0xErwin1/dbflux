@@ -322,7 +322,6 @@ pub fn save_profiles(
             auth_profile_id: profile.auth_profile_id.map(|u| u.to_string()),
             proxy_profile_id: profile.proxy_profile_id.map(|u| u.to_string()),
             ssh_tunnel_profile_id: ssh_tunnel_profile_id_str,
-            access_profile_id: None,
             created_at: String::new(),
             updated_at: String::new(),
         };

@@ -296,14 +296,8 @@ fn load_governance_settings(
         .into_iter()
         .map(|p| dbflux_core::ToolPolicyConfig {
             id: p.policy_id,
-            allowed_tools: p
-                .allowed_tools
-                .map(|t| serde_json::from_str(&t).unwrap_or_default())
-                .unwrap_or_default(),
-            allowed_classes: p
-                .allowed_classes
-                .map(|c| serde_json::from_str(&c).unwrap_or_default())
-                .unwrap_or_default(),
+            allowed_tools: p.allowed_tools,
+            allowed_classes: p.allowed_classes,
         })
         .collect();
 

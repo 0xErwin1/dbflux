@@ -3,6 +3,20 @@
 //! This module detects and imports data from legacy JSON storage files into the
 //! SQLite-backed storage. It is restart-safe and idempotent.
 //!
+//! ## Hash Mismatch Policy (Source of Truth)
+//!
+//! **After successful JSON-to-SQLite migration, the SQLite record is the source of truth.**
+//!
+//! Editing the original JSON file after migration has NO effect on DBFlux behavior.
+//! The hash stored in `legacy_imports.source_hash` is used for deduplication, NOT for
+//! detecting external changes to the source file.
+//!
+//! Rationale: Migration is a one-time conversion, not a sync relationship. The SQLite
+//! database becomes the authoritative store, and the original JSON files are preserved
+//! as backups (renamed to *.bak) but are never re-imported automatically.
+//!
+//! ## Import Idempotency
+//!
 //! Import idempotency is achieved via:
 //! 1. An explicit `legacy_imports` table storing per-source-file provenance
 //!    including SHA-256 hash, so a partial import is never re-run blindly.
@@ -617,7 +631,6 @@ fn import_profiles_with_status(
             auth_profile_id: profile.auth_profile_id.map(|u| u.to_string()),
             proxy_profile_id: profile.proxy_profile_id.map(|u| u.to_string()),
             ssh_tunnel_profile_id: None,
-            access_profile_id: None,
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1910,8 +1923,8 @@ fn import_governance_settings(
             id: uuid::Uuid::new_v4().to_string(),
             governance_id: 1,
             policy_id: p.id.clone(),
-            allowed_tools: Some(serde_json::to_string(&p.allowed_tools).unwrap_or_default()),
-            allowed_classes: Some(serde_json::to_string(&p.allowed_classes).unwrap_or_default()),
+            allowed_tools: p.allowed_tools.clone(),
+            allowed_classes: p.allowed_classes.clone(),
         })
         .collect();
 
