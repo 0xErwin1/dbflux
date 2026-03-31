@@ -164,14 +164,19 @@ pub fn save_driver_settings(
         existing_old.iter().map(|d| d.driver_key.clone()).collect();
 
     for key in &desired {
+        let ov = overrides.get(key);
         let dto = dbflux_storage::repositories::driver_settings::DriverSettingsDto {
             driver_key: key.clone(),
-            overrides_json: overrides
-                .get(key)
-                .map(|ov| serde_json::to_string(ov).unwrap_or_default()),
-            settings_json: settings
-                .get(key)
-                .map(|s| serde_json::to_string(s).unwrap_or_default()),
+            refresh_policy: ov.and_then(|o| {
+                o.refresh_policy.map(|rp| match rp {
+                    dbflux_core::RefreshPolicySetting::Interval => "interval".to_string(),
+                    dbflux_core::RefreshPolicySetting::Manual => "manual".to_string(),
+                })
+            }),
+            refresh_interval_secs: ov.and_then(|o| o.refresh_interval_secs.map(|v| v as i32)),
+            confirm_dangerous: ov.and_then(|o| o.confirm_dangerous.map(|v| if v { 1 } else { 0 })),
+            requires_where: ov.and_then(|o| o.requires_where.map(|v| if v { 1 } else { 0 })),
+            requires_preview: ov.and_then(|o| o.requires_preview.map(|v| if v { 1 } else { 0 })),
             updated_at: String::new(),
         };
         old_repo.upsert(&dto)?;

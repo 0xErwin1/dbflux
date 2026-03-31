@@ -38,7 +38,7 @@ impl SettingsRepository {
     pub fn get(&self, key: &str) -> Result<Option<String>, StorageError> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT value_json FROM app_settings WHERE key = ?1")
+            .prepare("SELECT theme FROM cfg_general_settings WHERE id = 1")
             .map_err(|source| StorageError::Sqlite {
                 path: "dbflux.db".into(),
                 source,
@@ -57,14 +57,15 @@ impl SettingsRepository {
     }
 
     /// Sets a setting value.
+    #[allow(deprecated)]
     pub fn set(&self, key: &str, value_json: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO app_settings (key, value_json, updated_at)
-                VALUES (?1, ?2, datetime('now'))
-                ON CONFLICT(key) DO UPDATE SET
-                    value_json = excluded.value_json,
+                INSERT INTO cfg_general_settings (id, theme, updated_at)
+                VALUES (1, ?2, datetime('now'))
+                ON CONFLICT(id) DO UPDATE SET
+                    theme = excluded.theme,
                     updated_at = datetime('now')
                 "#,
                 params![key, value_json],
@@ -79,9 +80,10 @@ impl SettingsRepository {
     }
 
     /// Deletes a setting by key.
+    #[allow(deprecated)]
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM app_settings WHERE key = ?1", [key])
+            .execute("DELETE FROM cfg_general_settings WHERE id = 1", [])
             .map_err(|source| StorageError::Sqlite {
                 path: "dbflux.db".into(),
                 source,
@@ -95,7 +97,9 @@ impl SettingsRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM cfg_general_settings", [], |row| {
+                row.get(0)
+            })
             .map_err(|source| StorageError::Sqlite {
                 path: "dbflux.db".into(),
                 source,
@@ -108,7 +112,7 @@ impl SettingsRepository {
     pub fn all(&self) -> Result<Vec<SettingDto>, StorageError> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT key, value_json, updated_at FROM app_settings ORDER BY key")
+            .prepare("SELECT theme, updated_at FROM cfg_general_settings ORDER BY theme")
             .map_err(|source| StorageError::Sqlite {
                 path: "dbflux.db".into(),
                 source,
@@ -117,9 +121,9 @@ impl SettingsRepository {
         let rows = stmt
             .query_map([], |row| {
                 Ok(SettingDto {
-                    key: row.get(0)?,
-                    value_json: row.get(1)?,
-                    updated_at: row.get(2)?,
+                    key: "theme".to_string(),
+                    value_json: row.get(0)?,
+                    updated_at: row.get(1)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {

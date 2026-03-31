@@ -2,6 +2,17 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.12] – 2026-03-31
+
+### Added
+
+* Unified SQLite storage: consolidated all state into a single `~/.local/share/dbflux/dbflux.db` with domain-prefixed tables (`cfg_*`, `st_*`, `aud_*`, `sys_*`) and proper foreign key constraints across previously isolated domains
+* SQLite-backed connection tree: migrated the connection tree from JSON file storage to native SQLite with a `TreeStore` trait abstraction
+* Flat-column schema migration: rewrote all repositories to replace JSON blob columns with dedicated flat tables for drivers, proxies, SSH tunnels, hooks, sessions, and governance policies
+* Internal SQLite bootstrap: the storage crate now bootstraps its own runtime, removing dependency on app-managed SQLite handles for internal state
+* Session and runtime state persistence: session metadata, runtime state, and durable config now persist directly to the state and config databases
+* Import diagnostics and reset tools: added tooling for diagnosing and resetting legacy JSON import state
+
 ## [0.4.0-dev.11] – 2026-03-27
 
 ### Added
