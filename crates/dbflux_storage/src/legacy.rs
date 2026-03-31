@@ -700,11 +700,7 @@ fn import_profiles_with_status(
                     profile.name, id_str
                 );
             }
-            if exists.is_some() {
-                Some(id_str)
-            } else {
-                None
-            }
+            if exists.is_some() { Some(id_str) } else { None }
         } else {
             None
         };
@@ -724,11 +720,7 @@ fn import_profiles_with_status(
                     profile.name, id_str
                 );
             }
-            if exists.is_some() {
-                Some(id_str)
-            } else {
-                None
-            }
+            if exists.is_some() { Some(id_str) } else { None }
         } else {
             None
         };
@@ -779,7 +771,10 @@ fn import_profiles_with_status(
             // Log as warning instead of collecting as fatal error - profile-level
             // insert failures (e.g., due to orphaned FKs despite our validation,
             // or other constraint issues) shouldn't abort the entire import.
-            warn!("profile '{}': insert failed (skipping): {}", profile.name, e);
+            warn!(
+                "profile '{}': insert failed (skipping): {}",
+                profile.name, e
+            );
             continue;
         }
 
@@ -794,15 +789,14 @@ fn import_profiles_with_status(
         }
 
         // Denormalize access_kind params for Managed access
-        if let Some(dbflux_core::AccessKind::Managed { params, .. }) = &profile.access_kind {
-            if !params.is_empty() {
-                if let Err(e) = access_params_repo.upsert_batch(&profile_id, params) {
-                    profile_errors.push(format!(
-                        "profile '{}': denormalize access params failed: {}",
-                        profile.name, e
-                    ));
-                }
-            }
+        if let Some(dbflux_core::AccessKind::Managed { params, .. }) = &profile.access_kind
+            && !params.is_empty()
+            && let Err(e) = access_params_repo.upsert_batch(&profile_id, params)
+        {
+            profile_errors.push(format!(
+                "profile '{}': denormalize access params failed: {}",
+                profile.name, e
+            ));
         }
 
         // Denormalize: write to child tables
@@ -1327,10 +1321,9 @@ fn import_proxy_profiles_with_status(
         // repo.insert() handles its own transaction for atomicity.
         // Propagate errors so we fail loudly instead of silent rollback.
         if let Err(e) = repo.insert(&dto, auth_dto.as_ref()) {
-            result.errors.push(format!(
-                "proxies: failed to import '{}': {}",
-                dto.name, e
-            ));
+            result
+                .errors
+                .push(format!("proxies: failed to import '{}': {}", dto.name, e));
             set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
             return;
         }

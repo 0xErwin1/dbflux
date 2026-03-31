@@ -232,18 +232,14 @@ pub struct ConnectionProfileValueRefDto {
     pub profile_id: String,
     pub ref_key: String,
     pub ref_kind: String,
-    /// The primary scalar value (deprecated - use native variant columns instead):
-    /// - Literal: the literal value string
-    /// - Env: the env var key name
-    /// - Secret: the locator
-    /// - Parameter: the parameter name
-    /// - Auth: the field name
+    /// Legacy scalar value (use native variant columns instead).
+    /// Native columns: literal_value, env_key, secret_locator, param_name, auth_field.
     pub ref_value: String,
     /// Provider ID for Secret and Parameter variants.
     pub ref_provider: Option<String>,
     /// Optional JSON key for Secret and Parameter variants.
     pub ref_json_key: Option<String>,
-    // Native columns for ValueRef variants (v16+)
+    /// Native columns for ValueRef variants.
     pub literal_value: Option<String>,
     pub env_key: Option<String>,
     pub secret_locator: Option<String>,

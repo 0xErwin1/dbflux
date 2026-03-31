@@ -245,7 +245,7 @@ crates/
       key_value.rs          # Key-value operation types (Hash, Set, List, ZSet, Stream)
       view.rs               # DataViewMode (Table/Document) abstraction
     src/config/             # Application configuration
-      app.rs                # Runtime config for external RPC services (`config.json`)
+      app.rs                # Legacy config.json import (deprecated)
       refresh_policy.rs     # Schema refresh policy
       scripts_directory.rs  # Scripts folder tree (file/folder CRUD)
     src/pipeline/           # Pre-connect pipeline (auth/value/access stages)
@@ -332,10 +332,20 @@ crates/
     src/service.rs          # ApprovalService (approve/reject lifecycle)
     src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
   dbflux_audit/             # Audit logging
-    src/lib.rs              # AuditService with SQLite backend
+    src/lib.rs              # AuditService delegates to AuditRepository
     src/query.rs            # AuditQueryFilter for date/actor/tool queries
     src/export.rs           # Audit export to JSON/CSV
-    src/store/              # SQLite store implementation
+  dbflux_storage/           # Unified SQLite storage
+    src/bootstrap.rs        # StorageRuntime with single dbflux.db connection
+    src/paths.rs            # dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db
+    src/migrations/         # Trait-based migration system
+      mod.rs                # MigrationRegistry, Migration trait
+      *.rs                  # Individual migration files (001_initial.rs, etc.)
+    src/repositories/       # All domain repositories
+      traits.rs             # Repository trait (all(), find_by_id(), upsert(), delete())
+      audit.rs              # AuditRepository with AuditEventDto
+      *.rs                  # Other domain repositories
+    src/legacy.rs           # JSON-to-SQLite import
   dbflux_test_support/      # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
@@ -428,7 +438,7 @@ crates/
 
 - Settings is organized into 8 sections: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers.
 - Sidebar uses `TreeNav` component with collapsible Network/Connection categories.
-- `UiStateStore` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
+- `UiStateStore` persists sidebar collapse state to `st_ui_state` table in `~/.local/share/dbflux/dbflux.db`.
 - Auth Profiles section is provider-driven (`DynAuthProvider::form_def`) and supports importing provider-discovered profiles (for AWS, from `~/.aws/config`).
 - Proxy and SSH tunnel forms use `FormGridNav<F>` for keyboard-driven 2D grid navigation.
 - Drivers section shows per-driver settings overrides filtered by `DatabaseCategory`.
@@ -437,7 +447,7 @@ crates/
 
 - `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, cross-platform socket naming, and IPC auth tokens (`auth.rs`).
 - `crates/dbflux/src/ipc_server.rs` runs the app-control IPC server for single-instance behavior (`Focus`, `OpenScript`). `crates/dbflux/src/cli.rs` acts as the IPC client when a second instance is launched.
-- `crates/dbflux_core/src/config/app.rs` loads `~/.config/dbflux/config.json` and exposes `rpc_services` runtime configuration.
+- `crates/dbflux_core/src/config/app.rs` handles legacy config.json import only (deprecated).
 - `crates/dbflux/src/app.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
 - `crates/dbflux_driver_ipc/src/driver.rs` implements `DbDriver` as an RPC proxy and only shuts down managed hosts that DBFlux spawned itself.
 - External connection profiles use `DbConfig::External { kind, values }`, where form values come from the remote `form_definition` returned during `Hello`.
@@ -459,15 +469,34 @@ crates/
 
 ### Storage & Configuration
 
-- Profiles + secrets: `crates/dbflux_core/src/connection/profile.rs` and `crates/dbflux_core/src/storage/secrets.rs` define connection/SSH/proxy/auth profiles and keyring integration.
-- Generic stores: `crates/dbflux_core/src/storage/json_store.rs` provides `JsonStore<T>` with type aliases (`ProfileStore`, `SshTunnelStore`, `ProxyStore`). `ItemManager<T>` in `connection/item_manager.rs` adds CRUD + auto-save; `ProxyManager` and `SshTunnelManager` are type aliases.
-- Secret management: `SecretManager` uses `HasSecretRef` trait for generic keyring operations across SSH tunnels, proxy profiles, and auth profiles.
-- Storage: `crates/dbflux_core/src/storage/history.rs` and `crates/dbflux_core/src/storage/saved_query.rs` persist JSON data in the config dir.
-- Session persistence: `crates/dbflux_core/src/storage/session.rs` manages scratch/shadow files and a session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
-- UI state: `crates/dbflux_core/src/storage/ui_state.rs` persists sidebar collapse state to `~/.local/share/dbflux/state.json`.
-- Scripts directory: `crates/dbflux_core/src/config/scripts_directory.rs` manages a user scripts folder with file/folder CRUD, import, and move operations.
-- Execution context: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
-- History modal: `crates/dbflux/src/ui/overlays/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
+**Unified SQLite storage**: All runtime data is stored in a single SQLite database at `~/.local/share/dbflux/dbflux.db`. This replaced three separate stores (config.db, state.db, audit.sqlite).
+
+**Domain table prefixes**:
+- `cfg_*` — config domain (profiles, auth, proxy, SSH, hooks, services, governance, drivers, folders)
+- `st_*` — state domain (sessions, tabs, query history, saved queries, recent items, UI state, schema cache)
+- `aud_*` — audit domain (audit events, entities, attributes)
+- `sys_*` — system domain (migrations, metadata, legacy imports)
+
+**Storage crate** (`dbflux_storage/`):
+- `bootstrap.rs`: `StorageRuntime` manages the single `dbflux.db` connection with lazy initialization
+- `paths.rs`: `dbflux_db_path()` returns the database path
+- `migrations/`: Trait-based migration system (`Migration` trait with `name()` and `run(&Transaction)`). `MigrationRegistry` holds all migrations and runs them in order, tracking completion in `sys_migrations`. Idempotent — checks `sys_migrations` before running.
+- `repositories/`: All domain repositories implement the `Repository` trait (`all()`, `find_by_id()`, `upsert()`, `delete()`). `AuditRepository` handles audit events with `AuditEventDto`.
+- `legacy.rs`: Imports legacy JSON files into SQLite on first startup (idempotent, tracked in `sys_legacy_imports`)
+
+**Legacy JSON import order**: Auth/proxy/SSH first, then connection profiles (FK dependency order). Import sources:
+- `profiles.json` → `cfg_connection_profiles` + child tables
+- `auth_profiles.json` → `cfg_auth_profiles`
+- `ssh_tunnels.json` → `cfg_ssh_tunnel_profiles`
+- `config.json` → `cfg_services` (RPC services only)
+
+**Secrets**: `SecretManager` uses `HasSecretRef` trait for keyring operations. Secrets are stored in the OS keyring, references stored in SQLite.
+
+**Session persistence**: Scratch/shadow files and session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
+
+**Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
+
+**History modal**: `crates/dbflux/src/ui/overlays/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 
 ### Driver Implementations
 
@@ -535,7 +564,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `ExecutionPlan` captures the original request context for deferred execution
 
 **Audit** (`dbflux_audit`):
-- `AuditService` with SQLite backend (`~/.config/dbflux/audit.sqlite`)
+- `AuditService` delegates to `AuditRepository` in `dbflux_storage` (`~/.local/share/dbflux/dbflux.db`, `aud_audit_events` table)
 - `AuditQueryFilter` for querying by actor, tool, date range
 - Export to JSON/CSV via `AuditExportFormat`
 - All policy decisions logged with actor, tool, decision, and reason
@@ -561,7 +590,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Data Flow
 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/views/workspace/).
-- External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
+- External driver bootstrap: at startup, DBFlux reads `cfg_services` from `~/.local/share/dbflux/dbflux.db`, probes each service, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
@@ -600,16 +629,27 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `lua`, and `aws` (enabled by default in this branch).
-- Runtime data (config dir via `dirs::config_dir`):
-  - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/config/app.rs).
-  - `profiles.json`, `ssh_tunnels.json`, `proxies.json`, and `auth_profiles.json` (crates/dbflux_core/src/storage/json_store.rs).
-  - `history.json` for query history (crates/dbflux_core/src/storage/history.rs).
-  - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/storage/saved_query.rs).
-- Session data (data dir via `dirs::data_dir`):
-  - `sessions/session.json` manifest of open tabs (crates/dbflux_core/src/storage/session.rs).
+- Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
+  - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
+  - `cfg_auth_profiles` (provider-agnostic auth profile storage)
+  - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
+  - `cfg_hooks`, `cfg_hook_bindings`
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (external RPC services)
+  - `cfg_governance_*` tables (roles, policies, trusted clients)
+  - `cfg_drivers` (per-driver settings overrides)
+  - `cfg_folders` (connection tree organization)
+  - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`, `st_recent_items`, `st_ui_state`
+  - `aud_audit_events`, `aud_audit_entities`, `aud_audit_attributes`
+  - `sys_migrations`, `sys_legacy_imports`
+- Legacy JSON import: On first startup, `dbflux_storage/src/legacy.rs` imports existing JSON files into SQLite if they exist:
+  - `~/.config/dbflux/profiles.json` → `cfg_connection_profiles`
+  - `~/.config/dbflux/auth_profiles.json` → `cfg_auth_profiles`
+  - `~/.config/dbflux/ssh_tunnels.json` → `cfg_ssh_tunnel_profiles`
+  - `~/.config/dbflux/config.json` (rpc_services only) → `cfg_services`
+  - Import is idempotent (tracked in `sys_legacy_imports`)
+- Session data (data dir):
   - `sessions/` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
   - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
-  - `state.json` persisted UI state — sidebar collapse, etc. (crates/dbflux_core/src/storage/ui_state.rs).
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build & Deploy
