@@ -33,7 +33,8 @@ crates/
 ├── dbflux_mcp_server/         # Standalone MCP server binary for AI clients
 ├── dbflux_policy/             # Policy engine, roles, trusted clients, classification
 ├── dbflux_approval/           # Approval service and pending execution store
-└── dbflux_audit/              # Audit logging with SQLite backend
+├── dbflux_audit/              # Audit logging with SQLite backend
+└── dbflux_storage/             # Unified storage: SQLite database, migrations, repositories
 ```
 
 ## Build & Run Commands
@@ -302,7 +303,7 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 ### External RPC Drivers
 
 - Treat the external service `Hello` payload as source of truth for `DbKind`, metadata, and form definition
-- `~/.config/dbflux/config.json` `rpc_services` is runtime/process config only (socket/command/args/env/timeout)
+- RPC services are stored in `cfg_services` table in `~/.local/share/dbflux/dbflux.db` (socket_id, command, args, env, timeout)
 - Internal driver keys for external services are `rpc:<socket_id>`
 - Use `DbConfig::External { kind, values }` for external driver profile configs
 - Only managed hosts started by DBFlux are shut down automatically
@@ -438,7 +439,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `ApprovalService` manages approve/reject lifecycle
 
 **Audit** (`dbflux_audit`):
-- SQLite-backed audit log in `~/.config/dbflux/audit.sqlite`
+- SQLite-backed audit log in `~/.local/share/dbflux/dbflux.db` (aud_audit_events table)
 - Queryable via `AuditQueryFilter` (actor, tool, date range)
 - Export to JSON/CSV
 
@@ -574,7 +575,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 | `crates/dbflux/src/keymap/focus.rs`                               | FocusTarget (Document/Sidebar/BackgroundTasks)      |
 | `crates/dbflux_core/src/core/traits.rs`                           | `DbDriver`, `Connection` traits                     |
 | `crates/dbflux_core/src/driver/capabilities.rs`                   | DatabaseCategory, QueryLanguage, DriverCapabilities |
-| `crates/dbflux_core/src/config/app.rs`                            | External RPC service runtime config (`config.json`) |
+| `crates/dbflux_core/src/config/app.rs`                            | Legacy config.json import (deprecated) |
 | `crates/dbflux_core/src/access/mod.rs`                            | AccessKind + AccessManager contracts                |
 | `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                             |
 | `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
@@ -626,7 +627,13 @@ MCP provides a preview-before-execute workflow for schema changes:
 | `crates/dbflux_policy/src/classification.rs`                      | ExecutionClassification enum                        |
 | `crates/dbflux_policy/src/trusted_clients.rs`                     | TrustedClientRegistry                               |
 | `crates/dbflux_approval/src/service.rs`                           | ApprovalService for pending executions              |
-| `crates/dbflux_audit/src/lib.rs`                                  | AuditService with SQLite backend                    |
+| `crates/dbflux_audit/src/lib.rs`                                  | AuditService delegates to AuditRepository          |
+| `crates/dbflux_storage/src/bootstrap.rs`                          | StorageRuntime with single dbflux.db connection    |
+| `crates/dbflux_storage/src/paths.rs`                              | dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db |
+| `crates/dbflux_storage/src/migrations/mod.rs`                     | MigrationRegistry, Migration trait                 |
+| `crates/dbflux_storage/src/repositories/traits.rs`                 | Repository trait (all(), find_by_id(), upsert(), delete()) |
+| `crates/dbflux_storage/src/repositories/audit.rs`                  | AuditRepository with AuditEventDto                 |
+| `crates/dbflux_storage/src/legacy.rs`                             | JSON-to-SQLite import (profiles, auth, ssh, config) |
 | `crates/dbflux/src/platform.rs`                                   | X11/Wayland detection, window options               |
 | `crates/dbflux/src/ui/document/governance.rs`                     | MCP approvals view document                         |
 | `crates/dbflux/src/ui/overlays/login_modal.rs`                    | SSO login waiting modal                             |

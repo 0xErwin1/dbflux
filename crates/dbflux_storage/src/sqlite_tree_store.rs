@@ -12,9 +12,9 @@ use std::path::PathBuf;
 /// This store opens a fresh connection for each operation to avoid
 /// threading issues with rusqlite::Connection (which is not Sync).
 ///
-/// The tree data is stored in the config database, separate from
-/// the profiles themselves, so even if the tree data is corrupted
-/// or missing, the profiles remain intact.
+/// The tree data is stored in `dbflux.db` (`cfg_connection_folders` table),
+/// separate from the profiles themselves, so even if the tree data is
+/// corrupted or missing, the profiles remain intact.
 pub struct SqliteTreeStore {
     config_db_path: PathBuf,
 }
