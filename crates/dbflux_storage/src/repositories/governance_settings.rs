@@ -1,4 +1,4 @@
-//! Repository for governance_settings and child tables in config.db.
+//! Repository for cfg_governance_settings and child tables in dbflux.db.
 //!
 //! These tables store the normalized governance settings as native columns,
 //! replacing the JSON blob previously stored in app_settings.
@@ -33,11 +33,11 @@ impl GovernanceSettingsRepository {
             .prepare(
                 r#"
                 SELECT id, mcp_enabled_by_default, updated_at
-                FROM governance_settings WHERE id = 1
+                FROM cfg_governance_settings WHERE id = 1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -53,7 +53,7 @@ impl GovernanceSettingsRepository {
             Ok(dto) => Ok(Some(dto)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -64,7 +64,7 @@ impl GovernanceSettingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO governance_settings (id, mcp_enabled_by_default, updated_at)
+                INSERT INTO cfg_governance_settings (id, mcp_enabled_by_default, updated_at)
                 VALUES (1, ?1, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     mcp_enabled_by_default = excluded.mcp_enabled_by_default,
@@ -73,7 +73,7 @@ impl GovernanceSettingsRepository {
                 params![settings.mcp_enabled_by_default],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -88,13 +88,13 @@ impl GovernanceSettingsRepository {
             .prepare(
                 r#"
                 SELECT id, governance_id, client_id, name, issuer, active
-                FROM governance_trusted_clients
+                FROM cfg_trusted_clients
                 WHERE governance_id = 1
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -110,7 +110,7 @@ impl GovernanceSettingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -132,11 +132,11 @@ impl GovernanceSettingsRepository {
             // Already in a transaction, execute directly
             self.conn()
                 .execute(
-                    "DELETE FROM governance_trusted_clients WHERE governance_id = 1",
+                    "DELETE FROM cfg_trusted_clients WHERE governance_id = 1",
                     [],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -144,7 +144,7 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .execute(
                         r#"
-                        INSERT INTO governance_trusted_clients
+                        INSERT INTO cfg_trusted_clients
                             (id, governance_id, client_id, name, issuer, active)
                         VALUES (?1, 1, ?2, ?3, ?4, ?5)
                         "#,
@@ -157,7 +157,7 @@ impl GovernanceSettingsRepository {
                         ],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
             }
@@ -166,23 +166,23 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
             tx.execute(
-                "DELETE FROM governance_trusted_clients WHERE governance_id = 1",
+                "DELETE FROM cfg_trusted_clients WHERE governance_id = 1",
                 [],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
             for client in clients {
                 tx.execute(
                     r#"
-                    INSERT INTO governance_trusted_clients
+                    INSERT INTO cfg_trusted_clients
                         (id, governance_id, client_id, name, issuer, active)
                     VALUES (?1, 1, ?2, ?3, ?4, ?5)
                     "#,
@@ -195,13 +195,13 @@ impl GovernanceSettingsRepository {
                     ],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -217,12 +217,12 @@ impl GovernanceSettingsRepository {
             .prepare(
                 r#"
                 SELECT id, governance_id, role_id
-                FROM governance_policy_roles
+                FROM cfg_policy_roles
                 WHERE governance_id = 1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -235,7 +235,7 @@ impl GovernanceSettingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -252,12 +252,9 @@ impl GovernanceSettingsRepository {
 
         if in_transaction {
             self.conn()
-                .execute(
-                    "DELETE FROM governance_policy_roles WHERE governance_id = 1",
-                    [],
-                )
+                .execute("DELETE FROM cfg_policy_roles WHERE governance_id = 1", [])
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -265,13 +262,13 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .execute(
                         r#"
-                        INSERT INTO governance_policy_roles (id, governance_id, role_id)
+                        INSERT INTO cfg_policy_roles (id, governance_id, role_id)
                         VALUES (?1, 1, ?2)
                         "#,
                         params![role.id, role.role_id],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
             }
@@ -280,35 +277,32 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
-            tx.execute(
-                "DELETE FROM governance_policy_roles WHERE governance_id = 1",
-                [],
-            )
-            .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
-                source,
-            })?;
+            tx.execute("DELETE FROM cfg_policy_roles WHERE governance_id = 1", [])
+                .map_err(|source| StorageError::Sqlite {
+                    path: "dbflux.db".into(),
+                    source,
+                })?;
 
             for role in roles {
                 tx.execute(
                     r#"
-                    INSERT INTO governance_policy_roles (id, governance_id, role_id)
+                    INSERT INTO cfg_policy_roles (id, governance_id, role_id)
                     VALUES (?1, 1, ?2)
                     "#,
                     params![role.id, role.role_id],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -327,19 +321,19 @@ impl GovernanceSettingsRepository {
             .prepare(
                 r#"
                 SELECT id, governance_id, policy_id
-                FROM governance_tool_policies
+                FROM cfg_tool_policies
                 WHERE governance_id = 1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let policy_rows: Vec<(String, i64, String)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?
             .filter_map(|r| r.ok())
@@ -366,20 +360,20 @@ impl GovernanceSettingsRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT tool_name FROM tool_policy_allowed_tools
+                SELECT tool_name FROM cfg_tool_policy_allowed_tools
                 WHERE tool_policy_id = ?1
                 ORDER BY tool_name
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let rows = stmt
             .query_map([policy_id], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -396,20 +390,20 @@ impl GovernanceSettingsRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT class_name FROM tool_policy_allowed_classes
+                SELECT class_name FROM cfg_tool_policy_allowed_classes
                 WHERE tool_policy_id = ?1
                 ORDER BY class_name
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let rows = stmt
             .query_map([policy_id], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -431,11 +425,11 @@ impl GovernanceSettingsRepository {
         if in_transaction {
             self.conn()
                 .execute(
-                    "DELETE FROM tool_policy_allowed_tools WHERE tool_policy_id = ?1",
+                    "DELETE FROM cfg_tool_policy_allowed_tools WHERE tool_policy_id = ?1",
                     [policy_id],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -443,11 +437,11 @@ impl GovernanceSettingsRepository {
                 let id = uuid::Uuid::new_v4().to_string();
                 self.conn()
                     .execute(
-                        "INSERT INTO tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
+                        "INSERT INTO cfg_tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
                         params![id, policy_id, tool],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
             }
@@ -456,33 +450,33 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
             tx.execute(
-                "DELETE FROM tool_policy_allowed_tools WHERE tool_policy_id = ?1",
+                "DELETE FROM cfg_tool_policy_allowed_tools WHERE tool_policy_id = ?1",
                 [policy_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
             for tool in tools {
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.execute(
-                    "INSERT INTO tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
+                    "INSERT INTO cfg_tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
                     params![id, policy_id, tool],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -501,11 +495,11 @@ impl GovernanceSettingsRepository {
         if in_transaction {
             self.conn()
                 .execute(
-                    "DELETE FROM tool_policy_allowed_classes WHERE tool_policy_id = ?1",
+                    "DELETE FROM cfg_tool_policy_allowed_classes WHERE tool_policy_id = ?1",
                     [policy_id],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -513,11 +507,11 @@ impl GovernanceSettingsRepository {
                 let id = uuid::Uuid::new_v4().to_string();
                 self.conn()
                     .execute(
-                        "INSERT INTO tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
+                        "INSERT INTO cfg_tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
                         params![id, policy_id, class],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
             }
@@ -526,33 +520,33 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
             tx.execute(
-                "DELETE FROM tool_policy_allowed_classes WHERE tool_policy_id = ?1",
+                "DELETE FROM cfg_tool_policy_allowed_classes WHERE tool_policy_id = ?1",
                 [policy_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
             for class in classes {
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.execute(
-                    "INSERT INTO tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
+                    "INSERT INTO cfg_tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
                     params![id, policy_id, class],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -562,20 +556,17 @@ impl GovernanceSettingsRepository {
 
     /// Replaces all tool policies.
     ///
-    /// This method handles both the parent governance_tool_policies table and the
-    /// child tool_policy_allowed_tools and tool_policy_allowed_classes tables.
+    /// This method handles both the parent cfg_tool_policies table and the
+    /// child cfg_tool_policy_allowed_tools and cfg_tool_policy_allowed_classes tables.
     pub fn replace_tool_policies(&self, policies: &[ToolPolicyDto]) -> Result<(), StorageError> {
         let in_transaction = !self.conn().is_autocommit();
 
         if in_transaction {
             // Delete existing policies (cascade deletes child table rows via FK)
             self.conn()
-                .execute(
-                    "DELETE FROM governance_tool_policies WHERE governance_id = 1",
-                    [],
-                )
+                .execute("DELETE FROM cfg_tool_policies WHERE governance_id = 1", [])
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -584,13 +575,13 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .execute(
                         r#"
-                        INSERT INTO governance_tool_policies (id, governance_id, policy_id)
+                        INSERT INTO cfg_tool_policies (id, governance_id, policy_id)
                         VALUES (?1, 1, ?2)
                         "#,
                         params![policy.id, policy.policy_id],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
@@ -605,29 +596,26 @@ impl GovernanceSettingsRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
-            tx.execute(
-                "DELETE FROM governance_tool_policies WHERE governance_id = 1",
-                [],
-            )
-            .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
-                source,
-            })?;
+            tx.execute("DELETE FROM cfg_tool_policies WHERE governance_id = 1", [])
+                .map_err(|source| StorageError::Sqlite {
+                    path: "dbflux.db".into(),
+                    source,
+                })?;
 
             for policy in policies {
                 tx.execute(
                     r#"
-                    INSERT INTO governance_tool_policies (id, governance_id, policy_id)
+                    INSERT INTO cfg_tool_policies (id, governance_id, policy_id)
                     VALUES (?1, 1, ?2)
                     "#,
                     params![policy.id, policy.policy_id],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -635,11 +623,11 @@ impl GovernanceSettingsRepository {
                 for tool in &policy.allowed_tools {
                     let id = uuid::Uuid::new_v4().to_string();
                     tx.execute(
-                        "INSERT INTO tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
+                        "INSERT INTO cfg_tool_policy_allowed_tools (id, tool_policy_id, tool_name) VALUES (?1, ?2, ?3)",
                         params![id, policy.id, tool],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
                 }
@@ -648,18 +636,18 @@ impl GovernanceSettingsRepository {
                 for class in &policy.allowed_classes {
                     let id = uuid::Uuid::new_v4().to_string();
                     tx.execute(
-                        "INSERT INTO tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
+                        "INSERT INTO cfg_tool_policy_allowed_classes (id, tool_policy_id, class_name) VALUES (?1, ?2, ?3)",
                         params![id, policy.id, class],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
                 }
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -669,7 +657,7 @@ impl GovernanceSettingsRepository {
     }
 }
 
-/// DTO for governance_settings table.
+/// DTO for cfg_governance_settings table.
 #[derive(Debug, Clone)]
 pub struct GovernanceSettingsDto {
     pub id: i64,
@@ -677,7 +665,7 @@ pub struct GovernanceSettingsDto {
     pub updated_at: String,
 }
 
-/// DTO for governance_trusted_clients table.
+/// DTO for cfg_trusted_clients table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustedClientDto {
     pub id: String,
@@ -688,7 +676,7 @@ pub struct TrustedClientDto {
     pub active: i32,
 }
 
-/// DTO for governance_policy_roles table.
+/// DTO for cfg_policy_roles table.
 #[derive(Debug, Clone)]
 pub struct PolicyRoleDto {
     pub id: String,
@@ -696,10 +684,10 @@ pub struct PolicyRoleDto {
     pub role_id: String,
 }
 
-/// DTO for governance_tool_policies table.
+/// DTO for cfg_tool_policies table.
 ///
 /// After migration 0005, allowed_tools and allowed_classes are stored in
-/// normalized child tables (tool_policy_allowed_tools and tool_policy_allowed_classes),
+/// normalized child tables (cfg_tool_policy_allowed_tools and cfg_tool_policy_allowed_classes),
 /// not as JSON columns on this struct.
 #[derive(Debug, Clone)]
 pub struct ToolPolicyDto {
@@ -713,7 +701,7 @@ pub struct ToolPolicyDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -733,7 +721,9 @@ mod tests {
     fn upsert_and_get_trusted_clients() {
         let path = temp_db("upsert_get");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = GovernanceSettingsRepository::new(Arc::new(conn));
 

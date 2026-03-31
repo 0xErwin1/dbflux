@@ -1,4 +1,4 @@
-//! Configuration loader that reads and writes all durable config from `config.db` repositories.
+//! Configuration loader that reads and writes all durable config from `dbflux.db` repositories.
 //!
 //! This is the authoritative config-loading path for the app. It replaces
 //! `AppConfigStore` (which reads `config.json`) for all covered durable config domains.
@@ -900,7 +900,7 @@ pub fn save_ssh_tunnels(
 // Configuration loading (read path - already migrated)
 // ---------------------------------------------------------------------------
 
-/// Loaded durable configuration from `config.db`.
+/// Loaded durable configuration from `dbflux.db`.
 pub struct LoadedConfig {
     pub general_settings: GeneralSettings,
     pub driver_overrides: HashMap<DriverKey, GlobalOverrides>,
@@ -913,7 +913,7 @@ pub struct LoadedConfig {
     pub ssh_tunnels: Vec<SshTunnelProfile>,
 }
 
-/// Loads all durable config domains from `config.db`.
+/// Loads all durable config domains from `dbflux.db`.
 ///
 /// Uses sensible defaults when repositories are empty (fresh install).
 /// This function is the single entry point for loading all covered durable config

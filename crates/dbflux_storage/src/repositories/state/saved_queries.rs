@@ -1,4 +1,4 @@
-//! Repository for saved queries and folders in state.db.
+//! Repository for saved queries and folders in dbflux.db.
 //!
 //! Stores named query definitions with folder organization.
 
@@ -31,13 +31,13 @@ impl SavedQueriesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO saved_query_folders (id, parent_id, name, position)
+                INSERT INTO st_saved_query_folders (id, parent_id, name, position)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![dto.id, dto.parent_id, dto.name, dto.position as i64],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         info!("Created saved query folder: {}", dto.name);
@@ -48,9 +48,9 @@ impl SavedQueriesRepository {
     pub fn folders(&self) -> Result<Vec<SavedQueryFolderDto>, StorageError> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT id, parent_id, name, position, created_at, updated_at FROM saved_query_folders ORDER BY position")
+            .prepare("SELECT id, parent_id, name, position, created_at, updated_at FROM st_saved_query_folders ORDER BY position")
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -66,7 +66,7 @@ impl SavedQueriesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -81,7 +81,7 @@ impl SavedQueriesRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -92,9 +92,9 @@ impl SavedQueriesRepository {
     /// Deletes a folder (and orphan children via ON DELETE CASCADE).
     pub fn delete_folder(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM saved_query_folders WHERE id = ?1", [id])
+            .execute("DELETE FROM st_saved_query_folders WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -107,7 +107,7 @@ impl SavedQueriesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO saved_queries (id, folder_id, name, sql, is_favorite, connection_id)
+                INSERT INTO st_saved_queries (id, folder_id, name, sql, is_favorite, connection_id)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 "#,
                 params![
@@ -120,7 +120,7 @@ impl SavedQueriesRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         info!("Inserted saved query: {}", dto.name);
@@ -133,7 +133,7 @@ impl SavedQueriesRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE saved_queries SET
+                UPDATE st_saved_queries SET
                     folder_id = ?2, name = ?3, sql = ?4, is_favorite = ?5,
                     connection_id = ?6, last_used_at = datetime('now')
                 WHERE id = ?1
@@ -148,13 +148,13 @@ impl SavedQueriesRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         if rows == 0 {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: rusqlite::Error::QueryReturnedNoRows,
             });
         }
@@ -167,10 +167,10 @@ impl SavedQueriesRepository {
             .conn()
             .prepare(
                 "SELECT id, folder_id, name, sql, is_favorite, connection_id, created_at, last_used_at
-                 FROM saved_queries ORDER BY last_used_at DESC",
+                 FROM st_saved_queries ORDER BY last_used_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -188,7 +188,7 @@ impl SavedQueriesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -203,7 +203,7 @@ impl SavedQueriesRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -217,10 +217,10 @@ impl SavedQueriesRepository {
             .conn()
             .prepare(
                 "SELECT id, folder_id, name, sql, is_favorite, connection_id, created_at, last_used_at
-                 FROM saved_queries WHERE id = ?1",
+                 FROM st_saved_queries WHERE id = ?1",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -239,7 +239,7 @@ impl SavedQueriesRepository {
             Ok(dto) => Ok(Some(dto)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -248,9 +248,9 @@ impl SavedQueriesRepository {
     /// Deletes a saved query by ID.
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM saved_queries WHERE id = ?1", [id])
+            .execute("DELETE FROM st_saved_queries WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -260,26 +260,26 @@ impl SavedQueriesRepository {
     pub fn toggle_favorite(&self, id: &str) -> Result<bool, StorageError> {
         self.conn()
             .execute(
-                "UPDATE saved_queries SET is_favorite = NOT is_favorite WHERE id = ?1",
+                "UPDATE st_saved_queries SET is_favorite = NOT is_favorite WHERE id = ?1",
                 [id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let mut stmt = self
             .conn()
-            .prepare("SELECT is_favorite FROM saved_queries WHERE id = ?1")
+            .prepare("SELECT is_favorite FROM st_saved_queries WHERE id = ?1")
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let fav: i32 =
             stmt.query_row([id], |row| row.get(0))
                 .map_err(|source| StorageError::Sqlite {
-                    path: "state.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -290,11 +290,11 @@ impl SavedQueriesRepository {
     pub fn touch(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "UPDATE saved_queries SET last_used_at = datetime('now') WHERE id = ?1",
+                "UPDATE st_saved_queries SET last_used_at = datetime('now') WHERE id = ?1",
                 [id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -307,12 +307,12 @@ impl SavedQueriesRepository {
             .conn()
             .prepare(
                 "SELECT id, folder_id, name, sql, is_favorite, connection_id, created_at, last_used_at
-                 FROM saved_queries
+                 FROM st_saved_queries
                  WHERE LOWER(name) LIKE ?1 OR LOWER(sql) LIKE ?1
                  ORDER BY last_used_at DESC LIMIT ?2",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -330,7 +330,7 @@ impl SavedQueriesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -345,7 +345,7 @@ impl SavedQueriesRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -359,10 +359,10 @@ impl SavedQueriesRepository {
             .conn()
             .prepare(
                 "SELECT id, folder_id, name, sql, is_favorite, connection_id, created_at, last_used_at
-                 FROM saved_queries WHERE is_favorite = 1 ORDER BY last_used_at DESC",
+                 FROM st_saved_queries WHERE is_favorite = 1 ORDER BY last_used_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -380,7 +380,7 @@ impl SavedQueriesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -395,7 +395,7 @@ impl SavedQueriesRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -406,15 +406,15 @@ impl SavedQueriesRepository {
     /// Clears all saved queries (for reset).
     pub fn clear(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM saved_queries", [])
+            .execute("DELETE FROM st_saved_queries", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         self.conn()
-            .execute("DELETE FROM saved_query_folders", [])
+            .execute("DELETE FROM st_saved_query_folders", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -464,7 +464,7 @@ impl SavedQueryDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -481,7 +481,9 @@ mod tests {
     fn insert_update_delete() {
         let path = temp_db("sq_crud");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         let dto = SavedQueryDto::new("Test Query".to_string(), "SELECT 1".to_string(), None);
@@ -505,7 +507,9 @@ mod tests {
     fn folders_crud() {
         let path = temp_db("sq_folders");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         let folder = SavedQueryFolderDto {
@@ -530,7 +534,9 @@ mod tests {
     fn search_and_favorites() {
         let path = temp_db("sq_search");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         repo.insert(&SavedQueryDto::new(

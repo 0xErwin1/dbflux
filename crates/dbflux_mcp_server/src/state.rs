@@ -129,20 +129,19 @@ fn load_driver_settings(
 fn build_runtime(
     config_dir: Option<&std::path::Path>,
 ) -> Result<(McpRuntime, GovernanceSettings), String> {
-    let audit_service = match config_dir {
-        Some(dir) => {
-            let audit_path = dir.join("mcp_audit.sqlite");
-            dbflux_audit::AuditService::new_sqlite(&audit_path).map_err(|e| {
-                error_messages::config_error("initialize audit database", Some(&audit_path), e)
-            })?
-        }
-        None => dbflux_audit::AuditService::new_sqlite_default().map_err(|e| {
-            error_messages::config_error("initialize default audit database", None, e)
-        })?,
-    };
+    // Use the unified dbflux.db path for audit service, regardless of config_dir override.
+    // The config_dir override is for legacy config.json location; the unified dbflux.db
+    // always lives in the standard data directory.
+    let dbflux_db_path = storage_paths::dbflux_db_path()
+        .map_err(|e| error_messages::config_error("resolve unified dbflux.db path", None, e))?;
+
+    let audit_service = dbflux_audit::AuditService::new_sqlite(&dbflux_db_path).map_err(|e| {
+        error_messages::config_error("initialize audit database", Some(&dbflux_db_path), e)
+    })?;
 
     let mut runtime = McpRuntime::new(audit_service);
 
+    // Pass config_dir for governance settings loading (still reads from SQLite)
     let governance_settings = load_governance_into_runtime(&mut runtime, config_dir)?;
 
     // Drain startup events — governance load is not observable to callers.
@@ -240,15 +239,15 @@ fn load_governance_into_runtime(
     Ok(governance)
 }
 
-fn open_config_db(config_dir: Option<&std::path::Path>) -> Result<rusqlite::Connection, String> {
-    let path = match config_dir {
-        Some(dir) => dir.join("config.db"),
-        None => storage_paths::config_db_path()
-            .map_err(|e| format!("Failed to resolve config.db path: {}", e))?,
-    };
+fn open_config_db(_config_dir: Option<&std::path::Path>) -> Result<rusqlite::Connection, String> {
+    // Always use the unified dbflux.db for governance settings, regardless of config_dir override.
+    // The config_dir override was for legacy config.json location; governance settings
+    // are now stored in the unified dbflux.db.
+    let path = storage_paths::dbflux_db_path()
+        .map_err(|e| format!("Failed to resolve unified dbflux.db path: {}", e))?;
 
     storage_sqlite::open_database(&path)
-        .map_err(|e| error_messages::config_error("open config database", Some(&path), e))
+        .map_err(|e| error_messages::config_error("open unified database", Some(&path), e))
 }
 
 fn load_governance_settings(
@@ -261,14 +260,14 @@ fn load_governance_settings(
     // Load governance settings (mcp_enabled_by_default)
     let dto = repo
         .get()
-        .map_err(|e| format!("Failed to load governance settings from config.db: {}", e))?;
+        .map_err(|e| format!("Failed to load governance settings from dbflux.db: {}", e))?;
 
     let mcp_enabled_by_default = dto.map(|d| d.mcp_enabled_by_default != 0).unwrap_or(false);
 
     // Load trusted clients
     let trusted_clients = repo
         .get_trusted_clients()
-        .map_err(|e| format!("Failed to load trusted clients from config.db: {}", e))?
+        .map_err(|e| format!("Failed to load trusted clients from dbflux.db: {}", e))?
         .into_iter()
         .map(|c| dbflux_core::TrustedClientConfig {
             id: c.client_id,
@@ -281,7 +280,7 @@ fn load_governance_settings(
     // Load policy roles
     let roles = repo
         .get_policy_roles()
-        .map_err(|e| format!("Failed to load policy roles from config.db: {}", e))?
+        .map_err(|e| format!("Failed to load policy roles from dbflux.db: {}", e))?
         .into_iter()
         .map(|r| dbflux_core::PolicyRoleConfig {
             id: r.role_id,
@@ -292,7 +291,7 @@ fn load_governance_settings(
     // Load tool policies
     let policies = repo
         .get_tool_policies()
-        .map_err(|e| format!("Failed to load tool policies from config.db: {}", e))?
+        .map_err(|e| format!("Failed to load tool policies from dbflux.db: {}", e))?
         .into_iter()
         .map(|p| dbflux_core::ToolPolicyConfig {
             id: p.policy_id,

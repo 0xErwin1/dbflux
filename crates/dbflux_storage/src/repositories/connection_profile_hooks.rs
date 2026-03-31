@@ -1,4 +1,4 @@
-//! Repository for connection profile inline hooks in config.db.
+//! Repository for connection profile inline hooks in dbflux.db.
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -32,13 +32,13 @@ impl ConnectionProfileHooksRepository {
                        lua_source_type, lua_content, lua_path,
                        lua_log, lua_env_read, lua_conn_metadata, lua_process_run,
                        cwd, inherit_env, timeout_ms, execution_mode, ready_signal, on_failure
-                FROM connection_profile_hooks
+                FROM cfg_connection_profile_hooks
                 WHERE profile_id = ?1
                 ORDER BY phase ASC, order_index ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -72,7 +72,7 @@ impl ConnectionProfileHooksRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -87,7 +87,7 @@ impl ConnectionProfileHooksRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -99,7 +99,7 @@ impl ConnectionProfileHooksRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_hooks (
+                INSERT INTO cfg_connection_profile_hooks (
                     id, profile_id, phase, order_index, enabled, hook_kind,
                     command, script_language, script_source_type, script_content, script_path,
                     lua_source_type, lua_content, lua_path,
@@ -138,7 +138,7 @@ impl ConnectionProfileHooksRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -148,11 +148,11 @@ impl ConnectionProfileHooksRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_hooks WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_hooks WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -162,11 +162,13 @@ impl ConnectionProfileHooksRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM connection_profile_hooks", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM cfg_connection_profile_hooks",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

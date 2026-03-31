@@ -1,4 +1,4 @@
-//! Repository for service/RPC definitions in config.db.
+//! Repository for service/RPC definitions in dbflux.db.
 //!
 //! Services store external RPC driver configurations (e.g., socket IDs, commands,
 //! environment variables) for launching managed driver hosts.
@@ -77,23 +77,23 @@ impl ServiceRepository {
         Ok(())
     }
 
-    /// Fetches all services.
+    /// Fetches all cfg_services.
     pub fn all(&self) -> Result<Vec<ServiceDto>, StorageError> {
         let mut stmt = self
             .conn()
             .prepare(
                 r#"
                 SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
-                FROM services
+                FROM cfg_services
                 ORDER BY socket_id ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
-        let services = stmt
+        let cfg_services = stmt
             .query_map([], |row| {
                 Ok(ServiceDto {
                     socket_id: row.get(0)?,
@@ -105,13 +105,13 @@ impl ServiceRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let mut result = Vec::new();
         let mut last_err = None;
-        for service in services {
+        for service in cfg_services {
             match service {
                 Ok(s) => result.push(s),
                 Err(e) => last_err = Some(e),
@@ -120,7 +120,7 @@ impl ServiceRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -135,12 +135,12 @@ impl ServiceRepository {
             .prepare(
                 r#"
                 SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
-                FROM services
+                FROM cfg_services
                 WHERE socket_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -159,7 +159,7 @@ impl ServiceRepository {
             Ok(service) => Ok(Some(service)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -172,13 +172,13 @@ impl ServiceRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-                INSERT INTO services (
+                INSERT INTO cfg_services (
                     socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
@@ -192,12 +192,12 @@ impl ServiceRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -212,14 +212,14 @@ impl ServiceRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let rows_affected = tx
             .execute(
                 r#"
-                UPDATE services SET
+                UPDATE cfg_services SET
                     enabled = ?2,
                     command = ?3,
                     startup_timeout_ms = ?4,
@@ -234,7 +234,7 @@ impl ServiceRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -245,7 +245,7 @@ impl ServiceRepository {
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -260,13 +260,13 @@ impl ServiceRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-                INSERT INTO services (
+                INSERT INTO cfg_services (
                     socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
                 ON CONFLICT(socket_id) DO UPDATE SET
@@ -283,12 +283,12 @@ impl ServiceRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -299,9 +299,9 @@ impl ServiceRepository {
     /// Deletes a service by socket ID.
     pub fn delete(&self, socket_id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM services WHERE socket_id = ?1", [socket_id])
+            .execute("DELETE FROM cfg_services WHERE socket_id = ?1", [socket_id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -309,13 +309,13 @@ impl ServiceRepository {
         Ok(())
     }
 
-    /// Returns the count of services.
+    /// Returns the count of cfg_services.
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM services", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM cfg_services", [], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -353,7 +353,7 @@ impl ServiceDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -371,7 +371,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = ServiceDto::new("test-socket".to_string());
 

@@ -1,6 +1,6 @@
-//! Repository for connection profile hook bindings in config.db.
+//! Repository for connection profile hook bindings in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_profile_hook_bindings child table,
+//! This module provides CRUD operations for the cfg_connection_profile_hook_bindings child table,
 //! which stores bindings of global hooks to connection profiles by phase.
 
 use log::info;
@@ -37,13 +37,13 @@ impl ConnectionProfileHookBindingsRepository {
             .prepare(
                 r#"
                 SELECT id, profile_id, hook_id, phase, order_index
-                FROM connection_profile_hook_bindings
+                FROM cfg_connection_profile_hook_bindings
                 WHERE profile_id = ?1
                 ORDER BY phase ASC, order_index ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -58,7 +58,7 @@ impl ConnectionProfileHookBindingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -73,7 +73,7 @@ impl ConnectionProfileHookBindingsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -86,7 +86,7 @@ impl ConnectionProfileHookBindingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_hook_bindings (
+                INSERT INTO cfg_connection_profile_hook_bindings (
                     id, profile_id, hook_id, phase, order_index
                 ) VALUES (?1, ?2, ?3, ?4, ?5)
                 "#,
@@ -99,7 +99,7 @@ impl ConnectionProfileHookBindingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -111,7 +111,7 @@ impl ConnectionProfileHookBindingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_hook_bindings (
+                INSERT INTO cfg_connection_profile_hook_bindings (
                     id, profile_id, hook_id, phase, order_index
                 ) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(profile_id, hook_id, phase) DO UPDATE SET
@@ -126,7 +126,7 @@ impl ConnectionProfileHookBindingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -141,11 +141,11 @@ impl ConnectionProfileHookBindingsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_hook_bindings WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_hook_bindings WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

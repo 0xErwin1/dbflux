@@ -1,7 +1,10 @@
 //! Repository modules for DBFlux internal storage.
 //!
 //! Each repository provides CRUD operations for a specific config domain.
-//! Config repositories operate on `config.db`; state repositories on `state.db`.
+//! Config repositories operate on `dbflux.db`.
+
+pub mod audit;
+pub mod traits;
 
 pub mod auth_profile_fields;
 pub mod auth_profiles;

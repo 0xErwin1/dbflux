@@ -1,4 +1,4 @@
-//! Repository for connection profiles in config.db.
+//! Repository for connection profiles in dbflux.db.
 //!
 //! Connection profiles store database connection configurations that users
 //! create to connect to various databases.
@@ -119,12 +119,12 @@ impl ConnectionProfileRepository {
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
                        created_at, updated_at
-                FROM connection_profiles
+                FROM cfg_connection_profiles
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -150,7 +150,7 @@ impl ConnectionProfileRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -165,7 +165,7 @@ impl ConnectionProfileRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -184,12 +184,12 @@ impl ConnectionProfileRepository {
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
                        created_at, updated_at
-                FROM connection_profiles
+                FROM cfg_connection_profiles
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -218,7 +218,7 @@ impl ConnectionProfileRepository {
             Ok(profile) => Ok(Some(profile)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -229,7 +229,7 @@ impl ConnectionProfileRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profiles (
+                INSERT INTO cfg_connection_profiles (
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
@@ -258,7 +258,7 @@ impl ConnectionProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -272,7 +272,7 @@ impl ConnectionProfileRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE connection_profiles SET
+                UPDATE cfg_connection_profiles SET
                     name = ?2,
                     driver_id = ?3,
                     description = ?4,
@@ -307,7 +307,7 @@ impl ConnectionProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -325,7 +325,7 @@ impl ConnectionProfileRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profiles (
+                INSERT INTO cfg_connection_profiles (
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
@@ -369,7 +369,7 @@ impl ConnectionProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -380,9 +380,9 @@ impl ConnectionProfileRepository {
     /// Deletes a connection profile by ID.
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM connection_profiles WHERE id = ?1", [id])
+            .execute("DELETE FROM cfg_connection_profiles WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -394,11 +394,11 @@ impl ConnectionProfileRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM connection_profiles", [], |row| {
+            .query_row("SELECT COUNT(*) FROM cfg_connection_profiles", [], |row| {
                 row.get(0)
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -454,7 +454,7 @@ impl ConnectionProfileDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -472,7 +472,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // Insert a profile
         let dto = ConnectionProfileDto::new(Uuid::new_v4(), "Test Profile".to_string());
@@ -496,7 +498,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let id = Uuid::new_v4();
         let dto = ConnectionProfileDto::new(id, "Original".to_string());
@@ -534,7 +538,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
 

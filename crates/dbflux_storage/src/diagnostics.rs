@@ -94,15 +94,11 @@ pub fn run_diagnostics_for_paths(
 
 /// Runs a complete diagnostics report using the default runtime paths.
 ///
-/// This function resolves paths via `paths::config_db_path()`, `paths::state_db_path()`,
-/// and `paths::data_dir()`. If any path is unavailable, the report includes
-/// `<unavailable>` placeholders rather than panicking.
+/// This function resolves paths via `paths::dbflux_db_path()` and `paths::data_dir()`.
+/// If any path is unavailable, the report includes `<unavailable>` placeholders
+/// rather than panicking.
 pub fn run_diagnostics() -> DiagnosticsReport {
-    let config_db_path = match paths::config_db_path() {
-        Ok(p) => p,
-        Err(_) => PathBuf::from("<unavailable>"),
-    };
-    let state_db_path = match paths::state_db_path() {
+    let dbflux_db_path = match paths::dbflux_db_path() {
         Ok(p) => p,
         Err(_) => PathBuf::from("<unavailable>"),
     };
@@ -112,9 +108,9 @@ pub fn run_diagnostics() -> DiagnosticsReport {
     };
 
     run_diagnostics_for_paths(
-        &config_db_path,
-        &state_db_path,
-        config_db_path.parent().unwrap(),
+        &dbflux_db_path,
+        &dbflux_db_path,
+        dbflux_db_path.parent().unwrap(),
         &data_dir_path,
     )
 }
@@ -131,14 +127,14 @@ fn collect_config_db_diagnostics(path: &Path) -> DatabaseDiagnostics {
         match crate::sqlite::open_database(path) {
             Ok(conn) => {
                 let integrity_ok = migrations::verify_integrity(&conn).unwrap_or(false);
-                // Config db now uses name-based migrations via the `migrations` table.
-                // user_version is no longer used for config db (kept for compatibility).
+                // Unified db uses name-based migrations via `sys_migrations` table.
+                // user_version is not used.
                 let schema_version = conn
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .ok();
-                // Use `migrations` table for migration count (name-based tracking)
+                // Use `sys_migrations` table for migration count (name-based tracking)
                 let migration_count = conn
-                    .query_row("SELECT COUNT(*) FROM migrations", [], |row| {
+                    .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| {
                         row.get::<_, i64>(0)
                     })
                     .unwrap_or(0) as usize;
@@ -174,11 +170,12 @@ fn collect_state_db_diagnostics(path: &Path) -> DatabaseDiagnostics {
         match crate::sqlite::open_database(path) {
             Ok(conn) => {
                 let integrity_ok = migrations::verify_integrity(&conn).unwrap_or(false);
+                // Unified db uses name-based migrations via `sys_migrations` table.
                 let schema_version = conn
                     .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .ok();
                 let migration_count = conn
-                    .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                    .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| {
                         row.get::<_, i64>(0)
                     })
                     .unwrap_or(0) as usize;
@@ -469,8 +466,8 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_report_with_real_dbs() {
-        // Test diagnostics with actual runtime-created databases using isolated paths
+    fn diagnostics_report_with_real_unified_db() {
+        // Test diagnostics with actual runtime-created unified database using isolated paths
         let base = std::env::temp_dir().join(format!(
             "dbflux_diag_real_test_{}_{}",
             std::process::id(),
@@ -484,46 +481,33 @@ mod tests {
         let data_dir = base.join("data");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::create_dir_all(&data_dir).unwrap();
-        let config_db = base.join("config.db");
-        let state_db = base.join("state.db");
+        let unified_db = base.join("dbflux.db");
 
-        // Create real databases
-        let _conn = crate::sqlite::open_database(&config_db).unwrap();
-        let _conn2 = crate::sqlite::open_database(&state_db).unwrap();
-        crate::migrations::run_config_migrations(&_conn).unwrap();
-        crate::migrations::run_state_migrations(&_conn2).unwrap();
+        // Create unified database with migrations
+        let conn = crate::sqlite::open_database(&unified_db).unwrap();
+        crate::migrations::MigrationRegistry::new()
+            .run_all(&conn)
+            .unwrap();
 
         // Create sessions directory (artifact store root) so artifact diagnostics pass.
-        // The sessions dir is data_dir.join("sessions"), matching collect_artifact_diagnostics.
         let sessions_dir = data_dir.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
-        // Run diagnostics with real paths.
-        // Note: config_dir and data_dir are passed as-is (they are already the storage root dirs).
-        // The legacy files collection uses config_dir.join("dbflux/...") and data_dir.join("dbflux/..."),
-        // but the test uses bare temp dirs without the "dbflux" subdirectory, so legacy file
-        // diagnostics will show them as not-imported (file missing). That's fine — the important
-        // check is that the DB and artifact store diagnostics work.
-        let report = run_diagnostics_for_paths(&config_db, &state_db, &config_dir, &data_dir);
+        // Run diagnostics with the unified db path for both config and state
+        // (they are now the same database)
+        let report = run_diagnostics_for_paths(&unified_db, &unified_db, &config_dir, &data_dir);
 
-        // With real DBs that have passed migrations, status should be healthy
+        // With real DB that has passed migrations, status should be healthy
         assert!(report.config_db.exists);
         assert!(report.state_db.exists);
         assert!(report.config_db.integrity_ok);
         assert!(report.state_db.integrity_ok);
         assert!(matches!(report.overall_status, OverallStatus::Healthy));
 
-        // Schema version for config is no longer meaningful (user_version not used).
-        // Config now uses name-based migrations via the `migrations` table.
-        // State still uses user_version-based migrations.
-        assert_eq!(report.config_db.schema_version, Some(0)); // user_version is 0 for new install
-        assert_eq!(report.state_db.schema_version, Some(3));
-
-        // Migration count: new installations run all 3 config migrations (0001_initial,
-        // 0004_connection_profiles_fk, 0005_governance_normalize_tool_policies).
-        // State DB has 3 migrations (0001_initial + 0002_system_metadata + 0003_event_session_native_columns)
-        assert_eq!(report.config_db.migration_count, 3);
-        assert_eq!(report.state_db.migration_count, 3);
+        // Unified db uses sys_migrations table with name-based tracking
+        // Migration count is 1 (001_initial)
+        assert_eq!(report.config_db.migration_count, 1);
+        assert_eq!(report.state_db.migration_count, 1);
 
         let _ = std::fs::remove_dir_all(&base);
     }

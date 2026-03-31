@@ -1,4 +1,4 @@
-//! Repository for connection profile hook args in config.db.
+//! Repository for connection profile hook args in dbflux.db.
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -28,13 +28,13 @@ impl ConnectionProfileHookArgsRepository {
             .prepare(
                 r#"
                 SELECT id, hook_id, position, value
-                FROM connection_profile_hook_args
+                FROM cfg_connection_profile_hook_args
                 WHERE hook_id = ?1
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -48,7 +48,7 @@ impl ConnectionProfileHookArgsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -63,7 +63,7 @@ impl ConnectionProfileHookArgsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -75,13 +75,13 @@ impl ConnectionProfileHookArgsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_hook_args (id, hook_id, position, value)
+                INSERT INTO cfg_connection_profile_hook_args (id, hook_id, position, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![arg.id, arg.hook_id, arg.position, arg.value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -91,11 +91,11 @@ impl ConnectionProfileHookArgsRepository {
     pub fn delete_for_hook(&self, hook_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_hook_args WHERE hook_id = ?1",
+                "DELETE FROM cfg_connection_profile_hook_args WHERE hook_id = ?1",
                 [hook_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

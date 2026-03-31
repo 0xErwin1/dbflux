@@ -1,6 +1,6 @@
-//! Repository for connection profile config values in config.db.
+//! Repository for connection profile config values in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_profile_configs child table,
+//! This module provides CRUD operations for the cfg_connection_profile_configs child table,
 //! which stores typed EAV (Entity-Attribute-Value) config values for connection profiles.
 
 use log::info;
@@ -67,13 +67,13 @@ impl ConnectionProfileConfigsRepository {
             .prepare(
                 r#"
                 SELECT id, profile_id, config_key, config_value, config_value_kind
-                FROM connection_profile_configs
+                FROM cfg_connection_profile_configs
                 WHERE profile_id = ?1
                 ORDER BY config_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -88,7 +88,7 @@ impl ConnectionProfileConfigsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -103,7 +103,7 @@ impl ConnectionProfileConfigsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -116,7 +116,7 @@ impl ConnectionProfileConfigsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_configs (
+                INSERT INTO cfg_connection_profile_configs (
                     id, profile_id, config_key, config_value, config_value_kind
                 ) VALUES (?1, ?2, ?3, ?4, ?5)
                 "#,
@@ -129,7 +129,7 @@ impl ConnectionProfileConfigsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -141,7 +141,7 @@ impl ConnectionProfileConfigsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_configs (
+                INSERT INTO cfg_connection_profile_configs (
                     id, profile_id, config_key, config_value, config_value_kind
                 ) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(profile_id, config_key) DO UPDATE SET
@@ -157,7 +157,7 @@ impl ConnectionProfileConfigsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -172,11 +172,11 @@ impl ConnectionProfileConfigsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_configs WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_configs WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -261,7 +261,7 @@ impl ConnectionProfileConfigDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::connection_profiles::{
         ConnectionProfileDto, ConnectionProfileRepository,
     };
@@ -277,12 +277,14 @@ mod tests {
     }
 
     #[test]
-    fn connection_profile_configs_insert_and_fetch() {
+    fn cfg_connection_profile_configs_insert_and_fetch() {
         let path = temp_db("configs_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // Create parent profile first
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
@@ -312,12 +314,14 @@ mod tests {
     }
 
     #[test]
-    fn connection_profile_configs_replace() {
+    fn cfg_connection_profile_configs_replace() {
         let path = temp_db("configs_replace");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
         let conn_arc = Arc::new(conn);

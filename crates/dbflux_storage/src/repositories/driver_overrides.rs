@@ -1,4 +1,4 @@
-//! Repository for driver_overrides and driver_setting_values tables in config.db.
+//! Repository for cfg_driver_overrides and driver_setting_values tables in dbflux.db.
 //!
 //! These tables store the normalized driver settings as native columns,
 //! replacing the JSON blobs previously stored in driver_settings.
@@ -33,12 +33,12 @@ impl DriverOverridesRepository {
                 r#"
                 SELECT driver_key, refresh_policy, refresh_interval_secs,
                        confirm_dangerous, requires_where, requires_preview, updated_at
-                FROM driver_overrides
+                FROM cfg_driver_overrides
                 ORDER BY driver_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -55,7 +55,7 @@ impl DriverOverridesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -70,7 +70,7 @@ impl DriverOverridesRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -86,12 +86,12 @@ impl DriverOverridesRepository {
                 r#"
                 SELECT driver_key, refresh_policy, refresh_interval_secs,
                        confirm_dangerous, requires_where, requires_preview, updated_at
-                FROM driver_overrides
+                FROM cfg_driver_overrides
                 WHERE driver_key = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -111,7 +111,7 @@ impl DriverOverridesRepository {
             Ok(dto) => Ok(Some(dto)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -122,7 +122,7 @@ impl DriverOverridesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO driver_overrides (
+                INSERT INTO cfg_driver_overrides (
                     driver_key, refresh_policy, refresh_interval_secs,
                     confirm_dangerous, requires_where, requires_preview, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
@@ -144,7 +144,7 @@ impl DriverOverridesRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -156,11 +156,11 @@ impl DriverOverridesRepository {
     pub fn delete(&self, driver_key: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM driver_overrides WHERE driver_key = ?1",
+                "DELETE FROM cfg_driver_overrides WHERE driver_key = ?1",
                 [driver_key],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -172,11 +172,11 @@ impl DriverOverridesRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM driver_overrides", [], |row| {
+            .query_row("SELECT COUNT(*) FROM cfg_driver_overrides", [], |row| {
                 row.get(0)
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -184,7 +184,7 @@ impl DriverOverridesRepository {
     }
 }
 
-/// DTO for driver_overrides table.
+/// DTO for cfg_driver_overrides table.
 #[derive(Debug, Clone)]
 pub struct DriverOverridesDto {
     pub driver_key: String,
@@ -199,13 +199,13 @@ pub struct DriverOverridesDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "dbflux_repo_driver_overrides_{}_{}",
+            "dbflux_repo_cfg_driver_overrides_{}_{}",
             name,
             std::process::id()
         ));
@@ -219,7 +219,9 @@ mod tests {
     fn upsert_and_get() {
         let path = temp_db("upsert_get");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = DriverOverridesRepository::new(Arc::new(conn));
 

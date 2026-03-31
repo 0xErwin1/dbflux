@@ -1,4 +1,4 @@
-//! Repository for driver-level settings in config.db.
+//! Repository for driver-level settings in dbflux.db.
 //!
 //! # Deprecation Notice
 //!
@@ -46,7 +46,7 @@ impl DriverSettingsRepository {
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -60,7 +60,7 @@ impl DriverSettingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -75,7 +75,7 @@ impl DriverSettingsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -95,7 +95,7 @@ impl DriverSettingsRepository {
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -112,7 +112,7 @@ impl DriverSettingsRepository {
             Ok(setting) => Ok(Some(setting)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -137,7 +137,7 @@ impl DriverSettingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -153,7 +153,7 @@ impl DriverSettingsRepository {
                 [driver_key],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -167,7 +167,7 @@ impl DriverSettingsRepository {
             .conn()
             .query_row("SELECT COUNT(*) FROM driver_settings", [], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

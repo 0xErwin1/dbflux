@@ -1,4 +1,4 @@
-//! Repository for connection profile hook environment variables in config.db.
+//! Repository for connection profile hook environment variables in dbflux.db.
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -29,13 +29,13 @@ impl ConnectionProfileHookEnvsRepository {
             .prepare(
                 r#"
                 SELECT id, hook_id, key, value
-                FROM connection_profile_hook_envs
+                FROM cfg_connection_profile_hook_envs
                 WHERE hook_id = ?1
                 ORDER BY key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -49,7 +49,7 @@ impl ConnectionProfileHookEnvsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -64,7 +64,7 @@ impl ConnectionProfileHookEnvsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -76,14 +76,14 @@ impl ConnectionProfileHookEnvsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_hook_envs (id, hook_id, key, value)
+                INSERT INTO cfg_connection_profile_hook_envs (id, hook_id, key, value)
                 VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(hook_id, key) DO UPDATE SET value = excluded.value
                 "#,
                 params![env.id, env.hook_id, env.key, env.value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -93,11 +93,11 @@ impl ConnectionProfileHookEnvsRepository {
     pub fn delete_for_hook(&self, hook_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_hook_envs WHERE hook_id = ?1",
+                "DELETE FROM cfg_connection_profile_hook_envs WHERE hook_id = ?1",
                 [hook_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

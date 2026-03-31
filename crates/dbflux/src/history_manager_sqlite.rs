@@ -1,4 +1,4 @@
-//! Repository-backed history manager using `state.db`.
+//! Repository-backed history manager using `dbflux.db`.
 //!
 //! This replaces the JSON-based `HistoryStore` with SQLite-backed storage
 //! while preserving the same external interface.
@@ -30,7 +30,7 @@ pub struct HistoryManager {
 }
 
 impl HistoryManager {
-    /// Creates a manager backed by `state.db` repositories.
+    /// Creates a manager backed by `dbflux.db` repositories.
     ///
     /// If initialization fails (e.g., fresh DB), falls back to empty state.
     pub fn new(runtime: &StorageRuntime) -> Self {
@@ -43,7 +43,7 @@ impl HistoryManager {
         let recent_files = Self::load_recent_files(&recent_items_repo);
 
         info!(
-            "Loaded {} history entries, {} saved queries, {} recent files from state.db",
+            "Loaded {} history entries, {} saved queries, {} recent files from dbflux.db",
             history_entries.len(),
             saved_queries.len(),
             recent_files.len()
@@ -275,7 +275,7 @@ impl HistoryManager {
                 })
                 .collect(),
             Err(e) => {
-                log::warn!("Failed to load history from state.db: {}", e);
+                log::warn!("Failed to load history from dbflux.db: {}", e);
                 Vec::new()
             }
         }
@@ -305,7 +305,7 @@ impl HistoryManager {
                 })
                 .collect(),
             Err(e) => {
-                log::warn!("Failed to load saved queries from state.db: {}", e);
+                log::warn!("Failed to load saved queries from dbflux.db: {}", e);
                 Vec::new()
             }
         }
@@ -327,7 +327,7 @@ impl HistoryManager {
                 })
                 .collect(),
             Err(e) => {
-                log::warn!("Failed to load recent files from state.db: {}", e);
+                log::warn!("Failed to load recent files from dbflux.db: {}", e);
                 Vec::new()
             }
         }

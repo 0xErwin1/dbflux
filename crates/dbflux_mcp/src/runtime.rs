@@ -569,9 +569,11 @@ mod tests {
         assert_eq!(assignments.len(), 1);
 
         let events = runtime.drain_events();
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
+        );
         assert!(events.iter().any(|event| matches!(
             event,
             McpRuntimeEvent::ConnectionPolicyUpdated { connection_id }

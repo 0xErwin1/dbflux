@@ -1,6 +1,6 @@
-//! Repository for hook command definitions in config.db.
+//! Repository for hook command definitions in dbflux.db.
 //!
-//! This module provides CRUD operations for the hook_commands child table,
+//! This module provides CRUD operations for the cfg_hook_commands child table,
 //! which stores command execution details for hook definitions.
 
 use log::info;
@@ -34,12 +34,12 @@ impl HookCommandsRepository {
             .prepare(
                 r#"
                 SELECT id, hook_id, command, working_directory, timeout_ms, ready_signal
-                FROM hook_commands
+                FROM cfg_hook_commands
                 WHERE hook_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -58,7 +58,7 @@ impl HookCommandsRepository {
             Ok(cmd) => Ok(Some(cmd)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -69,7 +69,7 @@ impl HookCommandsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO hook_commands (
+                INSERT INTO cfg_hook_commands (
                     id, hook_id, command, working_directory, timeout_ms, ready_signal
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 "#,
@@ -83,7 +83,7 @@ impl HookCommandsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -96,7 +96,7 @@ impl HookCommandsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO hook_commands (
+                INSERT INTO cfg_hook_commands (
                     id, hook_id, command, working_directory, timeout_ms, ready_signal
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ON CONFLICT(hook_id) DO UPDATE SET
@@ -115,7 +115,7 @@ impl HookCommandsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -126,9 +126,12 @@ impl HookCommandsRepository {
     /// Deletes the command for a hook.
     pub fn delete_for_hook(&self, hook_id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM hook_commands WHERE hook_id = ?1", [hook_id])
+            .execute(
+                "DELETE FROM cfg_hook_commands WHERE hook_id = ?1",
+                [hook_id],
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -164,7 +167,7 @@ impl HookCommandDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::hook_definitions::{HookDefinitionDto, HookDefinitionRepository};
     use crate::sqlite::open_database;
     use std::sync::Arc;
@@ -172,19 +175,21 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "dbflux_repo_hook_commands_{}_{}",
+            "dbflux_repo_cfg_hook_commands_{}_{}",
             name,
             std::process::id()
         ))
     }
 
     #[test]
-    fn hook_commands_insert_and_fetch() {
-        let path = temp_db("hook_commands_insert");
+    fn cfg_hook_commands_insert_and_fetch() {
+        let path = temp_db("cfg_hook_commands_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let hook = HookDefinitionDto::new(
             Uuid::new_v4(),
@@ -210,12 +215,14 @@ mod tests {
     }
 
     #[test]
-    fn hook_commands_upsert() {
-        let path = temp_db("hook_commands_upsert");
+    fn cfg_hook_commands_upsert() {
+        let path = temp_db("cfg_hook_commands_upsert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let hook = HookDefinitionDto::new(
             Uuid::new_v4(),

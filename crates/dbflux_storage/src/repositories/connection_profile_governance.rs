@@ -1,6 +1,6 @@
-//! Repository for connection profile governance settings in config.db.
+//! Repository for connection profile governance settings in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_profile_governance child table,
+//! This module provides CRUD operations for the cfg_connection_profile_governance child table,
 //! which stores MCP governance settings for connection profiles.
 
 use log::info;
@@ -37,13 +37,13 @@ impl ConnectionProfileGovernanceRepository {
             .prepare(
                 r#"
                 SELECT id, profile_id, governance_key, governance_value
-                FROM connection_profile_governance
+                FROM cfg_connection_profile_governance
                 WHERE profile_id = ?1
                 ORDER BY governance_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -57,7 +57,7 @@ impl ConnectionProfileGovernanceRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -72,7 +72,7 @@ impl ConnectionProfileGovernanceRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -85,7 +85,7 @@ impl ConnectionProfileGovernanceRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_governance (
+                INSERT INTO cfg_connection_profile_governance (
                     id, profile_id, governance_key, governance_value
                 ) VALUES (?1, ?2, ?3, ?4)
                 "#,
@@ -97,7 +97,7 @@ impl ConnectionProfileGovernanceRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -109,7 +109,7 @@ impl ConnectionProfileGovernanceRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_governance (
+                INSERT INTO cfg_connection_profile_governance (
                     id, profile_id, governance_key, governance_value
                 ) VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(profile_id, governance_key) DO UPDATE SET
@@ -123,7 +123,7 @@ impl ConnectionProfileGovernanceRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -138,11 +138,11 @@ impl ConnectionProfileGovernanceRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_governance WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_governance WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

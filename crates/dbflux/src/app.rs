@@ -7,7 +7,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -66,7 +66,7 @@ pub use dbflux_core::{
     FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
-// Storage-backed modules (state.db) - declared in main.rs at crate root level.
+// Storage-backed modules (dbflux.db) - declared in main.rs at crate root level.
 
 fn rpc_registry_id(socket_id: &str) -> String {
     format!("rpc:{}", socket_id)
@@ -141,7 +141,7 @@ impl AppState {
 
         let tree_store: Box<dyn dbflux_core::TreeStore> =
             Box::new(dbflux_storage::sqlite_tree_store::SqliteTreeStore::new(
-                storage_runtime.config_db_path().to_path_buf(),
+                storage_runtime.dbflux_db_path().to_path_buf(),
             ));
 
         let facade = SessionFacade::with_all_custom_managers_and_tree_store(
@@ -170,25 +170,17 @@ impl AppState {
         }
 
         #[cfg(feature = "mcp")]
-        let mcp_runtime = match dbflux_audit::AuditService::new_sqlite_default() {
-            Ok(audit_service) => McpRuntime::new(audit_service),
-            Err(error) => {
-                log::warn!(
-                    "Failed to initialize default audit store for MCP runtime: {}",
-                    error
-                );
-
-                let fallback_path = dbflux_audit::temp_sqlite_path("dbflux-mcp-audit.sqlite");
-                match dbflux_audit::AuditService::new_sqlite(&fallback_path) {
-                    Ok(audit_service) => McpRuntime::new(audit_service),
-                    Err(fallback_error) => {
-                        panic!(
-                            "failed to initialize MCP runtime audit store (default and fallback): {fallback_error}"
-                        );
-                    }
+        let mcp_runtime =
+            match dbflux_audit::AuditService::new_sqlite(storage_runtime.dbflux_db_path()) {
+                Ok(audit_service) => McpRuntime::new(audit_service),
+                Err(error) => {
+                    panic!(
+                        "failed to initialize MCP runtime audit store at {}: {}",
+                        storage_runtime.dbflux_db_path().display(),
+                        error
+                    );
                 }
-            }
-        };
+            };
 
         let mut state = Self {
             facade,
@@ -343,7 +335,7 @@ impl AppState {
         )
     }
 
-    /// Loads all durable config from `config.db` via storage repositories.
+    /// Loads all durable config from `dbflux.db` via storage repositories.
     /// Returns (general_settings, driver_overrides, driver_settings, hook_definitions, services, runtime).
     /// Uses sensible defaults when storage is empty (fresh install).
     #[allow(clippy::type_complexity)]
@@ -2091,7 +2083,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
 
     #[cfg(feature = "mcp")]
-    use dbflux_mcp::server::authorization::{authorize_request, AuthorizationRequest};
+    use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
     #[cfg(feature = "mcp")]
     use dbflux_mcp::server::request_context::RequestIdentity;
     #[cfg(feature = "mcp")]
@@ -2525,9 +2517,11 @@ mod tests {
             assert_eq!(clients.len(), 1);
 
             let events = state.drain_mcp_runtime_events();
-            assert!(events
-                .iter()
-                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
+            );
         });
     }
 
@@ -2548,9 +2542,11 @@ mod tests {
             assert_eq!(pending.actor_id, "agent-a");
 
             let events = state.drain_mcp_runtime_events();
-            assert!(events
-                .iter()
-                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated)));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
+            );
         });
     }
 

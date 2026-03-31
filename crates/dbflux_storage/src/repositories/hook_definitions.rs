@@ -1,4 +1,4 @@
-//! Repository for hook definitions in config.db.
+//! Repository for hook definitions in dbflux.db.
 //!
 //! Hook definitions store reusable command/script hooks that can be bound
 //! to connection profiles.
@@ -86,12 +86,12 @@ impl HookDefinitionRepository {
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
                        enabled, created_at, updated_at
-                FROM hook_definitions
+                FROM cfg_hook_definitions
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -113,7 +113,7 @@ impl HookDefinitionRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -128,7 +128,7 @@ impl HookDefinitionRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -145,12 +145,12 @@ impl HookDefinitionRepository {
                 SELECT id, name, execution_mode, script_ref, cwd,
                        inherit_env, timeout_ms, ready_signal, on_failure,
                        enabled, created_at, updated_at
-                FROM hook_definitions
+                FROM cfg_hook_definitions
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -175,7 +175,7 @@ impl HookDefinitionRepository {
             Ok(hook) => Ok(Some(hook)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -184,7 +184,7 @@ impl HookDefinitionRepository {
     /// Inserts a new hook definition.
     pub fn insert(&self, hook: &HookDefinitionDto) -> Result<(), StorageError> {
         // Note: We don't use a transaction wrapper here because:
-        // 1. The main hook_definitions insert is atomic
+        // 1. The main cfg_hook_definitions insert is atomic
         // 2. Child table operations (hook_commands, hook_environment) are denormalized
         //    and can be rebuilt on next upsert if interrupted
         // 3. This avoids "cannot start a transaction within a transaction" errors
@@ -193,7 +193,7 @@ impl HookDefinitionRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO hook_definitions (
+                INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
                     enabled, created_at, updated_at
@@ -216,7 +216,7 @@ impl HookDefinitionRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -227,7 +227,7 @@ impl HookDefinitionRepository {
     /// Upserts a hook definition (insert or update by ID).
     pub fn upsert(&self, hook: &HookDefinitionDto) -> Result<(), StorageError> {
         // Note: We don't use a transaction wrapper here because:
-        // 1. The main hook_definitions upsert is atomic
+        // 1. The main cfg_hook_definitions upsert is atomic
         // 2. Child table operations (hook_commands, hook_environment) are denormalized
         //    and can be rebuilt on next upsert if interrupted
         // 3. This avoids "cannot start a transaction within a transaction" errors
@@ -236,7 +236,7 @@ impl HookDefinitionRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO hook_definitions (
+                INSERT INTO cfg_hook_definitions (
                     id, name, execution_mode, script_ref, cwd,
                     inherit_env, timeout_ms, ready_signal, on_failure,
                     enabled, created_at, updated_at
@@ -270,7 +270,7 @@ impl HookDefinitionRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -281,7 +281,7 @@ impl HookDefinitionRepository {
     /// Updates an existing hook definition.
     pub fn update(&self, hook: &HookDefinitionDto) -> Result<(), StorageError> {
         // Note: We don't use a transaction wrapper here because:
-        // 1. The main hook_definitions update is atomic
+        // 1. The main cfg_hook_definitions update is atomic
         // 2. Child table operations (hook_commands, hook_environment) are denormalized
         //    and can be rebuilt on next upsert if interrupted
         // 3. This avoids "cannot start a transaction within a transaction" errors
@@ -291,7 +291,7 @@ impl HookDefinitionRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE hook_definitions SET
+                UPDATE cfg_hook_definitions SET
                     name = ?2,
                     execution_mode = ?3,
                     script_ref = ?4,
@@ -318,7 +318,7 @@ impl HookDefinitionRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -334,9 +334,9 @@ impl HookDefinitionRepository {
     /// Deletes a hook definition by ID.
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM hook_definitions WHERE id = ?1", [id])
+            .execute("DELETE FROM cfg_hook_definitions WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -348,11 +348,11 @@ impl HookDefinitionRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM hook_definitions", [], |row| {
+            .query_row("SELECT COUNT(*) FROM cfg_hook_definitions", [], |row| {
                 row.get(0)
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -361,7 +361,7 @@ impl HookDefinitionRepository {
 }
 
 /// DTO for hook definition storage.
-/// Note: kind is stored in child tables (hook_definitions already has execution_mode).
+/// Note: kind is stored in child tables (cfg_hook_definitions already has execution_mode).
 /// command is stored in hook_commands child table.
 /// env is stored in hook_environment child table.
 /// The kind_json, command_json, env_json columns were dropped in migration v10.
@@ -404,7 +404,7 @@ impl HookDefinitionDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -418,7 +418,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = HookDefinitionDto::new(
             Uuid::new_v4(),

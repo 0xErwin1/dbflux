@@ -1,6 +1,6 @@
-//! Repository for hook environment variables in config.db.
+//! Repository for hook environment variables in dbflux.db.
 //!
-//! This module provides CRUD operations for the hook_environment child table,
+//! This module provides CRUD operations for the cfg_hook_environment child table,
 //! which stores environment variables for hook definitions.
 
 use log::info;
@@ -34,13 +34,13 @@ impl HookEnvRepository {
             .prepare(
                 r#"
                 SELECT id, hook_id, key, value
-                FROM hook_environment
+                FROM cfg_hook_environment
                 WHERE hook_id = ?1
                 ORDER BY key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -54,7 +54,7 @@ impl HookEnvRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -69,7 +69,7 @@ impl HookEnvRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -91,13 +91,13 @@ impl HookEnvRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO hook_environment (id, hook_id, key, value)
+                INSERT INTO cfg_hook_environment (id, hook_id, key, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![env.id, env.hook_id, env.key, env.value,],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -114,35 +114,38 @@ impl HookEnvRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         // Delete existing env vars first
-        tx.execute("DELETE FROM hook_environment WHERE hook_id = ?1", [hook_id])
-            .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
-                source,
-            })?;
+        tx.execute(
+            "DELETE FROM cfg_hook_environment WHERE hook_id = ?1",
+            [hook_id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: "dbflux.db".into(),
+            source,
+        })?;
 
         // Insert new env vars
         for (key, value) in env_vars.iter() {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 r#"
-                INSERT INTO hook_environment (id, hook_id, key, value)
+                INSERT INTO cfg_hook_environment (id, hook_id, key, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![id, hook_id, key, value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -153,9 +156,12 @@ impl HookEnvRepository {
     /// Deletes all environment variables for a hook.
     pub fn delete_for_hook(&self, hook_id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM hook_environment WHERE hook_id = ?1", [hook_id])
+            .execute(
+                "DELETE FROM cfg_hook_environment WHERE hook_id = ?1",
+                [hook_id],
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -175,7 +181,7 @@ pub struct HookEnvDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::hook_definitions::{HookDefinitionDto, HookDefinitionRepository};
     use crate::sqlite::open_database;
     use std::collections::HashMap;
@@ -196,7 +202,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let hook = HookDefinitionDto::new(
             Uuid::new_v4(),
@@ -232,7 +240,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let hook = HookDefinitionDto::new(
             Uuid::new_v4(),

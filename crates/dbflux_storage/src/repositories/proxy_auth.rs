@@ -1,6 +1,6 @@
-//! Repository for proxy auth credentials in config.db.
+//! Repository for proxy auth credentials in dbflux.db.
 //!
-//! This module provides CRUD operations for the proxy_auth child table,
+//! This module provides CRUD operations for the cfg_proxy_auth child table,
 //! which stores normalized authentication credentials for proxy profiles.
 
 use log::info;
@@ -34,12 +34,12 @@ impl ProxyAuthRepository {
             .prepare(
                 r#"
                 SELECT proxy_profile_id, username, domain, password_secret_ref
-                FROM proxy_auth
+                FROM cfg_proxy_auth
                 WHERE proxy_profile_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -56,7 +56,7 @@ impl ProxyAuthRepository {
             Ok(auth) => Ok(Some(auth)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -67,7 +67,7 @@ impl ProxyAuthRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO proxy_auth (
+                INSERT INTO cfg_proxy_auth (
                     proxy_profile_id, username, domain, password_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -81,7 +81,7 @@ impl ProxyAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -95,7 +95,7 @@ impl ProxyAuthRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE proxy_auth SET
+                UPDATE cfg_proxy_auth SET
                     username = ?2,
                     domain = ?3,
                     password_secret_ref = ?4
@@ -109,7 +109,7 @@ impl ProxyAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -127,7 +127,7 @@ impl ProxyAuthRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO proxy_auth (
+                INSERT INTO cfg_proxy_auth (
                     proxy_profile_id, username, domain, password_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -145,7 +145,7 @@ impl ProxyAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -157,11 +157,11 @@ impl ProxyAuthRepository {
     pub fn delete(&self, proxy_profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM proxy_auth WHERE proxy_profile_id = ?1",
+                "DELETE FROM cfg_proxy_auth WHERE proxy_profile_id = ?1",
                 [proxy_profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -194,7 +194,7 @@ impl ProxyAuthDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::proxy_profiles::{ProxyProfileDto, ProxyProfileRepository};
     use crate::sqlite::open_database;
     use std::sync::Arc;
@@ -202,19 +202,21 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "dbflux_repo_proxy_auth_{}_{}",
+            "dbflux_repo_cfg_proxy_auth_{}_{}",
             name,
             std::process::id()
         ))
     }
 
     #[test]
-    fn proxy_auth_insert_and_fetch() {
-        let path = temp_db("proxy_auth_insert_fetch");
+    fn cfg_proxy_auth_insert_and_fetch() {
+        let path = temp_db("cfg_proxy_auth_insert_fetch");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile so FK constraint passes
         let profile = ProxyProfileDto::new(
@@ -254,12 +256,14 @@ mod tests {
     }
 
     #[test]
-    fn proxy_auth_upsert() {
-        let path = temp_db("proxy_auth_upsert");
+    fn cfg_proxy_auth_upsert() {
+        let path = temp_db("cfg_proxy_auth_upsert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile
         let profile = ProxyProfileDto::new(
@@ -308,12 +312,14 @@ mod tests {
     }
 
     #[test]
-    fn proxy_auth_delete() {
-        let path = temp_db("proxy_auth_delete");
+    fn cfg_proxy_auth_delete() {
+        let path = temp_db("cfg_proxy_auth_delete");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile
         let profile = ProxyProfileDto::new(

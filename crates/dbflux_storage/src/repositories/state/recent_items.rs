@@ -1,4 +1,4 @@
-//! Repository for recent items in state.db.
+//! Repository for recent items in dbflux.db.
 //!
 //! Tracks recently opened files and connections with access timestamps.
 
@@ -31,9 +31,12 @@ impl RecentItemsRepository {
     pub fn record_access(&self, dto: &RecentItemDto) -> Result<(), StorageError> {
         // Remove any existing entry with same id
         self.conn()
-            .execute("DELETE FROM recent_items WHERE id = ?1", [dto.id.clone()])
+            .execute(
+                "DELETE FROM st_recent_items WHERE id = ?1",
+                [dto.id.clone()],
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -41,13 +44,13 @@ impl RecentItemsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO recent_items (id, kind, profile_id, path, title, accessed_at)
+                INSERT INTO st_recent_items (id, kind, profile_id, path, title, accessed_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
                 "#,
                 params![dto.id, dto.kind, dto.profile_id, dto.path, dto.title],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -55,15 +58,15 @@ impl RecentItemsRepository {
         self.conn()
             .execute(
                 r#"
-                DELETE FROM recent_items
+                DELETE FROM st_recent_items
                 WHERE id NOT IN (
-                    SELECT id FROM recent_items ORDER BY accessed_at DESC LIMIT ?1
+                    SELECT id FROM st_recent_items ORDER BY accessed_at DESC LIMIT ?1
                 )
                 "#,
                 [MAX_RECENT_ITEMS as i64],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -76,10 +79,10 @@ impl RecentItemsRepository {
         let mut stmt = self
             .conn()
             .prepare(
-                "SELECT id, kind, profile_id, path, title, accessed_at FROM recent_items ORDER BY accessed_at DESC",
+                "SELECT id, kind, profile_id, path, title, accessed_at FROM st_recent_items ORDER BY accessed_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -95,7 +98,7 @@ impl RecentItemsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -110,7 +113,7 @@ impl RecentItemsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -121,9 +124,9 @@ impl RecentItemsRepository {
     /// Removes a recent item by ID.
     pub fn remove(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM recent_items WHERE id = ?1", [id])
+            .execute("DELETE FROM st_recent_items WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -132,9 +135,9 @@ impl RecentItemsRepository {
     /// Clears all recent items.
     pub fn clear(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM recent_items", [])
+            .execute("DELETE FROM st_recent_items", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -179,7 +182,7 @@ impl RecentItemDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -199,7 +202,9 @@ mod tests {
     fn record_and_list() {
         let path = temp_db("record");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = RecentItemsRepository::new(Arc::new(conn));
 
         let dto = RecentItemDto::file(
@@ -218,7 +223,9 @@ mod tests {
     fn remove_and_clear() {
         let path = temp_db("remove");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = RecentItemsRepository::new(Arc::new(conn));
 
         let id = Uuid::new_v4();

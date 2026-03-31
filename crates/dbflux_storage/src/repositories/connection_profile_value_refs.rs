@@ -1,6 +1,6 @@
-//! Repository for connection profile value references in config.db.
+//! Repository for connection profile value references in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_profile_value_refs child table,
+//! This module provides CRUD operations for the cfg_connection_profile_value_refs child table,
 //! which stores value references (secrets, params, auth) for connection profiles.
 
 use log::info;
@@ -65,13 +65,13 @@ impl ConnectionProfileValueRefsRepository {
                 r#"
                 SELECT id, profile_id, ref_key, ref_kind, ref_value, ref_provider, ref_json_key,
                        literal_value, env_key, secret_locator, param_name, auth_field
-                FROM connection_profile_value_refs
+                FROM cfg_connection_profile_value_refs
                 WHERE profile_id = ?1
                 ORDER BY ref_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -93,7 +93,7 @@ impl ConnectionProfileValueRefsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -108,7 +108,7 @@ impl ConnectionProfileValueRefsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -121,7 +121,7 @@ impl ConnectionProfileValueRefsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_value_refs (
+                INSERT INTO cfg_connection_profile_value_refs (
                     id, profile_id, ref_key, ref_kind, ref_value, ref_provider, ref_json_key,
                     literal_value, env_key, secret_locator, param_name, auth_field
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
@@ -142,7 +142,7 @@ impl ConnectionProfileValueRefsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -154,7 +154,7 @@ impl ConnectionProfileValueRefsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_value_refs (
+                INSERT INTO cfg_connection_profile_value_refs (
                     id, profile_id, ref_key, ref_kind, ref_value, ref_provider, ref_json_key,
                     literal_value, env_key, secret_locator, param_name, auth_field
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
@@ -185,7 +185,7 @@ impl ConnectionProfileValueRefsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -200,11 +200,11 @@ impl ConnectionProfileValueRefsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_value_refs WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_value_refs WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

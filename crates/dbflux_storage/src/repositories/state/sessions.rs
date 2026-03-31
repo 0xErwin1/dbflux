@@ -1,15 +1,15 @@
-//! Repository for session and tab metadata in state.db.
+//! Repository for session and tab metadata in dbflux.db.
 //!
 //! Session metadata (which tabs are open, their kind, paths, positions, active index)
-//! lives in `state.db`. Actual file content (scratch files, shadow files) stays on disk
-//! in `~/.local/share/dbflux/sessions/` via `ArtifactStore`.
+//! lives in `dbflux.db`. Actual file content (scratch files, shadow files) stays on disk
+//! in `~/.local/share/dbflux/st_sessions/` via `ArtifactStore`.
 //!
 //! `restore_session()` provides the authoritative session data for the app:
 //! it returns a `SessionManifest` (the same shape the old JSON-based `SessionStore` used)
 //! so that callers in `actions.rs` and elsewhere don't need to change.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -35,7 +35,7 @@ struct TabRestorePayload {
     is_pinned: bool,
 }
 
-/// Full session data assembled from `sessions` + `session_tabs` rows.
+/// Full session data assembled from `st_sessions` + `st_session_tabs` rows.
 #[derive(Debug, Clone)]
 pub(crate) struct FullSession {
     pub id: String,
@@ -64,7 +64,7 @@ pub(crate) struct FullTab {
     pub exec_ctx_container: Option<String>,
 }
 
-/// Session repository — manages session and tab metadata in state.db.
+/// Session repository — manages session and tab metadata in dbflux.db.
 pub struct SessionRepository {
     conn: OwnedConnection,
 }
@@ -78,16 +78,16 @@ impl SessionRepository {
         &self.conn
     }
 
-    /// Returns all sessions ordered by `last_opened_at` descending.
+    /// Returns all st_sessions ordered by `last_opened_at` descending.
     pub fn all(&self) -> Result<Vec<SessionDto>, StorageError> {
         let mut stmt = self
             .conn()
             .prepare(
                 "SELECT id, name, kind, created_at, updated_at, last_opened_at, is_last_active
-                 FROM sessions ORDER BY last_opened_at DESC",
+                 FROM st_sessions ORDER BY last_opened_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -104,7 +104,7 @@ impl SessionRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -119,7 +119,7 @@ impl SessionRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -132,10 +132,10 @@ impl SessionRepository {
         let mut stmt = self
             .conn()
             .prepare(
-                "SELECT id FROM sessions WHERE is_last_active = 1 ORDER BY last_opened_at DESC LIMIT 1",
+                "SELECT id FROM st_sessions WHERE is_last_active = 1 ORDER BY last_opened_at DESC LIMIT 1",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -153,10 +153,10 @@ impl SessionRepository {
             .conn()
             .prepare(
                 "SELECT id, name, kind, active_index, created_at, updated_at, last_opened_at
-                 FROM sessions WHERE id = ?1",
+                 FROM st_sessions WHERE id = ?1",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -200,10 +200,10 @@ impl SessionRepository {
                         scratch_file_path, shadow_file_path, language, file_path,
                         exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema,
                         exec_ctx_container, created_at, updated_at
-                 FROM session_tabs WHERE session_id = ?1 ORDER BY position ASC",
+                 FROM st_session_tabs WHERE session_id = ?1 ORDER BY position ASC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -228,7 +228,7 @@ impl SessionRepository {
                 ))
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -277,7 +277,7 @@ impl SessionRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -298,21 +298,21 @@ impl SessionRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         if dto.is_last_active {
-            tx.execute("UPDATE sessions SET is_last_active = 0", [])
+            tx.execute("UPDATE st_sessions SET is_last_active = 0", [])
                 .map_err(|source| StorageError::Sqlite {
-                    path: "state.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
         }
 
         tx.execute(
             r#"
-            INSERT INTO sessions (id, name, kind, created_at, updated_at, last_opened_at, is_last_active)
+            INSERT INTO st_sessions (id, name, kind, created_at, updated_at, last_opened_at, is_last_active)
             VALUES (?1, ?2, ?3, datetime('now'), datetime('now'), datetime('now'), ?4)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -324,12 +324,12 @@ impl SessionRepository {
             params![dto.id, dto.name, dto.kind, dto.is_last_active as i32],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -342,7 +342,7 @@ impl SessionRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO session_tabs (id, session_id, tab_kind, title, position, is_pinned,
+                INSERT INTO st_session_tabs (id, session_id, tab_kind, title, position, is_pinned,
                                          scratch_file_path, shadow_file_path,
                                          language, file_path, exec_ctx_connection_id,
                                          exec_ctx_database, exec_ctx_schema, exec_ctx_container,
@@ -382,7 +382,7 @@ impl SessionRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -392,23 +392,23 @@ impl SessionRepository {
     /// Removes a tab by ID.
     pub fn remove_tab(&self, tab_id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM session_tabs WHERE id = ?1", [tab_id])
+            .execute("DELETE FROM st_session_tabs WHERE id = ?1", [tab_id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
     }
 
     /// Removes all tabs for a session.
-    pub fn clear_session_tabs(&self, session_id: &str) -> Result<(), StorageError> {
+    pub fn clear_st_session_tabs(&self, session_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM session_tabs WHERE session_id = ?1",
+                "DELETE FROM st_session_tabs WHERE session_id = ?1",
                 [session_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -417,27 +417,27 @@ impl SessionRepository {
     /// Deletes a session and its tabs (cascade).
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM sessions WHERE id = ?1", [id])
+            .execute("DELETE FROM st_sessions WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         info!("Deleted session: {}", id);
         Ok(())
     }
 
-    /// Clears all sessions and tabs (for reset).
+    /// Clears all st_sessions and tabs (for reset).
     pub fn clear_all(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM session_tabs", [])
+            .execute("DELETE FROM st_session_tabs", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         self.conn()
-            .execute("DELETE FROM sessions", [])
+            .execute("DELETE FROM st_sessions", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -542,24 +542,24 @@ impl SessionRepository {
                     self.conn()
                         .unchecked_transaction()
                         .map_err(|source| StorageError::Sqlite {
-                            path: "state.db".into(),
+                            path: "dbflux.db".into(),
                             source,
                         })?;
 
                 tx.execute(
                     r#"
-                    INSERT INTO sessions (id, name, kind, created_at, updated_at, last_opened_at, is_last_active)
+                    INSERT INTO st_sessions (id, name, kind, created_at, updated_at, last_opened_at, is_last_active)
                     VALUES (?1, 'workspace', 'workspace', datetime('now'), datetime('now'), datetime('now'), 1)
                     "#,
                     params![id],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "state.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
                 tx.commit().map_err(|source| StorageError::Sqlite {
-                    path: "state.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -571,21 +571,21 @@ impl SessionRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
-        // Deactivate all other sessions so this one is the sole active workspace.
-        tx.execute("UPDATE sessions SET is_last_active = 0", [])
+        // Deactivate all other st_sessions so this one is the sole active workspace.
+        tx.execute("UPDATE st_sessions SET is_last_active = 0", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         // Mark our session as active and update its metadata, including active_index.
         tx.execute(
             r#"
-            UPDATE sessions
+            UPDATE st_sessions
             SET name = 'workspace',
                 kind = 'workspace',
                 active_index = ?2,
@@ -600,17 +600,17 @@ impl SessionRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
         // Delete all existing tabs for this session so we can replace them cleanly.
         tx.execute(
-            "DELETE FROM session_tabs WHERE session_id = ?1",
+            "DELETE FROM st_session_tabs WHERE session_id = ?1",
             params![session_id],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -635,9 +635,35 @@ impl SessionRepository {
             let exec_ctx_schema = tab.exec_ctx.schema.clone();
             let exec_ctx_container = tab.exec_ctx.container.clone();
 
+            // Validate exec_ctx_connection_id FK — if the referenced profile doesn't exist,
+            // null it to avoid FK constraint failures (mirrors legacy import behavior).
+            let exec_ctx_connection_id = if let Some(ref id) = exec_ctx_connection_id {
+                let exists: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM cfg_connection_profiles WHERE id = ?1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|source| StorageError::Sqlite {
+                        path: "dbflux.db".into(),
+                        source,
+                    })?;
+                if exists.is_none() {
+                    log::warn!(
+                        "Nulling orphan exec_ctx_connection_id {} in session_tab {}",
+                        id,
+                        tab.id
+                    );
+                }
+                exists
+            } else {
+                None
+            };
+
             tx.execute(
                 r#"
-                INSERT INTO session_tabs (id, session_id, tab_kind, title, position, is_pinned,
+                INSERT INTO st_session_tabs (id, session_id, tab_kind, title, position, is_pinned,
                                          scratch_file_path, shadow_file_path,
                                          language, file_path, exec_ctx_connection_id,
                                          exec_ctx_database, exec_ctx_schema, exec_ctx_container,
@@ -663,13 +689,13 @@ impl SessionRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -685,7 +711,7 @@ impl SessionRepository {
     fn find_workspace_session_id(&self) -> Option<String> {
         self.conn()
             .query_row(
-                "SELECT id FROM sessions WHERE name = 'workspace' AND kind = 'workspace' AND is_last_active = 1 LIMIT 1",
+                "SELECT id FROM st_sessions WHERE name = 'workspace' AND kind = 'workspace' AND is_last_active = 1 LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -728,7 +754,7 @@ pub struct SessionTabDto {
     pub file_path: Option<String>,
 }
 
-/// A session manifest restored from state.db.
+/// A session manifest restored from dbflux.db.
 ///
 /// This is what `actions.rs` expects — the same shape the old `SessionStore`
 /// returned from `load_manifest()`.
@@ -741,7 +767,7 @@ pub struct RestoredSession {
     pub tabs: Vec<RestoredTab>,
 }
 
-/// A tab restored from state.db.
+/// A tab restored from dbflux.db.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoredTab {
     pub id: String,
@@ -802,14 +828,17 @@ pub struct WorkspaceTab {
 mod tests {
     use super::*;
     use crate::artifacts::ArtifactStore;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
+    use crate::repositories::connection_profiles::{
+        ConnectionProfileDto, ConnectionProfileRepository,
+    };
     use crate::sqlite::open_database;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "dbflux_repo_sessions_{}_{}",
+            "dbflux_repo_st_sessions_{}_{}",
             name,
             std::process::id()
         ));
@@ -820,10 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn upsert_and_list_sessions() {
+    fn upsert_and_list_st_sessions() {
         let path = temp_db("upsert");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let dto = SessionDto {
@@ -847,7 +878,9 @@ mod tests {
     fn upsert_clears_last_active() {
         let path = temp_db("last_active");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let dto1 = SessionDto {
@@ -882,7 +915,9 @@ mod tests {
     fn upsert_tabs_and_restore() {
         let path = temp_db("tabs");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let session_id = Uuid::new_v4().to_string();
@@ -930,7 +965,9 @@ mod tests {
     fn save_and_restore_workspace_session() {
         let path = temp_db("workspace");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let manifest = WorkspaceSessionManifest {
@@ -954,7 +991,7 @@ mod tests {
             .expect("save session");
 
         // Verify the session was saved
-        let all = repo.all().expect("list sessions");
+        let all = repo.all().expect("list st_sessions");
         assert_eq!(all.len(), 1);
         assert!(all[0].is_last_active);
 
@@ -970,7 +1007,9 @@ mod tests {
     fn delete_clears_session_and_tabs() {
         let path = temp_db("delete");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let session_id = Uuid::new_v4().to_string();
@@ -998,7 +1037,9 @@ mod tests {
         // and one orphan file, then verify only the orphan is removed.
         let path = temp_db("restore_orphan");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         // Create a temp artifact store directory
@@ -1087,8 +1128,17 @@ mod tests {
         // Verifies that file_path round-trips correctly through save and restore.
         let path = temp_db("file_backed");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
-        let repo = SessionRepository::new(Arc::new(conn));
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        let arc_conn = Arc::new(conn);
+        let repo = SessionRepository::new(arc_conn.clone());
+
+        // Insert a connection profile so the exec_ctx FK is valid.
+        let profile_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let profile = ConnectionProfileDto::new(profile_id, "Test Profile".to_string());
+        let profile_repo = ConnectionProfileRepository::new(arc_conn.clone());
+        profile_repo.insert(&profile).expect("insert profile");
 
         // Create a temp artifact store so we have a real file to reference.
         let artifact_root = std::env::temp_dir().join(format!(
@@ -1101,7 +1151,7 @@ mod tests {
         store.write_content(&file_path, "SELECT 1;").expect("write");
 
         let exec_ctx = dbflux_core::ExecutionContext {
-            connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            connection_id: Some(profile_id),
             database: Some("testdb".into()),
             schema: Some("public".into()),
             container: None,
@@ -1153,11 +1203,20 @@ mod tests {
         // Verifies that the full ExecutionContext survives through the JSON payload.
         let path = temp_db("exec_ctx");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
-        let repo = SessionRepository::new(Arc::new(conn));
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        let arc_conn = Arc::new(conn);
+        let repo = SessionRepository::new(arc_conn.clone());
+
+        // Insert a connection profile so the exec_ctx FK is valid.
+        let profile_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let profile = ConnectionProfileDto::new(profile_id, "Test Profile".to_string());
+        let profile_repo = ConnectionProfileRepository::new(arc_conn.clone());
+        profile_repo.insert(&profile).expect("insert profile");
 
         let exec_ctx = dbflux_core::ExecutionContext {
-            connection_id: Some(Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap()),
+            connection_id: Some(profile_id),
             database: Some("analytics".into()),
             schema: Some("metrics".into()),
             container: Some("events".into()),
@@ -1214,7 +1273,9 @@ mod tests {
         // Verifies that active_index is stored on the session row and restored correctly.
         let path = temp_db("active_idx");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         let manifest = WorkspaceSessionManifest {
@@ -1283,12 +1344,14 @@ mod tests {
     }
 
     #[test]
-    fn repeated_saves_do_not_create_duplicate_sessions() {
+    fn repeated_saves_do_not_create_duplicate_st_sessions() {
         // Verifies that repeated save_workspace_session calls reuse the same
         // session row rather than accumulating new rows.
         let path = temp_db("repeat_save");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = SessionRepository::new(Arc::new(conn));
 
         for i in 0..3 {
@@ -1314,11 +1377,11 @@ mod tests {
         }
 
         // After 3 saves, there should still be exactly 1 session.
-        let all = repo.all().expect("list sessions");
+        let all = repo.all().expect("list st_sessions");
         assert_eq!(
             all.len(),
             1,
-            "repeated saves must not create duplicate sessions — got {}",
+            "repeated saves must not create duplicate st_sessions — got {}",
             all.len()
         );
 

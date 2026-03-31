@@ -1,6 +1,6 @@
-//! Repository for SSH tunnel auth credentials in config.db.
+//! Repository for SSH tunnel auth credentials in dbflux.db.
 //!
-//! This module provides CRUD operations for the ssh_tunnel_auth child table,
+//! This module provides CRUD operations for the cfg_ssh_tunnel_auth child table,
 //! which stores normalized authentication credentials for SSH tunnel profiles.
 
 use log::info;
@@ -37,12 +37,12 @@ impl SshTunnelAuthRepository {
             .prepare(
                 r#"
                 SELECT ssh_tunnel_profile_id, key_path, password_secret_ref, passphrase_secret_ref
-                FROM ssh_tunnel_auth
+                FROM cfg_ssh_tunnel_auth
                 WHERE ssh_tunnel_profile_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -59,7 +59,7 @@ impl SshTunnelAuthRepository {
             Ok(auth) => Ok(Some(auth)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -70,7 +70,7 @@ impl SshTunnelAuthRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO ssh_tunnel_auth (
+                INSERT INTO cfg_ssh_tunnel_auth (
                     ssh_tunnel_profile_id, key_path, password_secret_ref, passphrase_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -84,7 +84,7 @@ impl SshTunnelAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -101,7 +101,7 @@ impl SshTunnelAuthRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE ssh_tunnel_auth SET
+                UPDATE cfg_ssh_tunnel_auth SET
                     key_path = ?2,
                     password_secret_ref = ?3,
                     passphrase_secret_ref = ?4
@@ -115,7 +115,7 @@ impl SshTunnelAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -139,7 +139,7 @@ impl SshTunnelAuthRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO ssh_tunnel_auth (
+                INSERT INTO cfg_ssh_tunnel_auth (
                     ssh_tunnel_profile_id, key_path, password_secret_ref, passphrase_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -157,7 +157,7 @@ impl SshTunnelAuthRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -172,11 +172,11 @@ impl SshTunnelAuthRepository {
     pub fn delete(&self, ssh_tunnel_profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM ssh_tunnel_auth WHERE ssh_tunnel_profile_id = ?1",
+                "DELETE FROM cfg_ssh_tunnel_auth WHERE ssh_tunnel_profile_id = ?1",
                 [ssh_tunnel_profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -212,7 +212,7 @@ impl SshTunnelAuthDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::ssh_tunnel_profiles::{
         SshTunnelProfileDto, SshTunnelProfileRepository,
     };
@@ -222,19 +222,21 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "dbflux_repo_ssh_tunnel_auth_{}_{}",
+            "dbflux_repo_cfg_ssh_tunnel_auth_{}_{}",
             name,
             std::process::id()
         ))
     }
 
     #[test]
-    fn ssh_tunnel_auth_insert_and_fetch() {
+    fn cfg_ssh_tunnel_auth_insert_and_fetch() {
         let path = temp_db("ssh_auth_insert_fetch");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile so FK constraint passes
         let profile = SshTunnelProfileDto::with_auth_method(
@@ -275,12 +277,14 @@ mod tests {
     }
 
     #[test]
-    fn ssh_tunnel_auth_upsert() {
+    fn cfg_ssh_tunnel_auth_upsert() {
         let path = temp_db("ssh_auth_upsert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile
         let profile = SshTunnelProfileDto::with_auth_method(
@@ -328,12 +332,14 @@ mod tests {
     }
 
     #[test]
-    fn ssh_tunnel_auth_delete() {
+    fn cfg_ssh_tunnel_auth_delete() {
         let path = temp_db("ssh_auth_delete");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile
         let profile = SshTunnelProfileDto::with_auth_method(

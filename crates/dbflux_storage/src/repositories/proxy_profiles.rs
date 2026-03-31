@@ -1,8 +1,8 @@
-//! Repository for proxy profiles in config.db.
+//! Repository for proxy profiles in dbflux.db.
 //!
 //! Proxy profiles store SOCKS5/HTTP proxy configurations.
 //!
-//! This repository uses native auth_kind column and proxy_auth child table.
+//! This repository uses native auth_kind column and cfg_proxy_auth child table.
 //! The auth_json column was dropped in migration v10.
 
 use log::info;
@@ -44,12 +44,12 @@ impl ProxyProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, kind, host, port, auth_kind, no_proxy, enabled, save_secret, created_at, updated_at
-                FROM proxy_profiles
+                FROM cfg_proxy_profiles
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -70,7 +70,7 @@ impl ProxyProfileRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -85,7 +85,7 @@ impl ProxyProfileRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -100,12 +100,12 @@ impl ProxyProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, kind, host, port, auth_kind, no_proxy, enabled, save_secret, created_at, updated_at
-                FROM proxy_profiles
+                FROM cfg_proxy_profiles
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -129,7 +129,7 @@ impl ProxyProfileRepository {
             Ok(profile) => Ok(Some(profile)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -141,7 +141,7 @@ impl ProxyProfileRepository {
     }
 
     /// Inserts a new proxy profile with auth credentials.
-    /// Writes to proxy_profiles (with auth_kind) and proxy_auth tables.
+    /// Writes to cfg_proxy_profiles (with auth_kind) and cfg_proxy_auth tables.
     /// Note: auth_json column dropped in migration v10.
     pub fn insert(
         &self,
@@ -153,13 +153,13 @@ impl ProxyProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-            INSERT INTO proxy_profiles (
+            INSERT INTO cfg_proxy_profiles (
                 id, name, kind, host, port, auth_kind, no_proxy, enabled, save_secret, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now')
@@ -178,7 +178,7 @@ impl ProxyProfileRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -188,7 +188,7 @@ impl ProxyProfileRepository {
             auth_dto.proxy_profile_id = profile.id.clone();
             tx.execute(
                 r#"
-                INSERT INTO proxy_auth (
+                INSERT INTO cfg_proxy_auth (
                     proxy_profile_id, username, domain, password_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -202,13 +202,13 @@ impl ProxyProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -227,7 +227,7 @@ impl ProxyProfileRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE proxy_profiles SET
+                UPDATE cfg_proxy_profiles SET
                     name = ?2,
                     kind = ?3,
                     host = ?4,
@@ -252,7 +252,7 @@ impl ProxyProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -289,13 +289,13 @@ impl ProxyProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-            INSERT INTO proxy_profiles (
+            INSERT INTO cfg_proxy_profiles (
                 id, name, kind, host, port, auth_kind, no_proxy, enabled, save_secret, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now')
@@ -324,7 +324,7 @@ impl ProxyProfileRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -334,7 +334,7 @@ impl ProxyProfileRepository {
             auth_dto.proxy_profile_id = profile.id.clone();
             tx.execute(
                 r#"
-                INSERT INTO proxy_auth (
+                INSERT INTO cfg_proxy_auth (
                     proxy_profile_id, username, domain, password_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -352,13 +352,13 @@ impl ProxyProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -366,12 +366,12 @@ impl ProxyProfileRepository {
         Ok(())
     }
 
-    /// Deletes a proxy profile by ID (cascade deletes proxy_auth).
+    /// Deletes a proxy profile by ID (cascade deletes cfg_proxy_auth).
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM proxy_profiles WHERE id = ?1", [id])
+            .execute("DELETE FROM cfg_proxy_profiles WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -383,9 +383,11 @@ impl ProxyProfileRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM proxy_profiles", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM cfg_proxy_profiles", [], |row| {
+                row.get(0)
+            })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -467,7 +469,7 @@ impl ProxyProfileDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -481,7 +483,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = ProxyProfileDto::with_auth(
             Uuid::new_v4(),
@@ -511,7 +515,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = ProxyProfileDto::with_auth(
             Uuid::new_v4(),
@@ -554,7 +560,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = ProxyProfileDto::with_auth(
             Uuid::new_v4(),

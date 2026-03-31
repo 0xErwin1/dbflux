@@ -1,6 +1,6 @@
-//! Repository for tracking legacy import provenance in config.db.
+//! Repository for tracking legacy import provenance in dbflux.db.
 //!
-//! The `legacy_imports` table records each JSON source file that has been migrated
+//! The `sys_legacy_imports` table records each JSON source file that has been migrated
 //! to the native SQLite schema, enabling one-shot semantics (skip if already imported
 //! and hash matches) and restart-safe retry on failure.
 
@@ -27,7 +27,7 @@ impl LegacyImportsRepository {
         let result = self.conn.query_row(
             r#"
             SELECT id, source_path, source_hash, imported_at, record_count, domain, status, error_message
-            FROM legacy_imports
+            FROM sys_legacy_imports
             WHERE source_path = ?1
             "#,
             [path],
@@ -49,7 +49,7 @@ impl LegacyImportsRepository {
             Ok(import) => Ok(Some(import)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -60,7 +60,7 @@ impl LegacyImportsRepository {
         let result = self.conn.query_row(
             r#"
             SELECT id, source_path, source_hash, imported_at, record_count, domain, status, error_message
-            FROM legacy_imports
+            FROM sys_legacy_imports
             WHERE source_hash = ?1
             "#,
             [source_hash],
@@ -82,7 +82,7 @@ impl LegacyImportsRepository {
             Ok(import) => Ok(Some(import)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -95,13 +95,13 @@ impl LegacyImportsRepository {
             .prepare(
                 r#"
                 SELECT id, source_path, source_hash, imported_at, record_count, domain, status, error_message
-                FROM legacy_imports
+                FROM sys_legacy_imports
                 WHERE domain = ?1
                 ORDER BY imported_at DESC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -119,7 +119,7 @@ impl LegacyImportsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -134,7 +134,7 @@ impl LegacyImportsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -151,7 +151,7 @@ impl LegacyImportsRepository {
         let result = self.conn.query_row(
             r#"
             SELECT source_hash, status
-            FROM legacy_imports
+            FROM sys_legacy_imports
             WHERE source_path = ?1
             "#,
             [path],
@@ -179,7 +179,7 @@ impl LegacyImportsRepository {
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -190,7 +190,7 @@ impl LegacyImportsRepository {
         self.conn
             .execute(
                 r#"
-                INSERT OR REPLACE INTO legacy_imports (
+                INSERT OR REPLACE INTO sys_legacy_imports (
                     id, source_path, source_hash, imported_at, record_count, domain, status, error_message
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                 "#,
@@ -206,7 +206,7 @@ impl LegacyImportsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -249,11 +249,11 @@ impl LegacyImportsRepository {
         let rows_affected = self
             .conn
             .execute(
-                "UPDATE legacy_imports SET status = ?2 WHERE id = ?1",
+                "UPDATE sys_legacy_imports SET status = ?2 WHERE id = ?1",
                 params![id, status],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -315,13 +315,13 @@ pub enum ImportStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "dbflux_legacy_imports_{}_{}",
+            "dbflux_sys_legacy_imports_{}_{}",
             name,
             std::process::id()
         ));
@@ -335,7 +335,9 @@ mod tests {
     fn record_and_fetch_import() {
         let path = temp_db("record_fetch");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -365,7 +367,9 @@ mod tests {
     fn get_status_completed() {
         let path = temp_db("status_completed");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -390,7 +394,9 @@ mod tests {
     fn get_status_not_found() {
         let path = temp_db("status_not_found");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -408,7 +414,9 @@ mod tests {
     fn get_status_hash_mismatch() {
         let path = temp_db("status_mismatch");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -434,7 +442,9 @@ mod tests {
     fn update_status() {
         let path = temp_db("update_status");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -463,7 +473,9 @@ mod tests {
     fn find_by_hash() {
         let path = temp_db("find_by_hash");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -495,7 +507,9 @@ mod tests {
     fn all_for_domain() {
         let path = temp_db("all_for_domain");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 
@@ -535,7 +549,9 @@ mod tests {
     fn record_failure() {
         let path = temp_db("record_failure");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = LegacyImportsRepository::new(Arc::new(conn));
 

@@ -1,4 +1,4 @@
-//! Repository modules for runtime state domains in state.db.
+//! Repository modules for runtime state domains in dbflux.db.
 
 pub mod event_log;
 pub mod query_history;

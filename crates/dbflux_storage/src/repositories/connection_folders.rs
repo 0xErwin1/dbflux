@@ -1,4 +1,4 @@
-//! Repository for connection folders in config.db.
+//! Repository for connection folders in dbflux.db.
 //!
 //! Connection folders store the hierarchical folder structure for organizing
 //! connection profiles in the connection tree.
@@ -48,10 +48,10 @@ impl ConnectionFoldersRepository {
         &self.conn
     }
 
-    /// Checks if a profile exists in connection_profiles.
+    /// Checks if a profile exists in cfg_connection_profiles.
     fn profile_exists(&self, profile_id: &str) -> bool {
         let result = self.conn().query_row(
-            "SELECT 1 FROM connection_profiles WHERE id = ?1",
+            "SELECT 1 FROM cfg_connection_profiles WHERE id = ?1",
             [profile_id],
             |_row| Ok(()),
         );
@@ -65,12 +65,12 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, parent_id, name, position, collapsed, created_at, updated_at
-                FROM connection_folders
+                FROM cfg_connection_folders
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -87,7 +87,7 @@ impl ConnectionFoldersRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -102,7 +102,7 @@ impl ConnectionFoldersRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -117,12 +117,12 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, parent_id, name, position, collapsed, created_at, updated_at
-                FROM connection_folders
+                FROM cfg_connection_folders
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -150,13 +150,13 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, parent_id, name, position, collapsed, created_at, updated_at
-                FROM connection_folders
+                FROM cfg_connection_folders
                 WHERE parent_id IS NULL
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -173,7 +173,7 @@ impl ConnectionFoldersRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -188,7 +188,7 @@ impl ConnectionFoldersRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -203,13 +203,13 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, parent_id, name, position, collapsed, created_at, updated_at
-                FROM connection_folders
+                FROM cfg_connection_folders
                 WHERE parent_id = ?1
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -226,7 +226,7 @@ impl ConnectionFoldersRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -241,7 +241,7 @@ impl ConnectionFoldersRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -254,7 +254,7 @@ impl ConnectionFoldersRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_folders (id, parent_id, name, position, collapsed, created_at, updated_at)
+                INSERT INTO cfg_connection_folders (id, parent_id, name, position, collapsed, created_at, updated_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 "#,
                 params![
@@ -268,7 +268,7 @@ impl ConnectionFoldersRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -280,7 +280,7 @@ impl ConnectionFoldersRepository {
         self.conn()
             .execute(
                 r#"
-                UPDATE connection_folders
+                UPDATE cfg_connection_folders
                 SET parent_id = ?2, name = ?3, position = ?4, collapsed = ?5, updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -293,7 +293,7 @@ impl ConnectionFoldersRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -303,9 +303,12 @@ impl ConnectionFoldersRepository {
     /// Deletes a folder and all its items (cascade).
     pub fn delete_folder(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM connection_folders WHERE id = ?1", params![id])
+            .execute(
+                "DELETE FROM cfg_connection_folders WHERE id = ?1",
+                params![id],
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -322,13 +325,13 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, folder_id, profile_id, position
-                FROM connection_folder_items
+                FROM cfg_connection_folder_items
                 WHERE folder_id = ?1
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -342,7 +345,7 @@ impl ConnectionFoldersRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -357,7 +360,7 @@ impl ConnectionFoldersRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -372,12 +375,12 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, folder_id, profile_id, position
-                FROM connection_folder_items
+                FROM cfg_connection_folder_items
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -391,7 +394,7 @@ impl ConnectionFoldersRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -406,7 +409,7 @@ impl ConnectionFoldersRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -424,12 +427,12 @@ impl ConnectionFoldersRepository {
             .prepare(
                 r#"
                 SELECT id, folder_id, profile_id, position
-                FROM connection_folder_items
+                FROM cfg_connection_folder_items
                 WHERE profile_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -452,13 +455,13 @@ impl ConnectionFoldersRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT OR IGNORE INTO connection_folder_items (id, folder_id, profile_id, position)
+                INSERT OR IGNORE INTO cfg_connection_folder_items (id, folder_id, profile_id, position)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![dto.id, dto.folder_id, dto.profile_id, dto.position],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -470,14 +473,14 @@ impl ConnectionFoldersRepository {
         self.conn()
             .execute(
                 r#"
-                UPDATE connection_folder_items
+                UPDATE cfg_connection_folder_items
                 SET folder_id = ?2, profile_id = ?3, position = ?4
                 WHERE id = ?1
                 "#,
                 params![dto.id, dto.folder_id, dto.profile_id, dto.position],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -488,11 +491,11 @@ impl ConnectionFoldersRepository {
     pub fn delete_item(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_folder_items WHERE id = ?1",
+                "DELETE FROM cfg_connection_folder_items WHERE id = ?1",
                 params![id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -503,11 +506,11 @@ impl ConnectionFoldersRepository {
     pub fn delete_item_by_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_folder_items WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_folder_items WHERE profile_id = ?1",
                 params![profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -517,16 +520,16 @@ impl ConnectionFoldersRepository {
     /// Clears all folders and items.
     pub fn clear_all(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM connection_folder_items", [])
+            .execute("DELETE FROM cfg_connection_folder_items", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         self.conn()
-            .execute("DELETE FROM connection_folders", [])
+            .execute("DELETE FROM cfg_connection_folders", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -587,7 +590,7 @@ impl ConnectionFoldersRepository {
                     continue;
                 }
 
-                // Check if the profile exists in connection_profiles before inserting
+                // Check if the profile exists in cfg_connection_profiles before inserting
                 // (it might not exist if it was deleted or never imported)
                 if !self.profile_exists(&profile_id_str) {
                     info!(

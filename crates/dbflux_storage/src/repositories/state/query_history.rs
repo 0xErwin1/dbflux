@@ -1,4 +1,4 @@
-//! Repository for query history in state.db.
+//! Repository for query history in dbflux.db.
 //!
 //! Stores individual query executions with timing, results, and favorites.
 
@@ -37,7 +37,7 @@ impl QueryHistoryRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO query_history (
+                INSERT INTO st_query_history (
                     id, connection_profile_id, driver_id, database_name,
                     query_text, query_kind, executed_at, duration_ms,
                     succeeded, error_summary, row_count, is_favorite
@@ -59,13 +59,13 @@ impl QueryHistoryRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         // Trim to max entries, preserving favorites
         self.trim_to_max().map_err(|source| StorageError::Sqlite {
-            path: "state.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -81,10 +81,10 @@ impl QueryHistoryRepository {
                 "SELECT id, connection_profile_id, driver_id, database_name, query_text,
                         query_kind, executed_at, duration_ms, succeeded, error_summary,
                         row_count, is_favorite
-                 FROM query_history ORDER BY executed_at DESC LIMIT ?1",
+                 FROM st_query_history ORDER BY executed_at DESC LIMIT ?1",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -106,7 +106,7 @@ impl QueryHistoryRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -121,7 +121,7 @@ impl QueryHistoryRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -139,11 +139,11 @@ impl QueryHistoryRepository {
         let rows = self
             .conn()
             .execute(
-                "UPDATE query_history SET is_favorite = NOT is_favorite WHERE id = ?1",
+                "UPDATE st_query_history SET is_favorite = NOT is_favorite WHERE id = ?1",
                 [id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -151,16 +151,16 @@ impl QueryHistoryRepository {
         if rows > 0 {
             let mut stmt = self
                 .conn()
-                .prepare("SELECT is_favorite FROM query_history WHERE id = ?1")
+                .prepare("SELECT is_favorite FROM st_query_history WHERE id = ?1")
                 .map_err(|source| StorageError::Sqlite {
-                    path: "state.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
             let fav: i32 =
                 stmt.query_row([id], |row| row.get(0))
                     .map_err(|source| StorageError::Sqlite {
-                        path: "state.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
@@ -173,9 +173,9 @@ impl QueryHistoryRepository {
     /// Removes a history entry by ID.
     pub fn remove(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM query_history WHERE id = ?1", [id])
+            .execute("DELETE FROM st_query_history WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -184,9 +184,9 @@ impl QueryHistoryRepository {
     /// Clears all non-favorite entries.
     pub fn clear_non_favorites(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM query_history WHERE is_favorite = 0", [])
+            .execute("DELETE FROM st_query_history WHERE is_favorite = 0", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -195,9 +195,9 @@ impl QueryHistoryRepository {
     /// Clears all history entries.
     pub fn clear(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM query_history", [])
+            .execute("DELETE FROM st_query_history", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -212,12 +212,12 @@ impl QueryHistoryRepository {
                 "SELECT id, connection_profile_id, driver_id, database_name, query_text,
                         query_kind, executed_at, duration_ms, succeeded, error_summary,
                         row_count, is_favorite
-                 FROM query_history
+                 FROM st_query_history
                  WHERE LOWER(query_text) LIKE ?1
                  ORDER BY executed_at DESC LIMIT ?2",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -239,7 +239,7 @@ impl QueryHistoryRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -254,7 +254,7 @@ impl QueryHistoryRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -270,10 +270,10 @@ impl QueryHistoryRepository {
                 "SELECT id, connection_profile_id, driver_id, database_name, query_text,
                         query_kind, executed_at, duration_ms, succeeded, error_summary,
                         row_count, is_favorite
-                 FROM query_history WHERE is_favorite = 1 ORDER BY executed_at DESC",
+                 FROM st_query_history WHERE is_favorite = 1 ORDER BY executed_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -295,7 +295,7 @@ impl QueryHistoryRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -310,7 +310,7 @@ impl QueryHistoryRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -322,7 +322,9 @@ impl QueryHistoryRepository {
         // Count total entries
         let total: i64 =
             self.conn()
-                .query_row("SELECT COUNT(*) FROM query_history", [], |row| row.get(0))?;
+                .query_row("SELECT COUNT(*) FROM st_query_history", [], |row| {
+                    row.get(0)
+                })?;
 
         if total as usize <= self.max_entries {
             return Ok(());
@@ -332,7 +334,7 @@ impl QueryHistoryRepository {
         let non_fav_keep = self
             .max_entries
             .saturating_sub(self.conn().query_row::<i64, _, _>(
-                "SELECT COUNT(*) FROM query_history WHERE is_favorite = 1",
+                "SELECT COUNT(*) FROM st_query_history WHERE is_favorite = 1",
                 [],
                 |row| row.get(0),
             )? as usize);
@@ -340,10 +342,10 @@ impl QueryHistoryRepository {
         // Delete old non-favorites beyond the keep limit
         self.conn().execute(
             r#"
-            DELETE FROM query_history
+            DELETE FROM st_query_history
             WHERE is_favorite = 0
               AND id NOT IN (
-                  SELECT id FROM query_history
+                  SELECT id FROM st_query_history
                   WHERE is_favorite = 0
                   ORDER BY executed_at DESC
                   LIMIT ?1
@@ -405,7 +407,7 @@ impl QueryHistoryDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -425,7 +427,9 @@ mod tests {
     fn add_and_list() {
         let path = temp_db("add");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = QueryHistoryRepository::new(Arc::new(conn));
 
         let dto = QueryHistoryDto::new(
@@ -450,7 +454,9 @@ mod tests {
     fn toggle_favorite_and_remove() {
         let path = temp_db("fav");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = QueryHistoryRepository::new(Arc::new(conn));
 
         let dto = QueryHistoryDto::new(
@@ -478,7 +484,9 @@ mod tests {
     fn search_finds_entries() {
         let path = temp_db("search");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = QueryHistoryRepository::new(Arc::new(conn));
 
         repo.add(&QueryHistoryDto::new(
@@ -515,7 +523,9 @@ mod tests {
     fn clear_preserves_favorites() {
         let path = temp_db("clear");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = QueryHistoryRepository::new(Arc::new(conn));
 
         let dto = QueryHistoryDto::new(

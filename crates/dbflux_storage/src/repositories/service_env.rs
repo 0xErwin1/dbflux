@@ -1,6 +1,6 @@
-//! Repository for service environment variables in config.db.
+//! Repository for service environment variables in dbflux.db.
 //!
-//! This module provides CRUD operations for the service_env child table,
+//! This module provides CRUD operations for the cfg_service_env child table,
 //! which stores environment variables for service/RPC definitions.
 
 use log::info;
@@ -34,13 +34,13 @@ impl ServiceEnvRepository {
             .prepare(
                 r#"
                 SELECT id, service_id, key, value
-                FROM service_env
+                FROM cfg_service_env
                 WHERE service_id = ?1
                 ORDER BY key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -54,7 +54,7 @@ impl ServiceEnvRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -69,7 +69,7 @@ impl ServiceEnvRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -91,13 +91,13 @@ impl ServiceEnvRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO service_env (id, service_id, key, value)
+                INSERT INTO cfg_service_env (id, service_id, key, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![env.id, env.service_id, env.key, env.value,],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -114,17 +114,17 @@ impl ServiceEnvRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         // Delete existing env vars first
         tx.execute(
-            "DELETE FROM service_env WHERE service_id = ?1",
+            "DELETE FROM cfg_service_env WHERE service_id = ?1",
             [service_id],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -133,19 +133,19 @@ impl ServiceEnvRepository {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 r#"
-                INSERT INTO service_env (id, service_id, key, value)
+                INSERT INTO cfg_service_env (id, service_id, key, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![id, service_id, key, value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -161,11 +161,11 @@ impl ServiceEnvRepository {
     pub fn delete_for_service(&self, service_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM service_env WHERE service_id = ?1",
+                "DELETE FROM cfg_service_env WHERE service_id = ?1",
                 [service_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -185,7 +185,7 @@ pub struct ServiceEnvDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::services::{ServiceDto, ServiceRepository};
     use crate::sqlite::open_database;
     use std::collections::HashMap;
@@ -193,19 +193,21 @@ mod tests {
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "dbflux_repo_service_env_{}_{}",
+            "dbflux_repo_cfg_service_env_{}_{}",
             name,
             std::process::id()
         ))
     }
 
     #[test]
-    fn service_env_insert_and_fetch() {
-        let path = temp_db("service_env_insert");
+    fn cfg_service_env_insert_and_fetch() {
+        let path = temp_db("cfg_service_env_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let service = ServiceDto::new("test-socket".to_string());
         let conn_arc = Arc::new(conn);
@@ -239,12 +241,14 @@ mod tests {
     }
 
     #[test]
-    fn service_env_replace_existing() {
-        let path = temp_db("service_env_replace");
+    fn cfg_service_env_replace_existing() {
+        let path = temp_db("cfg_service_env_replace");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let service = ServiceDto::new("test-socket".to_string());
         let conn_arc = Arc::new(conn);

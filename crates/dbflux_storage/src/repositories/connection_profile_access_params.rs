@@ -1,4 +1,4 @@
-//! Repository for connection profile access params in config.db.
+//! Repository for connection profile access params in dbflux.db.
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -29,13 +29,13 @@ impl ConnectionProfileAccessParamsRepository {
             .prepare(
                 r#"
                 SELECT id, profile_id, param_key, param_value
-                FROM connection_profile_access_params
+                FROM cfg_connection_profile_access_params
                 WHERE profile_id = ?1
                 ORDER BY param_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -49,7 +49,7 @@ impl ConnectionProfileAccessParamsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -64,7 +64,7 @@ impl ConnectionProfileAccessParamsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -76,14 +76,14 @@ impl ConnectionProfileAccessParamsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_access_params (id, profile_id, param_key, param_value)
+                INSERT INTO cfg_connection_profile_access_params (id, profile_id, param_key, param_value)
                 VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(profile_id, param_key) DO UPDATE SET param_value = excluded.param_value
                 "#,
                 params![param.id, param.profile_id, param.param_key, param.param_value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -93,11 +93,11 @@ impl ConnectionProfileAccessParamsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_access_params WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_access_params WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

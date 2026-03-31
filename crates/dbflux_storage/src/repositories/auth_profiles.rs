@@ -1,4 +1,4 @@
-//! Repository for auth profiles in config.db.
+//! Repository for auth profiles in dbflux.db.
 //!
 //! Auth profiles store authentication configurations for connecting to
 //! cloud-hosted databases (e.g., AWS SSO, Azure AD).
@@ -82,12 +82,12 @@ impl AuthProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, provider_id, enabled, created_at, updated_at
-                FROM auth_profiles
+                FROM cfg_auth_profiles
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -103,7 +103,7 @@ impl AuthProfileRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -118,7 +118,7 @@ impl AuthProfileRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -133,12 +133,12 @@ impl AuthProfileRepository {
             .prepare(
                 r#"
                 SELECT id, name, provider_id, enabled, created_at, updated_at
-                FROM auth_profiles
+                FROM cfg_auth_profiles
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -157,7 +157,7 @@ impl AuthProfileRepository {
             Ok(profile) => Ok(Some(profile)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -170,13 +170,13 @@ impl AuthProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-                INSERT INTO auth_profiles (
+                INSERT INTO cfg_auth_profiles (
                     id, name, provider_id, enabled, created_at, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
@@ -190,12 +190,12 @@ impl AuthProfileRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -210,14 +210,14 @@ impl AuthProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         let rows_affected = tx
             .execute(
                 r#"
-                UPDATE auth_profiles SET
+                UPDATE cfg_auth_profiles SET
                     name = ?2,
                     provider_id = ?3,
                     enabled = ?4,
@@ -232,7 +232,7 @@ impl AuthProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -243,7 +243,7 @@ impl AuthProfileRepository {
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -284,9 +284,9 @@ impl AuthProfileRepository {
     /// Deletes an auth profile by ID.
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM auth_profiles WHERE id = ?1", [id])
+            .execute("DELETE FROM cfg_auth_profiles WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -298,9 +298,11 @@ impl AuthProfileRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM auth_profiles", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM cfg_auth_profiles", [], |row| {
+                row.get(0)
+            })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -338,7 +340,7 @@ impl AuthProfileDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -352,7 +354,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = AuthProfileDto::new(Uuid::new_v4(), "AWS SSO".to_string(), "aws-sso".to_string());
 

@@ -1,4 +1,4 @@
-//! Repository for general app settings in config.db.
+//! Repository for general app settings in dbflux.db.
 //!
 //! # Deprecation Notice
 //!
@@ -40,7 +40,7 @@ impl SettingsRepository {
             .conn()
             .prepare("SELECT value_json FROM app_settings WHERE key = ?1")
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -50,7 +50,7 @@ impl SettingsRepository {
             Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -70,7 +70,7 @@ impl SettingsRepository {
                 params![key, value_json],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -83,7 +83,7 @@ impl SettingsRepository {
         self.conn()
             .execute("DELETE FROM app_settings WHERE key = ?1", [key])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -97,7 +97,7 @@ impl SettingsRepository {
             .conn()
             .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -110,7 +110,7 @@ impl SettingsRepository {
             .conn()
             .prepare("SELECT key, value_json, updated_at FROM app_settings ORDER BY key")
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -123,7 +123,7 @@ impl SettingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -138,7 +138,7 @@ impl SettingsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }

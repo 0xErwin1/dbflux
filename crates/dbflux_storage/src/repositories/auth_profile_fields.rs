@@ -1,6 +1,6 @@
-//! Repository for auth profile field values in config.db.
+//! Repository for auth profile field values in dbflux.db.
 //!
-//! This module provides CRUD operations for the auth_profile_fields child table,
+//! This module provides CRUD operations for the cfg_auth_profile_fields child table,
 //! which stores typed EAV (Entity-Attribute-Value) field values for auth profiles.
 
 use log::info;
@@ -68,13 +68,13 @@ impl AuthProfileFieldsRepository {
                 r#"
                 SELECT id, auth_profile_id, field_key, value_text, value_bool,
                        value_number, value_secret_ref, value_kind
-                FROM auth_profile_fields
+                FROM cfg_auth_profile_fields
                 WHERE auth_profile_id = ?1
                 ORDER BY field_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -92,7 +92,7 @@ impl AuthProfileFieldsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -107,7 +107,7 @@ impl AuthProfileFieldsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -120,7 +120,7 @@ impl AuthProfileFieldsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO auth_profile_fields (
+                INSERT INTO cfg_auth_profile_fields (
                     id, auth_profile_id, field_key, value_text,
                     value_bool, value_number, value_secret_ref, value_kind
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -137,7 +137,7 @@ impl AuthProfileFieldsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -149,7 +149,7 @@ impl AuthProfileFieldsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO auth_profile_fields (
+                INSERT INTO cfg_auth_profile_fields (
                     id, auth_profile_id, field_key, value_text,
                     value_bool, value_number, value_secret_ref, value_kind
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -172,7 +172,7 @@ impl AuthProfileFieldsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -187,11 +187,11 @@ impl AuthProfileFieldsRepository {
     pub fn delete_for_profile(&self, auth_profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM auth_profile_fields WHERE auth_profile_id = ?1",
+                "DELETE FROM cfg_auth_profile_fields WHERE auth_profile_id = ?1",
                 [auth_profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -273,7 +273,7 @@ impl AuthProfileFieldDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::auth_profiles::{AuthProfileDto, AuthProfileRepository};
     use crate::sqlite::open_database;
     use std::sync::Arc;
@@ -288,12 +288,14 @@ mod tests {
     }
 
     #[test]
-    fn auth_profile_fields_insert_and_fetch() {
+    fn cfg_auth_profile_fields_insert_and_fetch() {
         let path = temp_db("auth_fields_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent profile
         let _profile_id = Uuid::new_v4().to_string();
@@ -334,12 +336,14 @@ mod tests {
     }
 
     #[test]
-    fn auth_profile_fields_upsert() {
+    fn cfg_auth_profile_fields_upsert() {
         let path = temp_db("auth_fields_upsert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let profile = AuthProfileDto::new(
             Uuid::new_v4(),

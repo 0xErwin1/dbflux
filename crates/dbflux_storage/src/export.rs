@@ -445,8 +445,8 @@ pub fn export_to_file(
 fn collect_all_domains(
     runtime: &crate::bootstrap::StorageRuntime,
 ) -> Result<ExportDomains, StorageError> {
-    let config_conn = runtime.config_db();
-    let state_conn = runtime.state_db();
+    let config_conn = runtime.dbflux_db();
+    let state_conn = runtime.dbflux_db();
 
     // Config domains
     let general_settings_repo = GeneralSettingsRepository::new(config_conn.clone());
@@ -810,8 +810,8 @@ pub fn import_from_file(
 
     let mut result = ImportResult::default();
 
-    let config_conn = runtime.config_db();
-    let state_conn = runtime.state_db();
+    let config_conn = runtime.dbflux_db();
+    let state_conn = runtime.dbflux_db();
 
     // Import general settings
     if let Some(settings) = &export.domains.general_settings {
@@ -1323,10 +1323,9 @@ mod tests {
         let temp_label = format!("dbflux_export_test_{}_{}", name, std::process::id());
         let temp_dir = std::env::temp_dir().join(&temp_label);
         std::fs::create_dir_all(&temp_dir).unwrap();
-        let config_db_path = temp_dir.join("config.db");
-        let state_db_path = temp_dir.join("state.db");
-        let runtime = crate::bootstrap::StorageRuntime::for_path(config_db_path, state_db_path)
-            .expect("temp runtime");
+        let dbflux_db_path = temp_dir.join("dbflux.db");
+        let runtime =
+            crate::bootstrap::StorageRuntime::for_path(dbflux_db_path).expect("temp runtime");
         (runtime, temp_dir)
     }
 

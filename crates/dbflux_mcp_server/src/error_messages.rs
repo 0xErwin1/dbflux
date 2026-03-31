@@ -286,13 +286,13 @@ pub fn audit_error(operation: &str, error: impl std::fmt::Display) -> String {
          • Disk full\n\
          \n\
          Resolution:\n\
-         • Check audit database: ~/.config/dbflux/mcp_audit.sqlite\n\
-         • Verify permissions: chmod 644 ~/.config/dbflux/mcp_audit.sqlite\n\
-         • Check disk space: df -h ~/.config\n\
-         • Test integrity: sqlite3 mcp_audit.sqlite 'PRAGMA integrity_check;'\n\
+         • Check audit database: ~/.local/share/dbflux/dbflux.db (aud_audit_events table)\n\
+         • Verify permissions: chmod 644 ~/.local/share/dbflux/dbflux.db\n\
+         • Check disk space: df -h ~/.local\n\
+         • Test integrity: sqlite3 ~/.local/share/dbflux/dbflux.db 'PRAGMA integrity_check;'\n\
          \n\
          If database is corrupted (WARNING: loses audit history):\n\
-         • rm ~/.config/dbflux/mcp_audit.sqlite\n\
+         • rm ~/.local/share/dbflux/dbflux.db\n\
          • Server will recreate on next start",
         error, operation
     )

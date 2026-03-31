@@ -1,6 +1,6 @@
-//! Repository for service command arguments in config.db.
+//! Repository for service command arguments in dbflux.db.
 //!
-//! This module provides CRUD operations for the service_args child table,
+//! This module provides CRUD operations for the cfg_service_args child table,
 //! which stores ordered command arguments for service/RPC definitions.
 
 use log::info;
@@ -34,13 +34,13 @@ impl ServiceArgsRepository {
             .prepare(
                 r#"
                 SELECT id, service_id, position, value
-                FROM service_args
+                FROM cfg_service_args
                 WHERE service_id = ?1
                 ORDER BY position ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -54,7 +54,7 @@ impl ServiceArgsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -69,7 +69,7 @@ impl ServiceArgsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -82,13 +82,13 @@ impl ServiceArgsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO service_args (id, service_id, position, value)
+                INSERT INTO cfg_service_args (id, service_id, position, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![arg.id, arg.service_id, arg.position, arg.value,],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -101,17 +101,17 @@ impl ServiceArgsRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         // Delete existing args first
         tx.execute(
-            "DELETE FROM service_args WHERE service_id = ?1",
+            "DELETE FROM cfg_service_args WHERE service_id = ?1",
             [service_id],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -120,19 +120,19 @@ impl ServiceArgsRepository {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 r#"
-                INSERT INTO service_args (id, service_id, position, value)
+                INSERT INTO cfg_service_args (id, service_id, position, value)
                 VALUES (?1, ?2, ?3, ?4)
                 "#,
                 params![id, service_id, position as i64, value],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -144,11 +144,11 @@ impl ServiceArgsRepository {
     pub fn delete_for_service(&self, service_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM service_args WHERE service_id = ?1",
+                "DELETE FROM cfg_service_args WHERE service_id = ?1",
                 [service_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -168,26 +168,28 @@ pub struct ServiceArgDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::services::{ServiceDto, ServiceRepository};
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "dbflux_repo_service_args_{}_{}",
+            "dbflux_repo_cfg_service_args_{}_{}",
             name,
             std::process::id()
         ))
     }
 
     #[test]
-    fn service_args_insert_and_fetch() {
-        let path = temp_db("service_args_insert");
+    fn cfg_service_args_insert_and_fetch() {
+        let path = temp_db("cfg_service_args_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         // First create the parent service so FK constraint passes
         let service = ServiceDto::new("test-socket".to_string());
@@ -217,12 +219,14 @@ mod tests {
     }
 
     #[test]
-    fn service_args_replace_existing() {
-        let path = temp_db("service_args_replace");
+    fn cfg_service_args_replace_existing() {
+        let path = temp_db("cfg_service_args_replace");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let service = ServiceDto::new("test-socket".to_string());
         let conn_arc = Arc::new(conn);

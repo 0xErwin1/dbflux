@@ -1,6 +1,6 @@
-//! Repository for event_log table in state.db.
+//! Repository for st_event_log table in dbflux.db.
 //!
-//! Provides typed access to event_log entries, with native columns for
+//! Provides typed access to st_event_log entries, with native columns for
 //! common query fields (actor_id, tool_id, decision, duration_ms)
 //! extracted from the details_json blob.
 
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
 
-/// Event log entry DTO — reflects the native columns in the event_log table.
+/// Event log entry DTO — reflects the native columns in the st_event_log table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventLogDto {
     pub id: String,
@@ -27,7 +27,7 @@ pub struct EventLogDto {
     pub created_at: String,
 }
 
-/// Repository for event_log entries.
+/// Repository for st_event_log entries.
 pub struct EventLogRepository {
     conn: OwnedConnection,
 }
@@ -48,10 +48,10 @@ impl EventLogRepository {
             .prepare(
                 "SELECT id, event_kind, description, target_kind, target_id,
                         actor_id, tool_id, decision, duration_ms, details_json, created_at
-                 FROM event_log ORDER BY created_at DESC",
+                 FROM st_event_log ORDER BY created_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -72,7 +72,7 @@ impl EventLogRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -82,7 +82,7 @@ impl EventLogRepository {
                 Ok(r) => result.push(r),
                 Err(e) => {
                     return Err(StorageError::Sqlite {
-                        path: "state.db".into(),
+                        path: "dbflux.db".into(),
                         source: e,
                     });
                 }
@@ -98,10 +98,10 @@ impl EventLogRepository {
             .prepare(
                 "SELECT id, event_kind, description, target_kind, target_id,
                         actor_id, tool_id, decision, duration_ms, details_json, created_at
-                 FROM event_log WHERE actor_id = ?1 ORDER BY created_at DESC",
+                 FROM st_event_log WHERE actor_id = ?1 ORDER BY created_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -122,7 +122,7 @@ impl EventLogRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -132,7 +132,7 @@ impl EventLogRepository {
                 Ok(r) => result.push(r),
                 Err(e) => {
                     return Err(StorageError::Sqlite {
-                        path: "state.db".into(),
+                        path: "dbflux.db".into(),
                         source: e,
                     });
                 }
@@ -148,10 +148,10 @@ impl EventLogRepository {
             .prepare(
                 "SELECT id, event_kind, description, target_kind, target_id,
                         actor_id, tool_id, decision, duration_ms, details_json, created_at
-                 FROM event_log WHERE tool_id = ?1 ORDER BY created_at DESC",
+                 FROM st_event_log WHERE tool_id = ?1 ORDER BY created_at DESC",
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -172,7 +172,7 @@ impl EventLogRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -182,7 +182,7 @@ impl EventLogRepository {
                 Ok(r) => result.push(r),
                 Err(e) => {
                     return Err(StorageError::Sqlite {
-                        path: "state.db".into(),
+                        path: "dbflux.db".into(),
                         source: e,
                     });
                 }
@@ -196,7 +196,7 @@ impl EventLogRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO event_log (id, event_kind, description, target_kind, target_id,
+                INSERT INTO st_event_log (id, event_kind, description, target_kind, target_id,
                                        actor_id, tool_id, decision, duration_ms, details_json,
                                        created_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
@@ -215,7 +215,7 @@ impl EventLogRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -227,9 +227,9 @@ impl EventLogRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM event_log", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM st_event_log", [], |row| row.get(0))
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(count)
@@ -238,9 +238,9 @@ impl EventLogRepository {
     /// Clears all event log entries.
     pub fn clear(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM event_log", [])
+            .execute("DELETE FROM st_event_log", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -250,14 +250,14 @@ impl EventLogRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "dbflux_repo_event_log_{}_{}",
+            "dbflux_repo_st_event_log_{}_{}",
             name,
             std::process::id()
         ));
@@ -271,7 +271,9 @@ mod tests {
     fn insert_and_list_events() {
         let path = temp_db("insert");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = EventLogRepository::new(Arc::new(conn));
 
         let dto = EventLogDto {
@@ -300,7 +302,9 @@ mod tests {
     fn by_actor_filters_correctly() {
         let path = temp_db("by_actor");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = EventLogRepository::new(Arc::new(conn));
 
         let dto1 = EventLogDto {
@@ -342,7 +346,9 @@ mod tests {
     fn count_and_clear() {
         let path = temp_db("count");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = EventLogRepository::new(Arc::new(conn));
 
         assert_eq!(repo.count().expect("count"), 0);

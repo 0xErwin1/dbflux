@@ -7,8 +7,9 @@ use log::info;
 use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
 use crate::legacy::LegacyImportResult;
-use crate::migrations;
+use crate::migrations::MigrationRegistry;
 use crate::paths;
+use crate::repositories::audit::AuditRepository;
 use crate::repositories::auth_profiles::AuthProfileRepository;
 use crate::repositories::connection_profiles::ConnectionProfileRepository;
 use crate::repositories::driver_overrides::DriverOverridesRepository;
@@ -31,41 +32,38 @@ use crate::sqlite;
 /// An owned database connection wrapped in Arc for shared access.
 pub type OwnedConnection = Arc<rusqlite::Connection>;
 
-/// Holds the open connections for every internal DBFlux database.
+/// Holds the open connection for the unified DBFlux database.
+///
+/// The single `dbflux.db` database contains all domains (config, state, audit) using
+/// domain-prefixed table names (`cfg_*`, `st_*`, `aud_*`, `sys_*`).
 ///
 /// Obtained exclusively via [`initialize`] — callers never construct this
 /// directly.
 pub struct StorageRuntime {
-    config_db_path: PathBuf,
-    state_db_path: PathBuf,
-    config_db: OwnedConnection,
-    state_db: OwnedConnection,
+    dbflux_db_path: PathBuf,
+    dbflux_db: OwnedConnection,
     /// Manages filesystem artifact paths (scratch/shadow files).
-    /// Content stays on disk; metadata about paths lives in state.db.
+    /// Content stays on disk; metadata about paths lives in dbflux.db.
     artifacts: ArtifactStore,
 }
 
 impl StorageRuntime {
-    /// Creates a runtime pointing at the given config and state database paths.
+    /// Creates a runtime pointing at the given unified database path.
     ///
     /// The caller is responsible for ensuring the parent directories exist.
-    /// Migrations are applied on first open.
+    /// Migrations are applied on first open using the unified schema.
     #[allow(clippy::result_large_err)]
-    pub fn for_path(config_db_path: PathBuf, state_db_path: PathBuf) -> Result<Self, StorageError> {
-        // Open and validate config.db - apply migrations if needed
-        let config_conn = crate::sqlite::open_database(&config_db_path)?;
-        migrations::run_config_migrations(&config_conn)?;
-        info!("Config database ready at {}", config_db_path.display());
+    pub fn for_path(dbflux_db_path: PathBuf) -> Result<Self, StorageError> {
+        // Open and validate dbflux.db - apply migrations if needed
+        let dbflux_conn = crate::sqlite::open_database(&dbflux_db_path)?;
+        let registry = MigrationRegistry::new();
+        registry.run_all(&dbflux_conn)?;
+        info!("Unified database ready at {}", dbflux_db_path.display());
 
-        // Open and validate state.db - apply migrations if needed
-        let state_conn = crate::sqlite::open_database(&state_db_path)?;
-        migrations::run_state_migrations(&state_conn)?;
-        info!("State database ready at {}", state_db_path.display());
-
-        // Initialize the artifact store using the parent directory of state.db as data root.
+        // Initialize the artifact store using the parent directory of dbflux.db as data root.
         // This ensures test/temp runtimes use isolated directories instead of resolving
         // the real artifact root from the user home directory.
-        let sessions_root = state_db_path
+        let sessions_root = dbflux_db_path
             .parent()
             .map(|p| p.join("sessions"))
             .unwrap_or_else(|| PathBuf::from("sessions"));
@@ -75,25 +73,21 @@ impl StorageRuntime {
             artifacts.root_path().display()
         );
 
-        // Wrap connections in Arc for shared access
+        // Wrap connection in Arc for shared access
         #[allow(clippy::arc_with_non_send_sync)]
-        let config_db = Arc::new(config_conn);
-        #[allow(clippy::arc_with_non_send_sync)]
-        let state_db = Arc::new(state_conn);
+        let dbflux_db = Arc::new(dbflux_conn);
 
         Ok(StorageRuntime {
-            config_db_path,
-            state_db_path,
-            config_db,
-            state_db,
+            dbflux_db_path,
+            dbflux_db,
             artifacts,
         })
     }
 
-    /// Creates a runtime with both databases in temporary directories.
+    /// Creates a runtime with the database in a temporary directory.
     ///
-    /// Useful for tests. The directories are created under `std::env::temp_dir()`
-    /// with unique names to avoid collisions between parallel test runs.
+    /// Useful for tests. The directory is created under `std::env::temp_dir()`
+    /// with a unique name to avoid collisions between parallel test runs.
     #[allow(clippy::result_large_err)]
     pub fn in_memory() -> Result<Self, StorageError> {
         let temp_label = format!(
@@ -111,139 +105,131 @@ impl StorageRuntime {
             source,
         })?;
 
-        let config_db_path = temp_dir.join("config.db");
-        let state_db_path = temp_dir.join("state.db");
+        let dbflux_db_path = temp_dir.join("dbflux.db");
 
-        Self::for_path(config_db_path, state_db_path)
+        Self::for_path(dbflux_db_path)
     }
 
-    /// Returns the path to the config database.
-    pub fn config_db_path(&self) -> &Path {
-        &self.config_db_path
+    /// Returns the path to the unified database.
+    pub fn dbflux_db_path(&self) -> &Path {
+        &self.dbflux_db_path
     }
 
-    /// Returns the path to the state database (runtime state).
-    pub fn state_db_path(&self) -> &Path {
-        &self.state_db_path
-    }
-
-    /// Opens a **new** connection to the config database.
+    /// Opens a **new** connection to the unified database.
     ///
     /// Each call creates a fresh `rusqlite::Connection`; the PRAGMA set is
     /// re-applied. This keeps `StorageRuntime` cheaply-cloneable (it only
     /// stores a path) and avoids sharing a single connection across threads.
-    pub fn open_config_db(&self) -> Result<rusqlite::Connection, StorageError> {
-        sqlite::open_database(&self.config_db_path)
+    pub fn open_dbflux_db(&self) -> Result<rusqlite::Connection, StorageError> {
+        sqlite::open_database(&self.dbflux_db_path)
     }
 
-    /// Opens a **new** connection to the state database.
-    ///
-    /// Each call creates a fresh `rusqlite::Connection`; the PRAGMA set is
-    /// re-applied. This keeps `StorageRuntime` cheaply-cloneable (it only
-    /// stores a path) and avoids sharing a single connection across threads.
-    pub fn open_state_db(&self) -> Result<rusqlite::Connection, StorageError> {
-        sqlite::open_database(&self.state_db_path)
-    }
-
-    /// Returns an owned reference to the config database connection.
+    /// Returns an owned reference to the unified database connection.
     ///
     /// This is a cloneable reference stored in the Runtime.
-    pub fn config_db(&self) -> OwnedConnection {
-        self.config_db.clone()
-    }
-
-    /// Returns an owned reference to the state database connection.
-    pub fn state_db(&self) -> OwnedConnection {
-        self.state_db.clone()
+    pub fn dbflux_db(&self) -> OwnedConnection {
+        self.dbflux_db.clone()
     }
 
     // --- Repository convenience constructors ---
+    //
+    // All repositories now use the single unified database connection.
+    // Config-domain and state-domain tables coexist in the same database
+    // with domain-prefixed names (cfg_*, st_*).
 
     /// Creates a connection profile repository.
     pub fn connection_profiles(&self) -> ConnectionProfileRepository {
-        ConnectionProfileRepository::new(self.config_db())
+        ConnectionProfileRepository::new(self.dbflux_db())
     }
 
     /// Creates an auth profile repository.
     pub fn auth_profiles(&self) -> AuthProfileRepository {
-        AuthProfileRepository::new(self.config_db())
+        AuthProfileRepository::new(self.dbflux_db())
     }
 
     /// Creates a proxy profile repository.
     pub fn proxy_profiles(&self) -> ProxyProfileRepository {
-        ProxyProfileRepository::new(self.config_db())
+        ProxyProfileRepository::new(self.dbflux_db())
     }
 
     /// Creates an SSH tunnel profile repository.
     pub fn ssh_tunnels(&self) -> SshTunnelProfileRepository {
-        SshTunnelProfileRepository::new(self.config_db())
+        SshTunnelProfileRepository::new(self.dbflux_db())
     }
 
     /// Creates a hook definition repository.
     pub fn hook_definitions(&self) -> HookDefinitionRepository {
-        HookDefinitionRepository::new(self.config_db())
+        HookDefinitionRepository::new(self.dbflux_db())
     }
 
     /// Creates a service repository.
     pub fn services(&self) -> ServiceRepository {
-        ServiceRepository::new(self.config_db())
+        ServiceRepository::new(self.dbflux_db())
     }
 
     /// Creates a driver settings repository.
     pub fn driver_settings(&self) -> DriverSettingsRepository {
-        DriverSettingsRepository::new(self.config_db())
+        DriverSettingsRepository::new(self.dbflux_db())
     }
 
     /// Creates a settings repository.
     pub fn settings(&self) -> SettingsRepository {
-        SettingsRepository::new(self.config_db())
+        SettingsRepository::new(self.dbflux_db())
     }
 
     /// Creates a general settings repository.
     pub fn general_settings(&self) -> GeneralSettingsRepository {
-        GeneralSettingsRepository::new(self.config_db())
+        GeneralSettingsRepository::new(self.dbflux_db())
     }
 
     /// Creates a governance settings repository.
     pub fn governance_settings(&self) -> GovernanceSettingsRepository {
-        GovernanceSettingsRepository::new(self.config_db())
+        GovernanceSettingsRepository::new(self.dbflux_db())
     }
 
     /// Creates a driver overrides repository.
     pub fn driver_overrides(&self) -> DriverOverridesRepository {
-        DriverOverridesRepository::new(self.config_db())
+        DriverOverridesRepository::new(self.dbflux_db())
     }
 
     /// Creates a driver setting values repository.
     pub fn driver_setting_values(&self) -> DriverSettingValuesRepository {
-        DriverSettingValuesRepository::new(self.config_db())
+        DriverSettingValuesRepository::new(self.dbflux_db())
     }
 
     // --- State repositories ---
 
     /// Creates a UI state repository.
     pub fn ui_state(&self) -> UiStateRepository {
-        UiStateRepository::new(self.state_db())
+        UiStateRepository::new(self.dbflux_db())
     }
 
     /// Creates a recent items repository.
     pub fn recent_items(&self) -> RecentItemsRepository {
-        RecentItemsRepository::new(self.state_db())
+        RecentItemsRepository::new(self.dbflux_db())
     }
 
     /// Creates a query history repository.
     pub fn query_history(&self) -> QueryHistoryRepository {
-        QueryHistoryRepository::new(self.state_db())
+        QueryHistoryRepository::new(self.dbflux_db())
     }
 
     /// Creates a saved queries repository.
     pub fn saved_queries(&self) -> SavedQueriesRepository {
-        SavedQueriesRepository::new(self.state_db())
+        SavedQueriesRepository::new(self.dbflux_db())
     }
 
     /// Creates a session repository.
     pub fn sessions(&self) -> SessionRepository {
-        SessionRepository::new(self.state_db())
+        SessionRepository::new(self.dbflux_db())
+    }
+
+    /// Creates an audit repository.
+    pub fn audit(&self) -> AuditRepository {
+        use std::sync::Mutex;
+        // Wrap the connection in a Mutex for thread-safe access
+        let conn = self.open_dbflux_db().expect("should open dbflux db");
+        AuditRepository::new(Arc::new(Mutex::new(conn)))
     }
 
     /// Returns the artifact store for scratch/shadow path management.
@@ -266,10 +252,13 @@ impl StorageRuntime {
     /// The directories are used only to locate legacy JSON source files.
     /// This method is exposed on `StorageRuntime` so tests and bootstrap code
     /// can call it with arbitrary roots (avoiding global `dirs::*` lookups).
+    ///
+    /// Note: Legacy import now uses a single connection since config and state
+    /// domains have been unified into dbflux.db.
     pub fn run_legacy_import(&self, config_dir: &Path, data_dir: &Path) -> LegacyImportResult {
         crate::legacy::run_legacy_import(
-            self.config_db.clone(),
-            self.state_db.clone(),
+            self.dbflux_db.clone(),
+            self.dbflux_db.clone(),
             config_dir,
             data_dir,
         )
@@ -282,25 +271,22 @@ impl StorageRuntime {
 /// the application should abort — internal storage is mandatory.
 ///
 /// What it does:
-/// 1. Resolves `~/.config/dbflux/` (creating if needed) and `~/.local/share/dbflux/` (creating if needed).
-/// 2. Opens (or creates) `config.db` in the config directory with migrations applied.
-/// 3. Opens (or creates) `state.db` in the data directory with migrations applied.
-/// 4. Runs legacy JSON import for any existing data (idempotent, restart-safe).
+/// 1. Resolves `~/.local/share/dbflux/` (creating if needed).
+/// 2. Opens (or creates) `dbflux.db` in the data directory with unified migrations applied.
+/// 3. Runs legacy JSON import for any existing data (idempotent, restart-safe).
 ///    If import fails, the error is surfaced and the runtime is NOT returned.
-/// 5. Returns a [`StorageRuntime`] that can hand out connections on demand.
+/// 4. Returns a [`StorageRuntime`] that can hand out connections on demand.
 #[allow(clippy::result_large_err)]
 pub fn initialize() -> Result<StorageRuntime, StorageError> {
-    let config_db_path = paths::config_db_path()?;
-    let state_db_path = paths::state_db_path()?;
+    let dbflux_db_path = paths::dbflux_db_path()?;
     let config_dir = paths::config_data_dir()?;
     let data_dir = paths::data_dir()?;
 
-    info!("Config database path: {}", config_db_path.display());
-    info!("State database path: {}", state_db_path.display());
+    info!("Unified database path: {}", dbflux_db_path.display());
 
-    let runtime = StorageRuntime::for_path(config_db_path.clone(), state_db_path.clone())?;
+    let runtime = StorageRuntime::for_path(dbflux_db_path)?;
 
-    // Run legacy import if needed (idempotent via system_metadata markers)
+    // Run legacy import if needed (idempotent via legacy_imports markers)
     let import_result = runtime.run_legacy_import(&config_dir, &data_dir);
     if import_result.any_imported() {
         info!(
@@ -340,22 +326,26 @@ mod tests {
 
     #[test]
     fn initialize_succeeds_with_default_paths() {
-        // Use in-memory storage for tests to avoid polluting ~/.config/dbflux
+        // Use in-memory storage for tests to avoid polluting ~/.local/share/dbflux
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
-        assert!(runtime.state_db_path().exists());
+        assert!(runtime.dbflux_db_path().exists());
     }
 
     #[test]
-    fn storage_runtime_opens_state_db() {
-        // Use in-memory storage for tests to avoid polluting ~/.config/dbflux
+    fn storage_runtime_opens_unified_db() {
+        // Use in-memory storage for tests to avoid polluting ~/.local/share/dbflux
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
-        let conn = runtime.open_state_db().expect("should open state db");
+        let conn = runtime.open_dbflux_db().expect("should open dbflux db");
 
-        // State db migrations have run, so user_version should be 3 (INITIAL_VERSION + SYSTEM_METADATA_VERSION + STATE_EVENT_SESSION_COLUMNS_VERSION)
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
+        // MigrationRegistry has run, so sys_migrations should have the initial migration
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '001_initial'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(count, 1, "001_initial migration should be recorded");
     }
 
     #[test]

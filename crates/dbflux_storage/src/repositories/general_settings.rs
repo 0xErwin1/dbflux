@@ -1,4 +1,4 @@
-//! Repository for general_settings table in config.db.
+//! Repository for cfg_general_settings table in dbflux.db.
 //!
 //! This table stores the normalized general settings as native columns,
 //! replacing the JSON blob previously stored in app_settings.
@@ -37,11 +37,11 @@ impl GeneralSettingsRepository {
                        max_concurrent_background_tasks, auto_refresh_pause_on_error,
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
                        dangerous_requires_where, dangerous_requires_preview, updated_at
-                FROM general_settings WHERE id = 1
+                FROM cfg_general_settings WHERE id = 1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -70,7 +70,7 @@ impl GeneralSettingsRepository {
             Ok(dto) => Ok(Some(dto)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -81,7 +81,7 @@ impl GeneralSettingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO general_settings (
+                INSERT INTO cfg_general_settings (
                     id, theme, restore_session_on_startup, reopen_last_connections,
                     default_focus_on_startup, max_history_entries, auto_save_interval_ms,
                     default_refresh_policy, default_refresh_interval_secs,
@@ -124,7 +124,7 @@ impl GeneralSettingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -157,7 +157,7 @@ pub struct GeneralSettingsDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -177,7 +177,9 @@ mod tests {
     fn upsert_and_get() {
         let path = temp_db("upsert_get");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let repo = GeneralSettingsRepository::new(Arc::new(conn));
 

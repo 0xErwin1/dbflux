@@ -1,6 +1,6 @@
-//! Repository for connection profile settings overrides in config.db.
+//! Repository for connection profile settings overrides in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_profile_settings child table,
+//! This module provides CRUD operations for the cfg_connection_profile_settings child table,
 //! which stores settings overrides for connection profiles.
 
 use log::info;
@@ -37,13 +37,13 @@ impl ConnectionProfileSettingsRepository {
             .prepare(
                 r#"
                 SELECT id, profile_id, setting_key, setting_value
-                FROM connection_profile_settings
+                FROM cfg_connection_profile_settings
                 WHERE profile_id = ?1
                 ORDER BY setting_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -57,7 +57,7 @@ impl ConnectionProfileSettingsRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -72,7 +72,7 @@ impl ConnectionProfileSettingsRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -85,7 +85,7 @@ impl ConnectionProfileSettingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_settings (
+                INSERT INTO cfg_connection_profile_settings (
                     id, profile_id, setting_key, setting_value
                 ) VALUES (?1, ?2, ?3, ?4)
                 "#,
@@ -97,7 +97,7 @@ impl ConnectionProfileSettingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -109,7 +109,7 @@ impl ConnectionProfileSettingsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_profile_settings (
+                INSERT INTO cfg_connection_profile_settings (
                     id, profile_id, setting_key, setting_value
                 ) VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(profile_id, setting_key) DO UPDATE SET
@@ -123,7 +123,7 @@ impl ConnectionProfileSettingsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -138,11 +138,11 @@ impl ConnectionProfileSettingsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_settings WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_profile_settings WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -153,11 +153,11 @@ impl ConnectionProfileSettingsRepository {
     pub fn delete_by_key_prefix(&self, profile_id: &str, prefix: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_profile_settings WHERE profile_id = ?1 AND setting_key LIKE ?2 ESCAPE '\\'",
+                "DELETE FROM cfg_connection_profile_settings WHERE profile_id = ?1 AND setting_key LIKE ?2 ESCAPE '\\'",
                 rusqlite::params![profile_id, format!("{}%", prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -202,7 +202,7 @@ impl ConnectionProfileSettingDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::repositories::connection_profiles::{
         ConnectionProfileDto, ConnectionProfileRepository,
     };
@@ -218,12 +218,14 @@ mod tests {
     }
 
     #[test]
-    fn connection_profile_settings_insert_and_fetch() {
+    fn cfg_connection_profile_settings_insert_and_fetch() {
         let path = temp_db("settings_insert");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
         let conn_arc = Arc::new(conn);
@@ -251,12 +253,14 @@ mod tests {
     }
 
     #[test]
-    fn connection_profile_settings_replace() {
+    fn cfg_connection_profile_settings_replace() {
         let path = temp_db("settings_replace");
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
         let conn_arc = Arc::new(conn);

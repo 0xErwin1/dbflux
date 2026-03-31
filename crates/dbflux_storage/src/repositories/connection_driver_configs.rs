@@ -1,6 +1,6 @@
-//! Repository for driver-specific connection configs in config.db.
+//! Repository for driver-specific connection configs in dbflux.db.
 //!
-//! This module provides CRUD operations for the connection_driver_configs table,
+//! This module provides CRUD operations for the cfg_connection_driver_configs table,
 //! which stores typed native columns for DbConfig variants instead of JSON.
 
 use log::info;
@@ -402,12 +402,12 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json
-                FROM connection_driver_configs
+                FROM cfg_connection_driver_configs
                 WHERE profile_id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -453,7 +453,7 @@ impl ConnectionDriverConfigsRepository {
             Ok(dto) => Ok(Some(dto)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -464,7 +464,7 @@ impl ConnectionDriverConfigsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_driver_configs (
+                INSERT INTO cfg_connection_driver_configs (
                     id, profile_id, config_key,
                     use_uri, uri, host, port, user, database_name,
                     ssl_mode, ssl_ca, ssl_cert, ssl_key, password_secret_ref, connect_timeout_secs,
@@ -525,7 +525,7 @@ impl ConnectionDriverConfigsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -537,7 +537,7 @@ impl ConnectionDriverConfigsRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO connection_driver_configs (
+                INSERT INTO cfg_connection_driver_configs (
                     id, profile_id, config_key,
                     use_uri, uri, host, port, user, database_name,
                     ssl_mode, ssl_ca, ssl_cert, ssl_key, password_secret_ref, connect_timeout_secs,
@@ -630,7 +630,7 @@ impl ConnectionDriverConfigsRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -645,11 +645,11 @@ impl ConnectionDriverConfigsRepository {
     pub fn delete_for_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM connection_driver_configs WHERE profile_id = ?1",
+                "DELETE FROM cfg_connection_driver_configs WHERE profile_id = ?1",
                 [profile_id],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 

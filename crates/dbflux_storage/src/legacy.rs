@@ -133,7 +133,7 @@ fn compute_source_hash(path: &Path) -> Result<String, std::io::Error> {
 /// Checks the import status for a source file.
 ///
 /// For backward compatibility, this first checks the legacy_imports table (new approach),
-/// then falls back to system_metadata if no record exists there.
+/// then falls back to sys_metadata if no record exists there.
 fn get_import_status(conn: &OwnedConnection, source_file: &str) -> Option<bool> {
     // First check legacy_imports table (new approach with hash-based dedup)
     let repo = LegacyImportsRepository::new(conn.clone());
@@ -145,11 +145,11 @@ fn get_import_status(conn: &OwnedConnection, source_file: &str) -> Option<bool> 
         };
     }
 
-    // Fall back to system_metadata for backward compatibility with installs
+    // Fall back to sys_metadata for backward compatibility with installs
     // that were migrated before the legacy_imports table existed
     let result: Option<String> = conn
         .query_row(
-            "SELECT value FROM system_metadata WHERE key = ?1",
+            "SELECT value FROM sys_metadata WHERE key = ?1",
             [format!("legacy_import::{}", source_file)],
             |row| row.get(0),
         )
@@ -161,7 +161,7 @@ fn get_import_status(conn: &OwnedConnection, source_file: &str) -> Option<bool> 
     }
 }
 
-/// Records the import status for a source file in both system_metadata (for backward
+/// Records the import status for a source file in both sys_metadata (for backward
 /// compatibility) and legacy_imports (for new hash-based provenance tracking).
 fn set_import_status(conn: &rusqlite::Connection, source_file: &str, status: ImportStatus) {
     let value = match status {
@@ -169,9 +169,9 @@ fn set_import_status(conn: &rusqlite::Connection, source_file: &str, status: Imp
         ImportStatus::Failed => "failed",
     };
 
-    // Update system_metadata (backward compatibility)
+    // Update sys_metadata (backward compatibility)
     let _ = conn.execute(
-        "INSERT OR REPLACE INTO system_metadata (key, value) VALUES (?1, ?2)",
+        "INSERT OR REPLACE INTO sys_metadata (key, value) VALUES (?1, ?2)",
         rusqlite::params![format!("legacy_import::{}", source_file), value],
     );
 }
@@ -204,18 +204,18 @@ fn check_legacy_import_status(
             Some(false)
         }
         Ok(Some(RepoImportStatus::NotFound)) | Ok(None) => {
-            // Not found in legacy_imports — check if system_metadata has old record
+            // Not found in legacy_imports — check if sys_metadata has old record
             // for backward compatibility with installs from before this table existed
             if let Some(true) = get_import_status(conn, source_path) {
-                // Old system_metadata says completed but no legacy_imports record
+                // Old sys_metadata says completed but no legacy_imports record
                 // This means it was completed before the table existed — treat as one-shot skip
                 log::info!(
-                    "Legacy import of '{}' marked completed in system_metadata but no hash record, skipping",
+                    "Legacy import of '{}' marked completed in sys_metadata but no hash record, skipping",
                     source_path
                 );
                 return Some(true);
             }
-            // Never attempted, or old system_metadata says failed — proceed with import
+            // Never attempted, or old sys_metadata says failed — proceed with import
             None
         }
         Err(e) => {
@@ -275,10 +275,13 @@ pub fn run_legacy_import(
     let mut result = LegacyImportResult::default();
 
     // --- Config domain imports (config.db) ---
-    import_profiles_with_status(&config_conn, config_dir, &mut result);
+    // Import auth/ssh/proxy profiles BEFORE connection profiles so FK constraints are satisfied.
+    // Connection profiles (cfg_connection_profiles) have FK references to auth_profiles,
+    // ssh_tunnel_profiles, and proxy_profiles, so those must be inserted first.
     import_auth_profiles_with_status(&config_conn, config_dir, &mut result);
     import_proxy_profiles_with_status(&config_conn, config_dir, &mut result);
     import_ssh_tunnels_with_status(&config_conn, config_dir, &mut result);
+    import_profiles_with_status(&config_conn, config_dir, &mut result);
     import_config_json_with_status(&config_conn, config_dir, &mut result);
     import_connection_tree_with_status(&config_conn, config_dir, &mut result);
 
@@ -477,6 +480,51 @@ fn ssh_auth_method_to_str(method: &dbflux_core::SshAuthMethod) -> String {
     }
 }
 
+/// Extracts `ssh_tunnel_profile_id` from a DbConfig if present.
+///
+/// Legacy profiles stored SSH tunnel references directly on the DbConfig variants
+/// (Postgres, MySQL, MongoDB, Redis). Newer profiles use `AccessKind::Ssh` instead.
+fn extract_ssh_tunnel_profile_id(config: &dbflux_core::DbConfig) -> Option<String> {
+    match config {
+        dbflux_core::DbConfig::Postgres {
+            ssh_tunnel_profile_id,
+            ..
+        }
+        | dbflux_core::DbConfig::MySQL {
+            ssh_tunnel_profile_id,
+            ..
+        }
+        | dbflux_core::DbConfig::MongoDB {
+            ssh_tunnel_profile_id,
+            ..
+        }
+        | dbflux_core::DbConfig::Redis {
+            ssh_tunnel_profile_id,
+            ..
+        } => ssh_tunnel_profile_id.map(|id| id.to_string()),
+        _ => None,
+    }
+}
+
+/// Converts an AccessKind to the (access_kind_str, access_provider_str) tuple
+/// for storage in the connection profile DTO.
+///
+/// For `Managed` access, params must be stored separately via
+/// `cfg_connection_profile_access_params` repository.
+fn access_kind_to_columns(
+    access_kind: &Option<dbflux_core::AccessKind>,
+) -> (Option<String>, Option<String>) {
+    match access_kind {
+        None => (None, None),
+        Some(dbflux_core::AccessKind::Direct) => (Some("direct".to_string()), None),
+        Some(dbflux_core::AccessKind::Ssh { .. }) => (Some("ssh".to_string()), None),
+        Some(dbflux_core::AccessKind::Proxy { .. }) => (Some("proxy".to_string()), None),
+        Some(dbflux_core::AccessKind::Managed { provider, .. }) => {
+            (Some("managed".to_string()), Some(provider.clone()))
+        }
+    }
+}
+
 /// Imports connection profiles from legacy `profiles.json`.
 fn import_profiles_with_status(
     config_conn: &OwnedConnection,
@@ -567,8 +615,11 @@ fn import_profiles_with_status(
     let hook_bindings_repo = repo.hook_bindings();
     let governance_repo = repo.governance();
     let driver_configs_repo = repo.driver_configs();
+    let access_params_repo = repo.access_params();
 
     let mut imported = 0;
+    let mut profile_errors: Vec<String> = Vec::new();
+
     for profile in legacy {
         if existing_ids.contains(&profile.id.to_string()) {
             continue;
@@ -616,6 +667,95 @@ fn import_profiles_with_status(
             .as_ref()
             .and_then(|g| serde_json::to_string(g).ok());
 
+        // Extract ssh_tunnel_profile_id from DbConfig (legacy location)
+        let config_ssh_tunnel_id = extract_ssh_tunnel_profile_id(&profile.config);
+
+        // Extract access_kind and access_provider from profile.access_kind
+        let (access_kind_str, access_provider_str) = access_kind_to_columns(&profile.access_kind);
+
+        // For AccessKind::Ssh, prefer the ID from access_kind if available,
+        // otherwise fall back to the one from DbConfig
+        let ssh_tunnel_profile_id = match &profile.access_kind {
+            Some(dbflux_core::AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            }) => Some(ssh_tunnel_profile_id.to_string()),
+            _ => config_ssh_tunnel_id,
+        };
+
+        // Validate FK references before constructing the DTO.
+        // If a referenced ID doesn't exist in the DB, null it out and log a warning
+        // so the profile can still be imported (users can fix FKs manually later).
+        let auth_profile_id = if let Some(id) = profile.auth_profile_id {
+            let id_str = id.to_string();
+            let exists = config_conn
+                .query_row(
+                    "SELECT 1 FROM cfg_auth_profiles WHERE id = ?1 LIMIT 1",
+                    [&id_str],
+                    |_row| Ok(true),
+                )
+                .ok();
+            if exists.is_none() {
+                warn!(
+                    "Profile '{}': auth_profile_id {} not found, setting to NULL",
+                    profile.name, id_str
+                );
+            }
+            if exists.is_some() {
+                Some(id_str)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let proxy_profile_id = if let Some(id) = profile.proxy_profile_id {
+            let id_str = id.to_string();
+            let exists = config_conn
+                .query_row(
+                    "SELECT 1 FROM cfg_proxy_profiles WHERE id = ?1 LIMIT 1",
+                    [&id_str],
+                    |_row| Ok(true),
+                )
+                .ok();
+            if exists.is_none() {
+                warn!(
+                    "Profile '{}': proxy_profile_id {} not found, setting to NULL",
+                    profile.name, id_str
+                );
+            }
+            if exists.is_some() {
+                Some(id_str)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let ssh_tunnel_profile_id = if let Some(ref id) = ssh_tunnel_profile_id {
+            let exists = config_conn
+                .query_row(
+                    "SELECT 1 FROM cfg_ssh_tunnel_profiles WHERE id = ?1 LIMIT 1",
+                    [id],
+                    |_row| Ok(true),
+                )
+                .ok();
+            if exists.is_none() {
+                warn!(
+                    "Profile '{}': ssh_tunnel_profile_id {} not found, setting to NULL",
+                    profile.name, id
+                );
+            }
+            if exists.is_some() {
+                Some(id.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let dto = ConnectionProfileDto {
             id: profile.id.to_string(),
             name: profile.name.clone(),
@@ -626,17 +766,20 @@ fn import_profiles_with_status(
             icon: None,
             save_password: false,
             kind: Some(db_kind_to_str(profile.kind())),
-            access_kind: None,
-            access_provider: None,
-            auth_profile_id: profile.auth_profile_id.map(|u| u.to_string()),
-            proxy_profile_id: profile.proxy_profile_id.map(|u| u.to_string()),
-            ssh_tunnel_profile_id: None,
+            access_kind: access_kind_str,
+            access_provider: access_provider_str,
+            auth_profile_id,
+            proxy_profile_id,
+            ssh_tunnel_profile_id,
             created_at: String::new(),
             updated_at: String::new(),
         };
 
         if let Err(e) = repo.insert(&dto) {
-            warn!("Failed to import profile '{}': {}", profile.name, e);
+            // Log as warning instead of collecting as fatal error - profile-level
+            // insert failures (e.g., due to orphaned FKs despite our validation,
+            // or other constraint issues) shouldn't abort the entire import.
+            warn!("profile '{}': insert failed (skipping): {}", profile.name, e);
             continue;
         }
 
@@ -644,10 +787,22 @@ fn import_profiles_with_status(
         let profile_id = profile.id.to_string();
         let driver_dto = db_config_to_connection_driver_config_dto(&profile_id, &profile.config);
         if let Err(e) = driver_configs_repo.upsert(&driver_dto) {
-            warn!(
-                "Failed to denormalize driver config for profile '{}': {}",
+            profile_errors.push(format!(
+                "profile '{}': denormalize driver config failed: {}",
                 profile.name, e
-            );
+            ));
+        }
+
+        // Denormalize access_kind params for Managed access
+        if let Some(dbflux_core::AccessKind::Managed { params, .. }) = &profile.access_kind {
+            if !params.is_empty() {
+                if let Err(e) = access_params_repo.upsert_batch(&profile_id, params) {
+                    profile_errors.push(format!(
+                        "profile '{}': denormalize access params failed: {}",
+                        profile.name, e
+                    ));
+                }
+            }
         }
 
         // Denormalize: write to child tables
@@ -661,10 +816,10 @@ fn import_profiles_with_status(
                     Some(value.clone()),
                 );
                 if let Err(e) = settings_repo.insert(&setting_dto) {
-                    warn!(
-                        "Failed to denormalize connection setting '{}' for profile '{}': {}",
-                        key, profile.name, e
-                    );
+                    profile_errors.push(format!(
+                        "profile '{}': denormalize connection setting '{}' failed: {}",
+                        profile.name, key, e
+                    ));
                 }
             }
         }
@@ -722,10 +877,10 @@ fn import_profiles_with_status(
                     }
                 };
                 if let Err(e) = value_refs_repo.insert(&ref_dto) {
-                    warn!(
-                        "Failed to denormalize value ref '{}' for profile '{}': {}",
-                        key, profile.name, e
-                    );
+                    profile_errors.push(format!(
+                        "profile '{}': denormalize value ref '{}' failed: {}",
+                        profile.name, key, e
+                    ));
                 }
             }
         }
@@ -886,10 +1041,10 @@ fn import_profiles_with_status(
                         };
 
                     if let Err(e) = hooks_repo.insert(&hook_dto) {
-                        warn!(
-                            "Failed to denormalize {} hook {} for profile '{}': {}",
-                            phase_str, order_index, profile.name, e
-                        );
+                        profile_errors.push(format!(
+                            "profile '{}': denormalize {} hook {} failed: {}",
+                            profile.name, phase_str, order_index, e
+                        ));
                     }
 
                     // Denormalize env vars into hook_envs child table
@@ -902,10 +1057,10 @@ fn import_profiles_with_status(
                                 value: value.clone(),
                             };
                             if let Err(e) = hook_envs_repo.insert(&env_dto) {
-                                warn!(
-                                    "Failed to denormalize env var '{}' for {} hook {} of profile '{}': {}",
-                                    key, phase_str, order_index, profile.name, e
-                                );
+                                profile_errors.push(format!(
+                                    "profile '{}': denormalize env var '{}' for {} hook {} failed: {}",
+                                    profile.name, key, phase_str, order_index, e
+                                ));
                             }
                         }
                     }
@@ -927,10 +1082,10 @@ fn import_profiles_with_status(
                 // Store the bindings JSON in a single row for simplicity
                 // Since the table expects individual bindings, we serialize as JSON
                 if let Err(e) = hook_bindings_repo.insert(&binding_dto) {
-                    warn!(
-                        "Failed to denormalize hook bindings for profile '{}': {}",
+                    profile_errors.push(format!(
+                        "profile '{}': denormalize hook bindings failed: {}",
                         profile.name, e
-                    );
+                    ));
                 }
             }
         }
@@ -946,14 +1101,19 @@ fn import_profiles_with_status(
                 governance_value: Some(gov_json),
             };
             if let Err(e) = governance_repo.insert(&gov_dto) {
-                warn!(
-                    "Failed to denormalize governance for profile '{}': {}",
+                profile_errors.push(format!(
+                    "profile '{}': denormalize governance failed: {}",
                     profile.name, e
-                );
+                ));
             }
         }
 
         imported += 1;
+    }
+
+    // Surface collected profile errors at the end (Bug 3 fix)
+    if !profile_errors.is_empty() {
+        result.errors.extend(profile_errors);
     }
 
     result.profiles_imported += imported;
@@ -1025,18 +1185,6 @@ fn import_auth_profiles_with_status(
         return;
     }
 
-    set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
-
-    let tx = match config_conn.unchecked_transaction() {
-        Ok(t) => t,
-        Err(e) => {
-            result
-                .errors
-                .push(format!("auth_profiles: cannot start transaction: {}", e));
-            return;
-        }
-    };
-
     let repo = AuthProfileRepository::new(config_conn.clone());
     let existing_ids: std::collections::HashSet<String> = repo
         .all()
@@ -1048,24 +1196,23 @@ fn import_auth_profiles_with_status(
         if existing_ids.contains(&profile.id.to_string()) {
             continue;
         }
+        // insert_auth_profile handles its own transaction for atomicity.
+        // Propagate errors so we fail loudly instead of silent rollback.
         if let Err(e) = repo.insert_auth_profile(&profile) {
-            warn!("Failed to import auth profile '{}': {}", profile.name, e);
-        } else {
-            imported += 1;
+            result.errors.push(format!(
+                "auth_profiles: failed to import '{}': {}",
+                profile.name, e
+            ));
+            set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+            return;
         }
+        imported += 1;
     }
 
     result.auth_profiles_imported += imported;
 
     if imported > 0 {
         log::info!("Imported {} legacy auth profiles from {}", imported, source);
-    }
-
-    if let Err(e) = tx.commit() {
-        result
-            .errors
-            .push(format!("auth_profiles: commit failed: {}", e));
-        return;
     }
 
     set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
@@ -1115,18 +1262,6 @@ fn import_proxy_profiles_with_status(
         set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
         return;
     }
-
-    set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
-
-    let tx = match config_conn.unchecked_transaction() {
-        Ok(t) => t,
-        Err(e) => {
-            result
-                .errors
-                .push(format!("proxies: cannot start transaction: {}", e));
-            return;
-        }
-    };
 
     let repo = ProxyProfileRepository::new(config_conn.clone());
     let existing_ids: std::collections::HashSet<String> = repo
@@ -1189,11 +1324,17 @@ fn import_proxy_profiles_with_status(
             None
         };
 
+        // repo.insert() handles its own transaction for atomicity.
+        // Propagate errors so we fail loudly instead of silent rollback.
         if let Err(e) = repo.insert(&dto, auth_dto.as_ref()) {
-            warn!("Failed to import proxy profile '{}': {}", dto.name, e);
-        } else {
-            imported += 1;
+            result.errors.push(format!(
+                "proxies: failed to import '{}': {}",
+                dto.name, e
+            ));
+            set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+            return;
         }
+        imported += 1;
     }
 
     result.proxy_profiles_imported += imported;
@@ -1204,11 +1345,6 @@ fn import_proxy_profiles_with_status(
             imported,
             source
         );
-    }
-
-    if let Err(e) = tx.commit() {
-        result.errors.push(format!("proxies: commit failed: {}", e));
-        return;
     }
 
     set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
@@ -1258,18 +1394,6 @@ fn import_ssh_tunnels_with_status(
         set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
         return;
     }
-
-    set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
-
-    let tx = match config_conn.unchecked_transaction() {
-        Ok(t) => t,
-        Err(e) => {
-            result
-                .errors
-                .push(format!("ssh_tunnels: cannot start transaction: {}", e));
-            return;
-        }
-    };
 
     let repo = SshTunnelProfileRepository::new(config_conn.clone());
     let existing_ids: std::collections::HashSet<String> = repo
@@ -1335,12 +1459,17 @@ fn import_ssh_tunnels_with_status(
             } else {
                 None
             };
-
+        // repo.insert() handles its own transaction for atomicity.
+        // Propagate errors so we fail loudly instead of silent rollback.
         if let Err(e) = repo.insert(&dto, auth_dto.as_ref()) {
-            warn!("Failed to import SSH tunnel profile '{}': {}", dto.name, e);
-        } else {
-            imported += 1;
+            result.errors.push(format!(
+                "ssh_tunnels: failed to import '{}': {}",
+                dto.name, e
+            ));
+            set_import_status(config_conn.as_ref(), source, ImportStatus::Failed);
+            return;
         }
+        imported += 1;
     }
 
     result.ssh_tunnels_imported += imported;
@@ -1351,13 +1480,6 @@ fn import_ssh_tunnels_with_status(
             imported,
             source
         );
-    }
-
-    if let Err(e) = tx.commit() {
-        result
-            .errors
-            .push(format!("ssh_tunnels: commit failed: {}", e));
-        return;
     }
 
     set_import_status(config_conn.as_ref(), source, ImportStatus::Completed);
@@ -1505,7 +1627,7 @@ fn import_config_json_with_status(
     }
 
     tx.execute(
-        "INSERT INTO system_metadata (key, value, updated_at)
+        "INSERT INTO sys_metadata (key, value, updated_at)
          VALUES (?1, ?2, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         rusqlite::params![format!("legacy_import::{}", source), "completed"],
@@ -2511,7 +2633,9 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
         let conn = open_database(&path).expect("open");
-        migrations::run_config_migrations(&conn).expect("migrate");
+        migrations::MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrate");
         (path, Arc::new(conn))
     }
 
@@ -2525,7 +2649,9 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
         let conn = open_database(&path).expect("open");
-        migrations::run_state_migrations(&conn).expect("migrate");
+        migrations::MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrate");
         (path, Arc::new(conn))
     }
 

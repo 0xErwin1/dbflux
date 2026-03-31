@@ -1,9 +1,9 @@
-//! Repository for SSH tunnel profiles in config.db.
+//! Repository for SSH tunnel profiles in dbflux.db.
 //!
 //! SSH tunnel profiles store SSH tunnel configurations for secure database access.
 //!
 //! This repository uses native columns (host, port, user, auth_method, password_secret_ref)
-//! and a ssh_tunnel_auth child table for key_path and passphrase. The config_json column
+//! and a cfg_ssh_tunnel_auth child table for key_path and passphrase. The config_json column
 //! was dropped in migration v10. Column names were fixed in migration v13.
 
 use log::info;
@@ -46,12 +46,12 @@ impl SshTunnelProfileRepository {
                 r#"
                 SELECT id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
                        password_secret_ref, save_secret, created_at, updated_at
-                FROM ssh_tunnel_profiles
+                FROM cfg_ssh_tunnel_profiles
                 ORDER BY name ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -73,7 +73,7 @@ impl SshTunnelProfileRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -88,7 +88,7 @@ impl SshTunnelProfileRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -104,12 +104,12 @@ impl SshTunnelProfileRepository {
                 r#"
                 SELECT id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
                        password_secret_ref, save_secret, created_at, updated_at
-                FROM ssh_tunnel_profiles
+                FROM cfg_ssh_tunnel_profiles
                 WHERE id = ?1
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -134,7 +134,7 @@ impl SshTunnelProfileRepository {
             Ok(profile) => Ok(Some(profile)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -149,7 +149,7 @@ impl SshTunnelProfileRepository {
     }
 
     /// Inserts a new SSH tunnel profile with auth credentials.
-    /// Writes to ssh_tunnel_profiles (native columns) and ssh_tunnel_auth tables.
+    /// Writes to cfg_ssh_tunnel_profiles (native columns) and cfg_ssh_tunnel_auth tables.
     pub fn insert(
         &self,
         profile: &SshTunnelProfileDto,
@@ -160,13 +160,13 @@ impl SshTunnelProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-            INSERT INTO ssh_tunnel_profiles (
+            INSERT INTO cfg_ssh_tunnel_profiles (
                 id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
                 password_secret_ref, save_secret, created_at, updated_at
             ) VALUES (
@@ -187,7 +187,7 @@ impl SshTunnelProfileRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -197,7 +197,7 @@ impl SshTunnelProfileRepository {
             auth_dto.ssh_tunnel_profile_id = profile.id.clone();
             tx.execute(
                 r#"
-                INSERT INTO ssh_tunnel_auth (
+                INSERT INTO cfg_ssh_tunnel_auth (
                     ssh_tunnel_profile_id, key_path, password_secret_ref, passphrase_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -211,13 +211,13 @@ impl SshTunnelProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -235,7 +235,7 @@ impl SshTunnelProfileRepository {
             .conn()
             .execute(
                 r#"
-                UPDATE ssh_tunnel_profiles SET
+                UPDATE cfg_ssh_tunnel_profiles SET
                     name = ?2,
                     host = ?3,
                     port = ?4,
@@ -262,7 +262,7 @@ impl SshTunnelProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -298,13 +298,13 @@ impl SshTunnelProfileRepository {
             .conn()
             .unchecked_transaction()
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
         tx.execute(
             r#"
-            INSERT INTO ssh_tunnel_profiles (
+            INSERT INTO cfg_ssh_tunnel_profiles (
                 id, name, host, port, user, auth_method, key_path, passphrase_secret_ref,
                 password_secret_ref, save_secret, created_at, updated_at
             ) VALUES (
@@ -336,7 +336,7 @@ impl SshTunnelProfileRepository {
             ],
         )
         .map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -346,7 +346,7 @@ impl SshTunnelProfileRepository {
             auth_dto.ssh_tunnel_profile_id = profile.id.clone();
             tx.execute(
                 r#"
-                INSERT INTO ssh_tunnel_auth (
+                INSERT INTO cfg_ssh_tunnel_auth (
                     ssh_tunnel_profile_id, key_path, password_secret_ref, passphrase_secret_ref
                 ) VALUES (
                     ?1, ?2, ?3, ?4
@@ -364,13 +364,13 @@ impl SshTunnelProfileRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: "config.db".into(),
+            path: "dbflux.db".into(),
             source,
         })?;
 
@@ -378,12 +378,12 @@ impl SshTunnelProfileRepository {
         Ok(())
     }
 
-    /// Deletes an SSH tunnel profile by ID (cascade deletes ssh_tunnel_auth).
+    /// Deletes an SSH tunnel profile by ID (cascade deletes cfg_ssh_tunnel_auth).
     pub fn delete(&self, id: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM ssh_tunnel_profiles WHERE id = ?1", [id])
+            .execute("DELETE FROM cfg_ssh_tunnel_profiles WHERE id = ?1", [id])
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -395,11 +395,11 @@ impl SshTunnelProfileRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM ssh_tunnel_profiles", [], |row| {
+            .query_row("SELECT COUNT(*) FROM cfg_ssh_tunnel_profiles", [], |row| {
                 row.get(0)
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -484,7 +484,7 @@ impl SshTunnelProfileDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -498,7 +498,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = SshTunnelProfileDto::with_auth_method(
             Uuid::new_v4(),
@@ -528,7 +530,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = SshTunnelProfileDto::with_auth_method(
             Uuid::new_v4(),
@@ -571,7 +575,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let dto = SshTunnelProfileDto::with_auth_method(
             Uuid::new_v4(),

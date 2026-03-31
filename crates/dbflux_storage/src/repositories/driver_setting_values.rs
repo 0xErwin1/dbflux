@@ -1,4 +1,4 @@
-//! Repository for driver_setting_values table in config.db.
+//! Repository for cfg_driver_setting_values table in dbflux.db.
 //!
 //! This table stores driver-specific settings as key-value pairs (EAV pattern),
 //! replacing the JSON blob previously stored in driver_settings.settings_json.
@@ -35,13 +35,13 @@ impl DriverSettingValuesRepository {
             .prepare(
                 r#"
                 SELECT id, driver_key, setting_key, setting_value
-                FROM driver_setting_values
+                FROM cfg_driver_setting_values
                 WHERE driver_key = ?1
                 ORDER BY setting_key ASC
                 "#,
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -55,7 +55,7 @@ impl DriverSettingValuesRepository {
                 })
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -71,7 +71,7 @@ impl DriverSettingValuesRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO driver_setting_values (id, driver_key, setting_key, setting_value)
+                INSERT INTO cfg_driver_setting_values (id, driver_key, setting_key, setting_value)
                 VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(driver_key, setting_key) DO UPDATE SET
                     setting_value = excluded.setting_value
@@ -84,7 +84,7 @@ impl DriverSettingValuesRepository {
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -108,11 +108,11 @@ impl DriverSettingValuesRepository {
             // Already in a transaction, just execute directly
             self.conn()
                 .execute(
-                    "DELETE FROM driver_setting_values WHERE driver_key = ?1",
+                    "DELETE FROM cfg_driver_setting_values WHERE driver_key = ?1",
                     [driver_key],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
 
@@ -120,7 +120,7 @@ impl DriverSettingValuesRepository {
                 self.conn()
                     .execute(
                         r#"
-                        INSERT INTO driver_setting_values (id, driver_key, setting_key, setting_value)
+                        INSERT INTO cfg_driver_setting_values (id, driver_key, setting_key, setting_value)
                         VALUES (?1, ?2, ?3, ?4)
                         "#,
                         params![
@@ -131,7 +131,7 @@ impl DriverSettingValuesRepository {
                         ],
                     )
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
             }
@@ -141,23 +141,23 @@ impl DriverSettingValuesRepository {
                 self.conn()
                     .unchecked_transaction()
                     .map_err(|source| StorageError::Sqlite {
-                        path: "config.db".into(),
+                        path: "dbflux.db".into(),
                         source,
                     })?;
 
             tx.execute(
-                "DELETE FROM driver_setting_values WHERE driver_key = ?1",
+                "DELETE FROM cfg_driver_setting_values WHERE driver_key = ?1",
                 [driver_key],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
             for value in values {
                 tx.execute(
                     r#"
-                    INSERT INTO driver_setting_values (id, driver_key, setting_key, setting_value)
+                    INSERT INTO cfg_driver_setting_values (id, driver_key, setting_key, setting_value)
                     VALUES (?1, ?2, ?3, ?4)
                     "#,
                     params![
@@ -168,13 +168,13 @@ impl DriverSettingValuesRepository {
                     ],
                 )
                 .map_err(|source| StorageError::Sqlite {
-                    path: "config.db".into(),
+                    path: "dbflux.db".into(),
                     source,
                 })?;
             }
 
             tx.commit().map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         }
@@ -191,11 +191,11 @@ impl DriverSettingValuesRepository {
     pub fn delete_for_driver(&self, driver_key: &str) -> Result<(), StorageError> {
         self.conn()
             .execute(
-                "DELETE FROM driver_setting_values WHERE driver_key = ?1",
+                "DELETE FROM cfg_driver_setting_values WHERE driver_key = ?1",
                 [driver_key],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -207,11 +207,13 @@ impl DriverSettingValuesRepository {
     pub fn count(&self) -> Result<i64, StorageError> {
         let count: i64 = self
             .conn()
-            .query_row("SELECT COUNT(*) FROM driver_setting_values", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM cfg_driver_setting_values",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|source| StorageError::Sqlite {
-                path: "config.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -219,7 +221,7 @@ impl DriverSettingValuesRepository {
     }
 }
 
-/// DTO for driver_setting_values table.
+/// DTO for cfg_driver_setting_values table.
 #[derive(Debug, Clone)]
 pub struct DriverSettingValueDto {
     pub id: String,
@@ -231,13 +233,13 @@ pub struct DriverSettingValueDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::run_config_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
     fn temp_db(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "dbflux_repo_driver_setting_values_{}_{}",
+            "dbflux_repo_cfg_driver_setting_values_{}_{}",
             name,
             std::process::id()
         ));
@@ -253,7 +255,9 @@ mod tests {
 
         let path = temp_db("replace");
         let conn = open_database(&path).expect("should open");
-        run_config_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
 
         let conn_arc = Arc::new(conn);
         let values_repo = DriverSettingValuesRepository::new(conn_arc.clone());

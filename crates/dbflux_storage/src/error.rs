@@ -24,6 +24,34 @@ pub enum StorageError {
 
     #[error("legacy import failed: {0}")]
     LegacyImportFailed(String),
+
+    #[error("migration {kind} verification failed: {details}")]
+    Migration { kind: String, details: String },
+}
+
+/// Error type for repository operations.
+#[derive(Debug, Error)]
+pub enum RepositoryError {
+    #[error("repository sqlite error: {source}")]
+    Sqlite { source: rusqlite::Error },
+
+    #[error("entity not found: {0}")]
+    NotFound(String),
+
+    #[error("serialization error: {source}")]
+    Serialization { source: serde_json::Error },
+}
+
+impl From<rusqlite::Error> for RepositoryError {
+    fn from(source: rusqlite::Error) -> Self {
+        RepositoryError::Sqlite { source }
+    }
+}
+
+impl From<serde_json::Error> for RepositoryError {
+    fn from(source: serde_json::Error) -> Self {
+        RepositoryError::Serialization { source }
+    }
 }
 
 impl StorageError {
@@ -59,6 +87,24 @@ impl From<StorageError> for dbflux_core::DbError {
                 dbflux_core::DbError::InvalidProfile("data directory not available".to_string())
             }
             StorageError::LegacyImportFailed(msg) => dbflux_core::DbError::InvalidProfile(msg),
+            StorageError::Migration { kind, details } => dbflux_core::DbError::InvalidProfile(
+                format!("migration {} failed: {}", kind, details),
+            ),
+        }
+    }
+}
+
+impl From<RepositoryError> for StorageError {
+    fn from(err: RepositoryError) -> Self {
+        match err {
+            RepositoryError::Sqlite { source } => StorageError::Sqlite {
+                path: PathBuf::from("<unknown>"),
+                source,
+            },
+            RepositoryError::NotFound(msg) => StorageError::LegacyImportFailed(msg),
+            RepositoryError::Serialization { source } => {
+                StorageError::LegacyImportFailed(format!("serialization error: {}", source))
+            }
         }
     }
 }

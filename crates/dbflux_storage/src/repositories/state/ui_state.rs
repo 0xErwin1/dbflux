@@ -1,4 +1,4 @@
-//! Repository for UI runtime state in state.db.
+//! Repository for UI runtime state in dbflux.db.
 //!
 //! Stores persisted UI layout preferences (collapse state, scroll positions).
 
@@ -26,9 +26,9 @@ impl UiStateRepository {
     pub fn get(&self, key: &str) -> Result<Option<String>, StorageError> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT value_json FROM app_runtime_state WHERE key = ?1")
+            .prepare("SELECT value_json FROM st_ui_state WHERE key = ?1")
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -36,7 +36,7 @@ impl UiStateRepository {
             Ok(v) => Ok(Some(v)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             }),
         }
@@ -47,7 +47,7 @@ impl UiStateRepository {
         self.conn()
             .execute(
                 r#"
-                INSERT INTO app_runtime_state (key, value_json, updated_at)
+                INSERT INTO st_ui_state (key, value_json, updated_at)
                 VALUES (?1, ?2, datetime('now'))
                 ON CONFLICT(key) DO UPDATE SET
                     value_json = excluded.value_json,
@@ -56,7 +56,7 @@ impl UiStateRepository {
                 params![key, value_json],
             )
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -67,9 +67,9 @@ impl UiStateRepository {
     /// Deletes a state key.
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM app_runtime_state WHERE key = ?1", [key])
+            .execute("DELETE FROM st_ui_state WHERE key = ?1", [key])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -81,9 +81,9 @@ impl UiStateRepository {
     pub fn all(&self) -> Result<Vec<(String, String)>, StorageError> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT key, value_json FROM app_runtime_state ORDER BY key")
+            .prepare("SELECT key, value_json FROM st_ui_state ORDER BY key")
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -92,7 +92,7 @@ impl UiStateRepository {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
 
@@ -107,7 +107,7 @@ impl UiStateRepository {
 
         if let Some(e) = last_err {
             return Err(StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source: e,
             });
         }
@@ -118,9 +118,9 @@ impl UiStateRepository {
     /// Clears all runtime state (for reset).
     pub fn clear(&self) -> Result<(), StorageError> {
         self.conn()
-            .execute("DELETE FROM app_runtime_state", [])
+            .execute("DELETE FROM st_ui_state", [])
             .map_err(|source| StorageError::Sqlite {
-                path: "state.db".into(),
+                path: "dbflux.db".into(),
                 source,
             })?;
         Ok(())
@@ -130,7 +130,7 @@ impl UiStateRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migrations::state::run_state_migrations;
+    use crate::migrations::MigrationRegistry;
     use crate::sqlite::open_database;
     use std::sync::Arc;
 
@@ -150,7 +150,9 @@ mod tests {
     fn set_and_get() {
         let path = temp_db("set_get");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = UiStateRepository::new(Arc::new(conn));
 
         repo.set("ui_layout", r#"{"sidebar_collapsed":false}"#)
@@ -170,7 +172,9 @@ mod tests {
     fn all_and_clear() {
         let path = temp_db("all_clear");
         let conn = open_database(&path).expect("should open");
-        run_state_migrations(&conn).expect("migration should run");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
         let repo = UiStateRepository::new(Arc::new(conn));
 
         repo.set("key1", r#"{"a":1}"#).expect("set");

@@ -890,7 +890,7 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    /// Write the current tab state to the session manifest (state.db-backed).
+    /// Write the current tab state to the session manifest (dbflux.db-backed).
     pub(super) fn write_session_manifest(&self, cx: &App) {
         use dbflux_core::SessionTab;
 
@@ -951,7 +951,7 @@ impl Workspace {
         }
     }
 
-    /// Restore tabs from the session manifest on startup (state.db-backed).
+    /// Restore tabs from the session manifest on startup (dbflux.db-backed).
     pub(super) fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let manifest = {
             let app = self.app_state.read(cx);
@@ -963,7 +963,7 @@ impl Workspace {
                 Ok(Some(session)) => session,
                 Ok(None) => return,
                 Err(e) => {
-                    log::warn!("Failed to restore session from state.db: {}", e);
+                    log::warn!("Failed to restore session from dbflux.db: {}", e);
                     return;
                 }
             }
