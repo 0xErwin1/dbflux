@@ -23,6 +23,7 @@ pub enum LoginModalState {
     Success,
     Failed {
         error: String,
+        provider_name: Option<String>,
     },
     Cancelled,
 }
@@ -35,6 +36,7 @@ pub struct LoginModal {
     visible: bool,
     state: LoginModalState,
     focus_handle: FocusHandle,
+    last_provider_name: Option<String>,
     timeout_generation: u64,
     success_generation: u64,
 }
@@ -45,6 +47,7 @@ impl LoginModal {
             visible: false,
             state: LoginModalState::Idle,
             focus_handle: cx.focus_handle(),
+            last_provider_name: None,
             timeout_generation: 0,
             success_generation: 0,
         }
@@ -68,6 +71,7 @@ impl LoginModal {
                     verification_url
                 );
                 self.visible = true;
+                self.last_provider_name = Some(provider_name.clone());
                 self.state = LoginModalState::WaitingForBrowser {
                     provider_name: provider_name.clone(),
                     profile_name: profile_name.to_string(),
@@ -81,6 +85,7 @@ impl LoginModal {
             PipelineState::Failed { stage, error } => {
                 self.visible = true;
                 self.state = LoginModalState::Failed {
+                    provider_name: self.last_provider_name.clone(),
                     error: format!("{}: {}", stage, error),
                 };
                 self.focus_handle.focus(window);
@@ -126,8 +131,10 @@ impl LoginModal {
                         return;
                     }
 
-                    if matches!(this.state, LoginModalState::WaitingForBrowser { .. }) {
+                    if let LoginModalState::WaitingForBrowser { provider_name, .. } = &this.state {
+                        let provider_name = provider_name.clone();
                         this.state = LoginModalState::Failed {
+                            provider_name: Some(provider_name),
                             error: "Login timed out after 5 minutes".to_string(),
                         };
                         this.visible = true;
@@ -172,9 +179,11 @@ impl LoginModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let provider_name = provider_name.into();
         self.visible = true;
+        self.last_provider_name = Some(provider_name.clone());
         self.state = LoginModalState::WaitingForBrowser {
-            provider_name: provider_name.into(),
+            provider_name,
             profile_name: profile_name.into(),
             verification_url,
             launch_error: None,
@@ -402,62 +411,73 @@ impl Render for LoginModal {
                         ),
                 )
             }
-            LoginModalState::Failed { error } => frame
-                .child(
-                    div()
-                        .p(Spacing::MD)
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.warning)
-                                .child("Connection failed"),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .child(error.clone()),
-                        )
-                        .child(
-                            div().flex().justify_end().child(
-                                div()
-                                    .id("sso-failed-close")
-                                    .px(Spacing::MD)
-                                    .py(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close(cx);
-                                    }))
-                                    .child("Close"),
-                            ),
-                        ),
-                )
-                .child(
-                    div().flex().justify_end().child(
+            LoginModalState::Failed {
+                error,
+                provider_name,
+            } => {
+                let show_sso_wizard_button = provider_name
+                    .as_ref()
+                    .is_some_and(|p| p.contains("AWS SSO"));
+
+                let error_content = div()
+                    .p(Spacing::MD)
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .child(
                         div()
-                            .id("sso-open-wizard")
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .bg(theme.secondary)
-                            .hover(|d| d.bg(theme.muted))
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.warning)
+                            .child("Connection failed"),
+                    )
+                    .child(
+                        div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_sso_wizard(cx);
-                            }))
-                            .child("Open AWS SSO Wizard"),
-                    ),
-                ),
+                            .child(error.clone()),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            div()
+                                .id("sso-failed-close")
+                                .px(Spacing::MD)
+                                .py(Spacing::SM)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .bg(theme.secondary)
+                                .hover(|d| d.bg(theme.muted))
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close(cx);
+                                }))
+                                .child("Close"),
+                        ),
+                    );
+
+                if show_sso_wizard_button {
+                    frame.child(error_content).child(
+                        div().flex().justify_end().child(
+                            div()
+                                .id("sso-open-wizard")
+                                .px(Spacing::MD)
+                                .py(Spacing::SM)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .bg(theme.secondary)
+                                .hover(|d| d.bg(theme.muted))
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_sso_wizard(cx);
+                                }))
+                                .child("Open AWS SSO Wizard"),
+                        ),
+                    )
+                } else {
+                    frame.child(error_content)
+                }
+            }
             LoginModalState::Success => frame.child(
                 div()
                     .p(Spacing::MD)

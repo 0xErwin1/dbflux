@@ -7,15 +7,16 @@ use tokio::sync::{Mutex, RwLock};
 use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
-    AuthProfileManager, ConnectionProfile, DbDriver, DriverKey, FormValues, GovernanceSettings,
-    KeyringSecretStore, ProfileManager, SecretManager,
+    AccessKind, AuthProfileManager, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
+    ConnectionProfile, DbDriver, DriverKey, FormValues, GovernanceSettings, KeyringSecretStore,
+    ProfileManager, SecretManager, ValueRef,
 };
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,
 };
+use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::paths as storage_paths;
-use dbflux_storage::repositories::driver_setting_values::DriverSettingValuesRepository;
 use dbflux_storage::repositories::governance_settings::GovernanceSettingsRepository;
 use dbflux_storage::sqlite as storage_sqlite;
 
@@ -43,18 +44,23 @@ impl ServerState {
     /// Loads config and governance from disk, builds the driver registry,
     /// and returns a fully-initialized `ServerState`.
     ///
-    /// `config_dir` overrides the default `~/.config/dbflux` location.
+    /// `config_dir` is accepted for CLI compatibility but runtime state is loaded
+    /// exclusively from `dbflux.db`.
     pub fn new(client_id: String, config_dir: Option<PathBuf>) -> Result<Self, String> {
+        let storage_runtime = open_storage_runtime()?;
+        let profiles = load_profiles(&storage_runtime)?;
+        let auth_profiles = load_auth_profiles(&storage_runtime)?;
         let (runtime, governance_settings) = build_runtime(config_dir.as_deref())?;
 
         // Validate that the client_id exists as a trusted client
         validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
 
-        let profile_manager = ProfileManager::new();
-        let auth_profile_manager = AuthProfileManager::default();
+        let profile_manager = ProfileManager::with_profiles(profiles, None);
+        let auth_profile_manager =
+            AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
         let driver_registry = build_driver_registry();
         let auth_provider_registry = build_auth_provider_registry();
-        let driver_settings = Arc::new(load_driver_settings(config_dir.as_deref())?);
+        let driver_settings = Arc::new(load_driver_settings(&storage_runtime)?);
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
         let state = ServerState {
@@ -85,39 +91,41 @@ impl ServerState {
 }
 
 fn load_driver_settings(
-    config_dir: Option<&std::path::Path>,
+    runtime: &StorageRuntime,
 ) -> Result<HashMap<DriverKey, FormValues>, String> {
-    let conn = open_config_db(config_dir)?;
+    let overrides_repo = runtime.driver_overrides();
+    let values_repo = runtime.driver_setting_values();
 
-    // Get all driver keys from driver_overrides table (use conn directly)
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT driver_key FROM driver_overrides")
-        .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+    let mut driver_keys = std::collections::BTreeSet::new();
 
-    let driver_keys: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .map_err(|e| format!("Failed to query driver keys: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
+    for entry in overrides_repo
+        .all()
+        .map_err(|e| format!("Failed to load driver overrides: {}", e))?
+    {
+        driver_keys.insert(entry.driver_key);
+    }
 
-    drop(stmt);
-
-    #[allow(clippy::arc_with_non_send_sync)]
-    let repo = DriverSettingValuesRepository::new(Arc::new(conn));
+    for entry in values_repo
+        .all()
+        .map_err(|e| format!("Failed to load driver setting values: {}", e))?
+    {
+        driver_keys.insert(entry.driver_key);
+    }
 
     let mut settings = HashMap::new();
 
     for driver_key in driver_keys {
-        let values = repo
+        let values = values_repo
             .get_for_driver(&driver_key)
             .map_err(|e| format!("Failed to load driver settings for {}: {}", driver_key, e))?;
 
         let mut form_values = FormValues::new();
-        for v in values {
-            if let Some(val) = v.setting_value {
-                form_values.insert(v.setting_key, val);
+        for value in values {
+            if let Some(setting_value) = value.setting_value {
+                form_values.insert(value.setting_key, setting_value);
             }
         }
+
         if !form_values.is_empty() {
             settings.insert(driver_key, form_values);
         }
@@ -129,9 +137,7 @@ fn load_driver_settings(
 fn build_runtime(
     config_dir: Option<&std::path::Path>,
 ) -> Result<(McpRuntime, GovernanceSettings), String> {
-    // Use the unified dbflux.db path for audit service, regardless of config_dir override.
-    // The config_dir override is for legacy config.json location; the unified dbflux.db
-    // always lives in the standard data directory.
+    // Use the unified dbflux.db path for audit service regardless of config_dir.
     let dbflux_db_path = storage_paths::dbflux_db_path()
         .map_err(|e| error_messages::config_error("resolve unified dbflux.db path", None, e))?;
 
@@ -141,7 +147,7 @@ fn build_runtime(
 
     let mut runtime = McpRuntime::new(audit_service);
 
-    // Pass config_dir for governance settings loading (still reads from SQLite)
+    // Pass config_dir for CLI compatibility only; governance state is read from SQLite.
     let governance_settings = load_governance_into_runtime(&mut runtime, config_dir)?;
 
     // Drain startup events — governance load is not observable to callers.
@@ -153,7 +159,7 @@ fn build_runtime(
 fn validate_client_id(
     runtime: &McpRuntime,
     client_id: &str,
-    config_dir: Option<&std::path::Path>,
+    _config_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let clients = runtime
         .list_trusted_clients()
@@ -164,9 +170,9 @@ fn validate_client_id(
         .any(|client| client.id == client_id && client.active);
 
     if !client_exists {
-        let config_path = config_dir
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "~/.config/dbflux".to_string());
+        let settings_db_path = storage_paths::dbflux_db_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "~/.local/share/dbflux/dbflux.db".to_string());
 
         return Err(format!(
             "Client ID '{}' is not registered as a trusted client.\n\
@@ -175,17 +181,11 @@ fn validate_client_id(
              1. Open DBFlux GUI and go to Settings → MCP → Clients\n\
              2. Add a new trusted client with ID '{}'\n\
              \n\
-             Or manually edit the config file:\n\
-             {}/config.json\n\
+             Or insert a trusted client row into the DBFlux settings database:\n\
+             {}\n\
              \n\
-             Add this to the 'governance.trusted_clients' array:\n\
-             {{\n\
-               \"id\": \"{}\",\n\
-               \"name\": \"Your Client Name\",\n\
-               \"issuer\": \"optional-issuer\",\n\
-               \"active\": true\n\
-             }}",
-            client_id, client_id, config_path, client_id
+             Table: cfg_trusted_clients",
+            client_id, client_id, settings_db_path
         ));
     }
 
@@ -240,14 +240,336 @@ fn load_governance_into_runtime(
 }
 
 fn open_config_db(_config_dir: Option<&std::path::Path>) -> Result<rusqlite::Connection, String> {
-    // Always use the unified dbflux.db for governance settings, regardless of config_dir override.
-    // The config_dir override was for legacy config.json location; governance settings
-    // are now stored in the unified dbflux.db.
+    // Always use the unified dbflux.db for governance settings.
     let path = storage_paths::dbflux_db_path()
         .map_err(|e| format!("Failed to resolve unified dbflux.db path: {}", e))?;
 
     storage_sqlite::open_database(&path)
         .map_err(|e| error_messages::config_error("open unified database", Some(&path), e))
+}
+
+fn open_storage_runtime() -> Result<StorageRuntime, String> {
+    let dbflux_db_path = storage_paths::dbflux_db_path()
+        .map_err(|e| error_messages::config_error("resolve unified dbflux.db path", None, e))?;
+
+    StorageRuntime::for_path(dbflux_db_path.clone()).map_err(|e| {
+        error_messages::config_error("open unified database", Some(&dbflux_db_path), e)
+    })
+}
+
+fn load_auth_profiles(runtime: &StorageRuntime) -> Result<Vec<dbflux_core::AuthProfile>, String> {
+    let repo = runtime.auth_profiles();
+
+    repo.all()
+        .map_err(|e| format!("Failed to load auth profiles: {}", e))?
+        .into_iter()
+        .map(|dto| {
+            let id = uuid::Uuid::parse_str(&dto.id)
+                .map_err(|e| format!("Invalid auth profile id '{}': {}", dto.id, e))?;
+            let fields = repo.get_fields(&dto.id).map_err(|e| {
+                format!("Failed to load auth profile fields for '{}': {}", dto.id, e)
+            })?;
+
+            Ok(dbflux_core::AuthProfile {
+                id,
+                name: dto.name,
+                provider_id: dto.provider_id,
+                fields,
+                enabled: dto.enabled,
+            })
+        })
+        .collect()
+}
+
+fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, String> {
+    let repo = runtime.connection_profiles();
+    let dtos = repo
+        .all()
+        .map_err(|e| format!("Failed to load connection profiles: {}", e))?;
+
+    let mut profiles = Vec::with_capacity(dtos.len());
+
+    for dto in dtos {
+        let profile_id = dto.id.clone();
+        let id = uuid::Uuid::parse_str(&profile_id)
+            .map_err(|e| format!("Invalid connection profile id '{}': {}", profile_id, e))?;
+
+        let driver_config = repo
+            .driver_configs()
+            .get_for_profile(&profile_id)
+            .map_err(|e| format!("Failed to load driver config for '{}': {}", profile_id, e))?;
+
+        let config = driver_config
+            .and_then(|entry| entry.to_db_config())
+            .or_else(|| {
+                dto.kind
+                    .as_deref()
+                    .and_then(str_to_db_kind)
+                    .map(default_db_config_for_kind)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Connection profile '{}' is missing a valid driver config",
+                    profile_id
+                )
+            })?;
+
+        let connection_settings = load_connection_settings(&repo, &profile_id)?;
+        let value_refs = load_profile_value_refs(&repo, &profile_id)?;
+        let access_kind = load_access_kind(&repo, &dto, &profile_id)?;
+        let mcp_governance = load_profile_governance(&repo, &profile_id)?;
+
+        profiles.push(ConnectionProfile {
+            id,
+            name: dto.name,
+            kind: dto.kind.as_deref().and_then(str_to_db_kind),
+            driver_id: dto.driver_id,
+            config,
+            save_password: dto.save_password,
+            settings_overrides: None,
+            connection_settings,
+            hooks: None,
+            hook_bindings: None,
+            proxy_profile_id: dto
+                .proxy_profile_id
+                .as_deref()
+                .and_then(|value| uuid::Uuid::parse_str(value).ok()),
+            auth_profile_id: dto
+                .auth_profile_id
+                .as_deref()
+                .and_then(|value| uuid::Uuid::parse_str(value).ok()),
+            value_refs,
+            access_kind,
+            mcp_governance,
+        });
+    }
+
+    Ok(profiles)
+}
+
+fn load_connection_settings(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    profile_id: &str,
+) -> Result<Option<FormValues>, String> {
+    let settings = repo
+        .settings()
+        .get_for_profile(profile_id)
+        .map_err(|e| format!("Failed to load settings for '{}': {}", profile_id, e))?;
+
+    let mut values = FormValues::new();
+
+    for setting in settings {
+        if !setting.setting_key.starts_with("conn.") {
+            continue;
+        }
+
+        if let Some(value) = setting.setting_value {
+            values.insert(
+                setting.setting_key.trim_start_matches("conn.").to_string(),
+                value,
+            );
+        }
+    }
+
+    Ok((!values.is_empty()).then_some(values))
+}
+
+fn load_profile_value_refs(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    profile_id: &str,
+) -> Result<HashMap<String, ValueRef>, String> {
+    let value_refs = repo
+        .value_refs()
+        .get_for_profile(profile_id)
+        .map_err(|e| format!("Failed to load value refs for '{}': {}", profile_id, e))?;
+
+    let mut resolved = HashMap::with_capacity(value_refs.len());
+
+    for entry in value_refs {
+        let Some(kind) =
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::try_parse(
+                &entry.ref_kind,
+            )
+        else {
+            continue;
+        };
+
+        let value_ref = match kind {
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Literal => {
+                ValueRef::Literal {
+                    value: entry.literal_value.unwrap_or(entry.ref_value),
+                }
+            }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Env => {
+                ValueRef::Env {
+                    key: entry.env_key.unwrap_or(entry.ref_value),
+                }
+            }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
+                ValueRef::Secret {
+                    provider: entry.ref_provider.ok_or_else(|| {
+                        format!("Secret value ref '{}' is missing provider", entry.ref_key)
+                    })?,
+                    locator: entry.secret_locator.unwrap_or(entry.ref_value),
+                    json_key: entry.ref_json_key,
+                }
+            }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
+                ValueRef::Parameter {
+                    provider: entry.ref_provider.ok_or_else(|| {
+                        format!(
+                            "Parameter value ref '{}' is missing provider",
+                            entry.ref_key
+                        )
+                    })?,
+                    name: entry.param_name.unwrap_or(entry.ref_value),
+                    json_key: entry.ref_json_key,
+                }
+            }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Auth => {
+                ValueRef::Auth {
+                    field: entry.auth_field.unwrap_or(entry.ref_value),
+                }
+            }
+        };
+
+        resolved.insert(entry.ref_key, value_ref);
+    }
+
+    Ok(resolved)
+}
+
+fn load_access_kind(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    dto: &dbflux_storage::repositories::connection_profiles::ConnectionProfileDto,
+    profile_id: &str,
+) -> Result<Option<AccessKind>, String> {
+    let access_params = repo
+        .access_params()
+        .get_for_profile(profile_id)
+        .map_err(|e| format!("Failed to load access params for '{}': {}", profile_id, e))?;
+
+    Ok(match dto.access_kind.as_deref() {
+        Some("direct") => Some(AccessKind::Direct),
+        Some("ssh") => dto.ssh_tunnel_profile_id.as_deref().and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .ok()
+                .map(|ssh_tunnel_profile_id| AccessKind::Ssh {
+                    ssh_tunnel_profile_id,
+                })
+        }),
+        Some("proxy") => dto.proxy_profile_id.as_deref().and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .ok()
+                .map(|proxy_profile_id| AccessKind::Proxy { proxy_profile_id })
+        }),
+        Some("managed") => Some(AccessKind::Managed {
+            provider: dto.access_provider.clone().unwrap_or_default(),
+            params: access_params
+                .into_iter()
+                .map(|param| (param.param_key, param.param_value))
+                .collect(),
+        }),
+        _ => None,
+    })
+}
+
+fn load_profile_governance(
+    repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
+    profile_id: &str,
+) -> Result<Option<ConnectionMcpGovernance>, String> {
+    let governance_entries = repo.governance().get_for_profile(profile_id).map_err(|e| {
+        format!(
+            "Failed to load governance settings for '{}': {}",
+            profile_id, e
+        )
+    })?;
+    let binding_entries = repo
+        .governance_bindings()
+        .get_for_profile(profile_id)
+        .map_err(|e| {
+            format!(
+                "Failed to load governance bindings for '{}': {}",
+                profile_id, e
+            )
+        })?;
+
+    let enabled = governance_entries
+        .into_iter()
+        .find(|entry| entry.governance_key == "enabled")
+        .and_then(|entry| entry.governance_value)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(false);
+
+    if !enabled && binding_entries.is_empty() {
+        return Ok(None);
+    }
+
+    let mut policy_bindings = Vec::with_capacity(binding_entries.len());
+
+    for binding in binding_entries {
+        let role_ids = repo
+            .governance_binding_roles()
+            .get_for_binding(&binding.id)
+            .map_err(|e| {
+                format!(
+                    "Failed to load governance roles for '{}': {}",
+                    binding.id, e
+                )
+            })?
+            .into_iter()
+            .map(|entry| entry.role_id)
+            .collect();
+
+        let policy_ids = repo
+            .governance_binding_policies()
+            .get_for_binding(&binding.id)
+            .map_err(|e| {
+                format!(
+                    "Failed to load governance policies for '{}': {}",
+                    binding.id, e
+                )
+            })?
+            .into_iter()
+            .map(|entry| entry.policy_id)
+            .collect();
+
+        policy_bindings.push(ConnectionMcpPolicyBinding {
+            actor_id: binding.actor_id,
+            role_ids,
+            policy_ids,
+        });
+    }
+
+    Ok(Some(ConnectionMcpGovernance {
+        enabled,
+        policy_bindings,
+    }))
+}
+
+fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
+    match value {
+        "Postgres" => Some(dbflux_core::DbKind::Postgres),
+        "SQLite" => Some(dbflux_core::DbKind::SQLite),
+        "MySQL" => Some(dbflux_core::DbKind::MySQL),
+        "MariaDB" => Some(dbflux_core::DbKind::MariaDB),
+        "MongoDB" => Some(dbflux_core::DbKind::MongoDB),
+        "Redis" => Some(dbflux_core::DbKind::Redis),
+        "DynamoDB" => Some(dbflux_core::DbKind::DynamoDB),
+        _ => None,
+    }
+}
+
+fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfig {
+    match kind {
+        dbflux_core::DbKind::Postgres => dbflux_core::DbConfig::default_postgres(),
+        dbflux_core::DbKind::SQLite => dbflux_core::DbConfig::default_sqlite(),
+        dbflux_core::DbKind::MySQL => dbflux_core::DbConfig::default_mysql(),
+        dbflux_core::DbKind::MariaDB => dbflux_core::DbConfig::default_mysql(),
+        dbflux_core::DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
+        dbflux_core::DbKind::Redis => dbflux_core::DbConfig::default_redis(),
+        dbflux_core::DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
+    }
 }
 
 fn load_governance_settings(
@@ -499,6 +821,7 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
 }
 
 fn build_auth_provider_registry() -> HashMap<String, Arc<dyn DynAuthProvider>> {
+    #[allow(unused_mut)]
     let mut registry: HashMap<String, Arc<dyn DynAuthProvider>> = HashMap::new();
 
     #[cfg(feature = "aws")]

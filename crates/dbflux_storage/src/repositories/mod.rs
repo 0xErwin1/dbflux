@@ -31,7 +31,6 @@ pub mod governance_settings;
 pub mod hook_commands;
 pub mod hook_definitions;
 pub mod hook_environment;
-pub mod legacy_imports;
 pub mod proxy_auth;
 pub mod proxy_profiles;
 pub mod service_args;
@@ -42,5 +41,3 @@ pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
 
 pub mod state;
-
-pub use legacy_imports::{ImportStatus, LegacyImport, LegacyImportsRepository};

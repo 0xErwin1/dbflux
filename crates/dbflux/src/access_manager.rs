@@ -1,34 +1,51 @@
+use std::collections::HashMap;
 #[cfg(feature = "aws")]
 use std::sync::Arc;
 
 use dbflux_core::DbError;
+use dbflux_core::SshTunnelConfig;
 use dbflux_core::access::{AccessHandle, AccessKind, AccessManager};
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct ResolvedSshTunnel {
+    pub config: SshTunnelConfig,
+    pub secret: Option<SecretString>,
+}
 
 /// Concrete access manager for the app crate.
 ///
 /// Dispatches to the right tunnel infrastructure based on the `AccessKind`
-/// variant. SSH and proxy tunnels are currently handled by the legacy connect
-/// path in `ConnectProfileParams::execute()` — this manager only handles
-/// direct connections and managed tunnels (e.g. `aws-ssm`).
+/// variant. Direct, SSH, and managed access are handled here. Proxy tunnels
+/// still use the app connection flow and are not yet supported by this manager.
 pub struct AppAccessManager {
+    ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>,
     #[cfg(feature = "aws")]
     ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
 }
 
 impl AppAccessManager {
     #[cfg(feature = "aws")]
-    pub fn new(ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>) -> Self {
-        Self { ssm_factory }
+    pub fn new(
+        ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>,
+        ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
+    ) -> Self {
+        Self {
+            ssh_tunnels,
+            ssm_factory,
+        }
     }
 
     #[cfg(not(feature = "aws"))]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>) -> Self {
+        Self { ssh_tunnels }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
@@ -41,12 +58,12 @@ mod tests {
 
     #[cfg(feature = "aws")]
     fn test_manager() -> AppAccessManager {
-        AppAccessManager::new(None)
+        AppAccessManager::new(HashMap::new(), None)
     }
 
     #[cfg(not(feature = "aws"))]
     fn test_manager() -> AppAccessManager {
-        AppAccessManager::new()
+        AppAccessManager::new(HashMap::new())
     }
 
     fn run_ready_future<F>(future: F) -> F::Output
@@ -91,16 +108,36 @@ mod tests {
     }
 
     #[test]
-    fn ssh_and_proxy_modes_return_structured_legacy_path_errors() {
+    fn ssh_mode_reports_missing_profile_without_legacy_wording() {
         let manager = test_manager();
+        let missing_profile_id = Uuid::new_v4();
 
-        let ssh_result = run_ready_future(manager.open(
+        let result = run_ready_future(manager.open(
             &AccessKind::Ssh {
-                ssh_tunnel_profile_id: Uuid::new_v4(),
+                ssh_tunnel_profile_id: missing_profile_id,
             },
             "localhost",
             5432,
         ));
+
+        let error = match result {
+            Ok(_) => panic!("missing ssh tunnel profile should fail explicitly"),
+            Err(error) => error,
+        };
+
+        let DbError::ConnectionFailed(error) = error else {
+            panic!("ssh mode should return a connection error");
+        };
+
+        assert_eq!(
+            error.message,
+            format!("SSH tunnel profile '{}' was not found", missing_profile_id)
+        );
+    }
+
+    #[test]
+    fn proxy_mode_returns_structured_pipeline_error() {
+        let manager = test_manager();
 
         let proxy_result = run_ready_future(manager.open(
             &AccessKind::Proxy {
@@ -110,18 +147,9 @@ mod tests {
             5432,
         ));
 
-        let ssh_error = match ssh_result {
-            Ok(_) => panic!("ssh mode should route to explicit legacy-path failure"),
-            Err(error) => error,
-        };
-
         let proxy_error = match proxy_result {
-            Ok(_) => panic!("proxy mode should route to explicit legacy-path failure"),
+            Ok(_) => panic!("proxy mode should fail explicitly"),
             Err(error) => error,
-        };
-
-        let DbError::ConnectionFailed(ssh_error) = ssh_error else {
-            panic!("ssh mode should return a connection error");
         };
 
         let DbError::ConnectionFailed(proxy_error) = proxy_error else {
@@ -129,12 +157,8 @@ mod tests {
         };
 
         assert_eq!(
-            ssh_error.message,
-            "SSH tunnels are managed by the legacy connect path"
-        );
-        assert_eq!(
             proxy_error.message,
-            "Proxy tunnels are managed by the legacy connect path"
+            "Proxy tunnels are not supported by the connect pipeline yet"
         );
     }
 
@@ -172,17 +196,17 @@ impl AccessManager for AppAccessManager {
         &self,
         access_kind: &AccessKind,
         remote_host: &str,
-        _remote_port: u16,
+        remote_port: u16,
     ) -> Result<AccessHandle, DbError> {
         match access_kind {
             AccessKind::Direct => Ok(AccessHandle::direct()),
 
-            AccessKind::Ssh { .. } => Err(DbError::connection_failed(
-                "SSH tunnels are managed by the legacy connect path",
-            )),
+            AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            } => self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port),
 
             AccessKind::Proxy { .. } => Err(DbError::connection_failed(
-                "Proxy tunnels are managed by the legacy connect path",
+                "Proxy tunnels are not supported by the connect pipeline yet",
             )),
 
             AccessKind::Managed { provider, params } => {
@@ -193,6 +217,33 @@ impl AccessManager for AppAccessManager {
 }
 
 impl AppAccessManager {
+    fn open_ssh(
+        &self,
+        ssh_tunnel_profile_id: &Uuid,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, DbError> {
+        let resolved = self.ssh_tunnels.get(ssh_tunnel_profile_id).ok_or_else(|| {
+            DbError::connection_failed(format!(
+                "SSH tunnel profile '{}' was not found",
+                ssh_tunnel_profile_id
+            ))
+        })?;
+
+        let session = dbflux_ssh::establish_session(
+            &resolved.config,
+            resolved
+                .secret
+                .as_ref()
+                .map(|secret| secret.expose_secret()),
+        )?;
+
+        let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
+        let local_port = tunnel.local_port();
+
+        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+    }
+
     async fn open_managed(
         &self,
         provider: &str,

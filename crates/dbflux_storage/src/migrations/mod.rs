@@ -32,8 +32,6 @@ use rusqlite::{Connection, Transaction};
 
 use crate::error::StorageError;
 
-pub mod legacy_import;
-
 // ---------------------------------------------------------------------------
 // Migration trait and error types
 // ---------------------------------------------------------------------------
@@ -449,11 +447,6 @@ mod tests {
 
         // System domain tables
         assert!(tables.contains("sys_migrations"), "missing sys_migrations");
-        assert!(tables.contains("sys_metadata"), "missing sys_metadata");
-        assert!(
-            tables.contains("sys_legacy_imports"),
-            "missing sys_legacy_imports"
-        );
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);

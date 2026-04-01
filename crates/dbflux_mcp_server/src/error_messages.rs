@@ -258,17 +258,16 @@ pub fn config_error(
          {}\n\
          \n\
          Common causes:\n\
-         • Configuration file corrupted or has invalid JSON\n\
+         • dbflux.db is missing, corrupted, or inaccessible\n\
          • Insufficient permissions\n\
          • Directory does not exist\n\
          • Disk full\n\
          \n\
          Resolution:\n\
-         • Validate JSON: jq . ~/.config/dbflux/config.json\n\
-         • Check permissions: ls -la ~/.config/dbflux/\n\
-         • Ensure directory exists: mkdir -p ~/.config/dbflux\n\
-         • Verify disk space: df -h ~/.config\n\
-         • Backup and reset if corrupted: mv config.json config.json.backup",
+         • Check permissions: ls -la ~/.local/share/dbflux/\n\
+         • Ensure directory exists: mkdir -p ~/.local/share/dbflux\n\
+         • Verify disk space: df -h ~/.local\n\
+         • Test integrity: sqlite3 ~/.local/share/dbflux/dbflux.db 'PRAGMA integrity_check;'",
         operation, error, path_info
     )
 }

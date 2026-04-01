@@ -13,8 +13,7 @@ impl ProfileManager {
         Self { profiles, store }
     }
 
-    /// Loads profiles from the JSON store (legacy path). Returns an empty manager
-    /// if the store cannot be created or loaded.
+    /// Creates an empty in-memory manager.
     pub fn new() -> Self {
         Self::with_profiles(Vec::new(), None)
     }

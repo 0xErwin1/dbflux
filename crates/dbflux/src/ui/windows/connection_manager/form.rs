@@ -4,8 +4,8 @@ use crate::ui::windows::ssh_shared;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
 use dbflux_core::{
-    CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionOverrides,
-    ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig,
+    AccessKind, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
+    ConnectionOverrides, ConnectionProfile, DbConfig, FormFieldKind, SshTunnelConfig,
 };
 use gpui::*;
 use log::info;
@@ -300,8 +300,12 @@ impl ConnectionManagerWindow {
             }
         };
 
-        let ssh_tunnel = self.build_ssh_config(cx);
         let ssh_tunnel_profile_id = self.selected_ssh_tunnel_id;
+        let ssh_tunnel = if ssh_tunnel_profile_id.is_some() {
+            None
+        } else {
+            self.build_ssh_config(cx)
+        };
 
         match &mut config {
             DbConfig::Postgres {
@@ -356,9 +360,16 @@ impl ConnectionManagerWindow {
         profile.hook_bindings = self.collect_hook_bindings(cx);
         profile.mcp_governance = self.collect_mcp_governance(cx);
 
-        // Collect access kind — update SSM fields from inputs if SSM is selected
+        // Collect access kind — keep SSH/proxy profile selections as references instead
+        // of flattening them into inline connection fields.
         let access_kind = if self.is_ssm_selected() {
             Some(self.collect_managed_access_kind(cx))
+        } else if let Some(ssh_tunnel_profile_id) = self.selected_ssh_tunnel_id {
+            Some(AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            })
+        } else if let Some(proxy_profile_id) = self.selected_proxy_id {
+            Some(AccessKind::Proxy { proxy_profile_id })
         } else {
             self.access_kind.clone()
         };

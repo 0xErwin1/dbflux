@@ -22,8 +22,8 @@ pub enum StorageError {
     #[error("data directory not found — cannot resolve state database path")]
     DataDirUnavailable,
 
-    #[error("legacy import failed: {0}")]
-    LegacyImportFailed(String),
+    #[error("storage data error: {0}")]
+    Data(String),
 
     #[error("migration {kind} verification failed: {details}")]
     Migration { kind: String, details: String },
@@ -86,7 +86,7 @@ impl From<StorageError> for dbflux_core::DbError {
             StorageError::DataDirUnavailable => {
                 dbflux_core::DbError::InvalidProfile("data directory not available".to_string())
             }
-            StorageError::LegacyImportFailed(msg) => dbflux_core::DbError::InvalidProfile(msg),
+            StorageError::Data(msg) => dbflux_core::DbError::InvalidProfile(msg),
             StorageError::Migration { kind, details } => dbflux_core::DbError::InvalidProfile(
                 format!("migration {} failed: {}", kind, details),
             ),
@@ -101,9 +101,9 @@ impl From<RepositoryError> for StorageError {
                 path: PathBuf::from("<unknown>"),
                 source,
             },
-            RepositoryError::NotFound(msg) => StorageError::LegacyImportFailed(msg),
+            RepositoryError::NotFound(msg) => StorageError::Data(msg),
             RepositoryError::Serialization { source } => {
-                StorageError::LegacyImportFailed(format!("serialization error: {}", source))
+                StorageError::Data(format!("serialization error: {}", source))
             }
         }
     }

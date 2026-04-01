@@ -1,5 +1,5 @@
 use crate::connection::TreeStore;
-use crate::{ConnectionTree, ConnectionTreeNode, ConnectionTreeStore};
+use crate::{ConnectionTree, ConnectionTreeNode};
 use log::{error, info};
 use uuid::Uuid;
 
@@ -9,21 +9,12 @@ pub struct ConnectionTreeManager {
 }
 
 impl ConnectionTreeManager {
-    /// Creates a manager with a JSON file store (legacy, for testing only).
-    /// New code should use `with_store()`.
+    /// Creates an empty in-memory manager.
     pub fn new() -> Self {
-        let store = ConnectionTreeStore::new()
-            .ok()
-            .map(|s| Box::new(s) as Box<dyn TreeStore>);
-        let tree = store
-            .as_ref()
-            .and_then(|s| s.load().ok())
-            .unwrap_or_else(|| {
-                error!("Failed to load connection tree, using empty tree");
-                ConnectionTree::new()
-            });
-        info!("Loaded connection tree with {} nodes", tree.nodes.len());
-        Self { tree, store }
+        Self {
+            tree: ConnectionTree::new(),
+            store: None,
+        }
     }
 
     /// Creates a manager with a caller-supplied store.

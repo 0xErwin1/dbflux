@@ -9,7 +9,7 @@ pub trait Identifiable {
     fn id(&self) -> Uuid;
 }
 
-/// CRUD manager backed by a `JsonStore<T>`, with auto-save on mutation.
+/// CRUD manager with optional persistence.
 pub struct ItemManager<T> {
     pub items: Vec<T>,
     store: Option<JsonStore<T>>,
@@ -17,25 +17,10 @@ pub struct ItemManager<T> {
 }
 
 impl<T: Identifiable + Serialize + DeserializeOwned> ItemManager<T> {
-    pub fn new(filename: &str, label: &'static str) -> Self {
-        let (store, items) = match JsonStore::new(filename) {
-            Ok(store) => {
-                let items = store.load().unwrap_or_else(|e| {
-                    error!("Failed to load {}: {:?}", label, e);
-                    Vec::new()
-                });
-                info!("Loaded {} {} from disk", items.len(), label);
-                (Some(store), items)
-            }
-            Err(e) => {
-                error!("Failed to create {} store: {:?}", label, e);
-                (None, Vec::new())
-            }
-        };
-
+    pub fn new(_filename: &str, label: &'static str) -> Self {
         Self {
-            items,
-            store,
+            items: Vec::new(),
+            store: None,
             label,
         }
     }
