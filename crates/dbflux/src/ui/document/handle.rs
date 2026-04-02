@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use super::audit::AuditDocument;
 use super::code::CodeDocument;
 use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
@@ -7,7 +8,7 @@ use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, Docum
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::RefreshPolicy;
-use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
+use gpui::{AnyElement, App, Entity, Focusable, IntoElement, Subscription, Window};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
 /// The `id` is stored inline for quick access without needing `cx`.
@@ -29,6 +30,11 @@ pub enum DocumentHandle {
         id: DocumentId,
         entity: Entity<KeyValueDocument>,
     },
+    /// Audit event viewer document.
+    Audit {
+        id: DocumentId,
+        entity: Entity<AuditDocument>,
+    },
 }
 
 impl DocumentHandle {
@@ -49,12 +55,19 @@ impl DocumentHandle {
         Self::KeyValue { id, entity }
     }
 
+    /// Creates a new Audit document handle.
+    pub fn audit(entity: Entity<AuditDocument>, cx: &App) -> Self {
+        let id = entity.read(cx).id();
+        Self::Audit { id, entity }
+    }
+
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
             Self::Code { id, .. } => *id,
             Self::Data { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
+            Self::Audit { id, .. } => *id,
         }
     }
 
@@ -64,6 +77,7 @@ impl DocumentHandle {
             Self::Code { .. } => DocumentKind::Script,
             Self::Data { .. } => DocumentKind::Data,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
+            Self::Audit { .. } => DocumentKind::Audit,
         }
     }
 
@@ -151,6 +165,18 @@ impl DocumentHandle {
                     connection_id: doc.connection_id(),
                 }
             }
+            Self::Audit { id, entity } => {
+                let doc = entity.read(cx);
+                DocumentMetaSnapshot {
+                    id: *id,
+                    kind: DocumentKind::Audit,
+                    title: doc.title().to_string(),
+                    icon: DocumentIcon::Audit,
+                    state: doc.state(),
+                    closable: true,
+                    connection_id: None,
+                }
+            }
         }
     }
 
@@ -165,6 +191,7 @@ impl DocumentHandle {
             Self::Code { entity, .. } => entity.read(cx).can_close(cx),
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
+            Self::Audit { .. } => true,
         }
     }
 
@@ -179,6 +206,7 @@ impl DocumentHandle {
             Self::Code { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
+            Self::Audit { .. } => RefreshPolicy::default(),
         }
     }
 
@@ -192,6 +220,9 @@ impl DocumentHandle {
             }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, _cx| doc.set_active_tab(active));
+            }
+            Self::Audit { .. } => {
+                // AuditDocument doesn't need tab state
             }
         }
     }
@@ -207,6 +238,9 @@ impl DocumentHandle {
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
             }
+            Self::Audit { .. } => {
+                // AuditDocument doesn't use refresh policy
+            }
         }
     }
 
@@ -216,6 +250,7 @@ impl DocumentHandle {
             Self::Code { entity, .. } => entity.clone().into_any_element(),
             Self::Data { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
+            Self::Audit { entity, .. } => entity.clone().into_any_element(),
         }
     }
 
@@ -231,6 +266,7 @@ impl DocumentHandle {
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
+            Self::Audit { .. } => false,
         }
     }
 
@@ -246,6 +282,11 @@ impl DocumentHandle {
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
+            Self::Audit { entity, .. } => {
+                entity.update(cx, |doc, cx| {
+                    let _ = doc.focus_handle(cx);
+                });
+            }
         }
     }
 
@@ -256,6 +297,7 @@ impl DocumentHandle {
             Self::Code { entity, .. } => entity.read(cx).active_context(cx),
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
+            Self::Audit { .. } => ContextId::Editor,
         }
     }
 
@@ -288,6 +330,11 @@ impl DocumentHandle {
                     callback(&DocumentEvent::RequestFocus, cx);
                 }
             }),
+            Self::Audit { entity, .. } => {
+                cx.subscribe(entity, move |_entity, _event, _cx| {
+                    // AuditDocument doesn't emit document events yet
+                })
+            }
         }
     }
 }

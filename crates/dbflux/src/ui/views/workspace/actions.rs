@@ -152,6 +152,41 @@ impl Workspace {
         });
     }
 
+    /// Opens the global audit viewer as a document tab.
+    pub(super) fn open_audit_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::components::toast::ToastExt;
+        use crate::ui::document::AuditDocument;
+
+        // Check if an audit document is already open
+        let existing_audit_id = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| matches!(doc, crate::ui::document::DocumentHandle::Audit { .. }))
+            .map(|doc| doc.id());
+
+        if let Some(id) = existing_audit_id {
+            // Focus the existing audit tab
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            cx.toast_info("Focusing existing audit viewer", window);
+            return;
+        }
+
+        // Create a new audit document
+        let doc = cx.new(|cx| AuditDocument::new(self.app_state.clone(), window, cx));
+        let handle = crate::ui::document::DocumentHandle::audit(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
+        cx.toast_info("Opened audit viewer", window);
+    }
+
     #[cfg(feature = "mcp")]
     pub(super) fn open_mcp_approvals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::components::toast::ToastExt;

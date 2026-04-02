@@ -118,6 +118,12 @@ fn build_audit_filter(
         start_epoch_ms,
         end_epoch_ms,
         limit,
+        // Extended filter fields (not used in MCP governance path)
+        level: None,
+        category: None,
+        source_id: None,
+        outcome: None,
+        free_text: None,
     })
 }
 

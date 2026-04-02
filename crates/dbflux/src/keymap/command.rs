@@ -99,6 +99,7 @@ pub enum Command {
     OpenSettings,
     OpenLoginModal,
     OpenSsoWizard,
+    OpenAuditViewer,
     #[cfg(feature = "mcp")]
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
@@ -135,6 +136,7 @@ impl Command {
             "open_settings" => Some(Command::OpenSettings),
             "open_login_modal" => Some(Command::OpenLoginModal),
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
+            "open_audit_viewer" => Some(Command::OpenAuditViewer),
             #[cfg(feature = "mcp")]
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
             #[cfg(feature = "mcp")]
@@ -231,6 +233,7 @@ impl Command {
             Command::OpenSettings => "Open Settings",
             Command::OpenLoginModal => "Open Login Modal",
             Command::OpenSsoWizard => "Open AWS SSO Wizard",
+            Command::OpenAuditViewer => "Open Audit Viewer",
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "Open MCP Approvals",
             #[cfg(feature = "mcp")]
@@ -323,7 +326,8 @@ impl Command {
             | Command::TogglePanel
             | Command::OpenSettings
             | Command::OpenLoginModal
-            | Command::OpenSsoWizard => "View",
+            | Command::OpenSsoWizard
+            | Command::OpenAuditViewer => "View",
 
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::OpenMcpAudit | Command::RefreshMcpGovernance => {
@@ -362,6 +366,7 @@ impl Command {
                 | Command::ToggleSidebar
                 | Command::OpenLoginModal
                 | Command::OpenSsoWizard
+                | Command::OpenAuditViewer
         ) || {
             #[cfg(feature = "mcp")]
             {

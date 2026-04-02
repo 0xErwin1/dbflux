@@ -2208,11 +2208,15 @@ dependencies = [
 name = "dbflux_audit"
 version = "0.4.0-dev.12"
 dependencies = [
+ "dbflux_core",
  "dbflux_storage",
  "dirs 5.0.1",
+ "hex",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
 ]
 

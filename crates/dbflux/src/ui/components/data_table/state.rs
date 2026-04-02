@@ -129,6 +129,19 @@ impl DataTableState {
         &self.model
     }
 
+    /// Replace the model (e.g., after a new query loads new rows).
+    /// Emits SelectionChanged so subscribers can validate that the preserved selection
+    /// is still valid in the new model (row index might be out of bounds or point to
+    /// different data).
+    pub fn set_model(&mut self, model: Arc<TableModel>, cx: &mut Context<Self>) {
+        self.model = model;
+        // Emit SelectionChanged so the audit viewer's subscription can validate
+        // that the selected row is still valid in the new model. If the row count
+        // decreased, the selection may now be out of bounds.
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
     pub fn row_count(&self) -> usize {
         // Include pending inserts in the row count
         self.model.row_count() + self.edit_buffer.pending_insert_rows().len()

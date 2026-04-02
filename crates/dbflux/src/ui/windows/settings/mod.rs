@@ -1,4 +1,5 @@
 mod about_section;
+mod audit_section;
 mod auth_profiles_section;
 mod drivers;
 mod drivers_section;
@@ -29,6 +30,7 @@ mod ssh_tunnels_section;
 use crate::app::AppState;
 use crate::ui::components::tree_nav::TreeNav;
 use about_section::AboutSection;
+use audit_section::AuditSection;
 use auth_profiles_section::AuthProfilesSection;
 use drivers_section::DriversSection;
 use general_section::GeneralSection;
@@ -59,6 +61,7 @@ enum SettingsFocus {
 
 enum ActiveSettingsSection {
     About(Entity<AboutSection>),
+    Audit(Entity<AuditSection>),
     AuthProfiles(Entity<AuthProfilesSection>),
     Drivers(Entity<DriversSection>),
     General(Entity<GeneralSection>),
@@ -81,6 +84,7 @@ impl ActiveSettingsSection {
     fn as_view(&self) -> AnyView {
         match self {
             Self::About(section) => AnyView::from(section.clone()),
+            Self::Audit(section) => AnyView::from(section.clone()),
             Self::AuthProfiles(section) => AnyView::from(section.clone()),
             Self::Drivers(section) => AnyView::from(section.clone()),
             Self::General(section) => AnyView::from(section.clone()),
@@ -105,6 +109,11 @@ impl ActiveSettingsSection {
     ) {
         match self {
             Self::About(section) => {
+                section.update(cx, |section, cx| {
+                    section.handle_key_event(event, window, cx)
+                });
+            }
+            Self::Audit(section) => {
                 section.update(cx, |section, cx| {
                     section.handle_key_event(event, window, cx)
                 });
@@ -166,6 +175,9 @@ impl ActiveSettingsSection {
             Self::About(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
+            Self::Audit(section) => {
+                section.update(cx, |section, cx| section.focus_in(window, cx));
+            }
             Self::AuthProfiles(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
@@ -205,6 +217,9 @@ impl ActiveSettingsSection {
             Self::About(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
+            Self::Audit(section) => {
+                section.update(cx, |section, cx| section.focus_out(window, cx));
+            }
             Self::AuthProfiles(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
@@ -242,6 +257,7 @@ impl ActiveSettingsSection {
     fn is_dirty(&self, cx: &App) -> bool {
         match self {
             Self::About(section) => section.read(cx).is_dirty(cx),
+            Self::Audit(section) => section.read(cx).is_dirty(cx),
             Self::AuthProfiles(section) => section.read(cx).is_dirty(cx),
             Self::Drivers(section) => section.read(cx).is_dirty(cx),
             Self::General(section) => section.read(cx).is_dirty(cx),

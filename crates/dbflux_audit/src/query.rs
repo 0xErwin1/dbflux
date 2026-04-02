@@ -6,4 +6,10 @@ pub struct AuditQueryFilter {
     pub start_epoch_ms: Option<i64>,
     pub end_epoch_ms: Option<i64>,
     pub limit: Option<usize>,
+    // Extended filter fields
+    pub level: Option<String>,
+    pub category: Option<String>,
+    pub source_id: Option<String>,
+    pub outcome: Option<String>,
+    pub free_text: Option<String>,
 }

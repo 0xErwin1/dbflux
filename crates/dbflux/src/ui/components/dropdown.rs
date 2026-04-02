@@ -55,6 +55,10 @@ pub struct Dropdown {
     placeholder: SharedString,
     focus_ring_color: Option<Hsla>,
     compact_trigger: bool,
+    /// When true, renders a borderless inline trigger suitable for toolbars:
+    /// no background, no border, compact padding, small text. Matches the
+    /// visual weight of `Input::small()` controls in the DataGridPanel toolbar.
+    toolbar_style: bool,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
@@ -74,6 +78,7 @@ impl Dropdown {
             placeholder: "Select".into(),
             focus_ring_color: None,
             compact_trigger: false,
+            toolbar_style: false,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
         }
@@ -154,6 +159,14 @@ impl Dropdown {
 
     pub fn compact_trigger(mut self, compact: bool) -> Self {
         self.compact_trigger = compact;
+        self
+    }
+
+    /// Render with a borderless inline trigger for use inside toolbars.
+    /// The trigger has no background, no border, compact padding, and small text,
+    /// matching the visual weight of `Input::small()` in the DataGridPanel toolbar.
+    pub fn toolbar_style(mut self, toolbar: bool) -> Self {
+        self.toolbar_style = toolbar;
         self
     }
 
@@ -424,6 +437,21 @@ impl Render for Dropdown {
                     .text_color(theme.muted_foreground)
                     .child("▾"),
             );
+        } else if self.toolbar_style {
+            // Borderless inline trigger matching the DataGridPanel toolbar weight.
+            // No background, no border, compact horizontal padding only, xs text.
+            trigger = trigger
+                .justify_between()
+                .gap_1()
+                .px_1p5()
+                .text_xs()
+                .child(div().flex_1().truncate().child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("▾"),
+                );
         } else {
             trigger = trigger
                 .justify_between()
@@ -453,6 +481,21 @@ impl Render for Dropdown {
                 .id(self.id.clone())
                 .w_full()
                 .h_full()
+                .child(trigger)
+                .child(self.render_menu(cx));
+
+            if self.open {
+                container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
+            }
+
+            return container;
+        }
+
+        // toolbar_style uses the same simple container as compact (no focus-ring wrapper).
+        if self.toolbar_style {
+            let mut container = div()
+                .id(self.id.clone())
+                .w_full()
                 .child(trigger)
                 .child(self.render_menu(cx));
 

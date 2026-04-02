@@ -48,6 +48,7 @@ impl SettingsCoordinator {
                     TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
                 ],
             ),
+            TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
             #[cfg(feature = "mcp")]
             TreeNavNode::group(
                 "mcp-governance",
@@ -76,6 +77,7 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
+            "audit" => Some(SettingsSectionId::Audit),
             #[cfg(feature = "mcp")]
             "mcp-clients" => Some(SettingsSectionId::McpClients),
             #[cfg(feature = "mcp")]
@@ -99,6 +101,7 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
+            SettingsSectionId::Audit => "audit",
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients => "mcp-clients",
             #[cfg(feature = "mcp")]
@@ -137,6 +140,10 @@ mod tests {
             Some(SettingsSectionId::General)
         );
         assert_eq!(
+            SettingsCoordinator::section_for_tree_id("audit"),
+            Some(SettingsSectionId::Audit)
+        );
+        assert_eq!(
             SettingsCoordinator::section_for_tree_id("proxies"),
             Some(SettingsSectionId::Proxies)
         );
@@ -166,6 +173,7 @@ mod tests {
     fn tree_id_roundtrip_all_sections() {
         let mut sections = vec![
             SettingsSectionId::General,
+            SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,

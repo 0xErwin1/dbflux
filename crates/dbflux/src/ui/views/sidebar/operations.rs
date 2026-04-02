@@ -599,6 +599,32 @@ async fn run_hook_phase(
         let hook_cancel_for_execution = hook_cancel_token.clone();
         let executor = executor.clone();
 
+        // Capture start time and emit hook start event.
+        let hook_start_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let hook_command_for_audit = hook.display_command();
+        let phase_label = phase.label();
+        let _ = cx.update(|cx| {
+            app_state.read(cx).audit_service().record(
+                dbflux_core::observability::EventRecord::new(
+                    hook_start_ms,
+                    dbflux_core::observability::EventSeverity::Info,
+                    dbflux_core::observability::EventCategory::Hook,
+                    dbflux_core::observability::EventOutcome::Success,
+                )
+                .with_action("hook.execute_start")
+                .with_summary(format!(
+                    "Hook '{}' ({}) started",
+                    hook_command_for_audit, phase_label
+                ))
+                .with_actor_id("local")
+                .with_connection_context(
+                    profile_id.to_string(),
+                    context.database.as_deref().unwrap_or(""),
+                    context.db_kind.clone(),
+                ),
+            );
+        });
+
         let hook_result = cx
             .background_executor()
             .spawn(async move {
@@ -743,6 +769,63 @@ async fn run_hook_phase(
                 error
             );
         }
+
+        // Emit hook completion/failure audit event.
+        let hook_end_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let duration_ms = (hook_end_ms - hook_start_ms) as i64;
+        let hook_complete_action = if cancelled || failure_message.is_some() {
+            "hook.execute_fail"
+        } else {
+            "hook.execute_complete"
+        };
+        let hook_complete_outcome = if cancelled {
+            dbflux_core::observability::EventOutcome::Cancelled
+        } else if failure_message.is_some() {
+            dbflux_core::observability::EventOutcome::Failure
+        } else {
+            dbflux_core::observability::EventOutcome::Success
+        };
+        let hook_complete_severity = if cancelled || failure_message.is_some() {
+            dbflux_core::observability::EventSeverity::Error
+        } else {
+            dbflux_core::observability::EventSeverity::Info
+        };
+        let hook_complete_summary = if cancelled {
+            format!("Hook '{}' ({}) cancelled", command_display, phase.label())
+        } else if let Some(ref msg) = failure_message {
+            format!(
+                "Hook '{}' ({}) failed: {}",
+                command_display,
+                phase.label(),
+                msg
+            )
+        } else {
+            format!("Hook '{}' ({}) completed", command_display, phase.label())
+        };
+        let _ = cx.update(|cx| {
+            let audit_service = app_state.read(cx).audit_service().clone();
+            let mut event = dbflux_core::observability::EventRecord::new(
+                hook_end_ms,
+                hook_complete_severity,
+                dbflux_core::observability::EventCategory::Hook,
+                hook_complete_outcome,
+            );
+            event.action = hook_complete_action.to_string();
+            event.actor_type = dbflux_core::observability::EventActorType::User;
+            event.source_id = dbflux_core::observability::EventSourceId::Local;
+            event.connection_id = Some(profile_id.to_string());
+            event.database_name = context.database.clone();
+            event.driver_id = Some(context.db_kind.clone());
+            event.object_type = Some(command_display.clone());
+            event.summary = hook_complete_summary.clone();
+            event.duration_ms = Some(duration_ms);
+            if let Some(ref msg) = failure_message {
+                event.error_message = Some(msg.clone());
+            }
+            if let Err(e) = audit_service.record(event) {
+                log::warn!("Failed to record hook lifecycle audit event: {}", e);
+            }
+        });
 
         if cancelled {
             return HookPhaseState::Cancelled;
@@ -1687,10 +1770,48 @@ impl Sidebar {
             let connected = match result {
                 Ok(value) => value,
                 Err(error) => {
+                    // Emit connection failure audit event.
+                    let error_clone = error.clone();
+                    let profile_name_for_audit = profile_name.clone();
+                    let profile_id_for_audit = profile_id;
+
                     if let Err(update_error) = cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
+                            // Emit failure audit event.
+                            let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                            let driver_id = state
+                                .profiles()
+                                .iter()
+                                .find(|p| p.id == profile_id_for_audit)
+                                .map(|p| p.driver_id.clone())
+                                .unwrap_or_default();
+                            let mut event = dbflux_core::observability::EventRecord::new(
+                                now_ms,
+                                dbflux_core::observability::EventSeverity::Error,
+                                dbflux_core::observability::EventCategory::Connection,
+                                dbflux_core::observability::EventOutcome::Failure,
+                            );
+                            event.actor_type = dbflux_core::observability::EventActorType::User;
+                            event.source_id = dbflux_core::observability::EventSourceId::Local;
+                            event.connection_id = Some(profile_id_for_audit.to_string());
+                            event.driver_id = driver_id;
+                            event.error_message = Some(error_clone.clone());
+                            let event = event
+                                .with_action("connection.connect")
+                                .with_summary(format!(
+                                    "Connection to '{}' failed: {}",
+                                    profile_name_for_audit, error_clone
+                                ))
+                                .with_actor_id("local");
+                            if let Err(e) = state.audit_service().record(event) {
+                                log::warn!(
+                                    "Failed to record connection.failure audit event: {}",
+                                    e
+                                );
+                            }
+
                             state.cancel_detached_hook_tasks(profile_id);
-                            state.fail_task(task_id, error.clone());
+                            state.fail_task(task_id, error_clone);
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
                             cx.notify();
@@ -1796,6 +1917,7 @@ impl Sidebar {
             }
 
             let connected_profile_name = connected.profile.name.clone();
+            let connected_driver_id = connected.profile.driver_id.clone();
 
             if let Err(update_error) = cx.update(|cx| {
                 for warning in &hook_warnings {
@@ -1803,6 +1925,26 @@ impl Sidebar {
                 }
 
                 app_state.update(cx, |state, cx| {
+                    // Emit connection success audit event.
+                    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                    let mut event = dbflux_core::observability::EventRecord::new(
+                        now_ms,
+                        dbflux_core::observability::EventSeverity::Info,
+                        dbflux_core::observability::EventCategory::Connection,
+                        dbflux_core::observability::EventOutcome::Success,
+                    );
+                    event.actor_type = dbflux_core::observability::EventActorType::User;
+                    event.source_id = dbflux_core::observability::EventSourceId::Local;
+                    event.connection_id = Some(profile_id.to_string());
+                    event.driver_id = connected_driver_id.clone();
+                    let event = event
+                        .with_action("connection.connect")
+                        .with_summary(format!("Connected to '{}'", connected_profile_name))
+                        .with_actor_id("local");
+                    if let Err(e) = state.audit_service().record(event) {
+                        log::warn!("Failed to record connection.success audit event: {}", e);
+                    }
+
                     state.complete_task(task_id);
                     state.finish_pending_operation(profile_id, None);
                     state.apply_connect_profile(
@@ -2143,6 +2285,33 @@ impl Sidebar {
 
                     let error_msg = pipeline_error.to_string();
 
+                    // Emit pipeline connection failure audit event.
+                    let pipeline_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                    let pipeline_fail_driver_id = driver.display_name().to_string();
+                    let _ = cx.update(|cx| {
+                        let audit_service = app_state.read(cx).audit_service().clone();
+                        let mut event = dbflux_core::observability::EventRecord::new(
+                            pipeline_fail_now_ms,
+                            dbflux_core::observability::EventSeverity::Error,
+                            dbflux_core::observability::EventCategory::Connection,
+                            dbflux_core::observability::EventOutcome::Failure,
+                        );
+                        event.action = "connection.connect".to_string();
+                        event.actor_type = dbflux_core::observability::EventActorType::User;
+                        event.source_id = dbflux_core::observability::EventSourceId::Local;
+                        event.connection_id = Some(profile_id.to_string());
+                        event.driver_id = Some(pipeline_fail_driver_id);
+                        event.summary =
+                            format!("Connection to '{}' failed: {}", profile_name, error_msg);
+                        event.error_message = Some(error_msg.clone());
+                        if let Err(e) = audit_service.record(event) {
+                            log::warn!(
+                                "Failed to record pipeline connect failure audit event: {}",
+                                e
+                            );
+                        }
+                    });
+
                     if let Err(update_error) = cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
@@ -2174,6 +2343,7 @@ impl Sidebar {
             let overrides = dbflux_core::ConnectionOverrides::new(effective_password);
             let state_tx_for_connect = state_tx.clone();
             let driver_name_for_state = driver.display_name().to_string();
+            let driver_name_for_audit = driver.display_name().to_string();
 
             let connect_result = cx
                 .background_executor()
@@ -2220,6 +2390,33 @@ impl Sidebar {
                     let _ = state_tx.send(dbflux_core::PipelineState::Failed {
                         stage: "driver_connect".to_string(),
                         error: error.clone(),
+                    });
+
+                    // Emit driver connect failure audit event.
+                    let driver_fail_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                    let driver_fail_driver_id = driver_name_for_audit.clone();
+                    let _ = cx.update(|cx| {
+                        let audit_service = app_state.read(cx).audit_service().clone();
+                        let mut event = dbflux_core::observability::EventRecord::new(
+                            driver_fail_now_ms,
+                            dbflux_core::observability::EventSeverity::Error,
+                            dbflux_core::observability::EventCategory::Connection,
+                            dbflux_core::observability::EventOutcome::Failure,
+                        );
+                        event.action = "connection.connect".to_string();
+                        event.actor_type = dbflux_core::observability::EventActorType::User;
+                        event.source_id = dbflux_core::observability::EventSourceId::Local;
+                        event.connection_id = Some(profile_id.to_string());
+                        event.driver_id = Some(driver_fail_driver_id);
+                        event.summary =
+                            format!("Connection to '{}' failed: {}", profile_name, error);
+                        event.error_message = Some(error.clone());
+                        if let Err(e) = audit_service.record(event) {
+                            log::warn!(
+                                "Failed to record driver connect failure audit event: {}",
+                                e
+                            );
+                        }
                     });
 
                     if let Err(update_error) = cx.update(|cx| {
@@ -2339,6 +2536,31 @@ impl Sidebar {
             let _ = state_tx.send(dbflux_core::PipelineState::Connected);
 
             let connected_name = profile.name.clone();
+            let connected_driver_id = profile.driver_id.clone();
+
+            // Emit pipeline connection success audit event.
+            let connect_success_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+            let _ = cx.update(|cx| {
+                let audit_service = app_state.read(cx).audit_service().clone();
+                let mut event = dbflux_core::observability::EventRecord::new(
+                    connect_success_now_ms,
+                    dbflux_core::observability::EventSeverity::Info,
+                    dbflux_core::observability::EventCategory::Connection,
+                    dbflux_core::observability::EventOutcome::Success,
+                );
+                event.action = "connection.connect".to_string();
+                event.actor_type = dbflux_core::observability::EventActorType::User;
+                event.source_id = dbflux_core::observability::EventSourceId::Local;
+                event.connection_id = Some(profile_id.to_string());
+                event.driver_id = connected_driver_id;
+                event.summary = format!("Connected to '{}'", connected_name);
+                if let Err(e) = audit_service.record(event) {
+                    log::warn!(
+                        "Failed to record pipeline connect success audit event: {}",
+                        e
+                    );
+                }
+            });
 
             if let Err(update_error) = cx.update(|cx| {
                 for warning in &hook_warnings {
@@ -2490,6 +2712,28 @@ impl Sidebar {
                     return;
                 }
             }
+
+            // Emit disconnect audit event before actual disconnect.
+            let disconnect_driver_id = profile.driver_id.clone();
+            let disconnect_now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+            let _ = cx.update(|cx| {
+                let audit_service = app_state.read(cx).audit_service().clone();
+                let mut event = dbflux_core::observability::EventRecord::new(
+                    disconnect_now_ms,
+                    dbflux_core::observability::EventSeverity::Info,
+                    dbflux_core::observability::EventCategory::Connection,
+                    dbflux_core::observability::EventOutcome::Success,
+                );
+                event.action = "connection.disconnect".to_string();
+                event.actor_type = dbflux_core::observability::EventActorType::User;
+                event.source_id = dbflux_core::observability::EventSourceId::Local;
+                event.connection_id = Some(profile_id.to_string());
+                event.driver_id = disconnect_driver_id.clone();
+                event.summary = format!("Disconnected from '{}'", profile_name);
+                if let Err(e) = audit_service.record(event) {
+                    log::warn!("Failed to record disconnect audit event: {}", e);
+                }
+            });
 
             if let Err(update_error) = cx.update(|cx| {
                 app_state.update(cx, |state, cx| {

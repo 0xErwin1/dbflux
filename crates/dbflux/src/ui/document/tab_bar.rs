@@ -261,6 +261,7 @@ impl TabBar {
             super::types::DocumentIcon::Mongo => AppIcon::Database.path(),
             super::types::DocumentIcon::Collection => AppIcon::Folder.path(),
             super::types::DocumentIcon::Script => AppIcon::ScrollText.path(),
+            super::types::DocumentIcon::Audit => AppIcon::ScrollText.path(),
         };
 
         let center_x = self.active_tab_center_x.clone();

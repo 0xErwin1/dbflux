@@ -34,6 +34,8 @@ pub enum DocumentKind {
     RedisConsole,
     // v0.5+ (MongoDB)
     MongoCollection,
+    // Global audit viewer
+    Audit,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -58,6 +60,7 @@ pub enum DocumentIcon {
     Terminal,
     Mongo,
     Collection,
+    Audit,
 }
 
 impl DocumentIcon {
@@ -71,6 +74,7 @@ impl DocumentIcon {
             Self::Terminal => "terminal",
             Self::Mongo => "database",
             Self::Collection => "folder",
+            Self::Audit => "shield",
         }
     }
 }

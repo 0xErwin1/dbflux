@@ -19,6 +19,7 @@ impl SettingsCoordinator {
     fn section_display_name(section: super::SettingsSectionId) -> &'static str {
         match section {
             super::SettingsSectionId::General => "General",
+            super::SettingsSectionId::Audit => "Audit",
             #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpClients => "Clients",
             #[cfg(feature = "mcp")]

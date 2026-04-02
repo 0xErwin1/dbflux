@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 
 mod add_member_modal;
+mod audit;
+mod chrome;
 mod code;
 mod data_document;
 mod data_grid_panel;
@@ -18,6 +20,7 @@ mod tab_manager;
 mod task_runner;
 mod types;
 
+pub use audit::AuditDocument;
 pub use code::CodeDocument;
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};

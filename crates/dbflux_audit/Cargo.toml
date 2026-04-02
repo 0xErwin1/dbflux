@@ -13,9 +13,13 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dirs.workspace = true
+hex.workspace = true
+regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true

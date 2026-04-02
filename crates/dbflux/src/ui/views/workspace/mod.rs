@@ -109,6 +109,10 @@ pub struct Workspace {
 
     #[cfg(feature = "mcp")]
     active_governance_panel: Option<GovernancePanel>,
+
+    /// Background task handle for periodic audit purge.
+    /// Kept to ensure the task stays alive for the workspace lifetime.
+    _background_purge_task: Option<Task<()>>,
 }
 
 #[cfg(feature = "mcp")]
@@ -471,6 +475,7 @@ impl Workspace {
             focus_handle,
             #[cfg(feature = "mcp")]
             active_governance_panel: None,
+            _background_purge_task: None,
         };
 
         {
@@ -494,6 +499,113 @@ impl Workspace {
                         workspace.pending_focus = Some(FocusTarget::Sidebar);
                     }
                 }
+            }
+        }
+
+        // Spawn periodic audit purge task if configured.
+        {
+            let app_state = workspace.app_state.clone();
+            let interval_minutes = {
+                let runtime = app_state.read(cx).storage_runtime();
+                let repo = runtime.audit_settings();
+                repo.get()
+                    .ok()
+                    .flatten()
+                    .map(|s| s.background_purge_interval_minutes)
+                    .unwrap_or(0)
+            };
+
+            if interval_minutes > 0 {
+                let task = cx.spawn(async move |_workspace, cx| {
+                    let interval_duration =
+                        std::time::Duration::from_secs((interval_minutes as u64) * 60);
+
+                    loop {
+                        // Use GPUI's background timer instead of tokio sleep for compatibility.
+                        cx.background_executor()
+                            .timer(interval_duration)
+                            .await;
+
+                        // Get retention_days from settings.
+                        let retention_days = cx
+                            .update(|cx| {
+                                let runtime = app_state.read(cx).storage_runtime();
+                                let repo = runtime.audit_settings();
+                                repo.get()
+                                    .ok()
+                                    .flatten()
+                                    .map(|s| s.retention_days)
+                                    .unwrap_or(30)
+                            })
+                            .unwrap_or(30);
+
+                        // Get audit_service for purge and emit from foreground update.
+                        let purge_result = cx
+                            .update(|cx| {
+                                let audit_service = app_state.read(cx).audit_service().clone();
+                                audit_service.purge_old_events(retention_days, 500)
+                            })
+                            .ok();
+
+                        match purge_result {
+                            Some(Ok(stats)) => {
+                                log::info!(
+                                    "Periodic audit purge completed: deleted {} events in {} batches ({}ms)",
+                                    stats.deleted_count,
+                                    stats.batches,
+                                    stats.duration_ms
+                                );
+                                // Emit purge success audit event.
+                                let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                                let event = dbflux_core::observability::EventRecord::new(
+                                    now_ms,
+                                    dbflux_core::observability::EventSeverity::Info,
+                                    dbflux_core::observability::EventCategory::System,
+                                    dbflux_core::observability::EventOutcome::Success,
+                                )
+                                .with_action("system.purge.complete")
+                                .with_summary(format!(
+                                    "Periodic audit purge completed: deleted {} events",
+                                    stats.deleted_count
+                                ))
+                                .with_duration_ms(stats.duration_ms as i64);
+                                let _ = cx.update(|cx| {
+                                    let audit_service = app_state.read(cx).audit_service().clone();
+                                    if let Err(rec_err) = audit_service.record(event) {
+                                        log::warn!("Failed to record purge success audit event: {}", rec_err);
+                                    }
+                                });
+                            }
+                            Some(Err(e)) => {
+                                log::warn!("Periodic audit purge failed: {}", e);
+                                // Emit a system failure event for the purge failure.
+                                let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                                let event = dbflux_core::observability::EventRecord::new(
+                                    now_ms,
+                                    dbflux_core::observability::EventSeverity::Error,
+                                    dbflux_core::observability::EventCategory::System,
+                                    dbflux_core::observability::EventOutcome::Failure,
+                                )
+                                .with_action("system.purge.failed")
+                                .with_summary(format!(
+                                    "Periodic audit purge failed: {}",
+                                    e
+                                ));
+                                // Emit through a foreground update so we have proper context.
+                                let _ = cx.update(|cx| {
+                                    let audit_service = app_state.read(cx).audit_service().clone();
+                                    if let Err(rec_err) = audit_service.record(event) {
+                                        log::warn!("Failed to record purge failure audit event: {}", rec_err);
+                                    }
+                                });
+                            }
+                            None => {
+                                // cx.update failed - skip this cycle.
+                            }
+                        }
+                    }
+                });
+                workspace._background_purge_task = Some(task);
             }
         }
 
@@ -548,9 +660,14 @@ impl Workspace {
             PaletteCommand::new("open_settings", "Open Settings", "View"),
             PaletteCommand::new("open_login_modal", "Open Login Modal", "View"),
             PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
+            #[cfg(feature = "mcp")]
             PaletteCommand::new("open_mcp_approvals", "Open MCP Approvals", "View"),
+            #[cfg(feature = "mcp")]
             PaletteCommand::new("open_mcp_audit", "Open MCP Audit Viewer", "View"),
+            #[cfg(feature = "mcp")]
             PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
+            PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
+                .with_shortcut("Ctrl+Shift+A"),
         ]
     }
 

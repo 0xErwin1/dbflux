@@ -7,9 +7,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use dbflux_core::observability::EventRecord;
 use dbflux_storage::{
-    AppendAuditEvent, AuditQueryFilter as StorageAuditQueryFilter, AuditRepository,
-    error::RepositoryError,
+    AppendAuditEvent, AppendAuditEventExtended, AuditQueryFilter as StorageAuditQueryFilter,
+    AuditRepository, error::RepositoryError,
 };
 use rusqlite::Connection;
 
@@ -31,6 +32,7 @@ fn to_audit_error(e: RepositoryError) -> AuditError {
 ///
 /// Wraps `dbflux_storage::AuditRepository` to provide the same interface
 /// as before while delegating storage to the unified database.
+#[derive(Clone)]
 pub struct SqliteAuditStore {
     repo: AuditRepository,
     path: PathBuf,
@@ -46,6 +48,11 @@ impl SqliteAuditStore {
         // Open the database and run migrations if needed
         let conn = Connection::open(&path)?;
 
+        // Enable WAL mode to be compatible with StorageRuntime's database configuration.
+        // This must be done before any other operations to ensure proper isolation.
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| AuditError::Sqlite(e))?;
+
         // Apply migrations if the table doesn't exist
         let table_exists: bool = conn
             .query_row(
@@ -57,7 +64,7 @@ impl SqliteAuditStore {
             .unwrap_or(false);
 
         if !table_exists {
-            // Create the table - note: no FK constraint since cfg_connection_profiles
+            // Create the table with extended schema - note: no FK constraint since cfg_connection_profiles
             // may not exist when used standalone (outside of StorageRuntime migrations)
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS aud_audit_events (
@@ -70,9 +77,53 @@ impl SqliteAuditStore {
                     classification TEXT,
                     duration_ms INTEGER,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    created_at_epoch_ms INTEGER NOT NULL
+                    created_at_epoch_ms INTEGER NOT NULL,
+                    level TEXT,
+                    category TEXT,
+                    action TEXT,
+                    outcome TEXT,
+                    actor_type TEXT,
+                    source_id TEXT,
+                    summary TEXT,
+                    connection_id TEXT,
+                    database_name TEXT,
+                    driver_id TEXT,
+                    object_type TEXT,
+                    object_id TEXT,
+                    details_json TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    session_id TEXT,
+                    correlation_id TEXT
                 )",
             )?;
+        } else {
+            // Table exists but may not have extended columns - add them if missing
+            let extended_columns = [
+                "level",
+                "category",
+                "action",
+                "outcome",
+                "actor_type",
+                "source_id",
+                "summary",
+                "connection_id",
+                "database_name",
+                "driver_id",
+                "object_type",
+                "object_id",
+                "details_json",
+                "error_code",
+                "error_message",
+                "session_id",
+                "correlation_id",
+            ];
+
+            for col in extended_columns {
+                let sql = format!("ALTER TABLE aud_audit_events ADD COLUMN {} TEXT", col);
+                // Ignore errors - column may already exist
+                let _ = conn.execute_batch(&sql);
+            }
         }
 
         // Wrap in Arc<Mutex<Connection>> for AuditRepository
@@ -145,6 +196,19 @@ impl SqliteAuditStore {
             start_epoch_ms: filter.start_epoch_ms,
             end_epoch_ms: filter.end_epoch_ms,
             limit: filter.limit,
+            offset: None,
+            // Extended filter fields
+            level: filter.level.clone(),
+            category: filter.category.clone(),
+            categories: None,
+            source_id: filter.source_id.clone(),
+            outcome: filter.outcome.clone(),
+            connection_id: None,
+            driver_id: None,
+            actor_type: None,
+            free_text: filter.free_text.clone(),
+            correlation_id: None,
+            session_id: None,
         };
 
         let dtos = self.repo.query(&storage_filter).map_err(to_audit_error)?;
@@ -160,5 +224,66 @@ impl SqliteAuditStore {
                 created_at_epoch_ms: d.created_at_epoch_ms,
             })
             .collect())
+    }
+
+    /// Records an audit event using the extended schema.
+    ///
+    /// This is the primary method for recording events from service layers.
+    /// The event is validated and stored with the full RF-050/RF-051 schema.
+    pub fn record(&self, event: EventRecord) -> Result<EventRecord, AuditError> {
+        // Build the extended event for storage
+        let extended_event = AppendAuditEventExtended {
+            actor_id: event.actor_id.as_deref().unwrap_or("system"),
+            tool_id: "",  // Legacy field, not used in new events
+            decision: "", // Legacy field, mapped from outcome
+            reason: None,
+            profile_id: None,
+            classification: None,
+            duration_ms: event.duration_ms,
+            created_at_epoch_ms: event.ts_ms,
+            level: Some(event.level.as_str()),
+            category: Some(event.category.as_str()),
+            action: Some(&event.action),
+            outcome: Some(event.outcome.as_str()),
+            actor_type: Some(event.actor_type.as_str()),
+            source_id: Some(event.source_id.as_str()),
+            summary: Some(&event.summary),
+            connection_id: event.connection_id.as_deref(),
+            database_name: event.database_name.as_deref(),
+            driver_id: event.driver_id.as_deref(),
+            object_type: event.object_type.as_deref(),
+            object_id: event.object_id.as_deref(),
+            details_json: event.details_json.as_deref(),
+            error_code: event.error_code.as_deref(),
+            error_message: event.error_message.as_deref(),
+            session_id: event.session_id.as_deref(),
+            correlation_id: event.correlation_id.as_deref(),
+        };
+
+        let dto = self
+            .repo
+            .append_extended(extended_event)
+            .map_err(to_audit_error)?;
+
+        // Return the event with the assigned ID
+        let mut result = event;
+        result.id = Some(dto.id);
+        Ok(result)
+    }
+
+    /// Deletes audit events older than the given cutoff timestamp.
+    ///
+    /// ## Arguments
+    ///
+    /// * `cutoff_ms` - Unix timestamp in milliseconds
+    /// * `limit` - Maximum number of events to delete
+    ///
+    /// ## Returns
+    ///
+    /// The number of events deleted.
+    pub fn delete_older_than(&self, cutoff_ms: i64, limit: usize) -> Result<i64, AuditError> {
+        self.repo
+            .delete_older_than(cutoff_ms, limit)
+            .map_err(to_audit_error)
     }
 }

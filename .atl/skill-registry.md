@@ -8,7 +8,6 @@
 |---------|-------|------|
 | When creating a pull request | branch-pr | /home/iperez/.config/opencode/skills/branch-pr/SKILL.md |
 | When user asks to create a release, bump version, or tag | dbflux-release | /home/iperez/.config/opencode/skills/dbflux-release/SKILL.md |
-| When writing Go tests, using teatest, or adding test coverage | go-testing | /home/iperez/.config/opencode/skills/go-testing/SKILL.md |
 | When creating a GitHub issue, reporting a bug, or requesting a feature | issue-creation | /home/iperez/.config/opencode/skills/issue-creation/SKILL.md |
 | When user says "judgment day", "review adversarial", "dual review" | judgment-day | /home/iperez/.config/opencode/skills/judgment-day/SKILL.md |
 | When the orchestrator launches to implement tasks from SDD | sdd-apply | /home/iperez/.config/opencode/skills/sdd-apply/SKILL.md |
@@ -35,11 +34,6 @@
 - Update CHANGELOG.md with version and date
 - Create git tag after all changes committed
 - Run tests before tagging
-
-### go-testing
-- Use teatest for Bubbletea TUI testing
-- Use hammer for integration tests
-- Follow Go naming conventions: TestXxx, BenchmarkXxx
 
 ### judgment-day
 - Launch TWO independent blind judge sub-agents simultaneously

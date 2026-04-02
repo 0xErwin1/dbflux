@@ -39,5 +39,11 @@ fn to_filter(query: &AuditQuery) -> AuditQueryFilter {
         start_epoch_ms: query.start_epoch_ms,
         end_epoch_ms: query.end_epoch_ms,
         limit: query.limit,
+        // Extended filter fields (not used in MCP governance path)
+        level: None,
+        category: None,
+        source_id: None,
+        outcome: None,
+        free_text: None,
     }
 }

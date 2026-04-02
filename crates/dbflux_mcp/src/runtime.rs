@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use dbflux_approval::{ApprovalService, ExecutionPlan, InMemoryPendingExecutionStore};
 use dbflux_audit::AuditService;
+use dbflux_core::observability::{
+    EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+};
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyRole, ToolPolicy,
     TrustedClientRegistry,
@@ -366,27 +369,42 @@ impl McpRuntime {
             approval_handler::approve_execution(&mut self.approval_service, pending_id)
                 .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
-        let event = self
+        let ts_ms = now_epoch_ms();
+        let mut event = EventRecord::new(
+            ts_ms,
+            EventSeverity::Info,
+            EventCategory::Mcp,
+            EventOutcome::Success,
+        )
+        .with_action("mcp_approve_execution")
+        .with_summary(format!(
+            "MCP execution approved: tool={} actor={}",
+            replay_plan.tool_id, replay_plan.actor_id
+        ))
+        .with_actor_id(&replay_plan.actor_id)
+        .with_connection_context(
+            &replay_plan.connection_id,
+            "", // database_name not available
+            "", // driver_id not available
+        );
+
+        event.source_id = EventSourceId::Mcp;
+
+        let recorded = self
             .audit_service
-            .append(
-                &replay_plan.actor_id,
-                "approve_execution",
-                "allow",
-                None,
-                now_epoch_ms(),
-            )
+            .record(event)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
         self.push_event(McpRuntimeEvent::AuditAppended);
 
         Ok(AuditEntry {
-            id: event.id.to_string(),
-            actor_id: event.actor_id,
-            tool_id: event.tool_id,
-            decision: event.decision,
-            reason: event.reason,
-            created_at_epoch_ms: event.created_at_epoch_ms,
+            id: recorded.id.unwrap_or(0).to_string(),
+            actor_id: recorded.actor_id.unwrap_or_default(),
+            tool_id: "approve_execution".to_string(),
+            decision: "allow".to_string(),
+            reason: None,
+            created_at_epoch_ms: recorded.ts_ms,
         })
     }
 
@@ -397,27 +415,35 @@ impl McpRuntime {
         approval_handler::reject_execution(&mut self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
-        let event = self
+        let ts_ms = now_epoch_ms();
+        let mut event = EventRecord::new(
+            ts_ms,
+            EventSeverity::Warn,
+            EventCategory::Mcp,
+            EventOutcome::Failure,
+        )
+        .with_action("mcp_reject_execution")
+        .with_summary("MCP execution rejected by approver")
+        .with_actor_id("system")
+        .with_error("rejected", "rejected by approver");
+
+        event.source_id = EventSourceId::Mcp;
+
+        let recorded = self
             .audit_service
-            .append(
-                "system",
-                "reject_execution",
-                "deny",
-                Some("rejected by approver"),
-                now_epoch_ms(),
-            )
+            .record(event)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
         self.push_event(McpRuntimeEvent::AuditAppended);
 
         Ok(AuditEntry {
-            id: event.id.to_string(),
-            actor_id: event.actor_id,
-            tool_id: event.tool_id,
-            decision: event.decision,
-            reason: event.reason,
-            created_at_epoch_ms: event.created_at_epoch_ms,
+            id: recorded.id.unwrap_or(0).to_string(),
+            actor_id: recorded.actor_id.unwrap_or_default(),
+            tool_id: "reject_execution".to_string(),
+            decision: "deny".to_string(),
+            reason: Some("rejected by approver".to_string()),
+            created_at_epoch_ms: recorded.ts_ms,
         })
     }
 

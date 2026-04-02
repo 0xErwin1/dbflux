@@ -98,6 +98,12 @@ fn global_layer() -> KeymapLayer {
         Command::FocusBackgroundTasks,
     );
 
+    // Open audit viewer (Ctrl+Shift+A)
+    layer.bind(
+        KeyChord::new("a", Modifiers::ctrl_shift()),
+        Command::OpenAuditViewer,
+    );
+
     // Toggle sidebar (Ctrl+B)
     layer.bind(
         KeyChord::new("b", Modifiers::ctrl()),

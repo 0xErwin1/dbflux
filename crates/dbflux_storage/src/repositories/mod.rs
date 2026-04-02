@@ -4,6 +4,8 @@
 //! Config repositories operate on `dbflux.db`.
 
 pub mod audit;
+pub mod audit_settings;
+pub mod saved_filters;
 pub mod traits;
 
 pub mod auth_profile_fields;

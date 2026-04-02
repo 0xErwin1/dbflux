@@ -134,6 +134,9 @@ impl MigrationRegistry {
             migrations: Vec::new(),
         };
         registry.register(mod_001_initial::MigrationImpl);
+        registry.register(mod_002_audit_extended::MigrationImpl);
+        registry.register(mod_003_audit_settings::MigrationImpl);
+        registry.register(mod_004_audit_saved_filters::MigrationImpl);
         registry
     }
 
@@ -273,8 +276,14 @@ impl Default for MigrationRegistry {
 }
 
 mod mod_001_initial;
+mod mod_002_audit_extended;
+mod mod_003_audit_settings;
+mod mod_004_audit_saved_filters;
 
 pub use mod_001_initial::MigrationImpl;
+pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
+pub use mod_003_audit_settings::MigrationImpl as MigrationImplAuditSettings;
+pub use mod_004_audit_saved_filters::MigrationImpl as MigrationImplAuditSavedFilters;
 
 // ---------------------------------------------------------------------------
 // Database verification utilities
@@ -332,7 +341,7 @@ mod tests {
         let count_first: i64 = conn
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count_first, 1, "expected 1 migration after first run");
+        assert_eq!(count_first, 4, "expected 4 migrations after first run");
 
         registry.run_all(&conn).unwrap();
 
@@ -340,8 +349,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(
-            count_second, 1,
-            "expected still 1 migration after second run (idempotent)"
+            count_second, 4,
+            "expected still 4 migrations after second run (idempotent)"
         );
 
         drop(conn);
@@ -472,10 +481,13 @@ mod tests {
         let pending_before = registry.get_pending(&conn).unwrap();
         assert_eq!(
             pending_before.len(),
-            1,
-            "expected 1 pending migration before running"
+            4,
+            "expected 4 pending migrations before running"
         );
         assert_eq!(pending_before[0].name(), "001_initial");
+        assert_eq!(pending_before[1].name(), "002_audit_extended");
+        assert_eq!(pending_before[2].name(), "003_audit_settings");
+        assert_eq!(pending_before[3].name(), "004_audit_saved_filters");
 
         registry.run_all(&conn).unwrap();
 

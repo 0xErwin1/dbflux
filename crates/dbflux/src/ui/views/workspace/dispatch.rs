@@ -63,6 +63,10 @@ impl CommandDispatcher for Workspace {
                 self.open_sso_wizard(window, cx);
                 true
             }
+            Command::OpenAuditViewer => {
+                self.open_audit_viewer(window, cx);
+                true
+            }
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => {
                 self.open_mcp_approvals(window, cx);

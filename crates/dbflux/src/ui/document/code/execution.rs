@@ -288,6 +288,7 @@ impl CodeDocument {
             result: None,
             error: None,
             rows_affected: None,
+            is_script: false,
         };
         self.execution_history.push(record);
         self.active_execution_index = Some(self.execution_history.len() - 1);
@@ -301,6 +302,21 @@ impl CodeDocument {
         cx.notify();
 
         let request = QueryRequest::new(query.clone()).with_database(active_database);
+
+        // Capture audit_service, task_target, and started_at before spawning so we can emit
+        // audit events even if the document is closed before the deferred task runs.
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+        let task_target_for_audit = task_target.clone();
+        let started_at = Instant::now();
+
+        // Capture honest connection metadata (connection_id string + driver_id) before spawn
+        // so we can emit proper fallback events without needing cx in the async block.
+        let fallback_conn_id = self.connection_id.map(|id| id.to_string());
+        let fallback_driver_id = self
+            .connection_id
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .map(|c| c.profile.driver_id())
+            .unwrap_or_default();
 
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
@@ -317,41 +333,129 @@ impl CodeDocument {
                     log::warn!("Cleanup after cancel failed: {}", error);
                 }
 
-                if let Err(error) = cx.update(|cx| {
-                    this.update(cx, |doc, cx| {
-                        doc.complete_cancelled_query(task_id, exec_id, &task_target, cx);
-                    })
-                    .unwrap_or_else(|inner_error| {
+                let inner_result = this.update(cx, |doc, cx| {
+                    doc.complete_cancelled_query(task_id, exec_id, &task_target_for_audit, cx);
+                });
+                // Fallback fires if the entity is gone (this.update failed). If this.update
+                // succeeded, the entity is alive and process_pending_result will emit via the
+                // normal path — no second probe needed. This avoids both double-logging and
+                // the overhead of a separate cx.update call.
+                if inner_result.is_err() {
+                    // Entity is gone; process_pending_result won't run. Emit via fallback so the event
+                    // is not silently dropped.
+                    let ts_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let duration_ms = started_at.elapsed().as_millis() as i64;
+
+                    let mut event = EventRecord::new(
+                        ts_ms,
+                        EventSeverity::Warn,
+                        EventCategory::Query,
+                        EventOutcome::Cancelled,
+                    )
+                    .with_action("query_execute")
+                    .with_summary("Query cancelled")
+                    .with_connection_context(
+                        fallback_conn_id.clone().unwrap_or_default(),
+                        task_target_for_audit.database.clone().unwrap_or_default(),
+                        fallback_driver_id.clone(),
+                    );
+                    event.source_id = EventSourceId::Local;
+                    event.actor_type = EventActorType::User;
+                    event.duration_ms = Some(duration_ms);
+                    if let Err(e) = audit_service.record(event) {
                         log::warn!(
-                            "Failed to update document after cancelled query: {:?}",
-                            inner_error
+                            "Failed to emit cancelled query audit event via fallback: {}",
+                            e
                         );
-                    });
-                }) {
-                    log::warn!("Failed to apply cancelled query state to UI: {:?}", error);
+                    }
                 }
 
                 return;
             }
 
-            if let Err(error) = cx.update(|cx| {
-                this.update(cx, |doc, cx| {
-                    doc.pending_result = Some(PendingQueryResult {
-                        task_id,
-                        exec_id,
-                        query,
-                        result,
-                    });
-                    cx.notify();
-                })
-                .unwrap_or_else(|inner_error| {
-                    log::warn!(
-                        "Failed to update document with query result payload: {:?}",
-                        inner_error
+            // Emit fallback when entity is gone AND result delivery fails.
+            // When entity is gone, process_pending_result never runs → emit directly.
+            //
+            // Extract outcome details BEFORE moving result into the closure so we can
+            // emit the correct success/failure event when the entity is already gone.
+            let (outcome, severity, summary, error_detail) = match &result {
+                Ok(qr) => {
+                    let affected_rows = qr.affected_rows.unwrap_or_else(|| qr.rows.len() as u64);
+                    let rows_label = if qr.affected_rows.is_some() {
+                        "affected"
+                    } else {
+                        "returned"
+                    };
+                    let summary = format!(
+                        "Query executed successfully: {} rows {}",
+                        affected_rows, rows_label
                     );
+                    (EventOutcome::Success, EventSeverity::Info, summary, None)
+                }
+                Err(e) => {
+                    let summary = format!("Query failed: {}", e);
+                    (
+                        EventOutcome::Failure,
+                        EventSeverity::Error,
+                        summary,
+                        Some(e.to_string()),
+                    )
+                }
+            };
+
+            // Compute duration before result is consumed by the closure.
+            let duration_ms = started_at.elapsed().as_millis() as i64;
+
+            // Capture query text before it gets moved into PendingQueryResult so we can
+            // use it in the fallback event if needed.
+            let query_text = query.clone();
+
+            let inner_result = this.update(cx, |doc, cx| {
+                doc.pending_result = Some(PendingQueryResult {
+                    task_id,
+                    exec_id,
+                    query,
+                    result,
+                    is_script: false,
                 });
-            }) {
-                log::warn!("Failed to apply query result to UI state: {:?}", error);
+                cx.notify();
+            });
+
+            // Fallback fires if the entity is gone (this.update failed). If this.update
+            // succeeded, the entity is alive and process_pending_result will emit via the
+            // normal path — no second probe needed. This avoids both double-logging and
+            // the overhead of a separate cx.update call.
+            if inner_result.is_err() {
+                // Entity is gone; process_pending_result won't run. Emit via fallback so the event
+                // is not silently dropped.
+                let ts_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+
+                let details_json = serde_json::json!({ "query": query_text }).to_string();
+
+                let mut event = EventRecord::new(ts_ms, severity, EventCategory::Query, outcome)
+                    .with_action("query_execute")
+                    .with_summary(&summary)
+                    .with_connection_context(
+                        fallback_conn_id.clone().unwrap_or_default(),
+                        task_target_for_audit.database.clone().unwrap_or_default(),
+                        fallback_driver_id.clone(),
+                    )
+                    .with_details_json(details_json);
+                event.source_id = EventSourceId::Local;
+                event.actor_type = EventActorType::User;
+                event.duration_ms = Some(duration_ms);
+                if let Some(err) = error_detail {
+                    event.error_message = Some(err);
+                }
+                if let Err(e) = audit_service.record(event) {
+                    log::warn!("Failed to emit query audit event via fallback: {}", e);
+                }
             }
         })
         .detach();
@@ -375,6 +479,9 @@ impl CodeDocument {
             });
         }
 
+        // Emit audit event for dangerous query confirmation
+        self.emit_dangerous_query_audit_event(cx, pending.kind);
+
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -385,6 +492,14 @@ impl CodeDocument {
         target: &TaskTarget,
         cx: &mut Context<Self>,
     ) {
+        // Determine if this is a script execution by looking up the record
+        let is_script = self
+            .execution_history
+            .iter()
+            .find(|r| r.id == exec_id)
+            .map(|r| r.is_script)
+            .unwrap_or(false);
+
         if let Some(record) = self
             .execution_history
             .iter_mut()
@@ -417,6 +532,38 @@ impl CodeDocument {
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
+
+        // Emit audit event for cancelled execution with correct category
+        let duration_ms = self
+            .execution_history
+            .iter()
+            .find(|r| r.id == exec_id)
+            .and_then(|r| {
+                r.finished_at
+                    .and_then(|finished| Some(finished.saturating_duration_since(r.started_at)))
+            })
+            .map(|d| d.as_millis() as i64);
+
+        let (action, summary) = if is_script {
+            ("script_execute", "Script cancelled")
+        } else {
+            ("query_execute", "Query cancelled")
+        };
+
+        self.emit_audit_event(
+            cx,
+            if is_script {
+                EventCategory::Script
+            } else {
+                EventCategory::Query
+            },
+            action,
+            EventOutcome::Cancelled,
+            summary.to_string(),
+            None,
+            duration_ms,
+            None,
+        );
     }
 
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
@@ -492,13 +639,23 @@ impl CodeDocument {
 
         record.finished_at = Some(Instant::now());
 
+        // Compute duration before we start borrowing self for other operations
+        let duration_ms = record
+            .finished_at
+            .and_then(|finished| Some(finished.saturating_duration_since(record.started_at)))
+            .map(|d| d.as_millis() as i64);
+
+        let is_script = pending.is_script;
+
         match pending.result {
             Ok(qr) => {
                 self.runner.complete_primary(pending.task_id, cx);
 
-                let row_count = qr.rows.len();
+                // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)
+                let affected_rows = qr.affected_rows;
+                let row_count = affected_rows.unwrap_or_else(|| qr.rows.len() as u64);
                 let execution_time = qr.execution_time;
-                record.rows_affected = Some(row_count as u64);
+                record.rows_affected = Some(row_count);
                 let arc_result = Arc::new(qr);
                 record.result = Some(arc_result.clone());
 
@@ -516,19 +673,62 @@ impl CodeDocument {
                     database,
                     connection_name,
                     execution_time,
-                    Some(row_count),
+                    Some(row_count as usize),
                 );
                 self.app_state.update(cx, |state, _| {
                     state.add_history_entry(history_entry);
                 });
 
-                self.setup_data_grid(arc_result, pending.query, window, cx);
+                self.setup_data_grid(arc_result, pending.query.clone(), window, cx);
 
                 if self.layout == SqlQueryLayout::EditorOnly {
                     self.layout = SqlQueryLayout::Split;
                 }
 
                 self.focus_mode = SqlQueryFocus::Results;
+
+                // Emit audit event for successful execution (query or script)
+                let (action, summary) = if is_script {
+                    ("script_execute", format!("Script executed successfully"))
+                } else {
+                    // Distinguish between mutation row counts and SELECT result counts
+                    let rows_label = if affected_rows.is_some() {
+                        "affected"
+                    } else {
+                        "returned"
+                    };
+                    (
+                        "query_execute",
+                        format!(
+                            "Query executed successfully: {} rows {}",
+                            row_count, rows_label
+                        ),
+                    )
+                };
+
+                if is_script {
+                    self.emit_audit_event(
+                        cx,
+                        EventCategory::Script,
+                        action,
+                        EventOutcome::Success,
+                        summary,
+                        Some(&pending.query),
+                        duration_ms,
+                        None,
+                    );
+                } else {
+                    self.emit_audit_event(
+                        cx,
+                        EventCategory::Query,
+                        action,
+                        EventOutcome::Success,
+                        summary,
+                        Some(&pending.query),
+                        duration_ms,
+                        None,
+                    );
+                }
             }
             Err(e) => {
                 self.runner.fail_primary(pending.task_id, e.to_string(), cx);
@@ -537,6 +737,37 @@ impl CodeDocument {
                 record.error = Some(error_msg.clone());
                 self.state = DocumentState::Error;
                 cx.toast_error(format!("Query failed: {}", error_msg), window);
+
+                // Emit audit event for failed execution
+                let (action, summary) = if is_script {
+                    ("script_execute", format!("Script failed: {}", error_msg))
+                } else {
+                    ("query_execute", format!("Query failed: {}", error_msg))
+                };
+
+                if is_script {
+                    self.emit_audit_event(
+                        cx,
+                        EventCategory::Script,
+                        action,
+                        EventOutcome::Failure,
+                        summary,
+                        Some(&pending.query),
+                        duration_ms,
+                        Some(&error_msg),
+                    );
+                } else {
+                    self.emit_audit_event(
+                        cx,
+                        EventCategory::Query,
+                        action,
+                        EventOutcome::Failure,
+                        summary,
+                        Some(&pending.query),
+                        duration_ms,
+                        Some(&error_msg),
+                    );
+                }
             }
         }
 
@@ -799,6 +1030,7 @@ impl CodeDocument {
             result: None,
             error: None,
             rows_affected: None,
+            is_script: true,
         };
         self.execution_history.push(record);
         self.active_execution_index = Some(self.execution_history.len() - 1);
@@ -812,6 +1044,10 @@ impl CodeDocument {
         }
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
+
+        // Capture script start time before spawning so we can compute duration for
+        // cancellation fallback even if the document is gone when cancellation is detected.
+        let script_started_at = Instant::now();
 
         let executor = CompositeExecutor::new();
         let bg_cancel = cancel_token.clone();
@@ -880,34 +1116,124 @@ impl CodeDocument {
             }
         });
 
+        // Capture audit_service and script_started_at before spawning the deferred task so we can emit
+        // audit events even if the document is closed before the task runs.
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+
         cx.spawn(async move |this, cx| {
             let result = task.await;
 
             if cancel_token.is_cancelled() {
+                // Emit cancellation audit event for script (which has no connection context)
+                let dummy_target = TaskTarget {
+                    profile_id: Uuid::nil(),
+                    database: None,
+                };
+                let inner_result = this.update(cx, |doc, cx| {
+                    doc.complete_cancelled_query(task_id, exec_id, &dummy_target, cx);
+                });
+                let outer_result = cx.update(|_| ());
+                if inner_result.is_err() || outer_result.is_err() {
+                    // Entity is gone (outer fails) or inner update failed; emit audit event directly
+                    // so it is not silently dropped.
+                    let ts_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let duration_ms = script_started_at.elapsed().as_millis() as i64;
+                    let mut event = EventRecord::new(
+                        ts_ms,
+                        EventSeverity::Warn,
+                        EventCategory::Script,
+                        EventOutcome::Cancelled,
+                    )
+                    .with_action("script_execute")
+                    .with_summary("Script cancelled");
+                    event.source_id = EventSourceId::Local;
+                    event.actor_type = EventActorType::User;
+                    event.duration_ms = Some(duration_ms);
+                    if let Err(e) = audit_service.record(event) {
+                        log::warn!(
+                            "Failed to emit cancelled script audit event via fallback: {}",
+                            e
+                        );
+                    }
+                }
                 return;
             }
 
-            if let Err(error) = cx.update(|cx| {
-                this.update(cx, |doc, cx| {
-                    doc.pending_result = Some(PendingQueryResult {
-                        task_id,
-                        exec_id,
-                        query: content,
-                        result,
-                    });
-                    cx.notify();
-                })
-                .unwrap_or_else(|inner_error| {
-                    log::warn!(
-                        "Failed to update script document with execution result: {:?}",
-                        inner_error
-                    );
+            // Emit fallback when entity is gone AND result delivery fails.
+            // When entity is gone, process_pending_result never runs → emit directly.
+            //
+            // Extract outcome details and duration BEFORE moving result into the closure so we can
+            // emit the correct success/failure event when the entity is already gone.
+            let (outcome, severity, summary, error_detail, duration_ms) = match &result {
+                Ok(qr) => {
+                    // Script succeeded (output is in the QueryResult text_body)
+                    let summary = "Script executed successfully".to_string();
+                    let duration_ms = Some(qr.execution_time.as_millis() as i64);
+                    (
+                        EventOutcome::Success,
+                        EventSeverity::Info,
+                        summary,
+                        None,
+                        duration_ms,
+                    )
+                }
+                Err(e) => {
+                    let summary = format!("Script failed: {}", e);
+                    let duration_ms = Some(script_started_at.elapsed().as_millis() as i64);
+                    (
+                        EventOutcome::Failure,
+                        EventSeverity::Error,
+                        summary,
+                        Some(e.to_string()),
+                        duration_ms,
+                    )
+                }
+            };
+
+            // Capture script content before it gets moved into PendingQueryResult so we can
+            // use it in the fallback event if needed.
+            let script_content = content.clone();
+
+            let inner_result = this.update(cx, |doc, cx| {
+                doc.pending_result = Some(PendingQueryResult {
+                    task_id,
+                    exec_id,
+                    query: content,
+                    result,
+                    is_script: true,
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply script execution result to UI state: {:?}",
-                    error
-                );
+                cx.notify();
+            });
+
+            // Fallback fires if the entity is gone (inner update failed). We do NOT probe
+            // with a second synthetic cx.update call — we use the actual inner update result.
+            if inner_result.is_err() {
+                // Entity is gone; process_pending_result won't run. Emit via fallback so the event
+                // is not silently dropped.
+                let ts_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+
+                let details_json = serde_json::json!({ "query": script_content }).to_string();
+
+                // Scripts have no connection context; use nil profile_id.
+                let mut event = EventRecord::new(ts_ms, severity, EventCategory::Script, outcome)
+                    .with_action("script_execute")
+                    .with_summary(&summary)
+                    .with_details_json(details_json);
+                event.source_id = EventSourceId::Local;
+                event.actor_type = EventActorType::User;
+                event.duration_ms = duration_ms;
+                if let Some(err) = error_detail {
+                    event.error_message = Some(err);
+                }
+                if let Err(e) = audit_service.record(event) {
+                    log::warn!("Failed to emit script audit event via fallback: {}", e);
+                }
             }
         })
         .detach();

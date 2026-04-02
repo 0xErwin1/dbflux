@@ -10,6 +10,7 @@ use crate::legacy::LegacyImportResult;
 use crate::migrations::MigrationRegistry;
 use crate::paths;
 use crate::repositories::audit::AuditRepository;
+use crate::repositories::audit_settings::AuditSettingsRepository;
 use crate::repositories::auth_profiles::AuthProfileRepository;
 use crate::repositories::connection_profiles::ConnectionProfileRepository;
 use crate::repositories::driver_overrides::DriverOverridesRepository;
@@ -19,6 +20,7 @@ use crate::repositories::general_settings::GeneralSettingsRepository;
 use crate::repositories::governance_settings::GovernanceSettingsRepository;
 use crate::repositories::hook_definitions::HookDefinitionRepository;
 use crate::repositories::proxy_profiles::ProxyProfileRepository;
+use crate::repositories::saved_filters::SavedFiltersRepository;
 use crate::repositories::services::ServiceRepository;
 use crate::repositories::settings::SettingsRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
@@ -230,6 +232,19 @@ impl StorageRuntime {
         // Wrap the connection in a Mutex for thread-safe access
         let conn = self.open_dbflux_db().expect("should open dbflux db");
         AuditRepository::new(Arc::new(Mutex::new(conn)))
+    }
+
+    /// Creates an audit settings repository.
+    pub fn audit_settings(&self) -> AuditSettingsRepository {
+        AuditSettingsRepository::new(self.dbflux_db())
+    }
+
+    /// Creates a saved filters repository.
+    pub fn saved_filters(&self) -> SavedFiltersRepository {
+        use std::sync::Mutex;
+        // Wrap the connection in a Mutex for thread-safe access
+        let conn = self.open_dbflux_db().expect("should open dbflux db");
+        SavedFiltersRepository::new(Arc::new(Mutex::new(conn)))
     }
 
     /// Returns the artifact store for scratch/shadow path management.

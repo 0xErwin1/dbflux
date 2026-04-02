@@ -1,4 +1,5 @@
 use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
+use crate::ui::icons::AppIcon;
 use dbflux_export::export_text_payload;
 use dbflux_mcp::{
     AuditEntry, AuditExportFormat, AuditQuery, PendingExecutionDetail, PendingExecutionSummary,
@@ -10,6 +11,8 @@ use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
+
+use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
 
 pub struct McpApprovalsView {
     app_state: Entity<AppState>,
@@ -404,62 +407,68 @@ impl Render for McpAuditView {
             .size_full()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
+            .child(compact_top_bar(
+                theme,
+                vec![
+                    compact_labeled_control(
+                        "Actor:",
                         div()
                             .w(px(220.0))
                             .child(Input::new(&self.input_actor).small()),
+                        theme,
                     )
-                    .child(
+                    .into_any_element(),
+                    compact_labeled_control(
+                        "Tool:",
                         div()
                             .w(px(220.0))
                             .child(Input::new(&self.input_tool).small()),
+                        theme,
                     )
-                    .child(
+                    .into_any_element(),
+                    compact_labeled_control(
+                        "Start:",
                         div()
                             .w(px(160.0))
                             .child(Input::new(&self.input_start_epoch).small()),
+                        theme,
                     )
-                    .child(
+                    .into_any_element(),
+                    compact_labeled_control(
+                        "End:",
                         div()
                             .w(px(160.0))
                             .child(Input::new(&self.input_end_epoch).small()),
+                        theme,
                     )
-                    .child(
-                        Button::new("mcp-audit-filter-apply")
-                            .label("Apply Filters")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh(cx);
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("mcp-audit-export-csv")
-                            .label("Export CSV")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.export(AuditExportFormat::Csv, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mcp-audit-export-json")
-                            .label("Export JSON")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.export(AuditExportFormat::Json, cx);
-                            })),
-                    ),
-            )
+                    .into_any_element(),
+                    Button::new("mcp-audit-filter-apply")
+                        .label("Apply Filters")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh(cx);
+                        }))
+                        .into_any_element(),
+                    div().flex_1().into_any_element(),
+                    Button::new("mcp-audit-export-csv")
+                        .label("Export CSV")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.export(AuditExportFormat::Csv, cx);
+                        }))
+                        .into_any_element(),
+                    Button::new("mcp-audit-export-json")
+                        .label("Export JSON")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.export(AuditExportFormat::Json, cx);
+                        }))
+                        .into_any_element(),
+                ],
+            ))
             .child(
                 div()
                     .flex_1()
@@ -467,6 +476,7 @@ impl Render for McpAuditView {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .p_4()
                     .when(self.entries.is_empty(), |root| {
                         root.child(
                             div()
@@ -508,14 +518,31 @@ impl Render for McpAuditView {
                             )
                     })),
             )
-            .when_some(self.status_message.clone(), |root, message| {
-                root.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(message),
-                )
-            })
+            .child(workspace_footer_bar(
+                theme,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        svg()
+                            .path(AppIcon::Rows3.path())
+                            .size_3()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(format!("{} entries", self.entries.len())),
+                div(),
+                div().when_some(self.status_message.clone(), |right, message| {
+                    right.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(message),
+                    )
+                }),
+            ))
     }
 }
 

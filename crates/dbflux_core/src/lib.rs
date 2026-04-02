@@ -8,6 +8,7 @@ mod core;
 mod data;
 mod driver;
 mod facade;
+pub mod observability;
 pub mod pipeline;
 mod query;
 mod schema;
@@ -143,6 +144,12 @@ pub use storage::{
     SavedQuery, SavedQueryManager, SavedQueryStore, SecretManager, SecretStore, SessionManifest,
     SessionStore, SessionTab, SessionTabKind, SshTunnelStore, UiState, UiStateStore,
     connection_secret_ref, create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
+};
+
+pub use observability::{
+    EventActorType, EventCapturePolicy, EventCategory, EventDetail, EventObjectRef, EventOutcome,
+    EventPage, EventQuery, EventRecord, EventRetentionPolicy, EventSeverity, EventSink,
+    EventSinkError, EventSource, EventSourceError, EventSourceId,
 };
 
 // Backward-compatible public module paths for external crates that use

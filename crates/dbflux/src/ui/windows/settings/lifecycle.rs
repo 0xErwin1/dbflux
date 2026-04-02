@@ -60,6 +60,16 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::General(section), vec![focus_sub])
             }
+            SettingsSectionId::Audit => {
+                let section = cx.new(|cx| AuditSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Audit(section), vec![focus_sub])
+            }
             SettingsSectionId::Keybindings => (
                 ActiveSettingsSection::Keybindings(
                     cx.new(|cx| KeybindingsSection::new(window, cx)),

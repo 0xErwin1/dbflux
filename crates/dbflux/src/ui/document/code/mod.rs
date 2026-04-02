@@ -9,6 +9,9 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_core::observability::{
+    EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+};
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
     DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
@@ -166,6 +169,9 @@ struct PendingQueryResult {
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
+    /// Whether this execution is a script (vs a database query).
+    /// Determines the audit event category and whether connection context is required.
+    is_script: bool,
 }
 
 struct ActiveQueryTask {
@@ -189,6 +195,9 @@ pub struct ExecutionRecord {
     pub result: Option<Arc<QueryResult>>,
     pub error: Option<String>,
     pub rows_affected: Option<u64>,
+    /// Whether this execution is a script (vs a database query).
+    /// Used to determine audit event category on cancellation.
+    pub is_script: bool,
 }
 
 impl CodeDocument {
@@ -816,6 +825,148 @@ impl CodeDocument {
             }
 
             _ => false,
+        }
+    }
+
+    /// Emits an audit event for a query or script execution.
+    fn emit_audit_event(
+        &self,
+        cx: &mut Context<Self>,
+        category: EventCategory,
+        action: &str,
+        outcome: EventOutcome,
+        summary: String,
+        query: Option<&str>,
+        duration_ms: Option<i64>,
+        error: Option<&str>,
+    ) {
+        // Scripts don't require a connection context
+        let (conn_id, database_name, driver_id) = if category == EventCategory::Script {
+            (None, None, None)
+        } else {
+            let Some(conn_id) = self.connection_id else {
+                // For non-script queries, require connection context
+                return;
+            };
+            let (database_name, driver_id) = self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .map(|c| {
+                    let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                    (Some(db.unwrap_or_default()), Some(c.profile.driver_id()))
+                })
+                .unwrap_or((None, None));
+            (Some(conn_id), database_name, driver_id)
+        };
+
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let severity = match outcome {
+            EventOutcome::Success => EventSeverity::Info,
+            EventOutcome::Failure => EventSeverity::Error,
+            EventOutcome::Cancelled => EventSeverity::Warn,
+            EventOutcome::Pending => EventSeverity::Debug,
+        };
+
+        let mut event = EventRecord::new(ts_ms, severity, category, outcome)
+            .with_action(action)
+            .with_summary(&summary);
+
+        if let Some(conn_id) = conn_id {
+            if let (Some(db), Some(driver)) = (database_name, driver_id) {
+                event = event.with_connection_context(conn_id.to_string(), db, driver);
+            }
+        }
+
+        event.source_id = EventSourceId::Local;
+        event.actor_type = EventActorType::User;
+
+        if let Some(query) = query {
+            event.details_json = Some(serde_json::json!({ "query": query }).to_string());
+        }
+
+        if let Some(duration) = duration_ms {
+            event.duration_ms = Some(duration);
+        }
+
+        if let Some(error) = error {
+            event.error_message = Some(error.to_string());
+        }
+
+        if let Err(e) = self.app_state.read(cx).audit_service().record(event) {
+            log::warn!("Failed to emit audit event: {}", e);
+        }
+    }
+
+    /// Emits an audit event for a query execution.
+    fn emit_query_audit_event(
+        &self,
+        cx: &mut Context<Self>,
+        action: &str,
+        outcome: EventOutcome,
+        summary: String,
+        query: Option<&str>,
+        duration_ms: Option<i64>,
+        error: Option<&str>,
+    ) {
+        self.emit_audit_event(
+            cx,
+            EventCategory::Query,
+            action,
+            outcome,
+            summary,
+            query,
+            duration_ms,
+            error,
+        )
+    }
+
+    /// Emits an audit event for a dangerous query confirmation.
+    fn emit_dangerous_query_audit_event(&self, cx: &mut Context<Self>, kind: DangerousQueryKind) {
+        let Some(conn_id) = self.connection_id else {
+            return;
+        };
+
+        let (database_name, driver_id) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&conn_id)
+            .map(|c| {
+                let db = self.exec_ctx.database.clone().or(c.active_database.clone());
+                (db.unwrap_or_default(), c.profile.driver_id())
+            })
+            .unwrap_or_default();
+
+        let summary = format!("Dangerous query confirmed: {:?}", kind);
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let event = EventRecord::new(
+            ts_ms,
+            EventSeverity::Warn,
+            EventCategory::Query,
+            EventOutcome::Success,
+        )
+        .with_action("dangerous_query_confirmed")
+        .with_summary(&summary)
+        .with_connection_context(conn_id.to_string(), database_name, driver_id);
+
+        let mut e = event;
+        e.source_id = EventSourceId::Local;
+        e.actor_type = EventActorType::User;
+        e.details_json =
+            Some(serde_json::json!({ "dangerous_kind": format!("{:?}", kind) }).to_string());
+
+        if let Err(err) = self.app_state.read(cx).audit_service().record(e) {
+            log::warn!("Failed to emit dangerous query audit event: {}", err);
         }
     }
 }

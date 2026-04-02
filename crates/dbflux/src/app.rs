@@ -1,3 +1,6 @@
+use dbflux_core::observability::{
+    EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
@@ -92,6 +95,12 @@ pub struct AppState {
     history_manager: super::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
+    audit_service: dbflux_audit::AuditService,
+    /// Tracks whether the audit service was initialized from a degraded (in-memory)
+    /// store because the real SQLite database could not be opened. When true,
+    /// bootstrap_audit_settings will not enable the service even if persisted
+    /// settings say enabled=true, preserving an honest degraded-state signal.
+    audit_degraded: bool,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 }
@@ -169,18 +178,31 @@ impl AppState {
                 .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
-        #[cfg(feature = "mcp")]
-        let mcp_runtime =
+        let (audit_service, audit_degraded) =
             match dbflux_audit::AuditService::new_sqlite(storage_runtime.dbflux_db_path()) {
-                Ok(audit_service) => McpRuntime::new(audit_service),
-                Err(error) => {
-                    panic!(
-                        "failed to initialize MCP runtime audit store at {}: {}",
-                        storage_runtime.dbflux_db_path().display(),
-                        error
+                Ok(service) => (service, false),
+                Err(e) => {
+                    log::error!(
+                        "Failed to initialize audit service at {:?}: {}",
+                        storage_runtime.dbflux_db_path(),
+                        e
                     );
+                    // Audit service degrades gracefully: we create a disabled in-memory store
+                    // that won't persist events. The service is disabled so the viewer path
+                    // won't find any events to display, which is honest about degraded state.
+                    // We avoid writing to a fallback file path since the viewer won't use it.
+                    // rusqlite's :memory: database should always open; if it fails here,
+                    // we have bigger problems but we still avoid panicking in startup.
+                    let store = dbflux_audit::store::sqlite::SqliteAuditStore::new(":memory:")
+                        .expect("in-memory audit store must work: rusqlite :memory: unavailable");
+                    let mut svc = dbflux_audit::AuditService::new(store);
+                    svc.set_enabled(false);
+                    (svc, true)
                 }
             };
+
+        #[cfg(feature = "mcp")]
+        let mcp_runtime = McpRuntime::new(audit_service.clone());
 
         let mut state = Self {
             facade,
@@ -194,6 +216,8 @@ impl AppState {
             history_manager,
             scripts_directory,
             storage_runtime,
+            audit_service,
+            audit_degraded,
             #[cfg(feature = "mcp")]
             mcp_runtime,
         };
@@ -201,6 +225,27 @@ impl AppState {
         #[cfg(feature = "mcp")]
         if let Err(e) = state.bootstrap_mcp_runtime_from_persistence() {
             log::warn!("Failed to bootstrap MCP runtime from persistence: {}", e);
+        }
+
+        if let Err(e) = state.bootstrap_audit_settings() {
+            log::warn!("Failed to bootstrap audit settings: {}", e);
+            // Emit bootstrap failure audit event.
+            let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+            let event = EventRecord::new(
+                now_ms,
+                EventSeverity::Error,
+                EventCategory::System,
+                EventOutcome::Failure,
+            )
+            .with_action("system.audit_bootstrap.failed")
+            .with_summary(format!("Audit bootstrap failed: {}", e))
+            .with_actor_id("system");
+            if let Err(rec_err) = state.audit_service().record(event) {
+                log::warn!(
+                    "Failed to record audit bootstrap failure event: {}",
+                    rec_err
+                );
+            }
         }
 
         state
@@ -284,6 +329,142 @@ impl AppState {
         }
 
         self.mcp_runtime.drain_events();
+        Ok(())
+    }
+
+    /// Bootstraps audit settings from persistence.
+    ///
+    /// This method:
+    /// 1. Loads audit settings from cfg_audit_settings table
+    /// 2. Applies settings (enabled, redact_sensitive) to the audit service
+    /// 3. Runs purge_on_startup if enabled
+    ///
+    /// Note: Background purge task spawning requires GPUI context and should be
+    /// called from a component that has access to cx.background_executor().
+    /// For now, only purge_on_startup is implemented here.
+    fn bootstrap_audit_settings(&mut self) -> Result<(), String> {
+        use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
+
+        let repo = self.storage_runtime.audit_settings();
+
+        let settings = match repo.get().map_err(|e| e.to_string())? {
+            Some(s) => s,
+            None => {
+                // No settings yet, upsert defaults
+                let defaults = AuditSettingsDto::default();
+                repo.upsert(&defaults).map_err(|e| e.to_string())?;
+                defaults
+            }
+        };
+
+        // Apply settings to audit service.
+        // If the service is in degraded state (real DB could not be opened), keep it disabled
+        // regardless of persisted settings. This preserves an honest degraded-state signal:
+        // the viewer shows no events because the store is in-memory and disabled.
+        if self.audit_degraded {
+            log::warn!(
+                "Audit service is in degraded state (DB init failed); preserving disabled status \
+                 even though settings have enabled={}. Audit events will not be recorded.",
+                settings.enabled
+            );
+        } else {
+            self.audit_service.set_enabled(settings.enabled);
+        }
+        self.audit_service
+            .set_redact_sensitive(settings.redact_sensitive_values);
+        self.audit_service
+            .set_capture_query_text(settings.capture_query_text);
+
+        // Run purge on startup if enabled
+        if settings.purge_on_startup && settings.retention_days > 0 {
+            log::info!(
+                "Audit purge_on_startup enabled (retention_days={}), running purge...",
+                settings.retention_days
+            );
+            match self
+                .audit_service
+                .purge_old_events(settings.retention_days, 500)
+            {
+                Ok(stats) => {
+                    log::info!(
+                        "Audit purge completed: deleted {} events in {} batches ({}ms)",
+                        stats.deleted_count,
+                        stats.batches,
+                        stats.duration_ms
+                    );
+                    // Emit startup purge success audit event.
+                    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                    let event = EventRecord::new(
+                        now_ms,
+                        EventSeverity::Info,
+                        EventCategory::System,
+                        EventOutcome::Success,
+                    )
+                    .with_action("system.purge.complete")
+                    .with_summary(format!(
+                        "Startup audit purge completed: deleted {} events",
+                        stats.deleted_count
+                    ))
+                    .with_duration_ms(stats.duration_ms as i64)
+                    .with_actor_id("system");
+                    if let Err(rec_err) = self.audit_service.record(event) {
+                        log::warn!(
+                            "Failed to record startup purge success audit event: {}",
+                            rec_err
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Audit purge on startup failed: {}", e);
+                    // Emit startup purge failure audit event.
+                    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+                    let event = EventRecord::new(
+                        now_ms,
+                        EventSeverity::Error,
+                        EventCategory::System,
+                        EventOutcome::Failure,
+                    )
+                    .with_action("system.purge.failed")
+                    .with_summary(format!("Startup audit purge failed: {}", e))
+                    .with_actor_id("system");
+                    if let Err(rec_err) = self.audit_service.record(event) {
+                        log::warn!(
+                            "Failed to record startup purge failure audit event: {}",
+                            rec_err
+                        );
+                    }
+                }
+            }
+        }
+
+        // Store background purge settings for later use when GPUI context is available
+        // The actual background task spawning should be done from a GPUI component
+        if settings.background_purge_interval_minutes > 0 {
+            log::info!(
+                "Background audit purge configured (interval={}min, retention={}days)",
+                settings.background_purge_interval_minutes,
+                settings.retention_days
+            );
+        }
+
+        // Emit bootstrap success audit event.
+        let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let event = EventRecord::new(
+            now_ms,
+            EventSeverity::Info,
+            EventCategory::System,
+            EventOutcome::Success,
+        )
+        .with_action("system.audit_bootstrap.complete")
+        .with_summary("Audit settings bootstrapped successfully")
+        .with_actor_id("system");
+        if let Err(rec_err) = self.audit_service.record(event) {
+            log::warn!(
+                "Failed to record audit bootstrap success event: {}",
+                rec_err
+            );
+        }
+
         Ok(())
     }
 
@@ -902,15 +1083,70 @@ impl AppState {
     // --- ProfileManager ---
 
     pub fn add_profile_in_folder(&mut self, profile: ConnectionProfile, folder_id: Option<Uuid>) {
+        let profile_name = profile.name.clone();
         self.facade.add_profile_in_folder(profile, folder_id);
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            EventOutcome::Success,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let event = event
+            .with_action("config.profile.save")
+            .with_summary(format!("Created connection profile '{}'", profile_name))
+            .with_actor_id("local");
+
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.profile.save audit event: {}", e);
+        }
     }
 
     pub fn remove_profile(&mut self, idx: usize) -> Option<ConnectionProfile> {
-        self.facade.remove_profile(idx)
+        let removed = self.facade.remove_profile(idx)?;
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            EventOutcome::Success,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let event = event
+            .with_action("config.profile.delete")
+            .with_summary(format!("Deleted connection profile '{}'", removed.name))
+            .with_actor_id("local");
+
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.profile.delete audit event: {}", e);
+        }
+
+        Some(removed)
     }
 
     pub fn update_profile(&mut self, profile: ConnectionProfile) {
+        let profile_name = profile.name.clone();
         self.facade.profiles.update(profile);
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            EventOutcome::Success,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let event = event
+            .with_action("config.profile.save")
+            .with_summary(format!("Updated connection profile '{}'", profile_name))
+            .with_actor_id("local");
+
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.profile.save audit event: {}", e);
+        }
     }
 
     pub fn save_profiles(&self) {
@@ -925,12 +1161,39 @@ impl AppState {
     // --- SshTunnelManager ---
 
     pub fn add_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
+        let tunnel_name = tunnel.name.clone();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.ssh_tunnels.items.push(tunnel.clone());
-        if let Err(e) = crate::config_loader::save_ssh_tunnels(
+        let save_result = crate::config_loader::save_ssh_tunnels(
             &self.storage_runtime,
             &self.facade.ssh_tunnels.items,
-        ) {
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.ssh_tunnel.save")
+            .with_summary(format!("Created SSH tunnel '{}'", tunnel_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.ssh_tunnel.save audit event: {}", e);
+        }
+
+        if let Err(e) = save_result {
             log::error!("Failed to save SSH tunnel profiles: {}", e);
         }
     }
@@ -938,10 +1201,41 @@ impl AppState {
     #[allow(dead_code)]
     pub fn remove_ssh_tunnel(&mut self, idx: usize) -> Option<SshTunnelProfile> {
         let removed = self.facade.remove_ssh_tunnel(idx)?;
-        if let Err(e) = crate::config_loader::save_ssh_tunnels(
+        let tunnel_name = removed.name.clone();
+
+        let save_result = crate::config_loader::save_ssh_tunnels(
             &self.storage_runtime,
             &self.facade.ssh_tunnels.items,
-        ) {
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.ssh_tunnel.delete")
+            .with_summary(format!("Deleted SSH tunnel '{}'", tunnel_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!(
+                "Failed to record config.ssh_tunnel.delete audit event: {}",
+                e
+            );
+        }
+
+        if let Err(e) = save_result {
             log::error!("Failed to save SSH tunnel profiles after remove: {}", e);
         }
         Some(removed)
@@ -949,6 +1243,7 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn update_ssh_tunnel(&mut self, tunnel: SshTunnelProfile) {
+        let tunnel_name = tunnel.name.clone();
         if let Some(existing) = self
             .facade
             .ssh_tunnels
@@ -957,10 +1252,36 @@ impl AppState {
             .find(|t| t.id == tunnel.id)
         {
             *existing = tunnel.clone();
-            if let Err(e) = crate::config_loader::save_ssh_tunnels(
+            let save_result = crate::config_loader::save_ssh_tunnels(
                 &self.storage_runtime,
                 &self.facade.ssh_tunnels.items,
-            ) {
+            );
+
+            let (outcome, error_msg) = match &save_result {
+                Ok(()) => (EventOutcome::Success, None),
+                Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+            };
+
+            let mut event = EventRecord::new(
+                dbflux_core::chrono::Utc::now().timestamp_millis(),
+                EventSeverity::Info,
+                EventCategory::Config,
+                outcome,
+            );
+            event.actor_type = EventActorType::User;
+            event.source_id = EventSourceId::Local;
+            let mut event = event
+                .with_action("config.ssh_tunnel.save")
+                .with_summary(format!("Updated SSH tunnel '{}'", tunnel_name))
+                .with_actor_id("local");
+            if let Some(err) = error_msg {
+                event.error_message = Some(err);
+            }
+            if let Err(e) = self.audit_service.record(event) {
+                log::warn!("Failed to record config.ssh_tunnel.save audit event: {}", e);
+            }
+
+            if let Err(e) = save_result {
                 log::error!("Failed to save SSH tunnel profiles: {}", e);
             }
         }
@@ -969,28 +1290,84 @@ impl AppState {
     // --- ProxyManager ---
 
     pub fn add_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
+        let proxy_name = proxy.name.clone();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.proxies.items.push(proxy.clone());
-        if let Err(e) = crate::config_loader::save_proxy_profiles(
+        let save_result = crate::config_loader::save_proxy_profiles(
             &self.storage_runtime,
             &self.facade.proxies.items,
-        ) {
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.proxy.save")
+            .with_summary(format!("Created proxy '{}'", proxy_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.proxy.save audit event: {}", e);
+        }
+
+        if let Err(e) = save_result {
             log::error!("Failed to save proxy profiles: {}", e);
         }
     }
 
     pub fn remove_proxy(&mut self, idx: usize) -> Option<dbflux_core::ProxyProfile> {
         let removed = self.facade.remove_proxy(idx)?;
-        if let Err(e) = crate::config_loader::save_proxy_profiles(
+        let proxy_name = removed.name.clone();
+
+        let save_result = crate::config_loader::save_proxy_profiles(
             &self.storage_runtime,
             &self.facade.proxies.items,
-        ) {
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.proxy.delete")
+            .with_summary(format!("Deleted proxy '{}'", proxy_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!("Failed to record config.proxy.delete audit event: {}", e);
+        }
+
+        if let Err(e) = save_result {
             log::error!("Failed to save proxy profiles after remove: {}", e);
         }
         Some(removed)
     }
 
     pub fn update_proxy(&mut self, proxy: dbflux_core::ProxyProfile) {
+        let proxy_name = proxy.name.clone();
         if let Some(existing) = self
             .facade
             .proxies
@@ -999,10 +1376,36 @@ impl AppState {
             .find(|p| p.id == proxy.id)
         {
             *existing = proxy.clone();
-            if let Err(e) = crate::config_loader::save_proxy_profiles(
+            let save_result = crate::config_loader::save_proxy_profiles(
                 &self.storage_runtime,
                 &self.facade.proxies.items,
-            ) {
+            );
+
+            let (outcome, error_msg) = match &save_result {
+                Ok(()) => (EventOutcome::Success, None),
+                Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+            };
+
+            let mut event = EventRecord::new(
+                dbflux_core::chrono::Utc::now().timestamp_millis(),
+                EventSeverity::Info,
+                EventCategory::Config,
+                outcome,
+            );
+            event.actor_type = EventActorType::User;
+            event.source_id = EventSourceId::Local;
+            let mut event = event
+                .with_action("config.proxy.save")
+                .with_summary(format!("Updated proxy '{}'", proxy_name))
+                .with_actor_id("local");
+            if let Some(err) = error_msg {
+                event.error_message = Some(err);
+            }
+            if let Err(e) = self.audit_service.record(event) {
+                log::warn!("Failed to record config.proxy.save audit event: {}", e);
+            }
+
+            if let Err(e) = save_result {
                 log::error!("Failed to save proxy profiles: {}", e);
             }
         }
@@ -1023,32 +1426,93 @@ impl AppState {
     // --- AuthProfileManager ---
 
     pub fn add_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        let profile_name = profile.name.clone();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.auth_profiles.items.push(profile.clone());
-        if let Err(e) = crate::config_loader::save_auth_profiles(
+        let save_result = crate::config_loader::save_auth_profiles(
             &self.storage_runtime,
             &self.facade.auth_profiles.items,
-        ) {
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.auth_profile.save")
+            .with_summary(format!("Created auth profile '{}'", profile_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!(
+                "Failed to record config.auth_profile.save audit event: {}",
+                e
+            );
+        }
+
+        if let Err(e) = save_result {
             log::error!("Failed to save auth profiles: {}", e);
         }
     }
 
     pub fn remove_auth_profile(&mut self, idx: usize) -> Option<dbflux_core::AuthProfile> {
-        if idx < self.facade.auth_profiles.items.len() {
-            let removed = self.facade.auth_profiles.items.remove(idx);
-            if let Err(e) = crate::config_loader::save_auth_profiles(
-                &self.storage_runtime,
-                &self.facade.auth_profiles.items,
-            ) {
-                log::error!("Failed to save auth profiles after remove: {}", e);
-            }
-            Some(removed)
-        } else {
-            None
+        if idx >= self.facade.auth_profiles.items.len() {
+            return None;
         }
+        let removed = self.facade.auth_profiles.items.remove(idx);
+        let profile_name = removed.name.clone();
+
+        let save_result = crate::config_loader::save_auth_profiles(
+            &self.storage_runtime,
+            &self.facade.auth_profiles.items,
+        );
+
+        let (outcome, error_msg) = match &save_result {
+            Ok(()) => (EventOutcome::Success, None),
+            Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+        };
+
+        let mut event = EventRecord::new(
+            dbflux_core::chrono::Utc::now().timestamp_millis(),
+            EventSeverity::Info,
+            EventCategory::Config,
+            outcome,
+        );
+        event.actor_type = EventActorType::User;
+        event.source_id = EventSourceId::Local;
+        let mut event = event
+            .with_action("config.auth_profile.delete")
+            .with_summary(format!("Deleted auth profile '{}'", profile_name))
+            .with_actor_id("local");
+        if let Some(err) = error_msg {
+            event.error_message = Some(err);
+        }
+        if let Err(e) = self.audit_service.record(event) {
+            log::warn!(
+                "Failed to record config.auth_profile.delete audit event: {}",
+                e
+            );
+        }
+
+        if let Err(e) = save_result {
+            log::error!("Failed to save auth profiles after remove: {}", e);
+        }
+        Some(removed)
     }
 
     pub fn update_auth_profile(&mut self, profile: dbflux_core::AuthProfile) {
+        let profile_name = profile.name.clone();
         if let Some(existing) = self
             .facade
             .auth_profiles
@@ -1057,10 +1521,39 @@ impl AppState {
             .find(|i| i.id == profile.id)
         {
             *existing = profile.clone();
-            if let Err(e) = crate::config_loader::save_auth_profiles(
+            let save_result = crate::config_loader::save_auth_profiles(
                 &self.storage_runtime,
                 &self.facade.auth_profiles.items,
-            ) {
+            );
+
+            let (outcome, error_msg) = match &save_result {
+                Ok(()) => (EventOutcome::Success, None),
+                Err(e) => (EventOutcome::Failure, Some(e.to_string())),
+            };
+
+            let mut event = EventRecord::new(
+                dbflux_core::chrono::Utc::now().timestamp_millis(),
+                EventSeverity::Info,
+                EventCategory::Config,
+                outcome,
+            );
+            event.actor_type = EventActorType::User;
+            event.source_id = EventSourceId::Local;
+            let mut event = event
+                .with_action("config.auth_profile.save")
+                .with_summary(format!("Updated auth profile '{}'", profile_name))
+                .with_actor_id("local");
+            if let Some(err) = error_msg {
+                event.error_message = Some(err);
+            }
+            if let Err(e) = self.audit_service.record(event) {
+                log::warn!(
+                    "Failed to record config.auth_profile.save audit event: {}",
+                    e
+                );
+            }
+
+            if let Err(e) = save_result {
                 log::error!("Failed to save auth profiles: {}", e);
             }
         }
@@ -1483,6 +1976,22 @@ impl AppState {
 
     pub fn dangerous_query_suppressions_mut(&mut self) -> &mut DangerousQuerySuppressions {
         &mut self.facade.dangerous_query_suppressions
+    }
+
+    /// Returns a reference to the audit service.
+    ///
+    /// This is used by service layers to emit audit events for connection,
+    /// query, hook, and script operations.
+    pub fn audit_service(&self) -> &dbflux_audit::AuditService {
+        &self.audit_service
+    }
+
+    /// Returns true if the audit service was initialized from a degraded
+    /// (in-memory) store because the real SQLite database could not be opened.
+    /// When degraded, the service is kept disabled regardless of persisted
+    /// settings to preserve an honest signal in the viewer.
+    pub fn is_audit_degraded(&self) -> bool {
+        self.audit_degraded
     }
 
     pub fn connection_tree(&self) -> &dbflux_core::ConnectionTree {
