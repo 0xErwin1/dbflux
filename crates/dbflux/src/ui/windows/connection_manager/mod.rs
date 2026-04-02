@@ -700,6 +700,19 @@ impl ConnectionManagerWindow {
         }) = &profile.access_kind
         {
             instance.selected_ssh_tunnel_id = Some(*ssh_tunnel_profile_id);
+            instance.ssh_enabled = true;
+
+            let selected_tunnel = app_state
+                .read(cx)
+                .ssh_tunnels()
+                .iter()
+                .find(|tunnel| tunnel.id == *ssh_tunnel_profile_id)
+                .cloned();
+
+            if let Some(tunnel) = selected_tunnel {
+                let secret = app_state.read(cx).get_ssh_tunnel_secret(&tunnel);
+                instance.apply_ssh_tunnel(&tunnel, secret, window, cx);
+            }
         }
 
         // Populate SSM fields if access kind is a managed aws-ssm access
@@ -2605,6 +2618,34 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
+    fn effective_ssh_test_target(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<(dbflux_core::SshTunnelConfig, Option<String>)> {
+        if let Some(tunnel_id) = self.selected_ssh_tunnel_id {
+            let tunnel = self
+                .app_state
+                .read(cx)
+                .ssh_tunnels()
+                .iter()
+                .find(|candidate| candidate.id == tunnel_id)
+                .cloned()?;
+
+            let secret = self
+                .app_state
+                .read(cx)
+                .get_ssh_tunnel_secret(&tunnel)
+                .map(|secret| secret.expose_secret().to_string());
+
+            return Some((tunnel.config, secret));
+        }
+
+        let ssh_config = self.build_ssh_config(cx)?;
+        let ssh_secret = self.get_ssh_secret(cx);
+
+        Some((ssh_config, ssh_secret))
+    }
+
     pub(super) fn test_ssh_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.ssh_enabled {
             return;
@@ -2614,14 +2655,12 @@ impl ConnectionManagerWindow {
         self.ssh_test_error = None;
         cx.notify();
 
-        let Some(ssh_config) = self.build_ssh_config(cx) else {
+        let Some((ssh_config, ssh_secret)) = self.effective_ssh_test_target(cx) else {
             self.ssh_test_status = TestStatus::Failed;
             self.ssh_test_error = Some("SSH configuration incomplete".to_string());
             cx.notify();
             return;
         };
-
-        let ssh_secret = self.get_ssh_secret(cx);
 
         let this = cx.entity().clone();
 

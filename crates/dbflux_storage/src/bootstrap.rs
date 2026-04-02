@@ -6,7 +6,6 @@ use log::info;
 
 use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
-use crate::legacy::LegacyImportResult;
 use crate::migrations::MigrationRegistry;
 use crate::paths;
 use crate::repositories::audit::AuditRepository;
@@ -22,7 +21,6 @@ use crate::repositories::hook_definitions::HookDefinitionRepository;
 use crate::repositories::proxy_profiles::ProxyProfileRepository;
 use crate::repositories::saved_filters::SavedFiltersRepository;
 use crate::repositories::services::ServiceRepository;
-use crate::repositories::settings::SettingsRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
 use crate::repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
@@ -174,11 +172,6 @@ impl StorageRuntime {
         DriverSettingsRepository::new(self.dbflux_db())
     }
 
-    /// Creates a settings repository.
-    pub fn settings(&self) -> SettingsRepository {
-        SettingsRepository::new(self.dbflux_db())
-    }
-
     /// Creates a general settings repository.
     pub fn general_settings(&self) -> GeneralSettingsRepository {
         GeneralSettingsRepository::new(self.dbflux_db())
@@ -261,23 +254,6 @@ impl StorageRuntime {
     pub fn shadow_path(&self, doc_id: &str) -> std::path::PathBuf {
         self.artifacts.shadow_path(doc_id)
     }
-
-    /// Runs legacy JSON import using the provided directory roots.
-    ///
-    /// The directories are used only to locate legacy JSON source files.
-    /// This method is exposed on `StorageRuntime` so tests and bootstrap code
-    /// can call it with arbitrary roots (avoiding global `dirs::*` lookups).
-    ///
-    /// Note: Legacy import now uses a single connection since config and state
-    /// domains have been unified into dbflux.db.
-    pub fn run_legacy_import(&self, config_dir: &Path, data_dir: &Path) -> LegacyImportResult {
-        crate::legacy::run_legacy_import(
-            self.dbflux_db.clone(),
-            self.dbflux_db.clone(),
-            config_dir,
-            data_dir,
-        )
-    }
 }
 
 /// Bootstraps the internal storage layer.
@@ -288,35 +264,14 @@ impl StorageRuntime {
 /// What it does:
 /// 1. Resolves `~/.local/share/dbflux/` (creating if needed).
 /// 2. Opens (or creates) `dbflux.db` in the data directory with unified migrations applied.
-/// 3. Runs legacy JSON import for any existing data (idempotent, restart-safe).
-///    If import fails, the error is surfaced and the runtime is NOT returned.
-/// 4. Returns a [`StorageRuntime`] that can hand out connections on demand.
+/// 3. Returns a [`StorageRuntime`] that can hand out connections on demand.
 #[allow(clippy::result_large_err)]
 pub fn initialize() -> Result<StorageRuntime, StorageError> {
     let dbflux_db_path = paths::dbflux_db_path()?;
-    let config_dir = paths::config_data_dir()?;
-    let data_dir = paths::data_dir()?;
 
     info!("Unified database path: {}", dbflux_db_path.display());
 
-    let runtime = StorageRuntime::for_path(dbflux_db_path)?;
-
-    // Run legacy import if needed (idempotent via legacy_imports markers)
-    let import_result = runtime.run_legacy_import(&config_dir, &data_dir);
-    if import_result.any_imported() {
-        info!(
-            "Legacy import complete: {} items imported",
-            import_result.total_imported()
-        );
-    }
-    if import_result.has_errors() {
-        // Surface critical import failures rather than silently continuing.
-        // Wrap the first error as the cause.
-        let first_error = import_result.errors.join("; ");
-        return Err(StorageError::LegacyImportFailed(first_error));
-    }
-
-    Ok(runtime)
+    StorageRuntime::for_path(dbflux_db_path)
 }
 
 #[cfg(test)]

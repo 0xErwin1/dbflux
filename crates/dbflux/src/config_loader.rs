@@ -1,7 +1,6 @@
 //! Configuration loader that reads and writes all durable config from `dbflux.db` repositories.
 //!
-//! This is the authoritative config-loading path for the app. It replaces
-//! `AppConfigStore` (which reads `config.json`) for all covered durable config domains.
+//! This is the authoritative config-loading path for the app.
 
 use std::collections::HashMap;
 
@@ -99,7 +98,6 @@ pub fn save_driver_settings(
     let overrides_repo = runtime.driver_overrides();
     let values_repo = runtime.driver_setting_values();
 
-    // Get existing driver keys from both new and old tables
     let existing_overrides = overrides_repo.all().unwrap_or_default();
     let existing_overrides_keys: std::collections::HashSet<_> = existing_overrides
         .iter()
@@ -110,9 +108,7 @@ pub fn save_driver_settings(
     let desired: std::collections::HashSet<_> =
         overrides.keys().chain(settings.keys()).cloned().collect();
 
-    // Upsert all driver keys to new tables
     for key in &desired {
-        // Save overrides to driver_overrides table
         if let Some(ov) = overrides.get(key) {
             let dto = DriverOverridesDto {
                 driver_key: key.clone(),
@@ -128,13 +124,11 @@ pub fn save_driver_settings(
             };
             overrides_repo.upsert(&dto)?;
         } else {
-            // If no overrides provided, check if there's an existing override to delete
             if existing_overrides_keys.contains(key) {
                 overrides_repo.delete(key)?;
             }
         }
 
-        // Save settings values to driver_setting_values table
         if let Some(sv) = settings.get(key) {
             let values: Vec<DriverSettingValueDto> = sv
                 .iter()
@@ -151,39 +145,9 @@ pub fn save_driver_settings(
         }
     }
 
-    // Delete overrides and values for keys that are in DB but not in the desired state
     for key in existing_overrides_keys.difference(&desired) {
         overrides_repo.delete(key)?;
         values_repo.delete_for_driver(key)?;
-    }
-
-    // Also save to old driver_settings table for backward compatibility during migration
-    let old_repo = runtime.driver_settings();
-    let existing_old = old_repo.all().unwrap_or_default();
-    let existing_old_keys: std::collections::HashSet<_> =
-        existing_old.iter().map(|d| d.driver_key.clone()).collect();
-
-    for key in &desired {
-        let ov = overrides.get(key);
-        let dto = dbflux_storage::repositories::driver_settings::DriverSettingsDto {
-            driver_key: key.clone(),
-            refresh_policy: ov.and_then(|o| {
-                o.refresh_policy.map(|rp| match rp {
-                    dbflux_core::RefreshPolicySetting::Interval => "interval".to_string(),
-                    dbflux_core::RefreshPolicySetting::Manual => "manual".to_string(),
-                })
-            }),
-            refresh_interval_secs: ov.and_then(|o| o.refresh_interval_secs.map(|v| v as i32)),
-            confirm_dangerous: ov.and_then(|o| o.confirm_dangerous.map(|v| if v { 1 } else { 0 })),
-            requires_where: ov.and_then(|o| o.requires_where.map(|v| if v { 1 } else { 0 })),
-            requires_preview: ov.and_then(|o| o.requires_preview.map(|v| if v { 1 } else { 0 })),
-            updated_at: String::new(),
-        };
-        old_repo.upsert(&dto)?;
-    }
-
-    for key in existing_old_keys.difference(&desired) {
-        old_repo.delete(key)?;
     }
 
     Ok(())
@@ -1362,22 +1326,34 @@ fn load_profiles(
                 .filter_map(|vr| {
                     let kind = dbflux_storage::repositories::connection_profile_value_refs::RefKind::try_parse(&vr.ref_kind)?;
                     let value_ref = match kind {
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Literal => {
+                            ValueRef::Literal {
+                                value: vr.literal_value.unwrap_or(vr.ref_value),
+                            }
+                        }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Env => {
+                            ValueRef::Env {
+                                key: vr.env_key.unwrap_or(vr.ref_value),
+                            }
+                        }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
                             ValueRef::Secret {
-                                locator: vr.ref_value,
+                                locator: vr.secret_locator.unwrap_or(vr.ref_value),
                                 provider: vr.ref_provider?,
                                 json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
                             ValueRef::Parameter {
-                                name: vr.ref_value,
+                                name: vr.param_name.unwrap_or(vr.ref_value),
                                 provider: vr.ref_provider?,
                                 json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Auth => {
-                            ValueRef::Auth { field: vr.ref_value }
+                            ValueRef::Auth {
+                                field: vr.auth_field.unwrap_or(vr.ref_value),
+                            }
                         }
                     };
                     Some((vr.ref_key, value_ref))
@@ -1615,5 +1591,85 @@ fn load_ssh_tunnels(
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_config, save_profiles, save_ssh_tunnels};
+    use dbflux_core::{
+        AccessKind, ConnectionProfile, DbConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
+    };
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use uuid::Uuid;
+
+    #[test]
+    fn save_and_reload_preserves_ssh_tunnel_profile_reference() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let ssh_tunnel = SshTunnelProfile {
+            id: Uuid::new_v4(),
+            name: "bastion".to_string(),
+            config: SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "deploy".to_string(),
+                auth_method: SshAuthMethod::PrivateKey {
+                    key_path: Some("/tmp/bastion-key".into()),
+                },
+            },
+            save_secret: false,
+        };
+
+        save_ssh_tunnels(&runtime, &[ssh_tunnel.clone()]).expect("save ssh tunnel profile");
+
+        let mut profile = ConnectionProfile::new("pg-with-ssh", DbConfig::default_postgres());
+        profile.access_kind = Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id: ssh_tunnel.id,
+        });
+
+        if let DbConfig::Postgres {
+            ssh_tunnel: inline_ssh_tunnel,
+            ssh_tunnel_profile_id,
+            ..
+        } = &mut profile.config
+        {
+            *inline_ssh_tunnel = None;
+            *ssh_tunnel_profile_id = Some(ssh_tunnel.id);
+        }
+
+        save_profiles(&runtime, &[profile.clone()]).expect("save connection profile");
+
+        let loaded = load_config(&runtime);
+        let reloaded = loaded
+            .profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        match reloaded.access_kind {
+            Some(AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            }) => assert_eq!(ssh_tunnel_profile_id, ssh_tunnel.id),
+            other => panic!("expected ssh access kind, got {:?}", other),
+        }
+
+        match reloaded.config {
+            DbConfig::Postgres {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => {
+                assert!(
+                    ssh_tunnel.is_none(),
+                    "saved tunnel profiles must not reload as inline SSH fields"
+                );
+                assert!(
+                    ssh_tunnel_profile_id.is_none(),
+                    "driver config storage should stay empty when the connection references a saved SSH tunnel profile"
+                );
+            }
+            other => panic!("expected postgres config, got {:?}", other),
+        }
     }
 }

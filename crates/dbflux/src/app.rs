@@ -2551,8 +2551,25 @@ impl AppState {
             .as_ref()
             .and_then(|p| p.fields.get("profile_name").cloned());
 
+        let ssh_tunnels = self
+            .facade
+            .ssh_tunnels
+            .items
+            .iter()
+            .map(|tunnel| {
+                (
+                    tunnel.id,
+                    crate::access_manager::ResolvedSshTunnel {
+                        config: tunnel.config.clone(),
+                        secret: self.facade.secrets.get_ssh_tunnel_secret(tunnel),
+                    },
+                )
+            })
+            .collect();
+
         let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
             Arc::new(crate::access_manager::AppAccessManager::new(
+                ssh_tunnels,
                 #[cfg(feature = "aws")]
                 Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
                     aws_profile_name,

@@ -150,10 +150,10 @@ impl AccessManager for McpAccessManager {
         match access_kind {
             AccessKind::Direct => Ok(AccessHandle::direct()),
             AccessKind::Ssh { .. } => Err(dbflux_core::DbError::connection_failed(
-                "SSH tunnels are managed by the legacy connect path",
+                "SSH tunnels are not supported by the MCP server access manager",
             )),
             AccessKind::Proxy { .. } => Err(dbflux_core::DbError::connection_failed(
-                "Proxy tunnels are managed by the legacy connect path",
+                "Proxy tunnels are not supported by the MCP server access manager",
             )),
             AccessKind::Managed { provider, params } => {
                 self.open_managed(provider, params, remote_host).await

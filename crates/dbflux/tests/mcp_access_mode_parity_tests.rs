@@ -7,7 +7,7 @@ fn read_workspace_file(relative_path: &str) -> String {
 }
 
 #[test]
-fn access_manager_declares_all_access_modes_and_structured_failures() {
+fn access_manager_declares_all_access_modes_without_legacy_wording() {
     let access_manager = read_workspace_file("src/access_manager.rs");
 
     assert!(access_manager.contains("AccessKind::Direct"));
@@ -16,12 +16,16 @@ fn access_manager_declares_all_access_modes_and_structured_failures() {
     assert!(access_manager.contains("AccessKind::Managed"));
 
     assert!(
-        access_manager.contains("SSH tunnels are managed by the legacy connect path"),
-        "ssh failure should produce explicit structured error context"
+        access_manager.contains("SSH tunnel profile '") && access_manager.contains("was not found"),
+        "ssh failures should explain missing tunnel profile resolution"
     );
     assert!(
-        access_manager.contains("Proxy tunnels are managed by the legacy connect path"),
-        "proxy failure should produce explicit structured error context"
+        access_manager.contains("Proxy tunnels are not supported by the connect pipeline yet"),
+        "proxy failures should stay explicit"
+    );
+    assert!(
+        !access_manager.contains("legacy connect path"),
+        "legacy wording should not remain in the app access manager"
     );
     assert!(
         access_manager.contains("Unknown managed access provider"),

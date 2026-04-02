@@ -8,7 +8,7 @@
 //! - `cfg_*` — Config domain (profiles, auth, hooks, services, governance)
 //! - `st_*`  — State domain (sessions, query history, UI state)
 //! - `aud_*` — Audit domain (audit events)
-//! - `sys_*` — System domain (migrations, metadata)
+//! - `sys_*` — System domain (migrations)
 
 use rusqlite::Transaction;
 
@@ -39,32 +39,6 @@ const SCHEMA: &str = r#"
 
 -- Note: sys_migrations is created by ensure_sys_migrations() in mod.rs before
 -- any migration runs. It is NOT included here to avoid duplication.
-
--- System metadata key-value store
-CREATE TABLE IF NOT EXISTS sys_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Legacy imports tracking
-CREATE TABLE IF NOT EXISTS sys_legacy_imports (
-    id TEXT PRIMARY KEY,
-    source_path TEXT NOT NULL,
-    source_hash TEXT NOT NULL UNIQUE,
-    imported_at TEXT NOT NULL DEFAULT (datetime('now')),
-    record_count INTEGER NOT NULL DEFAULT 0,
-    domain TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'completed',
-    error_message TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_sys_legacy_imports_source_path
-    ON sys_legacy_imports(source_path);
-CREATE INDEX IF NOT EXISTS idx_sys_legacy_imports_source_hash
-    ON sys_legacy_imports(source_hash);
-CREATE INDEX IF NOT EXISTS idx_sys_legacy_imports_domain
-    ON sys_legacy_imports(domain);
 
 -- ============================================================================
 -- CONFIG DOMAIN (cfg_*) - Connection profiles, auth, hooks, services, governance

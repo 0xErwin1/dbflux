@@ -66,6 +66,43 @@ impl DriverSettingValuesRepository {
         Ok(result)
     }
 
+    /// Gets all setting values across all drivers.
+    pub fn all(&self) -> Result<Vec<DriverSettingValueDto>, StorageError> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                r#"
+                SELECT id, driver_key, setting_key, setting_value
+                FROM cfg_driver_setting_values
+                ORDER BY driver_key ASC, setting_key ASC
+                "#,
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(DriverSettingValueDto {
+                    id: row.get(0)?,
+                    driver_key: row.get(1)?,
+                    setting_key: row.get(2)?,
+                    setting_value: row.get(3)?,
+                })
+            })
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Upserts a single setting value.
     pub fn upsert(&self, value: &DriverSettingValueDto) -> Result<(), StorageError> {
         self.conn()

@@ -13,6 +13,8 @@ use crate::error::StorageError;
 /// Represents the kind of value reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefKind {
+    Literal,
+    Env,
     Secret,
     Param,
     Auth,
@@ -21,6 +23,8 @@ pub enum RefKind {
 impl RefKind {
     pub fn as_str(&self) -> &'static str {
         match self {
+            RefKind::Literal => "literal",
+            RefKind::Env => "env",
             RefKind::Secret => "secret",
             RefKind::Param => "param",
             RefKind::Auth => "auth",
@@ -29,6 +33,8 @@ impl RefKind {
 
     pub fn try_parse(s: &str) -> Option<Self> {
         match s {
+            "literal" => Some(RefKind::Literal),
+            "env" => Some(RefKind::Env),
             "secret" => Some(RefKind::Secret),
             "param" => Some(RefKind::Param),
             "auth" => Some(RefKind::Auth),

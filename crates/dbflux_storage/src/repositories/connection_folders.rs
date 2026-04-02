@@ -11,6 +11,9 @@ use uuid::Uuid;
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
 
+const ROOT_FOLDER_SENTINEL_ID: &str = "00000000-0000-0000-0000-000000000001";
+const ROOT_FOLDER_SENTINEL_NAME: &str = "__dbflux_root__";
+
 /// Data transfer object for a connection folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionFolderDto {
@@ -46,6 +49,24 @@ impl ConnectionFoldersRepository {
     /// Borrows the underlying connection.
     fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    fn is_root_folder_sentinel(folder_id: &str) -> bool {
+        folder_id == ROOT_FOLDER_SENTINEL_ID
+    }
+
+    fn root_folder_sentinel() -> ConnectionFolderDto {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+
+        ConnectionFolderDto {
+            id: ROOT_FOLDER_SENTINEL_ID.to_string(),
+            parent_id: None,
+            name: ROOT_FOLDER_SENTINEL_NAME.to_string(),
+            position: i32::MIN,
+            collapsed: false,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+        }
     }
 
     /// Checks if a profile exists in cfg_connection_profiles.
@@ -107,7 +128,10 @@ impl ConnectionFoldersRepository {
             });
         }
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|folder| !Self::is_root_folder_sentinel(&folder.id))
+            .collect())
     }
 
     /// Fetches a single folder by ID.
@@ -140,7 +164,7 @@ impl ConnectionFoldersRepository {
             })
             .ok();
 
-        Ok(folder)
+        Ok(folder.filter(|folder| !Self::is_root_folder_sentinel(&folder.id)))
     }
 
     /// Fetches all root folders (folders with no parent).
@@ -193,7 +217,10 @@ impl ConnectionFoldersRepository {
             });
         }
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|folder| !Self::is_root_folder_sentinel(&folder.id))
+            .collect())
     }
 
     /// Fetches child folders of a given parent folder.
@@ -246,7 +273,10 @@ impl ConnectionFoldersRepository {
             });
         }
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|folder| !Self::is_root_folder_sentinel(&folder.id))
+            .collect())
     }
 
     /// Inserts a new folder.
@@ -542,6 +572,8 @@ impl ConnectionFoldersRepository {
         // Clear existing data
         self.clear_all()?;
 
+        self.insert_folder(&Self::root_folder_sentinel())?;
+
         // Collect all folders and sort by depth (root folders first, then children)
         // This ensures parent folders are inserted before their children
         let mut folders: Vec<_> = tree.nodes.iter().filter(|n| n.is_folder()).collect();
@@ -583,12 +615,10 @@ impl ConnectionFoldersRepository {
         for node in tree.nodes.iter().filter(|n| n.is_connection_ref()) {
             if let Some(profile_id) = node.profile_id {
                 let profile_id_str = profile_id.to_string();
-
-                // Only insert if folder_id is not empty (root items use empty folder_id)
-                let folder_id = node.parent_id.map(|p| p.to_string()).unwrap_or_default();
-                if folder_id.is_empty() {
-                    continue;
-                }
+                let folder_id = node
+                    .parent_id
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| ROOT_FOLDER_SENTINEL_ID.to_string());
 
                 // Check if the profile exists in cfg_connection_profiles before inserting
                 // (it might not exist if it was deleted or never imported)
@@ -647,7 +677,9 @@ impl ConnectionFoldersRepository {
             let node = ConnectionTreeNode {
                 id: Uuid::new_v4(),
                 kind: ConnectionTreeNodeKind::ConnectionRef,
-                parent_id: if item.folder_id.is_empty() {
+                parent_id: if item.folder_id.is_empty()
+                    || Self::is_root_folder_sentinel(&item.folder_id)
+                {
                     None
                 } else {
                     Uuid::parse_str(&item.folder_id).ok()
