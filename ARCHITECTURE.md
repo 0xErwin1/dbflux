@@ -22,169 +22,175 @@
 
 ```
 crates/
-  dbflux/                   # GPUI app + UI composition
-    src/main.rs             # Application entry point
-    src/app.rs              # Global state, drivers, profiles, history, MCP runtime
-    src/assets.rs           # GPUI AssetSource impl for embedded SVG icons
-    src/access_manager.rs   # App AccessManager (direct + managed access providers)
-    src/auth_provider_registry.rs # Runtime registry for DynAuthProvider implementations
-    src/cli.rs              # CLI argument parsing and single-instance IPC client
-    src/hook_executor.rs    # Composite hook executor routing (process + Lua)
-    src/ipc_server.rs       # App-control IPC server (single-instance, OpenScript)
-    src/proxy.rs            # create_proxy_tunnel callback for CreateTunnelFn
-    src/platform.rs         # X11/Wayland detection, window options for floating windows
-    src/keymap/             # Keyboard system
-      mod.rs
-      actions.rs            # GPUI actions!() macro declarations
-      chord.rs              # KeyChord and Modifiers types
-      command.rs            # Command enum with all app actions
-      context.rs            # ContextId enum for keybinding context resolution
-      defaults.rs           # Context-aware key bindings
-      dispatcher.rs         # CommandDispatcher trait
-      focus.rs              # FocusTarget enum for panel routing
-      keymap.rs             # KeymapLayer and keybinding data structures
-    src/ui/                 # UI panels, windows, theme
-      mod.rs
-      theme.rs              # Theme definitions
-      tokens.rs             # Design tokens (spacing, sizing constants)
-      icons/                # SVG icon system (AppIcon enum)
-      dock/                 # Resizable dock panels
-        mod.rs              # Bottom dock support
-        sidebar_dock.rs     # Collapsible, resizable sidebar
-      views/                # Primary views (workspace and sidebar)
+  dbflux/                   # Binary shell: main entry point, CLI, single-instance IPC
+    src/
+      main.rs               # Application entry point, logging, window bootstrap, IPC socket
+      cli.rs                # CLI arg parsing, single-instance IPC client
+  dbflux_ui/                # GPUI UI layer: views, documents, overlays, components, keymap
+    src/
+      app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter)
+      ui/                   # UI panels, windows, theme
         mod.rs
-        status_bar.rs       # Status bar rendering
-        tasks_panel.rs      # Background tasks panel
-        workspace/          # Main layout, command dispatch, focus routing
+        theme.rs            # Theme definitions
+        tokens.rs           # Design tokens (spacing, sizing constants)
+        icons/              # SVG icon system (AppIcon enum)
+        dock/               # Resizable dock panels
+          mod.rs            # Bottom dock support
+          sidebar_dock.rs   # Collapsible, resizable sidebar
+        views/              # Primary views (workspace and sidebar)
           mod.rs
-          actions.rs        # Workspace-level action handlers
-          dispatch.rs       # Command dispatch logic
-          render.rs         # Workspace rendering
-        sidebar/            # Connection + scripts tree with folders, drag-drop
+          status_bar.rs     # Status bar rendering
+          tasks_panel.rs    # Background tasks panel
+          workspace/        # Main layout, command dispatch, focus routing
+            mod.rs
+            actions.rs      # Workspace-level action handlers
+            dispatch.rs     # Command dispatch logic
+            render.rs       # Workspace rendering
+          sidebar/          # Connection + scripts tree with folders, drag-drop
+            mod.rs
+            code_generation.rs
+            context_menu.rs
+            deletion.rs
+            drag_drop.rs
+            expansion.rs
+            operations.rs
+            render.rs
+            render_footer.rs
+            render_overlays.rs
+            render_tree.rs
+            selection.rs
+            table_loading.rs
+            tree_builder.rs
+        overlays/            # Modals and transient overlays
           mod.rs
-          code_generation.rs
-          context_menu.rs
-          deletion.rs
-          drag_drop.rs
-          expansion.rs
-          operations.rs
-          render.rs
-          render_footer.rs
-          render_overlays.rs
-          render_tree.rs
-          selection.rs
-          table_loading.rs
-          tree_builder.rs
-      overlays/             # Modals and transient overlays
-        mod.rs
-        cell_editor_modal.rs     # Modal editor for JSON/long text cells
-        command_palette.rs       # Fuzzy command palette
-        document_preview_modal.rs # JSON document preview modal
-        history_modal.rs         # Recent/saved queries modal
-        shutdown_overlay.rs      # Graceful shutdown overlay
-        sql_preview_modal.rs     # SQL/query preview (dual-mode: SQL and generic)
-        login_modal.rs           # SSO login waiting modal with timeout
-        sso_wizard.rs            # SSO account/role discovery wizard
-      document/             # Document-based tab system (like VS Code/DBeaver)
-        mod.rs              # Document exports and shared types
-        handle.rs           # DocumentHandle for entity management
-        types.rs            # DocumentId, DocumentKind, DocumentState
-        result_view.rs      # ResultView enum (Table, LiveOutput, etc.)
-        task_runner.rs      # Background task tracking for documents
-        data_document.rs    # Standalone data browsing document
-        tab_manager.rs      # MRU tab ordering and activation
-        tab_bar.rs          # Visual tab bar rendering
-        data_view.rs        # DataViewMode abstraction (Table vs Document)
-        add_member_modal.rs # Modal for adding Redis set/list/sorted-set members
-        new_key_modal.rs    # Modal for creating new Redis keys
-        governance.rs       # MCP approvals view for pending executions
-        code/               # CodeDocument: query/script editor
+          cell_editor_modal.rs     # Modal editor for JSON/long text cells
+          command_palette.rs       # Fuzzy command palette
+          document_preview_modal.rs # JSON document preview modal
+          history_modal.rs         # Recent/saved queries modal
+          shutdown_overlay.rs      # Graceful shutdown overlay
+          sql_preview_modal.rs     # SQL/query preview (dual-mode: SQL and generic)
+          login_modal.rs           # SSO login waiting modal with timeout
+          sso_wizard.rs            # SSO account/role discovery wizard
+        document/            # Document-based tab system (like VS Code/DBeaver)
+          mod.rs             # Document exports and shared types
+          handle.rs          # DocumentHandle for entity management
+          types.rs           # DocumentId, DocumentKind, DocumentState
+          result_view.rs     # ResultView enum (Table, LiveOutput, etc.)
+          task_runner.rs     # Background task tracking for documents
+          data_document.rs   # Standalone data browsing document
+          tab_manager.rs     # MRU tab ordering and activation
+          tab_bar.rs         # Visual tab bar rendering
+          data_view.rs       # DataViewMode abstraction (Table vs Document)
+          add_member_modal.rs # Modal for adding Redis set/list/sorted-set members
+          new_key_modal.rs   # Modal for creating new Redis keys
+          governance.rs      # MCP approvals view for pending executions
+          code/              # CodeDocument: query/script editor
+            mod.rs
+            completion.rs    # Language-aware autocompletion
+            context_bar.rs   # Execution context dropdowns (connection/database/schema)
+            diagnostics.rs   # Live query diagnostics
+            execution.rs     # Query and script execution flow (incl. dangerous-query confirmation)
+            file_ops.rs      # Auto-save, scratch/shadow file management
+            focus.rs         # Internal focus management
+            live_output.rs   # Document-owned streamed script output buffer
+            render.rs        # Toolbar, editor, and live output rendering
+          data_grid_panel/   # Data grid with table/document view modes
+            mod.rs
+            context_menu.rs
+            mutations.rs
+            navigation.rs
+            query.rs
+            render.rs
+            utils.rs
+          key_value/         # Redis/key-value-specific document view
+            mod.rs
+            commands.rs
+            context_menu.rs
+            copy_command.rs
+            document_view.rs
+            mutations.rs
+            pagination.rs
+            parsing.rs
+            render.rs
+        components/          # Reusable UI components
           mod.rs
-          completion.rs     # Language-aware autocompletion
-          context_bar.rs    # Execution context dropdowns (connection/database/schema)
-          diagnostics.rs    # Live query diagnostics
-          execution.rs      # Query and script execution flow (incl. dangerous-query confirmation)
-          file_ops.rs       # Auto-save, scratch/shadow file management
-          focus.rs          # Internal focus management
-          live_output.rs    # Document-owned streamed script output buffer
-          render.rs         # Toolbar, editor, and live output rendering
-        data_grid_panel/    # Data grid with table/document view modes
+          context_menu.rs    # Reusable context menu component
+          dropdown.rs        # Reusable dropdown selector
+          form_navigation.rs # FormNavigation / FormEditState traits
+          form_renderer.rs   # Generic form field rendering
+          json_editor_view.rs # Inline JSON editor component
+          modal_frame.rs     # Reusable modal chrome/frame
+          toast.rs           # Custom toast notification system
+          multi_select.rs    # Multi-select dropdown component
+          value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
+          data_table/        # Custom virtualized data table
+            mod.rs
+            table.rs         # Main table component with phantom scroller
+            state.rs         # Table state management
+            model.rs         # CellValue and data model
+            selection.rs      # Selection handling
+            events.rs         # Event handling
+            clipboard.rs      # Copy/paste support
+            theme.rs         # Table styling
+          document_tree/     # Hierarchical document/JSON viewer
+            mod.rs
+            state.rs         # Tree state with cursor, expansion, search
+            tree.rs          # Tree rendering with keyboard navigation
+            node.rs          # Node types (document, field, array item)
+            events.rs        # Document tree events (selection, context menu)
+          tree_nav/          # Reusable tree navigation component
+            mod.rs
+            gutter.rs
+        windows/             # Settings and connection manager windows
           mod.rs
-          context_menu.rs
-          mutations.rs
-          navigation.rs
-          query.rs
-          render.rs
-          utils.rs
-        key_value/          # Redis/key-value-specific document view
-          mod.rs
-          commands.rs
-          context_menu.rs
-          copy_command.rs
-          document_view.rs
-          mutations.rs
-          pagination.rs
-          parsing.rs
-          render.rs
-      components/           # Reusable UI components
-        mod.rs
-        context_menu.rs     # Reusable context menu component
-        dropdown.rs         # Reusable dropdown selector
-        form_navigation.rs  # FormNavigation / FormEditState traits
-        form_renderer.rs    # Generic form field rendering
-        json_editor_view.rs # Inline JSON editor component
-        modal_frame.rs      # Reusable modal chrome/frame
-        toast.rs            # Custom toast notification system
-        multi_select.rs     # Multi-select dropdown component
-        value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
-        data_table/         # Custom virtualized data table
-          mod.rs
-          table.rs          # Main table component with phantom scroller
-          state.rs          # Table state management
-          model.rs          # CellValue and data model
-          selection.rs      # Selection handling
-          events.rs         # Event handling
-          clipboard.rs      # Copy/paste support
-          theme.rs          # Table styling
-        document_tree/      # Hierarchical document/JSON viewer
-          mod.rs
-          state.rs          # Tree state with cursor, expansion, search
-          tree.rs           # Tree rendering with keyboard navigation
-          node.rs           # Node types (document, field, array item)
-          events.rs         # Document tree events (selection, context menu)
-        tree_nav/           # Reusable tree navigation component
-          mod.rs
-          gutter.rs
-      windows/              # Settings and connection manager windows
-        mod.rs
-        ssh_shared.rs       # Shared SSH auth UI components
-        settings/           # Settings window sections
-          mod.rs
-          render.rs         # Top-level settings window rendering
-          lifecycle.rs      # Settings window open/close/save logic
-          sidebar_nav.rs    # Settings sidebar navigation (TreeNav)
-          dirty_state.rs    # Unsaved-changes tracking for settings forms
-          form_nav.rs       # FormGridNav<F> generic 2D grid navigation
-          form_section.rs   # FormSection trait for keyboard navigation
-          section_trait.rs  # SettingsSection trait
-          general.rs        # General settings (theme, safety toggles)
-          keybindings.rs    # Keybindings settings section
-          auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
-          proxies.rs        # Proxy CRUD form with FormGridNav
-          ssh_tunnels.rs    # SSH tunnel CRUD form with FormGridNav
-          hooks.rs          # Hook definitions CRUD
-          drivers.rs        # Per-driver settings overrides
-          rpc_services.rs   # External RPC service management
-          mcp_section.rs    # MCP settings (trusted clients, roles, policies, audit)
-        connection_manager/ # Connection manager window
-          mod.rs
-          access_tab.rs     # Unified access mode editor (Direct/SSH/Proxy/SSM)
-          form.rs           # Connection form state and field management
-          navigation.rs     # Keyboard navigation within connection manager
-          render.rs         # Top-level connection manager rendering
-          render_driver_select.rs
-          render_tabs.rs
-          hooks_tab.rs      # Per-profile hook bindings
+          ssh_shared.rs      # Shared SSH auth UI components
+          settings/          # Settings window sections
+            mod.rs
+            render.rs        # Top-level settings window rendering
+            lifecycle.rs     # Settings window open/close/save logic
+            sidebar_nav.rs   # Settings sidebar navigation (TreeNav)
+            dirty_state.rs   # Unsaved-changes tracking for settings forms
+            form_nav.rs      # FormGridNav<F> generic 2D grid navigation
+            form_section.rs  # FormSection trait for keyboard navigation
+            section_trait.rs # SettingsSection trait
+            general.rs       # General settings (theme, safety toggles)
+            keybindings.rs   # Keybindings settings section
+            auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
+            proxies.rs       # Proxy CRUD form with FormGridNav
+            ssh_tunnels.rs   # SSH tunnel CRUD form with FormGridNav
+            hooks.rs         # Hook definitions CRUD
+            drivers.rs       # Per-driver settings overrides
+            rpc_services.rs  # External RPC service management
+            mcp_section.rs   # MCP settings (trusted clients, roles, policies, audit)
+          connection_manager/ # Connection manager window
+            mod.rs
+            access_tab.rs    # Unified access mode editor (Direct/SSH/Proxy/SSM)
+            form.rs          # Connection form state and field management
+            navigation.rs    # Keyboard navigation within connection manager
+            render.rs        # Top-level connection manager rendering
+            render_driver_select.rs
+            render_tabs.rs
+            hooks_tab.rs     # Per-profile hook bindings
+      keymap/                # Keyboard system
+        defaults.rs          # Context-aware key bindings
+        command.rs           # Command enum and dispatch
+        focus.rs             # FocusTarget (Document/Sidebar/BackgroundTasks)
+      ipc_server.rs          # App-control IPC server (Focus, OpenScript)
+      assets.rs              # GPUI AssetSource impl for embedded SVG icons
+      platform.rs            # X11/Wayland detection, window options
+  dbflux_app/               # Runtime/domain: AppState (plain struct), managers, hooks, auth
+    src/
+      app_state.rs          # AppState (plain struct, no GPUI dependency)
+      access_manager.rs      # AppAccessManager for direct/managed access
+      auth_provider_registry.rs # Runtime auth provider registry
+      hook_executor.rs       # Composite hook executor routing
+      proxy.rs               # create_proxy_tunnel callback for CreateTunnelFn
+      config_loader.rs       # SQLite-backed configuration persistence
+      history_manager_sqlite.rs # SQLite-backed query history
+      mcp_command.rs         # MCP subcommand integration and arg parsing
+      keymap/                # Keyboard system (pure domain types)
+        command.rs           # Command enum (pure domain)
+        focus.rs             # FocusTarget enum (pure domain)
   dbflux_core/              # Traits, core types, storage, errors
     src/access/             # AccessKind, AccessManager, and managed-access serialization
       mod.rs
@@ -278,7 +284,7 @@ crates/
     src/query_generator.rs  # MongoDB shell query generator (insertOne, updateOne, etc.)
   dbflux_driver_redis/      # Redis driver implementation
     src/driver.rs           # Connection, key-value API, schema discovery
-    src/command_generator.rs  # Redis command generator (SET, HSET, SADD, etc.)
+    src/command_generator.rs # Redis command generator (SET, HSET, SADD, etc.)
   dbflux_driver_dynamodb/   # DynamoDB driver implementation
     src/driver.rs           # Connection, schema discovery, scan/query/put/update/delete
     src/query_parser.rs     # JSON command envelope parser for DynamoDB operations
@@ -327,7 +333,7 @@ crates/
     src/engine.rs           # PolicyEngine with PolicyRole and ToolPolicy
     src/trusted_clients.rs  # TrustedClientRegistry for known AI clients
     src/assignments.rs      # ConnectionPolicyAssignment and PolicyBindingScope
-  dbflux_approval/          # Approval service for deferred executions
+  dbflux_approval/           # Approval service for deferred executions
     src/lib.rs              # Exports for ApprovalService and pending store
     src/service.rs          # ApprovalService (approve/reject lifecycle)
     src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
@@ -338,7 +344,7 @@ crates/
     src/redaction.rs        # Sensitive value redaction for details_json and error_message
     src/purge.rs            # Retention-based event purge (batched deletes)
     src/store/sqlite.rs     # SqliteAuditStore delegating to AuditRepository
-  dbflux_storage/           # Unified SQLite storage
+  dbflux_storage/            # Unified SQLite storage
     src/bootstrap.rs        # StorageRuntime with single dbflux.db connection
     src/paths.rs            # dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db
     src/migrations/         # Trait-based migration system
@@ -349,7 +355,7 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
-  dbflux_test_support/      # Docker containers and fixtures for integration tests
+  dbflux_test_support/       # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
     src/fake_driver.rs      # FakeDriver for unit tests
@@ -360,14 +366,14 @@ crates/
 ### Application Layer
 
 - App entry point: `crates/dbflux/src/main.rs` initializes logging, theme, and main GPUI window.
-- Global app state: `crates/dbflux/src/app.rs` owns drivers, profiles, active connections, history, task manager, and secret store access.
-- CLI and single-instance: `crates/dbflux/src/cli.rs` parses arguments; `crates/dbflux/src/ipc_server.rs` runs the app-control IPC server for `Focus` and `OpenScript` commands.
-- Assets: `crates/dbflux/src/assets.rs` implements GPUI's `AssetSource` to serve embedded SVG icons.
-- Workspace UI shell: `crates/dbflux/src/ui/views/workspace/` wires panes (sidebar/dock, document area, bottom dock), command palette, and focus routing. Split across `mod.rs`, `actions.rs`, `dispatch.rs`, and `render.rs`.
+- Global app state: `crates/dbflux_app/src/app_state.rs` (plain struct, no GPUI dependency) holds drivers, profiles, active connections, history, task manager, and secret store access.
+- CLI and single-instance: `crates/dbflux/src/cli.rs` parses arguments; `crates/dbflux_ui/src/ipc_server.rs` runs the app-control IPC server for `Focus` and `OpenScript` commands.
+- Assets: `crates/dbflux_ui/src/assets.rs` implements GPUI's `AssetSource` to serve embedded SVG icons.
+- Workspace UI shell: `crates/dbflux_ui/src/ui/views/workspace/` wires panes (sidebar/dock, document area, bottom dock), command palette, and focus routing. Split across `mod.rs`, `actions.rs`, `dispatch.rs`, and `render.rs`.
 
 ### Document System
 
-`crates/dbflux/src/ui/document/` implements a tab-based document architecture:
+`crates/dbflux_ui/src/ui/document/` implements a tab-based document architecture:
 
 - `DocumentHandle` manages document lifecycle as GPUI entities
 - `CodeDocument` provides language-aware editing for queries and scripts (SQL/MongoDB/Redis/Lua/Python/Bash) with multiple result tabs and live output for scripts. Connection/database/schema controls are only shown for languages that support connection context.
@@ -380,17 +386,17 @@ crates/
 
 ### Data Visualization
 
-- **Data table**: `crates/dbflux/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
-- **Document tree**: `crates/dbflux/src/ui/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
-- **Key-value view**: `crates/dbflux/src/ui/document/key_value/` Redis-specific document view with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu.
-- Cell editor modal: `crates/dbflux/src/ui/overlays/cell_editor_modal.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
-- Document preview modal: `crates/dbflux/src/ui/overlays/document_preview_modal.rs` full-screen JSON document preview with an inline JSON editor.
-- Command palette: `crates/dbflux/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
+- **Data table**: `crates/dbflux_ui/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
+- **Document tree**: `crates/dbflux_ui/src/ui/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
+- **Key-value view**: `crates/dbflux_ui/src/ui/document/key_value/` Redis-specific document view with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu.
+- Cell editor modal: `crates/dbflux_ui/src/ui/overlays/cell_editor_modal.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
+- Document preview modal: `crates/dbflux_ui/src/ui/overlays/document_preview_modal.rs` full-screen JSON document preview with an inline JSON editor.
+- Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
 
 ### Schema & Navigation
 
-- Sidebar: `crates/dbflux/src/ui/views/sidebar/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
-- Sidebar dock: `crates/dbflux/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
+- Sidebar: `crates/dbflux_ui/src/ui/views/sidebar/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
+- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
 ### Driver System
@@ -408,12 +414,12 @@ crates/
 
 ### Auth & Access Pipeline
 
-- `crates/dbflux/src/auth_provider_registry.rs` maintains runtime `DynAuthProvider` registration in the app crate and avoids hardcoding AWS provider logic in connection UI flows.
+- `crates/dbflux_app/src/auth_provider_registry.rs` maintains runtime `DynAuthProvider` registration in the app crate and avoids hardcoding AWS provider logic in connection UI flows.
 - `crates/dbflux_core/src/auth/` defines provider contracts (`AuthFormDef`, `DynAuthProvider`, `ImportableProfile`, `after_profile_saved`) and serializable auth profile/session types.
 - `AuthProfile` storage migrated from provider-specific nested `config` payloads to provider-agnostic `fields`, with compatibility deserialization for legacy entries.
 - `crates/dbflux_core/src/access/mod.rs` introduces provider-agnostic `AccessKind::Managed { provider, params }` with transparent migration from legacy `method = "ssm"` profile JSON.
 - `crates/dbflux_core/src/pipeline/mod.rs` runs pre-connect stages (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) and publishes `PipelineState` updates to UI watchers.
-- `crates/dbflux/src/access_manager.rs` provides the app-side `AccessManager` implementation for direct and managed access providers (currently `aws-ssm`).
+- `crates/dbflux_app/src/access_manager.rs` provides the app-side `AccessManager` implementation for direct and managed access providers (currently `aws-ssm`).
 
 ### Tunnel Infrastructure
 
@@ -449,9 +455,9 @@ crates/
 ### IPC/RPC Integration
 
 - `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, cross-platform socket naming, and IPC auth tokens (`auth.rs`).
-- `crates/dbflux/src/ipc_server.rs` runs the app-control IPC server for single-instance behavior (`Focus`, `OpenScript`). `crates/dbflux/src/cli.rs` acts as the IPC client when a second instance is launched.
+- `crates/dbflux_ui/src/ipc_server.rs` runs the app-control IPC server for single-instance behavior (`Focus`, `OpenScript`). `crates/dbflux/src/cli.rs` acts as the IPC client when a second instance is launched.
 - `crates/dbflux_core/src/config/app.rs` handles legacy config.json import only (deprecated).
-- `crates/dbflux/src/app.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
+- `crates/dbflux_app/src/app_state.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
 - `crates/dbflux_driver_ipc/src/driver.rs` implements `DbDriver` as an RPC proxy and only shuts down managed hosts that DBFlux spawned itself.
 - External connection profiles use `DbConfig::External { kind, values }`, where form values come from the remote `form_definition` returned during `Hello`.
 
@@ -499,7 +505,7 @@ crates/
 
 **Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
 
-**History modal**: `crates/dbflux/src/ui/overlays/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
+**History modal**: `crates/dbflux_ui/src/ui/overlays/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 
 ### Driver Implementations
 
@@ -533,14 +539,14 @@ crates/
 
 ### Supporting Components
 
-- Toast system: `crates/dbflux/src/ui/components/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts.
+- Toast system: `crates/dbflux_ui/src/ui/components/toast.rs` custom implementation with auto-dismiss (4s) for success/info/warning toasts.
 - Tunnel infrastructure: `crates/dbflux_tunnel_core/` provides RAII `Tunnel` with `TunnelConnector` trait and `ForwardingConnection<R>` bidirectional forwarder.
 - Proxy tunneling: `crates/dbflux_proxy/` implements SOCKS5 and HTTP CONNECT proxy tunnels via `TunnelConnector`.
 - SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implements SSH tunnel via `TunnelConnector`, all operations serialized to one thread for libssh2 safety.
 - Export: `crates/dbflux_export/` provides shape-based export (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). Format availability is determined by `QueryResultShape`, not by driver. Each format has its own module (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`).
 - Test support: `crates/dbflux_test_support/` provides Docker container management and fixtures for live integration tests across all drivers. DynamoDB Local is used only for integration tests and local validation; production usage targets remote AWS DynamoDB endpoints.
-- Icon system: `crates/dbflux/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets loaded via `assets.rs`.
-- Platform detection: `crates/dbflux/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints.
+- Icon system: `crates/dbflux_ui/src/ui/icons/mod.rs` centralized AppIcon enum with embedded SVG assets loaded via `assets.rs`.
+- Platform detection: `crates/dbflux_ui/src/platform.rs` handles X11/Wayland differences with `is_x11()`, `floating_window_kind()`, and `apply_window_options()` for proper window min size hints.
 
 ### MCP Governance System
 
@@ -591,27 +597,27 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `preview_mutation` is strictly read-only; unsafe `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating DDL preview path
 
 **UI Integration**:
-- `McpApprovalsView` (`ui/document/governance.rs`) for reviewing pending executions
+- `McpApprovalsView` (`crates/dbflux_ui/src/ui/document/governance.rs`) for reviewing pending executions
 - `mcp_section.rs` in Settings for trusted clients, roles, policies, and audit log
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
 ## Data Flow
 
-- Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/views/workspace/).
+- Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux_ui/src/ui/views/workspace/).
 - External driver bootstrap: at startup, DBFlux reads `cfg_services` from `~/.local/share/dbflux/dbflux.db`, probes each service, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
 - View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
 - Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.
-- Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux/src/ui/views/workspace/).
+- Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux_ui/src/ui/views/workspace/).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
 - History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (crates/dbflux_core/src/storage/history.rs).
 - Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (crates/dbflux_core/src/storage/saved_query.rs).
 
 ## Keyboard & Focus Architecture
 
-- Keymap system: `crates/dbflux/src/keymap/` defines `Command` enum (`command.rs`), `KeyChord` parsing (`chord.rs`), context-aware `KeymapLayer` bindings (`keymap.rs`), `ContextId` resolution (`context.rs`), `CommandDispatcher` trait (`dispatcher.rs`), and `FocusTarget` for panel routing (`focus.rs`). GPUI action declarations live in `actions.rs`.
+- Keymap system: `crates/dbflux_ui/src/keymap/` defines `Command` enum (`command.rs`), context-aware key bindings (`defaults.rs`), and `FocusTarget` for panel routing (`focus.rs`). Domain command types live in `crates/dbflux_app/src/keymap/`.
 - Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks).
 - Document-focused design: FocusTarget was simplified from Editor/Results/Sidebar/BackgroundTasks to Document/Sidebar/BackgroundTasks, letting documents manage their own internal focus state.
 - Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation).
