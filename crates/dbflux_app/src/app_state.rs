@@ -18,7 +18,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]

@@ -3,14 +3,15 @@ mod dispatch;
 pub mod pipeline;
 mod render;
 
-use crate::app::{AppStateEntity, AppStateChanged};
+use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
 
 use crate::keymap::{
-    self, key_chord_from_gpui, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
+    self, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
+    key_chord_from_gpui,
 };
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
@@ -124,7 +125,11 @@ enum GovernancePanel {
 }
 
 impl Workspace {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let toast_host = cx.new(|_cx| ToastHost::new());
         cx.set_global(ToastGlobal {
             host: toast_host.clone(),

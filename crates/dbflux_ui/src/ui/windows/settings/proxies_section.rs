@@ -1,9 +1,9 @@
+use super::SettingsSection;
+use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
-use super::SettingsSection;
-use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;

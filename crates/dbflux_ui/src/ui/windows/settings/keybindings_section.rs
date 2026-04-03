@@ -1,6 +1,6 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
-use crate::keymap::{key_chord_from_gpui, ContextId, KeyChord, Modifiers};
+use crate::keymap::{ContextId, KeyChord, Modifiers, key_chord_from_gpui};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::InputState;

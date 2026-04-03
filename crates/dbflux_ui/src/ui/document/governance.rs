@@ -6,11 +6,11 @@ use dbflux_mcp::{
 };
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 
 use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
 

@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
@@ -281,9 +281,10 @@ impl SshTunnelsSection {
         });
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_ssh_tunnels(runtime, self.app_state.read(cx).ssh_tunnels())
-        {
+        if let Err(e) = dbflux_app::config_loader::save_ssh_tunnels(
+            runtime,
+            self.app_state.read(cx).ssh_tunnels(),
+        ) {
             log::error!("Failed to save SSH tunnel profiles: {}", e);
         }
 

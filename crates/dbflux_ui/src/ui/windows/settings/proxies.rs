@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use gpui::*;
@@ -293,9 +293,10 @@ impl ProxiesSection {
         });
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_proxy_profiles(runtime, self.app_state.read(cx).proxies())
-        {
+        if let Err(e) = dbflux_app::config_loader::save_proxy_profiles(
+            runtime,
+            self.app_state.read(cx).proxies(),
+        ) {
             log::error!("Failed to save proxy profiles: {}", e);
         }
 

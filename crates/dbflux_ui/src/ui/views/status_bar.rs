@@ -1,4 +1,4 @@
-use crate::app::{AppStateEntity, AppStateChanged};
+use crate::app::{AppStateChanged, AppStateEntity};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{ActiveTheme, IconName, IconNamed};
@@ -14,7 +14,11 @@ pub struct StatusBar {
 impl EventEmitter<ToggleTasksPanel> for StatusBar {}
 
 impl StatusBar {
-    pub fn new(app_state: Entity<AppStateEntity>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.on_app_state_changed(cx);
         })

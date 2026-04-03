@@ -1,4 +1,4 @@
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use gpui::{Context, Entity, EventEmitter, KeyDownEvent, Subscription, Window};
 use gpui_component::input::{InputEvent, InputState};
 

@@ -173,7 +173,11 @@ pub struct SqlPreviewModal {
 }
 
 impl SqlPreviewModal {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sql_display = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("sql")

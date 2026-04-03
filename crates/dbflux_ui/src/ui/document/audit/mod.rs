@@ -67,7 +67,11 @@ pub struct AuditDocument {
 
 impl AuditDocument {
     /// Creates a new audit document.
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search events..."));
 
         let dropdown_time_range = cx.new(|_cx| {

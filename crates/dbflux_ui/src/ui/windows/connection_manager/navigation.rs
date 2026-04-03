@@ -1,4 +1,4 @@
-use crate::keymap::{key_chord_from_gpui, Command, ContextId};
+use crate::keymap::{Command, ContextId, key_chord_from_gpui};
 use crate::platform;
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::settings::{SettingsSectionId, SettingsWindow};
@@ -1963,8 +1963,8 @@ impl ConnectionManagerWindow {
 #[cfg(test)]
 mod tests {
     use super::{
-        next_active_tab, prev_active_tab, AccessTabMode, ActiveTab, FormFocus, MainNavState,
-        ProxyNavState, SshNavState,
+        AccessTabMode, ActiveTab, FormFocus, MainNavState, ProxyNavState, SshNavState,
+        next_active_tab, prev_active_tab,
     };
     use crate::ui::windows::ssh_shared::SshAuthSelection;
 

@@ -14,7 +14,11 @@ pub struct ShutdownOverlay {
 }
 
 impl ShutdownOverlay {
-    pub fn new(app_state: Entity<AppStateEntity>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // Start animation timer for spinner
         cx.spawn(async move |this, cx| {
             Self::animate_spinner(this, cx).await;

@@ -2,7 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
-use crate::app::{AppStateEntity, AppStateChanged};
+use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::ToastExt;
@@ -203,7 +203,11 @@ pub struct ExecutionRecord {
 }
 
 impl CodeDocument {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let connection_id = app_state.read(cx).active_connection_id();
 
         // Get query language from the active connection, default to SQL

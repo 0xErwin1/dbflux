@@ -14,12 +14,12 @@ use dbflux_ipc::{
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
     read_app_control_token, socket_name,
 };
+use dbflux_ui::AppStateEntity;
+use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
 use dbflux_ui::ui::views::workspace::Workspace;
-use dbflux_ui::AppStateEntity;
-use dbflux_ui::assets::Assets;
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -230,84 +230,79 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    Application::new()
-        .with_assets(Assets)
-        .run(|cx: &mut App| {
-            dbflux_ui::ui::theme::init(cx);
-            dbflux_ui::ui::components::data_table::init(cx);
-            dbflux_ui::ui::components::document_tree::init(cx);
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
+        dbflux_ui::ui::theme::init(cx);
+        dbflux_ui::ui::components::data_table::init(cx);
+        dbflux_ui::ui::components::document_tree::init(cx);
 
-            let app_state = cx.new(|_cx| AppStateEntity::new());
+        let app_state = cx.new(|_cx| AppStateEntity::new());
 
-            let audit_service = app_state.read(cx).audit_service().clone();
-            *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
+        let audit_service = app_state.read(cx).audit_service().clone();
+        *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
 
-            emit_system_startup(&audit_service);
+        emit_system_startup(&audit_service);
 
-            let theme_setting = app_state.read(cx).general_settings().theme;
-            dbflux_ui::ui::theme::apply_theme(theme_setting, None, cx);
+        let theme_setting = app_state.read(cx).general_settings().theme;
+        dbflux_ui::ui::theme::apply_theme(theme_setting, None, cx);
 
-            let mut main_window_options = WindowOptions {
-                app_id: Some("dbflux".into()),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("DBFlux".into()),
-                    ..Default::default()
-                }),
+        let mut main_window_options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("DBFlux".into()),
                 ..Default::default()
-            };
-            platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+            }),
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
 
-            let window_handle = cx
-                .open_window(main_window_options, |window, cx| {
-                    cx.bind_keys(command_palette_keybindings());
+        let window_handle = cx
+            .open_window(main_window_options, |window, cx| {
+                cx.bind_keys(command_palette_keybindings());
 
-                    let workspace =
-                        cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                    IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
-                    info!("IPC server started");
+                IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
+                info!("IPC server started");
 
-                    cx.new(|cx| Root::new(workspace, window, cx))
-                })
-                .expect("Failed to open main window");
+                cx.new(|cx| Root::new(workspace, window, cx))
+            })
+            .expect("Failed to open main window");
 
-            let app_state_for_close = app_state.clone();
-            window_handle
-                .update(cx, |_root, window, cx| {
-                    window.on_window_should_close(cx, move |_window, cx| {
-                        let already_shutting_down =
-                            app_state_for_close.read(cx).is_shutting_down();
-                        if already_shutting_down {
-                            let phase = app_state_for_close.read(cx).shutdown_phase();
-                            if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
-                                return true;
-                            }
-                            return false;
+        let app_state_for_close = app_state.clone();
+        window_handle
+            .update(cx, |_root, window, cx| {
+                window.on_window_should_close(cx, move |_window, cx| {
+                    let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
+                    if already_shutting_down {
+                        let phase = app_state_for_close.read(cx).shutdown_phase();
+                        if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
+                            return true;
                         }
+                        return false;
+                    }
 
-                        info!("Starting graceful shutdown...");
-                        let initiated_shutdown =
-                            app_state_for_close.update(cx, |state, _| state.begin_shutdown());
+                    info!("Starting graceful shutdown...");
+                    let initiated_shutdown =
+                        app_state_for_close.update(cx, |state, _| state.begin_shutdown());
 
-                        if initiated_shutdown {
-                            let audit_service =
-                                app_state_for_close.read(cx).audit_service().clone();
-                            emit_system_shutdown(&audit_service);
+                    if initiated_shutdown {
+                        let audit_service = app_state_for_close.read(cx).audit_service().clone();
+                        emit_system_shutdown(&audit_service);
 
-                            let app_state_shutdown = app_state_for_close.clone();
-                            cx.spawn(async move |cx| {
-                                run_shutdown_sequence(app_state_shutdown, cx).await;
-                            })
-                            .detach();
-                        }
+                        let app_state_shutdown = app_state_for_close.clone();
+                        cx.spawn(async move |cx| {
+                            run_shutdown_sequence(app_state_shutdown, cx).await;
+                        })
+                        .detach();
+                    }
 
-                        false
-                    });
-                })
-                .unwrap_or_else(|error| {
-                    log::warn!("Failed to install window close handler: {:?}", error);
+                    false
                 });
-        });
+            })
+            .unwrap_or_else(|error| {
+                log::warn!("Failed to install window close handler: {:?}", error);
+            });
+    });
 }
 
 async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut AsyncApp) {

@@ -1,4 +1,4 @@
-use crate::app::{AppStateEntity, AppStateChanged};
+use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
@@ -15,7 +15,11 @@ pub struct TasksPanel {
 }
 
 impl TasksPanel {
-    pub fn new(app_state: Entity<AppStateEntity>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.subscribe(&app_state, |_this, _, _: &AppStateChanged, cx| {
             cx.notify();
         })

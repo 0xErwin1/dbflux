@@ -1,10 +1,14 @@
 use super::*;
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::tree_nav::TreeNavAction;
 use section_trait::SectionFocusEvent;
 
 impl SettingsCoordinator {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self::new_with_section(app_state, SettingsSectionId::General, window, cx)
     }
 

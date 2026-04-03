@@ -282,7 +282,11 @@ pub struct ConnectionManagerWindow {
 }
 
 impl ConnectionManagerWindow {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let available_drivers: Vec<DriverInfo> = app_state
             .read(cx)
             .drivers()

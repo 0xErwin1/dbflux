@@ -2072,7 +2072,7 @@ impl DataGridPanel {
                 .size_full()
                 .track_focus(&self.context_menu_focus)
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    use crate::keymap::{key_chord_from_gpui, KeyChord, default_keymap};
+                    use crate::keymap::{KeyChord, default_keymap, key_chord_from_gpui};
 
                     let chord = key_chord_from_gpui(&event.keystroke);
                     let keymap = default_keymap();

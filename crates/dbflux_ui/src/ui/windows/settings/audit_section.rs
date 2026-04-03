@@ -1,9 +1,9 @@
-use super::layout;
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::layout;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
@@ -146,7 +146,10 @@ impl AuditSection {
         }
     }
 
-    fn load_settings(app_state: Entity<AppStateEntity>, cx: &mut Context<Self>) -> AuditSettingsDto {
+    fn load_settings(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut Context<Self>,
+    ) -> AuditSettingsDto {
         let runtime = app_state.read(cx).storage_runtime();
         let repo = runtime.audit_settings();
         repo.get().ok().flatten().unwrap_or_default()

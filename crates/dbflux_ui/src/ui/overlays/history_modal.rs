@@ -51,7 +51,11 @@ pub struct HistoryModal {
 }
 
 impl HistoryModal {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
         let rename_input = cx.new(|cx| InputState::new(window, cx));
         let save_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Query name"));

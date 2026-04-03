@@ -12,7 +12,7 @@ mod selection;
 mod table_loading;
 mod tree_builder;
 
-use crate::app::{AppState, AppStateEntity, AppStateChanged, ConnectedProfile};
+use crate::app::{AppState, AppStateChanged, AppStateEntity, ConnectedProfile};
 use crate::ui::components::tree_nav::{self, GutterInfo};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -535,7 +535,11 @@ struct DeleteConfirmState {
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let items = Self::build_tree_items(app_state.read(cx));
         let visible_entry_count = Self::count_visible_entries(&items);
         let gutter_metadata = compute_gutter_map(&items);

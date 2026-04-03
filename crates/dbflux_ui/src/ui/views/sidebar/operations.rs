@@ -1,6 +1,6 @@
 use super::*;
-use dbflux_app::hook_executor::CompositeExecutor;
 use crate::platform;
+use dbflux_app::hook_executor::CompositeExecutor;
 use dbflux_core::observability::actions::{
     CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED, CONNECTION_CONNECTING, CONNECTION_DISCONNECT,
     HOOK_EXECUTE, HOOK_EXECUTE_FAILED,

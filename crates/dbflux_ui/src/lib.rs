@@ -15,6 +15,6 @@ pub mod platform;
 pub mod ui;
 
 // Re-exports for convenience
-pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 #[cfg(feature = "mcp")]
 pub use app_state_entity::McpRuntimeEventRaised;
+pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};

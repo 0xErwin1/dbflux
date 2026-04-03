@@ -2,6 +2,21 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.14] – 2026-04-03
+
+### Changed
+
+* Architecture refactor: split codebase into `dbflux_app` (pure domain, no GPUI dependency) and `dbflux_ui` (all GPUI/UI code)
+* `dbflux` binary is now a thin shell that only bootstraps the application and IPC server
+* Keymap domain types moved from `dbflux_ui` to `dbflux_app`
+* `AppState` extracted as a plain struct in `dbflux_app`; `AppStateEntity` wrapper with GPUI event emission lives in `dbflux_ui`
+
+### Fixed
+
+* Fixed clippy warnings: renamed `keymap/keymap.rs` to `keymap_layer.rs`, fixed `ToastHost` Default impl, removed unnecessary `WindowHandle` clones
+* Audit viewer: moved status bar outside flex_1 to fix render layout
+* Updated crate references throughout codebase following the app/UI split
+
 ## [0.4.0-dev.13] – 2026-04-02
 
 ### Added

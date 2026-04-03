@@ -1,4 +1,4 @@
-use crate::app::{AppStateEntity, AppStateChanged, AuthProfileCreated};
+use crate::app::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Spacing};
@@ -50,7 +50,11 @@ pub enum SsoWizardEvent {
 }
 
 impl SsoWizard {
-    pub fn new(app_state: Entity<AppStateEntity>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             app_state,
             visible: false,
