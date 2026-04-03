@@ -1461,11 +1461,11 @@ impl Render for AuditDocument {
             .child(
                 div()
                     .flex_1()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .overflow_hidden()
-                    .child(self.render_event_list(cx))
-                    .child(self.render_status_bar(cx)),
+                    .child(self.render_event_list(cx)),
             )
+            .child(self.render_status_bar(cx))
     }
 }
