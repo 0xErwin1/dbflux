@@ -87,7 +87,7 @@ impl ServicesSection {
     }
 
     pub(super) fn load_services(&mut self, runtime: &StorageRuntime) {
-        let config = crate::config_loader::load_config(runtime);
+        let config = dbflux_app::config_loader::load_config(runtime);
         self.svc_services = config.services;
     }
 
@@ -255,7 +255,7 @@ impl ServicesSection {
         };
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_services(runtime, &self.svc_services) {
+        if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
             cx.toast_error(format!("Failed to save config: {}", e), window);
             return;
@@ -304,7 +304,7 @@ impl ServicesSection {
         }
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_services(runtime, &self.svc_services) {
+        if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
             cx.toast_error(format!("Failed to save config: {}", e), window);
             return;

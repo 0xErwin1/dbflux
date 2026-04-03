@@ -1,19 +1,12 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
-mod access_manager;
 mod app;
 mod assets;
-mod auth_provider_registry;
 mod cli;
-mod config_loader;
-mod history_manager_sqlite;
-mod hook_executor;
 mod ipc_server;
 mod keymap;
-mod mcp_command;
 mod platform;
-mod proxy;
 mod ui;
 
 use app::AppState;
@@ -156,7 +149,7 @@ fn main() {
 
     // Handle MCP subcommand
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
-        let exit_code = mcp_command::run_mcp_command(&args[2..]);
+        let exit_code = dbflux_app::mcp_command::run_mcp_command(&args[2..]);
         std::process::exit(exit_code);
     }
 

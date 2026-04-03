@@ -1,0 +1,31 @@
+[package]
+name = "dbflux_app"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Pure domain modules for DBFlux (no GPUI dependency)"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+dbflux_core.workspace = true
+dbflux_storage.workspace = true
+dbflux_ssh.workspace = true
+dbflux_proxy.workspace = true
+dbflux_lua = { workspace = true, optional = true }
+dbflux_mcp_server = { workspace = true, optional = true }
+dbflux_aws = { workspace = true, optional = true }
+dbflux_ssm = { workspace = true, optional = true }
+tokio.workspace = true
+uuid.workspace = true
+log.workspace = true
+indexmap.workspace = true
+async-trait = "0.1"
+
+[features]
+lua = ["dbflux_lua"]
+aws = ["dbflux_aws", "dbflux_ssm"]
+mcp = ["dbflux_mcp_server"]
