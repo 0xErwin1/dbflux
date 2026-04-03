@@ -2177,6 +2177,7 @@ dependencies = [
  "dbflux_ssm",
  "dbflux_storage",
  "dbflux_test_support",
+ "dbflux_ui",
  "dirs 5.0.1",
  "env_logger",
  "fuzzy-matcher",
@@ -2589,6 +2590,52 @@ version = "0.1.0"
 dependencies = [
  "dbflux_core",
  "log",
+]
+
+[[package]]
+name = "dbflux_ui"
+version = "0.4.0-dev.13"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "dbflux_app",
+ "dbflux_approval",
+ "dbflux_audit",
+ "dbflux_aws",
+ "dbflux_core",
+ "dbflux_driver_dynamodb",
+ "dbflux_driver_ipc",
+ "dbflux_driver_mongodb",
+ "dbflux_driver_mysql",
+ "dbflux_driver_postgres",
+ "dbflux_driver_redis",
+ "dbflux_driver_sqlite",
+ "dbflux_export",
+ "dbflux_ipc",
+ "dbflux_lua",
+ "dbflux_mcp",
+ "dbflux_mcp_server",
+ "dbflux_policy",
+ "dbflux_proxy",
+ "dbflux_ssh",
+ "dbflux_ssm",
+ "dbflux_storage",
+ "dirs 5.0.1",
+ "env_logger",
+ "fuzzy-matcher",
+ "gpui",
+ "gpui-component",
+ "indexmap",
+ "interprocess",
+ "libc",
+ "log",
+ "lsp-types",
+ "open",
+ "rfd",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

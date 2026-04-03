@@ -8,7 +8,7 @@ fn read_workspace_file(relative_path: &str) -> String {
 
 #[test]
 fn access_manager_declares_all_access_modes_without_legacy_wording() {
-    let access_manager = read_workspace_file("src/access_manager.rs");
+    let access_manager = read_workspace_file("../dbflux_app/src/access_manager.rs");
 
     assert!(access_manager.contains("AccessKind::Direct"));
     assert!(access_manager.contains("AccessKind::Ssh"));

@@ -1,16 +1,8 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
-mod app;
-mod assets;
 mod cli;
-mod ipc_server;
-mod keymap;
-mod platform;
-mod ui;
 
-use app::AppState;
-use assets::Assets;
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
@@ -21,19 +13,22 @@ use dbflux_ipc::{
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
     read_app_control_token, socket_name,
 };
+use dbflux_ui::ipc_server::IpcServer;
+use dbflux_ui::platform;
+use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
+use dbflux_ui::ui::views::workspace::Workspace;
+use dbflux_ui::AppStateEntity;
+use dbflux_ui::assets::Assets;
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
     Listener as IpcListener, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
     prelude::*,
 };
-use ipc_server::IpcServer;
 use log::info;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use ui::overlays::command_palette::command_palette_keybindings;
-use ui::views::workspace::Workspace;
 
 /// Global holder for the audit service, used by the panic hook.
 /// The panic hook needs access to the audit service, which is created
@@ -55,15 +50,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// 2. Falls back to stderr logging if the service is unavailable or fails
 /// 3. Always delegates to the previously installed panic hook
 fn install_panic_hook() {
-    // Capture the previous hook before installing ours
     let prev = std::panic::take_hook();
     *PREV_PANIC_HOOK.lock().unwrap() = Some(Box::new(prev));
 
-    // Install our hook
     std::panic::set_hook(Box::new(|panic_info: &std::panic::PanicHookInfo| {
-        // Try to record panic via audit service (best-effort, non-blocking)
         if let Some(audit_service) = AUDIT_SERVICE_FOR_PANIC.lock().unwrap().clone() {
-            // Format panic info for the audit record
             let panic_location = panic_info
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
@@ -79,8 +70,6 @@ fn install_panic_hook() {
 
             let panic_info_str = format!("{} at {}", panic_message, panic_location);
 
-            // Try best-effort recording (never panics, uses try_lock internally)
-            // record_panic_best_effort returns Option<EventRecord>, None means it failed or audit disabled
             match audit_service.record_panic_best_effort(&panic_info_str) {
                 Some(_) => {}
                 None => {
@@ -97,7 +86,6 @@ fn install_panic_hook() {
             );
         }
 
-        // Always chain to previous hook
         if let Some(ref prev_hook) = *PREV_PANIC_HOOK.lock().unwrap() {
             prev_hook(panic_info);
         }
@@ -141,13 +129,10 @@ fn emit_system_shutdown(audit_service: &AuditService) {
 }
 
 fn main() {
-    // Install the panic hook early, before any significant processing.
-    // This ensures panics during startup are captured.
     install_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
 
-    // Handle MCP subcommand
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
         let exit_code = dbflux_app::mcp_command::run_mcp_command(&args[2..]);
         std::process::exit(exit_code);
@@ -174,7 +159,6 @@ fn main() {
 }
 
 fn bind_ipc_socket() -> Result<IpcListener, ()> {
-    // First try connecting — if an existing instance responds, focus it and exit.
     let connect_name = socket_name().map_err(|e| {
         eprintln!("Failed to create socket name: {}", e);
     })?;
@@ -185,8 +169,6 @@ fn bind_ipc_socket() -> Result<IpcListener, ()> {
         std::process::exit(0);
     }
 
-    // No live instance. Bind with nonblocking accept and try_overwrite to handle
-    // stale sockets left behind by a crashed process.
     let bind_name = socket_name().map_err(|e| {
         eprintln!("Failed to create socket name: {}", e);
     })?;
@@ -247,84 +229,87 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        ui::theme::init(cx);
-        ui::components::data_table::init(cx);
-        ui::components::document_tree::init(cx);
-        let app_state = cx.new(|_cx| AppState::new());
+    Application::new()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
+            dbflux_ui::ui::theme::init(cx);
+            dbflux_ui::ui::components::data_table::init(cx);
+            dbflux_ui::ui::components::document_tree::init(cx);
 
-        // Store audit service in global for panic hook access
-        let audit_service = app_state.read(cx).audit_service().clone();
-        *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
+            let app_state = cx.new(|_cx| AppStateEntity::new());
 
-        // Emit system startup audit event
-        emit_system_startup(&audit_service);
+            let audit_service = app_state.read(cx).audit_service().clone();
+            *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
 
-        let theme_setting = app_state.read(cx).general_settings().theme;
-        ui::theme::apply_theme(theme_setting, None, cx);
+            emit_system_startup(&audit_service);
 
-        let mut main_window_options = WindowOptions {
-            app_id: Some("dbflux".into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("DBFlux".into()),
+            let theme_setting = app_state.read(cx).general_settings().theme;
+            dbflux_ui::ui::theme::apply_theme(theme_setting, None, cx);
+
+            let mut main_window_options = WindowOptions {
+                app_id: Some("dbflux".into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("DBFlux".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
+            };
+            platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
 
-        let window_handle = cx
-            .open_window(main_window_options, |window, cx| {
-                cx.bind_keys(command_palette_keybindings());
+            let window_handle = cx
+                .open_window(main_window_options, |window, cx| {
+                    cx.bind_keys(command_palette_keybindings());
 
-                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                    let workspace =
+                        cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
-                IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
-                info!("IPC server started");
+                    IpcServer::start_with_listener(listener, workspace.clone(), auth_token, cx);
+                    info!("IPC server started");
 
-                cx.new(|cx| Root::new(workspace, window, cx))
-            })
-            .expect("Failed to open main window");
+                    cx.new(|cx| Root::new(workspace, window, cx))
+                })
+                .expect("Failed to open main window");
 
-        let app_state_for_close = app_state.clone();
-        window_handle
-            .update(cx, |_root, window, cx| {
-                window.on_window_should_close(cx, move |_window, cx| {
-                    let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
-                    if already_shutting_down {
-                        let phase = app_state_for_close.read(cx).shutdown_phase();
-                        if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
-                            return true;
+            let app_state_for_close = app_state.clone();
+            window_handle
+                .update(cx, |_root, window, cx| {
+                    window.on_window_should_close(cx, move |_window, cx| {
+                        let already_shutting_down =
+                            app_state_for_close.read(cx).is_shutting_down();
+                        if already_shutting_down {
+                            let phase = app_state_for_close.read(cx).shutdown_phase();
+                            if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
+                                return true;
+                            }
+                            return false;
                         }
-                        return false;
-                    }
 
-                    info!("Starting graceful shutdown...");
-                    let initiated_shutdown =
-                        app_state_for_close.update(cx, |state, _| state.begin_shutdown());
+                        info!("Starting graceful shutdown...");
+                        let initiated_shutdown =
+                            app_state_for_close.update(cx, |state, _| state.begin_shutdown());
 
-                    if initiated_shutdown {
-                        // Emit system shutdown initiation event
-                        let audit_service = app_state_for_close.read(cx).audit_service().clone();
-                        emit_system_shutdown(&audit_service);
+                        if initiated_shutdown {
+                            let audit_service =
+                                app_state_for_close.read(cx).audit_service().clone();
+                            emit_system_shutdown(&audit_service);
 
-                        let app_state_shutdown = app_state_for_close.clone();
-                        cx.spawn(async move |cx| {
-                            run_shutdown_sequence(app_state_shutdown, cx).await;
-                        })
-                        .detach();
-                    }
+                            let app_state_shutdown = app_state_for_close.clone();
+                            cx.spawn(async move |cx| {
+                                run_shutdown_sequence(app_state_shutdown, cx).await;
+                            })
+                            .detach();
+                        }
 
-                    false
+                        false
+                    });
+                })
+                .unwrap_or_else(|error| {
+                    log::warn!("Failed to install window close handler: {:?}", error);
                 });
-            })
-            .unwrap_or_else(|error| {
-                log::warn!("Failed to install window close handler: {:?}", error);
-            });
-    });
+        });
 }
 
-async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
+async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut AsyncApp) {
     let start = Instant::now();
 
     info!("Shutdown phase: Cancelling tasks...");
@@ -427,8 +412,6 @@ async fn run_shutdown_sequence(app_state: Entity<AppState>, cx: &mut AsyncApp) {
             state.complete_shutdown();
         });
     });
-
-    // Socket cleanup is automatic — interprocess reclaims the name on drop.
 
     let stopped = shutdown_managed_hosts();
     if stopped > 0 {

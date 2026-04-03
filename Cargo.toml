@@ -2,6 +2,7 @@
 members = [
     "crates/dbflux",
     "crates/dbflux_app",
+    "crates/dbflux_ui",
     "crates/dbflux_core",
     "crates/dbflux_lua",
     "crates/dbflux_ipc",
@@ -64,6 +65,7 @@ dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
 dbflux_app = { path = "crates/dbflux_app" }
+dbflux_ui = { path = "crates/dbflux_ui" }
 mysql = "25"
 
 gpui = "0.2.2"

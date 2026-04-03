@@ -8,9 +8,11 @@ fn read_workspace_file(relative_path: &str) -> String {
 
 #[test]
 fn ui_contains_trusted_client_and_connection_policy_controls() {
-    let mcp_settings = read_workspace_file("src/ui/windows/settings/mcp_section.rs");
-    let connection_form = read_workspace_file("src/ui/windows/connection_manager/form.rs");
-    let connection_tabs = read_workspace_file("src/ui/windows/connection_manager/render_tabs.rs");
+    let mcp_settings = read_workspace_file("../dbflux_ui/src/ui/windows/settings/mcp_section.rs");
+    let connection_form =
+        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/form.rs");
+    let connection_tabs =
+        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/render_tabs.rs");
 
     assert!(mcp_settings.contains("mcp-client-save"));
     assert!(mcp_settings.contains("mcp-client-toggle-active"));
@@ -23,10 +25,10 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 
 #[test]
 fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
-    let governance_view = read_workspace_file("src/ui/document/governance.rs");
-    let workspace_actions = read_workspace_file("src/ui/views/workspace/actions.rs");
-    let workspace_dispatch = read_workspace_file("src/ui/views/workspace/dispatch.rs");
-    let workspace_mod = read_workspace_file("src/ui/views/workspace/mod.rs");
+    let governance_view = read_workspace_file("../dbflux_ui/src/ui/document/governance.rs");
+    let workspace_actions = read_workspace_file("../dbflux_ui/src/ui/views/workspace/actions.rs");
+    let workspace_dispatch = read_workspace_file("../dbflux_ui/src/ui/views/workspace/dispatch.rs");
+    let workspace_mod = read_workspace_file("../dbflux_ui/src/ui/views/workspace/mod.rs");
 
     assert!(governance_view.contains("mcp-approval-approve"));
     assert!(governance_view.contains("mcp-approval-reject"));

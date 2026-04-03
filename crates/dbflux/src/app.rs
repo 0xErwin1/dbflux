@@ -1,101 +1,22 @@
-//! DBFlux application state and event definitions.
+//! DBFlux application state re-exports.
 //!
-//! This module re-exports `AppState` from `dbflux_app` (a plain struct with no GPUI dependency)
-//! and adds GPUI-specific event types and `EventEmitter` implementations.
-
-use dbflux_core::observability::actions::{
-    CONFIG_CHANGE, CONFIG_CREATE, CONFIG_DELETE, CONFIG_UPDATE,
-};
-use dbflux_core::observability::{
-    EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
-};
-use dbflux_core::secrecy::SecretString;
-use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
-    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase,
-    ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
-};
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
-use dbflux_storage::bootstrap::StorageRuntime;
-
-#[cfg(feature = "mcp")]
-use dbflux_mcp::{
-    AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
-    McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
-    ToolPolicyDto, TrustedClientDto,
-};
-use gpui::{EventEmitter, WindowHandle};
-use gpui_component::Root;
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::RwLock;
-use uuid::Uuid;
+//! This module re-exports `AppState` from `dbflux_app` (a plain struct with no GPUI dependency).
+//! GPUI-coupled event types and `EventEmitter` implementations are in `dbflux_ui::AppStateEntity`.
 
 pub use dbflux_app::AppState;
 
-#[cfg(feature = "sqlite")]
-use dbflux_driver_sqlite::SqliteDriver;
-
-#[cfg(feature = "postgres")]
-use dbflux_driver_postgres::PostgresDriver;
-
-#[cfg(feature = "mysql")]
-use dbflux_core::DbKind;
-
-#[cfg(feature = "mysql")]
-use dbflux_driver_mysql::MysqlDriver;
-
-#[cfg(feature = "mongodb")]
-use dbflux_driver_mongodb::MongoDriver;
-
-#[cfg(feature = "redis")]
-use dbflux_driver_redis::RedisDriver;
-
-#[cfg(feature = "dynamodb")]
-use dbflux_driver_dynamodb::DynamoDriver;
-
-pub use dbflux_core::{
-    ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
-    FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
-    FetchTableDetailsParams, SwitchDatabaseParams,
-};
-
-// Re-export auth provider registry from dbflux_app
-pub use dbflux_app::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
-
-// ============================================================================
-// GPUI-coupled event types — these stay here because they implement EventEmitter
-// ============================================================================
-
-pub struct AppStateChanged;
-
-pub struct AuthProfileCreated {
-    pub profile_id: Uuid,
-}
+// Re-export GPUI-coupled event types from dbflux_ui for backwards compatibility
+pub use dbflux_ui::AppStateChanged;
+pub use dbflux_ui::AuthProfileCreated;
 
 #[cfg(feature = "mcp")]
-#[derive(Clone)]
-pub struct McpRuntimeEventRaised {
-    #[allow(dead_code)]
-    pub event: McpRuntimeEvent,
-}
+pub use dbflux_ui::McpRuntimeEventRaised;
+
+// Re-export the GPUI entity wrapper
+pub use dbflux_ui::AppStateEntity;
 
 // ============================================================================
-// EventEmitter implementations — GPUI-coupled, must stay in dbflux crate
-// ============================================================================
-
-impl EventEmitter<AppStateChanged> for AppState {}
-impl EventEmitter<AuthProfileCreated> for AppState {}
-
-#[cfg(feature = "mcp")]
-impl EventEmitter<McpRuntimeEventRaised> for AppState {}
-
-// ============================================================================
-// Tests — remain in dbflux crate since they test the full AppState with GPUI
+// Tests — remain in dbflux crate since they test AppState with dbflux dependencies
 // ============================================================================
 
 #[cfg(test)]

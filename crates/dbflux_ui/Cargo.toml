@@ -1,16 +1,14 @@
 [package]
-name = "dbflux"
+name = "dbflux_ui"
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "GPUI UI layer for DBFlux"
 repository.workspace = true
 homepage.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "dbflux"
-path = "src/main.rs"
+[lib]
 
 [dependencies]
 gpui.workspace = true
@@ -18,7 +16,6 @@ gpui-component.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true
-dbflux_ui = { workspace = true }
 dbflux_lua = { workspace = true, optional = true }
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true
@@ -83,16 +80,13 @@ optional = true
 
 [features]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "lua", "aws", "mcp"]
-sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite", "dbflux_ui/sqlite"]
-postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres", "dbflux_ui/postgres"]
-mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql", "dbflux_ui/mysql"]
-mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb", "dbflux_ui/mongodb"]
-redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis", "dbflux_ui/redis"]
-dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb", "dbflux_ui/dynamodb"]
-lua = ["dbflux_lua", "dbflux_app/lua", "dbflux_ui/lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws", "dbflux_ui/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp", "dbflux_ui/mcp"]
+sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite"]
+postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres"]
+mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql"]
+mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb"]
+redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
+dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
+lua = ["dbflux_lua", "dbflux_app/lua"]
+aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
+mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
-
-[dev-dependencies]
-dbflux_test_support.workspace = true
