@@ -8,6 +8,7 @@ pub mod auth_provider_registry;
 pub mod config_loader;
 pub mod history_manager_sqlite;
 pub mod hook_executor;
+pub mod keymap;
 pub mod mcp_command;
 pub mod proxy;
 

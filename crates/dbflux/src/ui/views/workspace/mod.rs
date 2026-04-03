@@ -10,7 +10,7 @@ use dbflux_core::observability::actions::CONFIG_CHANGE;
 use crate::app::McpRuntimeEventRaised;
 
 use crate::keymap::{
-    self, Command, CommandDispatcher, ContextId, FocusTarget, KeyChord, KeymapStack, default_keymap,
+    self, key_chord_from_gpui, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
 };
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};

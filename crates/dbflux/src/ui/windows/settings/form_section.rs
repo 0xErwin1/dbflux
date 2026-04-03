@@ -1,4 +1,4 @@
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use gpui::{Context, Entity, EventEmitter, KeyDownEvent, Subscription, Window};
 use gpui_component::input::{InputEvent, InputState};
 
@@ -174,7 +174,7 @@ pub trait FormSection: Sized + 'static {
             return false;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match (chord.key.as_str(), chord.modifiers) {
             ("escape", modifiers) if modifiers == Modifiers::none() => {

@@ -3,7 +3,7 @@ use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppState;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::FormRendererState;
 use dbflux_core::{
@@ -347,7 +347,7 @@ impl SettingsSection for DriversSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         if self.handle_open_dropdown(&chord, cx) {
             return;

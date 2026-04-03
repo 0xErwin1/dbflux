@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use gpui::*;
@@ -466,7 +466,7 @@ impl ProxiesSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.proxy_focus {
             ProxyFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {

@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
@@ -533,7 +533,7 @@ impl SshTunnelsSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.ssh_focus {
             SshFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {

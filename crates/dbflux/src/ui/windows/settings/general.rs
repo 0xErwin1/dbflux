@@ -1,4 +1,4 @@
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use gpui::*;
@@ -258,7 +258,7 @@ impl GeneralSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         if self.gen_editing_field {
             match (chord.key.as_str(), chord.modifiers) {

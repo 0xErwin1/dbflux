@@ -1,5 +1,5 @@
 use super::*;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::tree_nav::TreeNavAction;
 use section_trait::SectionFocusEvent;
 
@@ -281,7 +281,7 @@ impl SettingsCoordinator {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match (chord.key.as_str(), chord.modifiers) {
             ("w", modifiers) if modifiers == Modifiers::ctrl() => {

@@ -1,4 +1,4 @@
-use crate::keymap::{Command, ContextId};
+use crate::keymap::{key_chord_from_gpui, Command, ContextId};
 use crate::platform;
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::settings::{SettingsSectionId, SettingsWindow};
@@ -824,7 +824,7 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let chord = crate::keymap::KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
         let context = self.active_context();
 
         if let Some(command) = self.keymap.resolve(context, &chord) {
@@ -1978,8 +1978,8 @@ impl ConnectionManagerWindow {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccessTabMode, ActiveTab, FormFocus, MainNavState, ProxyNavState, SshNavState,
-        next_active_tab, prev_active_tab,
+        next_active_tab, prev_active_tab, AccessTabMode, ActiveTab, FormFocus, MainNavState,
+        ProxyNavState, SshNavState,
     };
     use crate::ui::windows::ssh_shared::SshAuthSelection;
 

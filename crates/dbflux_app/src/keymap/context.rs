@@ -139,7 +139,7 @@ impl ContextId {
         ]
     }
 
-    /// Returns the GPUI key_context string for this context.
+    /// Returns the GPUUI key_context string for this context.
     pub fn as_gpui_context(&self) -> &'static str {
         match self {
             ContextId::Global => "Global",

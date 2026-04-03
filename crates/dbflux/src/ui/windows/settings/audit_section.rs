@@ -1,9 +1,9 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::AppState;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
@@ -389,7 +389,7 @@ impl SettingsSection for AuditSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         if self.audit_editing_field {
             match (chord.key.as_str(), chord.modifiers) {

@@ -1,6 +1,6 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
-use crate::keymap::{ContextId, KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, ContextId, KeyChord, Modifiers};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::input::InputState;
@@ -79,7 +79,7 @@ impl SettingsSection for KeybindingsSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         if self.keybindings_editing_filter {
             if chord.key == "escape" && chord.modifiers == Modifiers::none() {

@@ -513,7 +513,7 @@ impl Render for Workspace {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let chord = KeyChord::from_gpui(&event.keystroke);
+                let chord = key_chord_from_gpui(&event.keystroke);
                 let context = this.active_context(cx);
 
                 if let Some(cmd) = this.keymap.resolve(context, &chord)

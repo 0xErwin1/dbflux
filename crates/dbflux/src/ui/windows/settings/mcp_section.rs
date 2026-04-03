@@ -2,7 +2,7 @@ use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use crate::app::{AppState, AppStateChanged, McpRuntimeEventRaised};
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
@@ -1473,7 +1473,7 @@ impl McpSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.variant {
             McpSectionVariant::Clients => self.handle_clients_nav(chord, window, cx),

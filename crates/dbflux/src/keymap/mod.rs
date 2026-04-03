@@ -2,21 +2,21 @@
 
 mod actions;
 mod chord;
-mod command;
-mod context;
 mod defaults;
 mod dispatcher;
-mod focus;
-mod keymap;
 
-pub use actions::*;
-pub use chord::{KeyChord, Modifiers};
-pub use command::Command;
-pub use context::ContextId;
-pub use defaults::default_keymap;
-pub use dispatcher::CommandDispatcher;
-pub use focus::FocusTarget;
-pub use keymap::{KeymapLayer, KeymapStack};
+// Re-export pure keymap types from dbflux_app for backwards compatibility
+pub use dbflux_app::keymap::{
+    Command, ContextId, FocusTarget, KeyChord, KeymapLayer, KeymapStack, Modifiers,
+};
 
 #[allow(unused_imports)]
-pub use chord::ParseError;
+pub use dbflux_app::keymap::ParseError;
+
+// Re-export GPUI conversion helpers from chord
+pub use chord::key_chord_from_gpui;
+
+// GPUI-coupled types that stay in dbflux
+pub use actions::*;
+pub use defaults::default_keymap;
+pub use dispatcher::CommandDispatcher;

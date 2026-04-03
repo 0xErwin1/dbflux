@@ -1,5 +1,5 @@
 use crate::app::AppStateChanged;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_core::{
@@ -1829,7 +1829,7 @@ impl HooksSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
         let ids = self.hook_sorted_ids();
         self.hook_sync_selection_from_ids(&ids);
 

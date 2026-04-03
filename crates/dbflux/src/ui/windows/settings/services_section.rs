@@ -1,9 +1,9 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::AppState;
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use dbflux_core::ServiceConfig;
 use gpui::prelude::*;
 use gpui::*;
@@ -125,7 +125,7 @@ impl SettingsSection for ServicesSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.svc_focus {
             ServiceFocus::List => match (chord.key.as_str(), chord.modifiers) {

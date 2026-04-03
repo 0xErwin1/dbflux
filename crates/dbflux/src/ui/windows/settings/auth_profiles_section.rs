@@ -4,7 +4,7 @@ use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::app::{AppState, AppStateChanged};
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, ImportableProfile};
 use gpui::prelude::*;
@@ -452,7 +452,7 @@ impl AuthProfilesSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.auth_focus {
             AuthFocus::ProfileList => match (chord.key.as_str(), chord.modifiers) {

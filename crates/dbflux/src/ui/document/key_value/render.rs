@@ -1078,9 +1078,9 @@ fn render_kv_context_menu(
             .size_full()
             .track_focus(menu_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                use crate::keymap::{KeyChord, default_keymap};
+                use crate::keymap::{key_chord_from_gpui, KeyChord, default_keymap};
 
-                let chord = KeyChord::from_gpui(&event.keystroke);
+                let chord = key_chord_from_gpui(&event.keystroke);
                 let keymap = default_keymap();
 
                 if let Some(cmd) = keymap.resolve(crate::keymap::ContextId::ContextMenu, &chord)

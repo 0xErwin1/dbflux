@@ -1,10 +1,10 @@
+use super::form_section::FormSection;
+use super::section_trait::SectionFocusEvent;
 use super::SettingsEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
-use super::form_section::FormSection;
-use super::section_trait::SectionFocusEvent;
 use crate::app::{AppState, AppStateChanged};
-use crate::keymap::{KeyChord, Modifiers};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_core::{ConnectionHook, HookExecutionMode, ScriptLanguage};
 use gpui::prelude::*;
@@ -539,7 +539,7 @@ impl SettingsSection for HooksSection {
             return;
         }
 
-        let chord = KeyChord::from_gpui(&event.keystroke);
+        let chord = key_chord_from_gpui(&event.keystroke);
 
         match self.hook_focus {
             HookFocus::List => match (chord.key.as_str(), chord.modifiers) {
