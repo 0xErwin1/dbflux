@@ -1,7 +1,7 @@
 use std::any::Any;
 
-use dbflux_core::ResolvedProxy;
 use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::ResolvedProxy;
 use dbflux_proxy::{ProxyTunnel, ProxyTunnelConfig};
 
 /// Creates a proxy tunnel and returns a type-erased handle plus the local port.

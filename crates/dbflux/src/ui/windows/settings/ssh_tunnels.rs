@@ -282,7 +282,7 @@ impl SshTunnelsSection {
 
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) =
-            crate::config_loader::save_ssh_tunnels(runtime, self.app_state.read(cx).ssh_tunnels())
+            dbflux_app::config_loader::save_ssh_tunnels(runtime, self.app_state.read(cx).ssh_tunnels())
         {
             log::error!("Failed to save SSH tunnel profiles: {}", e);
         }

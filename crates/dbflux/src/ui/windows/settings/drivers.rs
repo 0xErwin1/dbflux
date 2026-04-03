@@ -592,7 +592,7 @@ impl DriversSection {
         self.drv_settings.retain(|_, values| !values.is_empty());
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_driver_settings(
+        if let Err(e) = dbflux_app::config_loader::save_driver_settings(
             runtime,
             &self.drv_overrides,
             &self.drv_settings,

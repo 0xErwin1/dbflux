@@ -668,7 +668,7 @@ impl HooksSection {
 
     fn persist_hooks(&self, window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
+        if let Err(e) = dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
         {
             log::error!("Failed to save hooks to SQLite: {}", e);
             cx.toast_error(format!("Failed to save hooks: {}", e), window);

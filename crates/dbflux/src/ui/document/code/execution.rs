@@ -978,7 +978,7 @@ impl CodeDocument {
     }
 
     fn run_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::hook_executor::CompositeExecutor;
+        use dbflux_app::hook_executor::CompositeExecutor;
         use dbflux_core::{
             CancelToken, ConnectionHook, HookContext, HookExecutionMode, HookExecutor,
             HookFailureMode, HookKind, LuaCapabilities, ScriptLanguage, ScriptSource,

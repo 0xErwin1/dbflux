@@ -13,7 +13,7 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
-use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use dbflux_app::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 
 pub struct AppStateChanged;
 
@@ -95,7 +95,7 @@ pub struct AppState {
     hook_definitions: HashMap<String, ConnectionHook>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
-    history_manager: super::history_manager_sqlite::HistoryManager,
+    history_manager: dbflux_app::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
     audit_service: dbflux_audit::AuditService,
@@ -168,7 +168,7 @@ impl AppState {
         );
 
         let mut history_manager =
-            super::history_manager_sqlite::HistoryManager::new(&storage_runtime);
+            dbflux_app::history_manager_sqlite::HistoryManager::new(&storage_runtime);
         history_manager.set_max_entries(general_settings.max_history_entries);
 
         let mut auth_provider_registry = AuthProviderRegistry::new();
@@ -503,7 +503,7 @@ impl AppState {
         // But since load_app_config_from_storage already returned everything,
         // we need to pass the loaded data back. For now, just call load_config once more
         // since it's cheap (read-only from SQLite).
-        let loaded = super::config_loader::load_config(&runtime);
+        let loaded = dbflux_app::config_loader::load_config(&runtime);
 
         (
             BuiltDrivers {
@@ -536,7 +536,7 @@ impl AppState {
         let runtime = dbflux_storage::bootstrap::initialize()
             .expect("failed to initialize internal storage — cannot continue");
 
-        let loaded = super::config_loader::load_config(&runtime);
+        let loaded = dbflux_app::config_loader::load_config(&runtime);
 
         (
             loaded.general_settings,
@@ -1177,7 +1177,7 @@ impl AppState {
     }
 
     pub fn save_profiles(&self) {
-        if let Err(e) = crate::config_loader::save_profiles(
+        if let Err(e) = dbflux_app::config_loader::save_profiles(
             &self.storage_runtime,
             &self.facade.profiles.profiles,
         ) {
@@ -1192,7 +1192,7 @@ impl AppState {
         let tunnel_id = tunnel.id.to_string();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.ssh_tunnels.items.push(tunnel.clone());
-        let save_result = crate::config_loader::save_ssh_tunnels(
+        let save_result = dbflux_app::config_loader::save_ssh_tunnels(
             &self.storage_runtime,
             &self.facade.ssh_tunnels.items,
         );
@@ -1222,7 +1222,7 @@ impl AppState {
         let tunnel_name = removed.name.clone();
         let tunnel_id = removed.id.to_string();
 
-        let save_result = crate::config_loader::save_ssh_tunnels(
+        let save_result = dbflux_app::config_loader::save_ssh_tunnels(
             &self.storage_runtime,
             &self.facade.ssh_tunnels.items,
         );
@@ -1259,7 +1259,7 @@ impl AppState {
             .find(|t| t.id == tunnel.id)
         {
             *existing = tunnel.clone();
-            let save_result = crate::config_loader::save_ssh_tunnels(
+            let save_result = dbflux_app::config_loader::save_ssh_tunnels(
                 &self.storage_runtime,
                 &self.facade.ssh_tunnels.items,
             );
@@ -1291,7 +1291,7 @@ impl AppState {
         let proxy_id = proxy.id.to_string();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.proxies.items.push(proxy.clone());
-        let save_result = crate::config_loader::save_proxy_profiles(
+        let save_result = dbflux_app::config_loader::save_proxy_profiles(
             &self.storage_runtime,
             &self.facade.proxies.items,
         );
@@ -1320,7 +1320,7 @@ impl AppState {
         let proxy_name = removed.name.clone();
         let proxy_id = removed.id.to_string();
 
-        let save_result = crate::config_loader::save_proxy_profiles(
+        let save_result = dbflux_app::config_loader::save_proxy_profiles(
             &self.storage_runtime,
             &self.facade.proxies.items,
         );
@@ -1356,7 +1356,7 @@ impl AppState {
             .find(|p| p.id == proxy.id)
         {
             *existing = proxy.clone();
-            let save_result = crate::config_loader::save_proxy_profiles(
+            let save_result = dbflux_app::config_loader::save_proxy_profiles(
                 &self.storage_runtime,
                 &self.facade.proxies.items,
             );
@@ -1400,7 +1400,7 @@ impl AppState {
         let profile_id = profile.id.to_string();
         // Directly push to facade items (store is None so auto-save is a no-op).
         self.facade.auth_profiles.items.push(profile.clone());
-        let save_result = crate::config_loader::save_auth_profiles(
+        let save_result = dbflux_app::config_loader::save_auth_profiles(
             &self.storage_runtime,
             &self.facade.auth_profiles.items,
         );
@@ -1432,7 +1432,7 @@ impl AppState {
         let profile_name = removed.name.clone();
         let profile_id = removed.id.to_string();
 
-        let save_result = crate::config_loader::save_auth_profiles(
+        let save_result = dbflux_app::config_loader::save_auth_profiles(
             &self.storage_runtime,
             &self.facade.auth_profiles.items,
         );
@@ -1468,7 +1468,7 @@ impl AppState {
             .find(|i| i.id == profile.id)
         {
             *existing = profile.clone();
-            let save_result = crate::config_loader::save_auth_profiles(
+            let save_result = dbflux_app::config_loader::save_auth_profiles(
                 &self.storage_runtime,
                 &self.facade.auth_profiles.items,
             );
@@ -2521,7 +2521,7 @@ impl AppState {
             .map(|tunnel| {
                 (
                     tunnel.id,
-                    crate::access_manager::ResolvedSshTunnel {
+                    dbflux_app::access_manager::ResolvedSshTunnel {
                         config: tunnel.config.clone(),
                         secret: self.facade.secrets.get_ssh_tunnel_secret(tunnel),
                     },
@@ -2530,7 +2530,7 @@ impl AppState {
             .collect();
 
         let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
-            Arc::new(crate::access_manager::AppAccessManager::new(
+            Arc::new(dbflux_app::access_manager::AppAccessManager::new(
                 ssh_tunnels,
                 #[cfg(feature = "aws")]
                 Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
@@ -2571,7 +2571,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
 
     #[cfg(feature = "mcp")]
-    use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
+    use dbflux_mcp::server::authorization::{authorize_request, AuthorizationRequest};
     #[cfg(feature = "mcp")]
     use dbflux_mcp::server::request_context::RequestIdentity;
     #[cfg(feature = "mcp")]
@@ -3005,11 +3005,9 @@ mod tests {
             assert_eq!(clients.len(), 1);
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::TrustedClientsUpdated)));
         });
     }
 
@@ -3030,11 +3028,9 @@ mod tests {
             assert_eq!(pending.actor_id, "agent-a");
 
             let events = state.drain_mcp_runtime_events();
-            assert!(
-                events
-                    .iter()
-                    .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
-            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated)));
         });
     }
 

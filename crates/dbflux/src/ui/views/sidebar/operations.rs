@@ -1,5 +1,5 @@
 use super::*;
-use crate::hook_executor::CompositeExecutor;
+use dbflux_app::hook_executor::CompositeExecutor;
 use crate::platform;
 use dbflux_core::observability::actions::{
     CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED, CONNECTION_CONNECTING, CONNECTION_DISCONNECT,
@@ -1795,7 +1795,7 @@ impl Sidebar {
 
             let result = cx
                 .background_executor()
-                .spawn(async move { params.execute(Some(crate::proxy::create_proxy_tunnel)) })
+                .spawn(async move { params.execute(Some(dbflux_app::proxy::create_proxy_tunnel)) })
                 .await;
 
             if cancel_token.is_cancelled() {

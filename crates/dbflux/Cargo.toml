@@ -17,6 +17,7 @@ gpui.workspace = true
 gpui-component.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
+dbflux_app.workspace = true
 dbflux_lua = { workspace = true, optional = true }
 dbflux_export.workspace = true
 dbflux_ssh.workspace = true
@@ -87,9 +88,9 @@ mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql"]
 mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb"]
 redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
 dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
-lua = ["dbflux_lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval"]
+lua = ["dbflux_lua", "dbflux_app/lua"]
+aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
+mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

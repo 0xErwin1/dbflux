@@ -2154,6 +2154,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
+ "dbflux_app",
  "dbflux_approval",
  "dbflux_audit",
  "dbflux_aws",
@@ -2189,6 +2190,25 @@ dependencies = [
  "open",
  "rfd",
  "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_app"
+version = "0.4.0-dev.13"
+dependencies = [
+ "async-trait",
+ "dbflux_aws",
+ "dbflux_core",
+ "dbflux_lua",
+ "dbflux_mcp_server",
+ "dbflux_proxy",
+ "dbflux_ssh",
+ "dbflux_ssm",
+ "dbflux_storage",
+ "indexmap",
+ "log",
  "tokio",
  "uuid",
 ]

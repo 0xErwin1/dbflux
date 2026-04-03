@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 #[cfg(feature = "mcp")]
 pub fn run_mcp_command(args: &[String]) -> i32 {
     match parse_mcp_args(args) {
@@ -44,6 +42,8 @@ pub fn run_mcp_command(_args: &[String]) -> i32 {
 
 #[cfg(feature = "mcp")]
 fn parse_mcp_args(args: &[String]) -> Result<dbflux_mcp_server::McpServerArgs, String> {
+    use std::path::PathBuf;
+
     let mut client_id = None;
     let mut config_dir = None;
     let mut iter = args.iter();

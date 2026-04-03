@@ -146,18 +146,14 @@ mod tests {
             HookPhaseOutcome::Success { executions }
             | HookPhaseOutcome::CompletedWithWarnings { executions, .. } => {
                 assert_eq!(executions.len(), 2);
-                assert!(
-                    executions[0]
-                        .result
-                        .as_ref()
-                        .is_ok_and(|result| result.stdout.contains("command-ok"))
-                );
-                assert!(
-                    executions[1]
-                        .result
-                        .as_ref()
-                        .is_ok_and(|result| result.stdout.contains("lua-ok"))
-                );
+                assert!(executions[0]
+                    .result
+                    .as_ref()
+                    .is_ok_and(|result| result.stdout.contains("command-ok")));
+                assert!(executions[1]
+                    .result
+                    .as_ref()
+                    .is_ok_and(|result| result.stdout.contains("lua-ok")));
             }
             HookPhaseOutcome::Aborted { error, .. } => panic!("unexpected abort: {error}"),
         }

@@ -2,12 +2,12 @@ use crate::keymap::{KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
 use super::layout;
@@ -376,7 +376,9 @@ impl GeneralSection {
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
 
         let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) = crate::config_loader::save_general_settings(runtime, &self.gen_settings) {
+        if let Err(e) =
+            dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
+        {
             log::error!("Failed to save general settings to SQLite: {}", e);
             cx.toast_error(format!("Failed to save: {}", e), window);
             return;
