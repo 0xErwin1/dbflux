@@ -2175,7 +2175,6 @@ dependencies = [
  "dbflux_proxy",
  "dbflux_ssh",
  "dbflux_ssm",
- "dbflux_storage",
  "dbflux_test_support",
  "dbflux_ui",
  "dirs 5.0.1",

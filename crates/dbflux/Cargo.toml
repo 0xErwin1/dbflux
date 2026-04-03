@@ -15,20 +15,11 @@ path = "src/main.rs"
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
-dbflux_core.workspace = true
-dbflux_storage.workspace = true
 dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
-dbflux_lua = { workspace = true, optional = true }
-dbflux_export.workspace = true
-dbflux_ssh.workspace = true
-dbflux_proxy.workspace = true
+dbflux_core.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
-dbflux_mcp = { workspace = true, optional = true }
-dbflux_mcp_server = { workspace = true, optional = true }
-dbflux_policy = { workspace = true, optional = true }
-dbflux_approval = { workspace = true, optional = true }
 dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 uuid.workspace = true
@@ -44,7 +35,7 @@ lsp-types = "0.97"
 bincode = "1"
 interprocess.workspace = true
 open = "5"
-indexmap = "2"
+indexmap.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -81,16 +72,48 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_lua]
+workspace = true
+optional = true
+
+[dependencies.dbflux_export]
+workspace = true
+optional = true
+
+[dependencies.dbflux_ssh]
+workspace = true
+optional = true
+
+[dependencies.dbflux_proxy]
+workspace = true
+optional = true
+
+[dependencies.dbflux_mcp]
+workspace = true
+optional = true
+
+[dependencies.dbflux_mcp_server]
+workspace = true
+optional = true
+
+[dependencies.dbflux_policy]
+workspace = true
+optional = true
+
+[dependencies.dbflux_approval]
+workspace = true
+optional = true
+
 [features]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "lua", "aws", "mcp"]
-sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite", "dbflux_ui/sqlite"]
-postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres", "dbflux_ui/postgres"]
-mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql", "dbflux_ui/mysql"]
-mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb", "dbflux_ui/mongodb"]
-redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis", "dbflux_ui/redis"]
-dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb", "dbflux_ui/dynamodb"]
+sqlite = ["dbflux_app/sqlite", "dbflux_ui/sqlite"]
+postgres = ["dbflux_app/postgres", "dbflux_ui/postgres"]
+mysql = ["dbflux_app/mysql", "dbflux_ui/mysql"]
+mongodb = ["dbflux_app/mongodb", "dbflux_ui/mongodb"]
+redis = ["dbflux_app/redis", "dbflux_ui/redis"]
+dynamodb = ["dbflux_app/dynamodb", "dbflux_ui/dynamodb"]
 lua = ["dbflux_lua", "dbflux_app/lua", "dbflux_ui/lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws", "dbflux_ui/aws"]
+aws = ["dbflux_aws", "dbflux_ssm", "dbflux_app/aws", "dbflux_ui/aws"]
 mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp", "dbflux_ui/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 

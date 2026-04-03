@@ -3,6 +3,7 @@
 
 mod cli;
 
+use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
@@ -134,7 +135,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
-        let exit_code = dbflux_app::mcp_command::run_mcp_command(&args[2..]);
+        let exit_code = run_mcp_command(&args[2..]);
         std::process::exit(exit_code);
     }
 
