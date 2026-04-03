@@ -30,18 +30,8 @@ impl Sidebar {
                     .on_click(move |_, _, cx| {
                         let sidebar = sidebar.clone();
 
-                        if let Some(handle) = app_state.read(cx).settings_window {
-                            if handle
-                                .update(cx, |_root, window, _cx| window.activate_window())
-                                .is_ok()
-                            {
-                                return;
-                            }
-                            app_state.update(cx, |state, _| {
-                                state.settings_window = None;
-                            });
-                        }
-
+                        // Phase 3: settings_window removed from AppState - always open a new window
+                        // TODO: Phase 4 will track settings window in AppStateEntity
                         let app_state_for_window = app_state.clone();
                         let mut options = WindowOptions {
                             app_id: Some("dbflux".into()),
@@ -59,7 +49,7 @@ impl Sidebar {
                         };
                         platform::apply_window_options(&mut options, 800.0, 600.0);
 
-                        if let Ok(handle) = cx.open_window(
+                        let _ = cx.open_window(
                             options,
                             |window, cx| {
                                 let settings = cx.new(|cx| {
@@ -82,11 +72,7 @@ impl Sidebar {
 
                                 cx.new(|cx| Root::new(settings, window, cx))
                             },
-                        ) {
-                            app_state.update(cx, |state, _| {
-                                state.settings_window = Some(handle);
-                            });
-                        }
+                        );
                     })
                     .child(
                         svg()

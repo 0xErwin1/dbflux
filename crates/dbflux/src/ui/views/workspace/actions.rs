@@ -74,18 +74,8 @@ impl Workspace {
     }
 
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
-        if let Some(handle) = self.app_state.read(cx).settings_window {
-            if handle
-                .update(cx, |_root, window, _cx| window.activate_window())
-                .is_ok()
-            {
-                return;
-            }
-            self.app_state.update(cx, |state, _| {
-                state.settings_window = None;
-            });
-        }
-
+        // Phase 3: settings_window removed from AppState - always open a new window
+        // TODO: Phase 4 will track settings window in AppStateEntity
         let app_state = self.app_state.clone();
         let workspace = cx.entity().clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
@@ -126,10 +116,6 @@ impl Workspace {
             }) {
                 log::warn!("Failed to activate settings window: {:?}", e);
             }
-
-            self.app_state.update(cx, |state, _| {
-                state.settings_window = Some(handle);
-            });
         }
     }
 

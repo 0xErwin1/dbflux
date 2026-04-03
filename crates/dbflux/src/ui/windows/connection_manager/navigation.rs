@@ -1611,19 +1611,8 @@ impl ConnectionManagerWindow {
         section: SettingsSectionId,
         cx: &mut Context<Self>,
     ) {
-        if let Some(handle) = self.app_state.read(cx).settings_window {
-            if handle
-                .update(cx, |_root, window, _cx| window.activate_window())
-                .is_ok()
-            {
-                return;
-            }
-
-            self.app_state.update(cx, |state, _| {
-                state.settings_window = None;
-            });
-        }
-
+        // Phase 3: settings_window removed from AppState - always open a new window
+        // TODO: Phase 4 will track settings window in AppStateEntity
         let app_state = self.app_state.clone();
         let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
 
@@ -1639,15 +1628,11 @@ impl ConnectionManagerWindow {
         };
         platform::apply_window_options(&mut options, 800.0, 600.0);
 
-        if let Ok(handle) = cx.open_window(options, move |window, cx| {
+        let _ = cx.open_window(options, move |window, cx| {
             let settings = cx
                 .new(|cx| SettingsWindow::new_with_section(app_state.clone(), section, window, cx));
             cx.new(|cx| Root::new(settings, window, cx))
-        }) {
-            self.app_state.update(cx, |state, _| {
-                state.settings_window = Some(handle);
-            });
-        }
+        });
     }
 
     pub(super) fn activate_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
