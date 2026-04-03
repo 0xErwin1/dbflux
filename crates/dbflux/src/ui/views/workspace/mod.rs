@@ -4,6 +4,7 @@ pub mod pipeline;
 mod render;
 
 use crate::app::{AppState, AppStateChanged};
+use dbflux_core::observability::actions::CONFIG_CHANGE;
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -563,7 +564,7 @@ impl Workspace {
                                     dbflux_core::observability::EventCategory::System,
                                     dbflux_core::observability::EventOutcome::Success,
                                 )
-                                .with_action("system.purge.complete")
+                                .with_typed_action(CONFIG_CHANGE)
                                 .with_summary(format!(
                                     "Periodic audit purge completed: deleted {} events",
                                     stats.deleted_count
@@ -586,7 +587,7 @@ impl Workspace {
                                     dbflux_core::observability::EventCategory::System,
                                     dbflux_core::observability::EventOutcome::Failure,
                                 )
-                                .with_action("system.purge.failed")
+                                .with_typed_action(CONFIG_CHANGE)
                                 .with_summary(format!(
                                     "Periodic audit purge failed: {}",
                                     e

@@ -247,7 +247,6 @@ pub(super) enum McpSectionVariant {
     Clients,
     Roles,
     Policies,
-    Audit,
 }
 
 pub(super) struct McpSection {
@@ -1462,36 +1461,6 @@ impl McpSection {
             .child(form)
     }
 
-    fn render_audit_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(layout::section_header(
-                "Audit",
-                "Read-only audit trail recorded by the MCP server",
-                &theme,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "Audit trail is written by the MCP server to the dbflux.db audit table \
-                                 in the DBFlux data directory. Querying and filtering will be \
-                                 available here once the server is running.",
-                    )),
-            )
-    }
-
     // ─── Keyboard navigation ──────────────────────────────────────────────────
 
     pub(super) fn handle_key_event(
@@ -1510,7 +1479,6 @@ impl McpSection {
             McpSectionVariant::Clients => self.handle_clients_nav(chord, window, cx),
             McpSectionVariant::Roles => self.handle_roles_nav(chord, window, cx),
             McpSectionVariant::Policies => self.handle_policies_nav(chord, window, cx),
-            McpSectionVariant::Audit => self.handle_audit_nav(chord, cx),
         }
     }
 
@@ -1674,14 +1642,6 @@ impl McpSection {
             _ => {}
         }
     }
-
-    fn handle_audit_nav(&mut self, chord: KeyChord, cx: &mut Context<Self>) {
-        if let ("escape", m) = (chord.key.as_str(), chord.modifiers)
-            && m == Modifiers::none()
-        {
-            cx.emit(SectionFocusEvent::RequestFocusReturn);
-        }
-    }
 }
 
 impl SettingsSection for McpSection {
@@ -1690,7 +1650,6 @@ impl SettingsSection for McpSection {
             McpSectionVariant::Clients => SettingsSectionId::McpClients,
             McpSectionVariant::Roles => SettingsSectionId::McpRoles,
             McpSectionVariant::Policies => SettingsSectionId::McpPolicies,
-            McpSectionVariant::Audit => SettingsSectionId::McpAudit,
         }
     }
 
@@ -1748,7 +1707,6 @@ impl Render for McpSection {
             McpSectionVariant::Clients => self.render_clients_content(cx).into_any_element(),
             McpSectionVariant::Roles => self.render_roles_content(cx).into_any_element(),
             McpSectionVariant::Policies => self.render_policies_content(cx).into_any_element(),
-            McpSectionVariant::Audit => self.render_audit_content(cx).into_any_element(),
         };
 
         div().h_full().overflow_hidden().child(content)

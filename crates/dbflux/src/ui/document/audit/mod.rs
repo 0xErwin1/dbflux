@@ -60,6 +60,7 @@ pub struct AuditDocument {
     dropdown_outcome: Entity<Dropdown>,
     refresh_policy: RefreshPolicy,
     refresh_dropdown: Entity<Dropdown>,
+    load_request_id: u64,
     _refresh_timer: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -195,6 +196,7 @@ impl AuditDocument {
             dropdown_outcome,
             refresh_policy: RefreshPolicy::Manual,
             refresh_dropdown,
+            load_request_id: 0,
             _refresh_timer: None,
             _subscriptions: vec![
                 search_sub,
@@ -287,6 +289,7 @@ impl AuditDocument {
             offset,
             level: level_str,
             category: category_str,
+            action: None,
             categories: categories_str,
             source_id: source_str,
             outcome: self
@@ -301,6 +304,7 @@ impl AuditDocument {
                 .actor_type
                 .as_ref()
                 .map(|actor_type| actor_type.as_str().to_string()),
+            object_type: None,
             free_text: self.filters.free_text.clone(),
             correlation_id: self.filters.correlation_id.clone(),
             session_id: None,
@@ -346,6 +350,8 @@ impl AuditDocument {
     }
 
     fn load_events(&mut self, cx: &mut Context<Self>) {
+        self.load_request_id += 1;
+        let request_id = self.load_request_id;
         self.is_loading = true;
         self.export_menu_open = false;
         self.status_message = Some("Loading audit events...".to_string());
@@ -368,6 +374,10 @@ impl AuditDocument {
             Ok((events, total_events)) => {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
+                        if doc.load_request_id != request_id {
+                            return;
+                        }
+
                         let visible_ids: HashSet<i64> =
                             events.iter().map(|event| event.id).collect();
 
@@ -385,6 +395,10 @@ impl AuditDocument {
             Err(error) => {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
+                        if doc.load_request_id != request_id {
+                            return;
+                        }
+
                         doc.events.clear();
                         doc.total_events = 0;
                         doc.expanded_event_ids.clear();
@@ -1029,7 +1043,7 @@ impl AuditDocument {
         let actor = if event
             .actor_type
             .as_deref()
-            .filter(|actor_type| !actor_type.is_empty() && *actor_type != "System")
+            .filter(|actor_type| !actor_type.is_empty() && *actor_type != "system")
             .is_some()
         {
             format!(

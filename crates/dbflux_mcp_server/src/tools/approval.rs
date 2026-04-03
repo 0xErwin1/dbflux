@@ -85,7 +85,7 @@ impl DbFluxServer {
             .authorize_and_execute(
                 "request_execution",
                 Some(&connection_id_ref),
-                ExecutionClassification::Write,
+                classification,
                 move || async move {
                     let plan = ExecutionPlan {
                         connection_id,
@@ -204,6 +204,7 @@ impl DbFluxServer {
         Parameters(params): Parameters<ApproveExecutionParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.state.clone();
+        let approver_actor_id = state.client_id.clone();
         let pending_id = params
             .pending_id
             .parse::<Uuid>()
@@ -215,28 +216,50 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Admin,
                 move || async move {
-                    // Approve the execution
-                    let approved = {
+                    let replay_plan = {
+                        let runtime = state.runtime.read().await;
+                        runtime
+                            .approval_service()
+                            .list_pending()
+                            .into_iter()
+                            .find(|pending| pending.id == pending_id)
+                            .map(|pending| pending.plan)
+                            .ok_or_else(|| {
+                                ErrorData::invalid_params(
+                                    format!("Pending execution not found: {}", pending_id),
+                                    None,
+                                )
+                            })?
+                    };
+
+                    {
                         let mut runtime = state.runtime.write().await;
-                        let approval_service = runtime.approval_service_mut();
-                        approval_service
-                            .approve(pending_id)
+                        runtime
+                            .approve_pending_execution_with_origin_mut(
+                                &pending_id.to_string(),
+                                &approver_actor_id,
+                                dbflux_core::observability::EventOrigin::mcp(),
+                            )
                             .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     };
 
                     // Return the approved plan for the caller to execute
+                    let tool_id = replay_plan.tool_id.clone();
+                    let connection_id = replay_plan.connection_id.clone();
+                    let payload = replay_plan.payload.clone();
+
                     let response = serde_json::json!({
                         "approved": true,
                         "pending_id": pending_id.to_string(),
                         "status": "approved",
                         "replay_plan": {
-                            "tool_id": approved.replay_plan.tool_id,
-                            "connection_id": approved.replay_plan.connection_id,
-                            "params": approved.replay_plan.payload
+                            "tool_id": tool_id,
+                            "connection_id": connection_id,
+                            "params": payload
                         },
                         "message": format!(
                             "Execution approved. Call tool '{}' with the provided params to execute.",
-                            approved.replay_plan.tool_id
+                            replay_plan.tool_id
                         )
                     });
 
@@ -265,18 +288,22 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Admin,
                 move || async move {
-                    let _rejected = {
+                    let rejected = {
                         let mut runtime = state.runtime.write().await;
-                        let approval_service = runtime.approval_service_mut();
-                        approval_service
-                            .reject(pending_id)
+                        runtime
+                            .reject_pending_execution_with_origin_mut(
+                                &pending_id.to_string(),
+                                &state.client_id,
+                                params.reason.as_deref(),
+                                dbflux_core::observability::EventOrigin::mcp(),
+                            )
                             .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
                     };
 
                     let response = serde_json::json!({
                         "rejected": true,
                         "pending_id": pending_id.to_string(),
-                        "reason": params.reason.unwrap_or_else(|| "No reason provided".to_string())
+                        "reason": rejected.reason.unwrap_or_else(|| "No reason provided".to_string())
                     });
 
                     Ok(CallToolResult::success(vec![Content::text(
@@ -318,5 +345,27 @@ impl DbFluxServer {
             // Default to Admin for unknown tools (safest classification)
             _ => ExecutionClassification::Admin,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbFluxServer;
+    use dbflux_policy::ExecutionClassification;
+
+    #[test]
+    fn classify_tool_keeps_stricter_requested_execution_levels() {
+        assert_eq!(
+            DbFluxServer::classify_tool("drop_table"),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            DbFluxServer::classify_tool("select_data"),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            DbFluxServer::classify_tool("alter_table"),
+            ExecutionClassification::Admin
+        );
     }
 }

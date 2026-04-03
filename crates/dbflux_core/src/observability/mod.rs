@@ -28,11 +28,15 @@
 //! - [`EventRetentionPolicy`] - Controls event retention and purge behavior
 //! - [`EventCapturePolicy`] - Controls what events are captured
 
+pub mod actions;
+pub mod context;
 pub mod query;
 pub mod source;
 pub mod types;
 
 // Re-export commonly used types
+pub use actions::AuditAction;
+pub use context::{AuditContext, EventOrigin, new_correlation_id};
 pub use query::{EventDetail, EventPage, EventQuery};
 pub use source::{EventSink, EventSinkError, EventSource, EventSourceError};
 pub use types::{

@@ -2,6 +2,10 @@
 //!
 //! Provides authorization, approval flow, and audit logging for all tool executions.
 
+use dbflux_core::observability::{
+    AuditContext, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity, actions,
+    new_correlation_id,
+};
 use dbflux_mcp::{
     McpGovernanceService,
     server::{
@@ -10,6 +14,7 @@ use dbflux_mcp::{
     },
 };
 use dbflux_policy::ExecutionClassification;
+use rmcp::model::RawContent;
 use rmcp::model::{CallToolResult, ErrorData as McpError};
 use std::future::Future;
 
@@ -37,10 +42,11 @@ impl GovernanceMiddleware {
     /// Authorize and execute a tool handler with governance controls.
     ///
     /// This method:
-    /// 1. Checks if the client is authorized to execute the tool
-    /// 2. Routes to approval flow if required
-    /// 3. Executes the handler if authorized
-    /// 4. Audits the execution
+    /// 1. Generates one `correlation_id` shared between authorization and execution events
+    /// 2. Checks if the client is authorized to execute the tool
+    /// 3. Routes to approval flow if required
+    /// 4. Executes the handler if authorized
+    /// 5. Audits the execution with the shared correlation_id
     pub async fn authorize_and_execute<F, Fut>(
         &self,
         tool_id: &str,
@@ -83,6 +89,9 @@ impl GovernanceMiddleware {
         let policies = runtime.policies_for_engine();
         let policy_engine = dbflux_policy::PolicyEngine::new(assignments, roles, policies);
 
+        // Generate correlation_id once and share it across authorization + execution events
+        let correlation_id = new_correlation_id();
+
         let auth_request = AuthorizationRequest {
             identity: RequestIdentity {
                 client_id: self.state.client_id.clone(),
@@ -93,6 +102,7 @@ impl GovernanceMiddleware {
             tool_id: tool_id.to_string(),
             classification,
             mcp_enabled_for_connection,
+            correlation_id: Some(correlation_id.clone()),
         };
 
         // Authorize the request (keep runtime lock while calling authorize_request)
@@ -125,14 +135,17 @@ impl GovernanceMiddleware {
 
         let result = handler().await;
 
-        // Audit the execution (success or failure)
+        // Audit the execution (success or failure), sharing the correlation_id from auth
         self.audit_execution(tool_id, connection_id, &result, &outcome)
             .await?;
 
         result
     }
 
-    /// Audit a tool execution
+    /// Audit a tool execution after authorization succeeds.
+    ///
+    /// Emits exactly one `mcp_tool_execute` or `mcp_tool_execute_failed` event
+    /// with the same `correlation_id` as the authorization event.
     async fn audit_execution(
         &self,
         tool_id: &str,
@@ -140,11 +153,191 @@ impl GovernanceMiddleware {
         result: &Result<CallToolResult, McpError>,
         outcome: &AuthorizationOutcome,
     ) -> Result<(), McpError> {
-        // For now, we rely on the audit service being called in authorize_request
-        // Future: could add more detailed audit events here based on result
-        let _ = (tool_id, connection_id, result, outcome);
+        let runtime = self.state.runtime.read().await;
+        let audit_service = runtime.audit_service();
+
+        let ts_ms = now_epoch_ms();
+        // Use the correlation_id from authorization, or generate a new one if not available
+        let correlation_id = outcome
+            .correlation_id
+            .clone()
+            .unwrap_or_else(new_correlation_id);
+        let origin = EventOrigin::mcp();
+        let conn_id = connection_id.unwrap_or_default();
+
+        match result {
+            Ok(call_result) if call_result.is_error != Some(true) => {
+                // Success
+                let mut event = build_execution_event(
+                    ts_ms,
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    tool_id,
+                    outcome.actor_id.as_str(),
+                );
+
+                let ctx = AuditContext::new()
+                    .with_origin(origin)
+                    .with_correlation_id(correlation_id.as_str())
+                    .with_connection_id(conn_id);
+                ctx.apply_to(&mut event);
+
+                event = event.with_details_json(
+                    serde_json::json!({
+                        "content_count": call_result.content.len(),
+                    })
+                    .to_string(),
+                );
+
+                audit_service.record(event).map_err(|e| {
+                    McpError::internal_error(format!("Execution audit error: {}", e), None)
+                })?;
+            }
+            Ok(call_result) => {
+                // Handler returned an error-structured result (is_error == true)
+                let error_msg = extract_error_content(call_result);
+                let mut event = build_execution_event(
+                    ts_ms,
+                    EventSeverity::Warn,
+                    EventOutcome::Failure,
+                    tool_id,
+                    outcome.actor_id.as_str(),
+                );
+
+                let ctx = AuditContext::new()
+                    .with_origin(origin)
+                    .with_correlation_id(correlation_id.as_str())
+                    .with_connection_id(conn_id);
+                ctx.apply_to(&mut event);
+
+                event = event.with_error("handler_error", &error_msg);
+
+                audit_service.record(event).map_err(|e| {
+                    McpError::internal_error(format!("Execution audit error: {}", e), None)
+                })?;
+            }
+            Err(mcp_error) => {
+                // Handler returned an error
+                let mut event = build_execution_event(
+                    ts_ms,
+                    EventSeverity::Error,
+                    EventOutcome::Failure,
+                    tool_id,
+                    outcome.actor_id.as_str(),
+                );
+
+                let ctx = AuditContext::new()
+                    .with_origin(origin)
+                    .with_correlation_id(correlation_id.as_str())
+                    .with_connection_id(conn_id);
+                ctx.apply_to(&mut event);
+
+                event = event.with_error("handler_error", mcp_error.message.to_string());
+
+                audit_service.record(event).map_err(|e| {
+                    McpError::internal_error(format!("Execution audit error: {}", e), None)
+                })?;
+            }
+        }
+
         Ok(())
     }
+}
+
+/// Returns the appropriate typed audit action for a tool execution.
+///
+/// Query and script executions emit canonical `QUERY_EXECUTE`/`SCRIPT_EXECUTE` events
+/// instead of the generic `MCP_TOOL_EXECUTE` event.
+fn execution_action(
+    tool_id: &str,
+    outcome: EventOutcome,
+) -> dbflux_core::observability::AuditAction {
+    if is_query_tool(tool_id) {
+        match outcome {
+            EventOutcome::Success => actions::QUERY_EXECUTE,
+            EventOutcome::Failure => actions::QUERY_EXECUTE_FAILED,
+            _ => actions::QUERY_EXECUTE,
+        }
+    } else if is_script_tool(tool_id) {
+        match outcome {
+            EventOutcome::Success => actions::SCRIPT_EXECUTE,
+            EventOutcome::Failure => actions::SCRIPT_EXECUTE_FAILED,
+            _ => actions::SCRIPT_EXECUTE,
+        }
+    } else {
+        match outcome {
+            EventOutcome::Success => actions::MCP_TOOL_EXECUTE,
+            EventOutcome::Failure => actions::MCP_TOOL_EXECUTE_FAILED,
+            _ => actions::MCP_TOOL_EXECUTE,
+        }
+    }
+}
+
+/// Returns true if the tool is a query tool (select_data, count_records, aggregate_data).
+fn is_query_tool(tool_id: &str) -> bool {
+    matches!(tool_id, "select_data" | "count_records" | "aggregate_data")
+}
+
+/// Returns true if the tool is a script tool (execute_script).
+fn is_script_tool(tool_id: &str) -> bool {
+    tool_id == "execute_script"
+}
+
+/// Builds a canonical MCP tool execution event (without context fields — apply those separately).
+fn build_execution_event(
+    ts_ms: i64,
+    level: EventSeverity,
+    outcome: EventOutcome,
+    tool_id: &str,
+    actor_id: &str,
+) -> EventRecord {
+    let action = execution_action(tool_id, outcome);
+
+    let summary = if is_query_tool(tool_id) {
+        format!("Query {}: tool={}", outcome.as_str(), tool_id)
+    } else if is_script_tool(tool_id) {
+        format!("Script {}: tool={}", outcome.as_str(), tool_id)
+    } else {
+        format!("MCP tool {}: tool={}", outcome.as_str(), tool_id)
+    };
+
+    EventRecord::new(ts_ms, level, EventCategory::Mcp, outcome)
+        .with_typed_action(action)
+        .with_summary(summary)
+        .with_actor_id(actor_id)
+        .with_object_ref("tool", tool_id)
+}
+
+/// Extracts the error content from a [`CallToolResult`] that has `is_error == true`.
+///
+/// `CallToolResult.content` is a `Vec<Content>` where `Content = Annotated<RawContent>`.
+/// We deref to `RawContent` and match on its enum variants.
+fn extract_error_content(result: &CallToolResult) -> String {
+    let mut msgs = Vec::new();
+    for content in &result.content {
+        match &**content {
+            RawContent::Text(text) => {
+                msgs.push(text.text.clone());
+            }
+            RawContent::Image(img) => {
+                msgs.push(format!("[image: {} bytes]", img.data.len()));
+            }
+            RawContent::Audio(_) => {
+                msgs.push("[audio content]".to_string());
+            }
+            RawContent::Resource(res) => {
+                let uri = match &res.resource {
+                    rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
+                    rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
+                };
+                msgs.push(format!("[resource: {}]", uri));
+            }
+            RawContent::ResourceLink(link) => {
+                msgs.push(format!("[resource_link: {}]", link.uri));
+            }
+        }
+    }
+    msgs.join("\n")
 }
 
 #[cfg(test)]

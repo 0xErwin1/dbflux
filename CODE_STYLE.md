@@ -93,3 +93,7 @@
 - Do use `McpGovernanceService` trait for MCP-related governance operations; do not bypass policy engine.
 - Do use `platform::floating_window_kind()` for secondary windows to avoid X11 transient dialog issues.
 - Do log all MCP policy decisions via `AuditService` for compliance and debugging.
+- Do emit audit events through `EventSink` trait rather than calling `AuditService` directly in service layers; this decouples services from the storage implementation.
+- Do use canonical action string constants from `dbflux_core::observability::actions` instead of bare string literals in audit events.
+- Do set category-specific required fields before calling `EventSink::record()` — validation runs at record time and returns an error if fields are missing.
+- Do not store full query text in `details_json` — the `AuditService` replaces it with a SHA256 fingerprint by default; if full text is needed, opt in explicitly with `set_capture_query_text(true)` and understand the compliance implications.

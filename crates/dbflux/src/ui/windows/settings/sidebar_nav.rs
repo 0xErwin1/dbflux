@@ -48,7 +48,6 @@ impl SettingsCoordinator {
                     TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
                 ],
             ),
-            TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
             #[cfg(feature = "mcp")]
             TreeNavNode::group(
                 "mcp-governance",
@@ -58,9 +57,9 @@ impl SettingsCoordinator {
                     TreeNavNode::leaf("mcp-clients", "Clients", Some(AppIcon::Plug)),
                     TreeNavNode::leaf("mcp-roles", "Roles", Some(AppIcon::KeyRound)),
                     TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
-                    TreeNavNode::leaf("mcp-audit", "Audit", Some(AppIcon::History)),
                 ],
             ),
+            TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
             TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
         ]);
 
@@ -84,8 +83,6 @@ impl SettingsCoordinator {
             "mcp-roles" => Some(SettingsSectionId::McpRoles),
             #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
-            #[cfg(feature = "mcp")]
-            "mcp-audit" => Some(SettingsSectionId::McpAudit),
             "keybindings" => Some(SettingsSectionId::Keybindings),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
@@ -108,8 +105,6 @@ impl SettingsCoordinator {
             SettingsSectionId::McpRoles => "mcp-roles",
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
-            #[cfg(feature = "mcp")]
-            SettingsSectionId::McpAudit => "mcp-audit",
             SettingsSectionId::Keybindings => "keybindings",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
@@ -154,8 +149,8 @@ mod tests {
                 Some(SettingsSectionId::McpClients)
             );
             assert_eq!(
-                SettingsCoordinator::section_for_tree_id("mcp-audit"),
-                Some(SettingsSectionId::McpAudit)
+                SettingsCoordinator::section_for_tree_id("mcp-policies"),
+                Some(SettingsSectionId::McpPolicies)
             );
         }
     }
@@ -190,7 +185,6 @@ mod tests {
                 SettingsSectionId::McpClients,
                 SettingsSectionId::McpRoles,
                 SettingsSectionId::McpPolicies,
-                SettingsSectionId::McpAudit,
             ]);
         }
 

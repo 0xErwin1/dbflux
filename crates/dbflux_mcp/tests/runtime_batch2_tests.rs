@@ -1,5 +1,7 @@
 use dbflux_audit::AuditService;
 use dbflux_core::QueryLanguage;
+use dbflux_core::observability::EventCategory;
+use dbflux_core::observability::actions::MCP_AUTHORIZE;
 use dbflux_mcp::governance_service::{AuditExportFormat, AuditQuery};
 use dbflux_mcp::handlers::audit::{export_audit_logs, query_audit_logs};
 use dbflux_mcp::handlers::query::{QueryExecutionRequest, QueryHandlerError, handle_query_tool};
@@ -87,6 +89,7 @@ fn authorization_denies_untrusted_and_audits_reason() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            correlation_id: None,
         },
         10,
     )
@@ -96,10 +99,15 @@ fn authorization_denies_untrusted_and_audits_reason() {
     assert_eq!(outcome.deny_code, Some("untrusted_client"));
 
     let entries = audit_service
-        .query(&dbflux_audit::query::AuditQueryFilter::default())
+        .query_extended(&dbflux_audit::query::AuditQueryFilter {
+            action: Some(MCP_AUTHORIZE.as_str().to_string()),
+            category: Some(EventCategory::Mcp.as_str().to_string()),
+            ..Default::default()
+        })
         .expect("audit query should succeed");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].reason.as_deref(), Some("untrusted client"));
+    assert_eq!(entries[0].outcome.as_deref(), Some("failure"));
+    assert_eq!(entries[0].error_code.as_deref(), Some("untrusted_client"));
 }
 
 #[test]
@@ -155,14 +163,43 @@ fn script_run_requires_runnable_lifecycle() {
 
 #[test]
 fn audit_tools_query_and_export_filtered_results() {
+    use dbflux_core::observability::actions::QUERY_EXECUTE;
+    use dbflux_core::observability::types::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity,
+    };
+
     let audit_service = fresh_audit_service("dbflux-mcp-audit-tools-test.sqlite");
 
     audit_service
-        .append("agent-a", "read_query", "allow", None, 1)
-        .expect("append should succeed");
+        .record(
+            EventRecord::new(
+                1,
+                EventSeverity::Info,
+                EventCategory::Query,
+                EventOutcome::Success,
+            )
+            .with_typed_action(QUERY_EXECUTE)
+            .with_summary("Query executed")
+            .with_actor_id("agent-a")
+            .with_connection_context("conn-1", "main", "sqlite")
+            .with_duration_ms(5),
+        )
+        .expect("first record should succeed");
     audit_service
-        .append("agent-b", "run_script", "deny", Some("policy"), 2)
-        .expect("append should succeed");
+        .record(
+            EventRecord::new(
+                2,
+                EventSeverity::Info,
+                EventCategory::Script,
+                EventOutcome::Failure,
+            )
+            .with_action("run_script")
+            .with_summary("Script denied")
+            .with_actor_id("agent-b")
+            .with_error("policy", "policy")
+            .with_object_ref("script", "script-1"),
+        )
+        .expect("second record should succeed");
 
     let query = AuditQuery {
         actor_id: Some("agent-a".to_string()),

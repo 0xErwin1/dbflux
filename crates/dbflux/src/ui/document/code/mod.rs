@@ -9,8 +9,10 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
-    EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+    AuditAction, AuditContext, EventActorType, EventCategory, EventOrigin, EventOutcome,
+    EventRecord, EventSeverity, EventSourceId,
 };
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
@@ -829,11 +831,12 @@ impl CodeDocument {
     }
 
     /// Emits an audit event for a query or script execution.
+    #[allow(clippy::too_many_arguments)]
     fn emit_audit_event(
         &self,
         cx: &mut Context<Self>,
         category: EventCategory,
-        action: &str,
+        action: AuditAction,
         outcome: EventOutcome,
         summary: String,
         query: Option<&str>,
@@ -874,17 +877,20 @@ impl CodeDocument {
         };
 
         let mut event = EventRecord::new(ts_ms, severity, category, outcome)
-            .with_action(action)
+            .with_typed_action(action)
             .with_summary(&summary);
 
-        if let Some(conn_id) = conn_id {
-            if let (Some(db), Some(driver)) = (database_name, driver_id) {
-                event = event.with_connection_context(conn_id.to_string(), db, driver);
-            }
+        if let Some(conn_id) = conn_id
+            && let (Some(db), Some(driver)) = (database_name, driver_id)
+        {
+            event = event.with_connection_context(conn_id.to_string(), db, driver);
         }
 
-        event.source_id = EventSourceId::Local;
-        event.actor_type = EventActorType::User;
+        if category == EventCategory::Script {
+            event = event.with_origin(EventOrigin::script());
+        } else {
+            event = event.with_origin(EventOrigin::local());
+        }
 
         if let Some(query) = query {
             event.details_json = Some(serde_json::json!({ "query": query }).to_string());
@@ -901,29 +907,6 @@ impl CodeDocument {
         if let Err(e) = self.app_state.read(cx).audit_service().record(event) {
             log::warn!("Failed to emit audit event: {}", e);
         }
-    }
-
-    /// Emits an audit event for a query execution.
-    fn emit_query_audit_event(
-        &self,
-        cx: &mut Context<Self>,
-        action: &str,
-        outcome: EventOutcome,
-        summary: String,
-        query: Option<&str>,
-        duration_ms: Option<i64>,
-        error: Option<&str>,
-    ) {
-        self.emit_audit_event(
-            cx,
-            EventCategory::Query,
-            action,
-            outcome,
-            summary,
-            query,
-            duration_ms,
-            error,
-        )
     }
 
     /// Emits an audit event for a dangerous query confirmation.
@@ -943,7 +926,7 @@ impl CodeDocument {
             })
             .unwrap_or_default();
 
-        let summary = format!("Dangerous query confirmed: {:?}", kind);
+        let summary = format!("Dangerous query confirmed: {}", kind.message());
         let ts_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -955,15 +938,13 @@ impl CodeDocument {
             EventCategory::Query,
             EventOutcome::Success,
         )
-        .with_action("dangerous_query_confirmed")
+        .with_typed_action(audit_actions::DANGEROUS_QUERY_CONFIRMED)
         .with_summary(&summary)
         .with_connection_context(conn_id.to_string(), database_name, driver_id);
 
         let mut e = event;
-        e.source_id = EventSourceId::Local;
-        e.actor_type = EventActorType::User;
-        e.details_json =
-            Some(serde_json::json!({ "dangerous_kind": format!("{:?}", kind) }).to_string());
+        e = e.with_origin(EventOrigin::local());
+        e.details_json = Some(serde_json::json!({ "dangerous_kind": kind.message() }).to_string());
 
         if let Err(err) = self.app_state.read(cx).audit_service().record(e) {
             log::warn!("Failed to emit dangerous query audit event: {}", err);

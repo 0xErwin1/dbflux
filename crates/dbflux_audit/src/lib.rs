@@ -6,7 +6,7 @@ pub mod store;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use dbflux_core::observability::{EventRecord, EventSink as CoreEventSink, EventSinkError};
 use dbflux_storage::error::RepositoryError;
@@ -18,6 +18,8 @@ use crate::purge::{PurgeStats, purge_old_events};
 use crate::query::AuditQueryFilter;
 use crate::redaction::{redact_error_message, redact_json};
 use crate::store::sqlite::SqliteAuditStore;
+
+pub use dbflux_storage::repositories::audit::AuditEventDto;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -41,6 +43,8 @@ pub enum AuditError {
     ConfigDirUnavailable,
     #[error("event sink error: {0}")]
     EventSink(#[from] EventSinkError),
+    #[error("entity not found: {0}")]
+    NotFound(String),
 }
 
 impl From<AuditError> for EventSinkError {
@@ -51,6 +55,7 @@ impl From<AuditError> for EventSinkError {
             AuditError::Io(_) => EventSinkError::Storage(err.to_string()),
             AuditError::ConfigDirUnavailable => EventSinkError::Internal(err.to_string()),
             AuditError::EventSink(e) => e,
+            AuditError::NotFound(_) => EventSinkError::Storage(err.to_string()),
         }
     }
 }
@@ -59,7 +64,7 @@ impl From<RepositoryError> for AuditError {
     fn from(err: RepositoryError) -> Self {
         match err {
             RepositoryError::Sqlite { source } => AuditError::Sqlite(source),
-            RepositoryError::NotFound(_msg) => AuditError::Sqlite(rusqlite::Error::InvalidQuery),
+            RepositoryError::NotFound(msg) => AuditError::NotFound(msg),
             RepositoryError::Serialization { source } => AuditError::Serialization(source),
         }
     }
@@ -79,7 +84,12 @@ pub struct AuditService {
     /// Whether to capture full query text in details_json.
     /// When false, query text is replaced with a fingerprint (SHA256 hash).
     capture_query_text: Arc<AtomicBool>,
+    /// Maximum allowed size for the stored details_json payload.
+    max_detail_bytes: Arc<AtomicUsize>,
 }
+
+const DEFAULT_MAX_DETAIL_BYTES: usize = 65_536;
+const UNKNOWN_ACTOR_ID: &str = "unknown";
 
 impl AuditService {
     pub fn new(store: SqliteAuditStore) -> Self {
@@ -88,6 +98,7 @@ impl AuditService {
             redact_sensitive: Arc::new(AtomicBool::new(true)),
             enabled: Arc::new(AtomicBool::new(true)),
             capture_query_text: Arc::new(AtomicBool::new(false)),
+            max_detail_bytes: Arc::new(AtomicUsize::new(DEFAULT_MAX_DETAIL_BYTES)),
         }
     }
 
@@ -136,20 +147,18 @@ impl AuditService {
         self.capture_query_text.load(Ordering::SeqCst)
     }
 
-    pub fn sqlite_path(&self) -> &Path {
-        self.store.path()
+    /// Sets the maximum size in bytes for the stored details_json payload.
+    pub fn set_max_detail_bytes(&self, max_bytes: usize) {
+        self.max_detail_bytes.store(max_bytes, Ordering::SeqCst);
     }
 
-    pub fn append(
-        &self,
-        actor_id: &str,
-        tool_id: &str,
-        decision: &str,
-        reason: Option<&str>,
-        created_at_epoch_ms: i64,
-    ) -> Result<AuditEvent, AuditError> {
-        self.store
-            .append(actor_id, tool_id, decision, reason, created_at_epoch_ms)
+    /// Returns the maximum size in bytes for the stored details_json payload.
+    pub fn max_detail_bytes(&self) -> usize {
+        self.max_detail_bytes.load(Ordering::SeqCst)
+    }
+
+    pub fn sqlite_path(&self) -> &Path {
+        self.store.path()
     }
 
     pub fn query(&self, filter: &AuditQueryFilter) -> Result<Vec<AuditEvent>, AuditError> {
@@ -158,6 +167,17 @@ impl AuditService {
 
     pub fn get(&self, id: i64) -> Result<Option<AuditEvent>, AuditError> {
         self.store.get(id)
+    }
+
+    pub fn get_extended(&self, id: i64) -> Result<Option<AuditEventDto>, AuditError> {
+        self.store.get_extended(id)
+    }
+
+    pub fn query_extended(
+        &self,
+        filter: &AuditQueryFilter,
+    ) -> Result<Vec<AuditEventDto>, AuditError> {
+        self.store.query_extended(filter)
     }
 
     pub fn export(
@@ -169,16 +189,37 @@ impl AuditService {
         export_entries(&events, format).map_err(AuditError::from)
     }
 
+    pub fn export_extended(
+        &self,
+        filter: &AuditQueryFilter,
+        format: AuditExportFormat,
+    ) -> Result<String, AuditError> {
+        let events = self.query_extended(filter)?;
+        export::export_extended(&events, format).map_err(AuditError::from)
+    }
+
     /// Records an audit event using the extended schema.
     ///
     /// This is the primary method for recording events from service layers.
     /// It validates the event, optionally redacts sensitive values, and stores it
     /// with the full RF-050/RF-051 schema.
     ///
+    /// # Validation
+    ///
+    /// The following fields are validated based on category:
+    /// - **All**: `action`, `summary`, `ts_ms`
+    /// - **Query**: `connection_id`, `driver_id`, `duration_ms` for execution events
+    /// - **Connection**: `connection_id`
+    /// - **Hook**: `object_type`, `object_id` (hook name), `connection_id`
+    /// - **Script**: `object_type`, `object_id` (script name/path)
+    /// - **Mcp**: `actor_id`, `object_id` (tool name)
+    /// - **Config**: `object_type`, `object_id`
+    ///
     /// # Errors
     ///
     /// Returns `AuditError` if:
     /// - The event has an empty action field
+    /// - Category-specific required fields are missing
     /// - Storage operation fails
     pub fn record(&self, event: EventRecord) -> Result<EventRecord, AuditError> {
         // Check if audit is enabled
@@ -186,28 +227,196 @@ impl AuditService {
             return Ok(event);
         }
 
-        // Validate required fields
-        if event.action.is_empty() {
+        let event = Self::normalize_details_json(event)?;
+
+        // Canonical validation — all validation happens here, before fingerprinting/redaction
+        Self::validate_event(&event)?;
+
+        self.store.record(self.preprocess_event_for_storage(event)?)
+    }
+
+    /// Validates an event's required fields based on its category.
+    ///
+    /// This is the canonical validation point called by `record()`. It enforces
+    /// category-specific field requirements before storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EventSinkError::MissingRequiredField` if a required field is absent.
+    pub fn validate_event(event: &EventRecord) -> Result<(), AuditError> {
+        use dbflux_core::observability::types::EventCategory;
+
+        // Universal required fields
+        if !Self::has_required_text(Some(event.action.as_str())) {
             return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                 "action",
             )));
         }
+        if !Self::has_required_text(Some(event.summary.as_str())) {
+            return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                "summary",
+            )));
+        }
 
-        let mut event = event;
+        // Category-specific required fields
+        match event.category {
+            EventCategory::Query => {
+                if !Self::has_required_text(event.connection_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "connection_id",
+                    )));
+                }
+                if !Self::has_required_text(event.driver_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "driver_id",
+                    )));
+                }
+                if Self::query_action_requires_duration(event.action.as_str())
+                    && event.duration_ms.is_none()
+                {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "duration_ms",
+                    )));
+                }
+            }
+            EventCategory::Connection => {
+                if !Self::has_required_text(event.connection_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "connection_id",
+                    )));
+                }
+            }
+            EventCategory::Hook => {
+                if !Self::has_required_text(event.object_type.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_type",
+                    )));
+                }
+                if !Self::has_required_text(event.object_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_id",
+                    )));
+                }
+                if !Self::has_required_text(event.connection_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "connection_id",
+                    )));
+                }
+            }
+            EventCategory::Script => {
+                if !Self::has_required_text(event.object_type.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_type",
+                    )));
+                }
+                if !Self::has_required_text(event.object_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_id",
+                    )));
+                }
+            }
+            EventCategory::Mcp => {
+                if !Self::has_required_text(event.actor_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "actor_id",
+                    )));
+                }
+                if !Self::has_required_text(event.object_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_id",
+                    )));
+                }
+            }
+            EventCategory::Config => {
+                if !Self::has_required_text(event.object_type.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_type",
+                    )));
+                }
+                if !Self::has_required_text(event.object_id.as_deref()) {
+                    return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
+                        "object_id",
+                    )));
+                }
+            }
+            EventCategory::Governance | EventCategory::System => {
+                // No additional required fields beyond universal
+            }
+        }
 
-        // Apply query text fingerprinting if capture_query_text is disabled.
-        // This is independent of redaction: we always fingerprint when capture is disabled,
-        // regardless of whether redaction is enabled.
+        Ok(())
+    }
+
+    fn has_required_text(value: Option<&str>) -> bool {
+        value.is_some_and(|text| !text.trim().is_empty())
+    }
+
+    fn query_action_requires_duration(action: &str) -> bool {
+        matches!(action, "query_execute" | "query_execute_failed")
+    }
+
+    fn normalize_details_json(mut event: EventRecord) -> Result<EventRecord, AuditError> {
+        let Some(details) = event.details_json.take() else {
+            return Ok(event);
+        };
+
+        let value: serde_json::Value = serde_json::from_str(&details).map_err(|err| {
+            AuditError::EventSink(EventSinkError::Serialization(format!(
+                "details_json must be valid JSON: {}",
+                err
+            )))
+        })?;
+
+        let serde_json::Value::Object(_) = value else {
+            return Err(AuditError::EventSink(EventSinkError::Serialization(
+                "details_json must be a JSON object".to_string(),
+            )));
+        };
+
+        event.details_json = Some(serde_json::to_string(&value)?);
+
+        Ok(event)
+    }
+
+    fn preprocess_event_for_storage(
+        &self,
+        mut event: EventRecord,
+    ) -> Result<EventRecord, AuditError> {
+        if event.actor_id.is_none() {
+            event.actor_id = Some(UNKNOWN_ACTOR_ID.to_string());
+        }
+
         if !self.capture_query_text() {
             Self::apply_query_fingerprint_static(&mut event);
         }
 
-        // Apply redaction if enabled (sensitive value redaction)
         if self.redact_sensitive() {
             event = self.apply_redaction(event);
         }
 
-        self.store.record(event)
+        self.enforce_max_detail_bytes(&event)?;
+
+        Ok(event)
+    }
+
+    fn enforce_max_detail_bytes(&self, event: &EventRecord) -> Result<(), AuditError> {
+        let Some(details) = event.details_json.as_ref() else {
+            return Ok(());
+        };
+
+        let detail_len = details.len();
+        let max_detail_bytes = self.max_detail_bytes();
+
+        if detail_len > max_detail_bytes {
+            return Err(AuditError::EventSink(EventSinkError::Serialization(
+                format!(
+                    "details_json exceeds max_detail_bytes ({} > {})",
+                    detail_len, max_detail_bytes
+                ),
+            )));
+        }
+
+        Ok(())
     }
 
     /// Applies redaction for sensitive values in details_json and error_message.
@@ -284,6 +493,88 @@ impl AuditService {
         batch_size: usize,
     ) -> Result<PurgeStats, AuditError> {
         purge_old_events(&self.store, retention_days, batch_size)
+    }
+
+    /// Records a panic event without blocking.
+    ///
+    /// This is the public entry point for the global panic hook.
+    /// It creates a `system_panic` event from the provided panic info string
+    /// and attempts a non-blocking write through the store layer.
+    ///
+    /// If audit is disabled, returns `Ok(None)` silently.
+    /// If the store mutex is held by another thread, logs to stderr and returns `Ok(None)`.
+    /// If an actual storage error occurs, logs to stderr and returns `Ok(None)`.
+    ///
+    /// This function is designed to be called from a panic hook without risking
+    /// deadlock or double-panic.
+    ///
+    /// # Arguments
+    ///
+    /// * `panic_info` — A string describing the panic (message + location).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(record))` if the panic was recorded.
+    /// `Ok(None)` if recording failed or was not possible (no error returned to caller).
+    pub fn record_panic_best_effort(&self, panic_info: &str) -> Option<EventRecord> {
+        use dbflux_core::observability::types::EventSeverity;
+
+        if !self.is_enabled() {
+            return None;
+        }
+
+        // Use current time from std::time if chrono is not available as a direct dep
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let panic_event = EventRecord::new(
+            ts_ms,
+            EventSeverity::Fatal,
+            dbflux_core::observability::types::EventCategory::System,
+            dbflux_core::observability::types::EventOutcome::Failure,
+        )
+        .with_typed_action(dbflux_core::observability::actions::SYSTEM_PANIC)
+        .with_summary("Application panic captured")
+        .with_error("panic", panic_info);
+
+        let sanitized_panic_info = if self.redact_sensitive() {
+            redact_error_message(panic_info, true).redacted
+        } else {
+            panic_info.to_string()
+        };
+
+        // Build panic details JSON using the sanitized version
+        let details = serde_json::json!({
+            "panic_info": sanitized_panic_info,
+        });
+        let panic_event =
+            match Self::normalize_details_json(panic_event.with_details_json(details.to_string()))
+                .and_then(|event| self.preprocess_event_for_storage(event))
+            {
+                Ok(event) => event,
+                Err(e) => {
+                    eprintln!("[dbflux_audit] panic preprocessing failed: {:?}", e);
+                    return None;
+                }
+            };
+
+        // Delegates to store's non-blocking path
+        match self
+            .store
+            .record_panic_best_effort(panic_event, &sanitized_panic_info)
+        {
+            Ok(Some(record)) => Some(record),
+            Ok(None) => {
+                // Fallback already logged in store
+                None
+            }
+            Err(e) => {
+                eprintln!("[dbflux_audit] panic best-effort failed: {:?}", e);
+                None
+            }
+        }
     }
 }
 

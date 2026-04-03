@@ -27,14 +27,15 @@ impl AuditSourceAdapter {
     }
 
     /// Translates an `EventQuery` into a storage-layer `AuditQueryFilter`.
-    fn query_to_filter(query: &EventQuery) -> AuditQueryFilter {
+    #[allow(clippy::field_reassign_with_default)]
+    fn query_to_filter(query: &EventQuery, default_limit: Option<usize>) -> AuditQueryFilter {
         let mut filter = AuditQueryFilter::default();
 
         filter.id = query.id;
         filter.start_epoch_ms = query.from_ts_ms;
         filter.end_epoch_ms = query.to_ts_ms;
-        filter.limit = query.limit.or(Some(500));
-        filter.offset = query.offset.map(|offset| offset as usize);
+        filter.limit = query.limit.or(default_limit);
+        filter.offset = query.offset;
 
         if let Some(level) = &query.level {
             filter.level = Some(level.as_str().to_string());
@@ -64,7 +65,10 @@ impl AuditSourceAdapter {
             filter.free_text = Some(free_text.clone());
         }
         if let Some(action) = &query.action {
-            filter.tool_id = Some(action.clone());
+            filter.action = Some(action.clone());
+        }
+        if let Some(object_type) = &query.object_type {
+            filter.object_type = Some(object_type.clone());
         }
 
         filter
@@ -82,19 +86,23 @@ impl AuditSourceAdapter {
             .category
             .as_ref()
             .and_then(|c| EventCategory::from_str_repr(c))
-            .unwrap_or(EventCategory::Query);
+            .unwrap_or(EventCategory::System);
 
         let outcome = dto
             .outcome
             .as_ref()
             .and_then(|o| EventOutcome::from_str_repr(o))
-            .unwrap_or(EventOutcome::Success);
+            .unwrap_or(match dto.decision.as_str() {
+                "deny" | "rejected" => EventOutcome::Failure,
+                "pending" => EventOutcome::Pending,
+                _ => EventOutcome::Success,
+            });
 
         let actor_type = dto
             .actor_type
             .as_ref()
             .and_then(|a| EventActorType::from_str_repr(a))
-            .unwrap_or(EventActorType::User);
+            .unwrap_or(EventActorType::System);
 
         let source_id = dto
             .source_id
@@ -102,8 +110,18 @@ impl AuditSourceAdapter {
             .and_then(|s| EventSourceId::from_str_repr(s))
             .unwrap_or(EventSourceId::System);
 
-        let summary = dto.summary.as_deref().unwrap_or("");
-        let action = dto.action.as_deref().unwrap_or("");
+        let summary = dto
+            .summary
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or(dto.reason.as_deref().filter(|value| !value.is_empty()))
+            .unwrap_or(dto.tool_id.as_str());
+        let action = dto
+            .action
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(dto.tool_id.as_str());
+        let actor_id = (!dto.actor_id.is_empty()).then(|| dto.actor_id.clone());
 
         EventRecord {
             id: Some(dto.id),
@@ -113,7 +131,7 @@ impl AuditSourceAdapter {
             action: action.to_string(),
             outcome,
             actor_type,
-            actor_id: Some(dto.actor_id.clone()),
+            actor_id,
             source_id,
             connection_id: dto.connection_id.clone(),
             database_name: dto.database_name.clone(),
@@ -174,7 +192,7 @@ impl AuditSourceAdapter {
         &self,
         query: &EventQuery,
     ) -> Result<dbflux_core::observability::query::EventPage, EventSourceError> {
-        let filter = Self::query_to_filter(query);
+        let filter = Self::query_to_filter(query, Some(500));
         let total = self
             .repo
             .count_filtered(&filter)
@@ -221,7 +239,7 @@ impl EventSource for AuditSourceAdapter {
     }
 
     fn export_events(&self, query: &EventQuery, format: &str) -> Result<Vec<u8>, EventSourceError> {
-        let filter = Self::query_to_filter(query);
+        let filter = Self::query_to_filter(query, None);
         let events = self.repo.query(&filter).map_err(|e| {
             EventSourceError::Export(format!("audit query for export failed: {}", e))
         })?;

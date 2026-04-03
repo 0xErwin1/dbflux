@@ -42,24 +42,20 @@ pub struct AuditFilters {
 }
 
 /// Time range option for quick selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum TimeRange {
     Last15min,
     LastHour,
+    #[default]
     Last24h,
     Last7Days,
     Custom,
 }
 
-impl Default for TimeRange {
-    fn default() -> Self {
-        TimeRange::Last24h
-    }
-}
-
 impl TimeRange {
     /// Returns (start_ms, end_ms) tuple for this time range.
-    pub fn to_filter_values(&self) -> (Option<i64>, Option<i64>) {
+    pub fn to_filter_values(self) -> (Option<i64>, Option<i64>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)

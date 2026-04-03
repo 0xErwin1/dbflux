@@ -112,18 +112,7 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::McpPolicies(section), vec![focus_sub])
             }
-            #[cfg(feature = "mcp")]
-            SettingsSectionId::McpAudit => {
-                let section =
-                    cx.new(|cx| McpSection::new(app_state, McpSectionVariant::Audit, window, cx));
-                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
-                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
-                        this.pending_focus_return = true;
-                        cx.notify();
-                    }
-                });
-                (ActiveSettingsSection::McpAudit(section), vec![focus_sub])
-            }
+
             SettingsSectionId::Proxies => {
                 let section = cx.new(|cx| ProxiesSection::new(app_state, window, cx));
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {

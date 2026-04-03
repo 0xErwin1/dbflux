@@ -476,6 +476,24 @@ impl EventRecord {
         self.correlation_id = Some(correlation_id.into());
         self
     }
+
+    /// Sets the action field from a typed [`AuditAction`] constant.
+    ///
+    /// This is preferred over [`with_action`](Self::with_action) when
+    /// a canonical action constant is available.
+    pub fn with_typed_action(mut self, action: crate::observability::AuditAction) -> Self {
+        self.action = action.as_str().to_string();
+        self
+    }
+
+    /// Sets `actor_type` and `source_id` from an [`EventOrigin`].
+    ///
+    /// This applies the origin's actor and source mapping in a single call.
+    pub fn with_origin(mut self, origin: crate::observability::EventOrigin) -> Self {
+        self.actor_type = origin.actor_type;
+        self.source_id = origin.source_id;
+        self
+    }
 }
 
 // ============================================================================

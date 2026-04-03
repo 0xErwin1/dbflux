@@ -332,9 +332,12 @@ crates/
     src/service.rs          # ApprovalService (approve/reject lifecycle)
     src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
   dbflux_audit/             # Audit logging
-    src/lib.rs              # AuditService delegates to AuditRepository
-    src/query.rs            # AuditQueryFilter for date/actor/tool queries
-    src/export.rs           # Audit export to JSON/CSV
+    src/lib.rs              # AuditService: validate, fingerprint, redact, record
+    src/query.rs            # AuditQueryFilter (actor, category, action, outcome, date range)
+    src/export.rs           # Audit export to JSON/CSV (basic and extended schemas)
+    src/redaction.rs        # Sensitive value redaction for details_json and error_message
+    src/purge.rs            # Retention-based event purge (batched deletes)
+    src/store/sqlite.rs     # SqliteAuditStore delegating to AuditRepository
   dbflux_storage/           # Unified SQLite storage
     src/bootstrap.rs        # StorageRuntime with single dbflux.db connection
     src/paths.rs            # dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db
@@ -565,9 +568,14 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Audit** (`dbflux_audit`):
 - `AuditService` delegates to `AuditRepository` in `dbflux_storage` (`~/.local/share/dbflux/dbflux.db`, `aud_audit_events` table)
-- `AuditQueryFilter` for querying by actor, tool, date range
-- Export to JSON/CSV via `AuditExportFormat`
-- All policy decisions logged with actor, tool, decision, and reason
+- Events use `EventRecord` from `dbflux_core::observability` — structured fields for category, severity, outcome, actor type, connection, object, details, and error context
+- Events are emitted through `EventSink` trait; service layers inject `Arc<dyn EventSink>` rather than calling `AuditService` directly
+- Categories: `Query`, `Connection`, `Hook`, `Script`, `Mcp`, `Governance`, `Config`, `System`
+- Before storage: validates required category-specific fields, fingerprints query text as SHA256 (query text never stored by default), redacts sensitive values, enforces 64 KiB detail payload limit
+- `AuditQueryFilter` for querying by actor, tool, category, action, outcome, date range, free text, and correlation ID
+- Export to JSON/CSV via `AuditExportFormat`; `export_extended()` includes all DTO fields including `details_json`
+- Retention purge: `AuditService::purge_old_events(days, batch_size)` — batched to avoid long write transactions
+- See `docs/AUDIT.md` for full event schema, required fields, and usage patterns
 
 **MCP Runtime** (`dbflux_mcp/runtime.rs`):
 - `McpRuntime` implements `McpGovernanceService` trait

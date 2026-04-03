@@ -65,7 +65,7 @@ impl std::error::Error for EventSinkError {}
 ///         }
 ///
 ///         // Store the event and return with assigned ID
-///         let stored = self.store.append(event)?;
+///         let stored = self.store.record(event)?;
 ///         Ok(stored)
 ///     }
 /// }

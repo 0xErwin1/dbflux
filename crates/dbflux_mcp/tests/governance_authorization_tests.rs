@@ -1,4 +1,6 @@
 use dbflux_audit::AuditService;
+use dbflux_core::observability::EventCategory;
+use dbflux_core::observability::actions::MCP_AUTHORIZE;
 use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
 use dbflux_mcp::server::request_context::RequestIdentity;
 use dbflux_policy::{
@@ -59,6 +61,7 @@ fn trusted_client_policy_and_mcp_connection_gate_are_enforced() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            correlation_id: None,
         },
         1,
     )
@@ -80,6 +83,7 @@ fn trusted_client_policy_and_mcp_connection_gate_are_enforced() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: false,
+            correlation_id: None,
         },
         2,
     )
@@ -91,15 +95,22 @@ fn trusted_client_policy_and_mcp_connection_gate_are_enforced() {
         Some("connection_not_mcp_enabled")
     );
 
-    let entries = audit_service
-        .query(&dbflux_audit::query::AuditQueryFilter::default())
+    // Verify using the extended audit schema (record path)
+    // Results are ordered newest-first by id, so sort by id to get insertion order
+    let mut entries = audit_service
+        .query_extended(&dbflux_audit::query::AuditQueryFilter {
+            action: Some(MCP_AUTHORIZE.as_str().to_string()),
+            category: Some(EventCategory::Mcp.as_str().to_string()),
+            ..Default::default()
+        })
         .expect("audit query should succeed");
+    entries.sort_by_key(|e| e.id);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].decision, "allow");
-    assert_eq!(entries[1].decision, "deny");
+    assert_eq!(entries[0].outcome.as_deref(), Some("success"));
+    assert_eq!(entries[1].outcome.as_deref(), Some("failure"));
     assert_eq!(
-        entries[1].reason.as_deref(),
-        Some("connection not MCP-enabled")
+        entries[1].error_code.as_deref(),
+        Some("connection_not_mcp_enabled")
     );
 }
 
@@ -122,6 +133,7 @@ fn untrusted_and_deny_by_default_requests_are_rejected_and_audited() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            correlation_id: None,
         },
         10,
     )
@@ -143,6 +155,7 @@ fn untrusted_and_deny_by_default_requests_are_rejected_and_audited() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            correlation_id: None,
         },
         11,
     )
@@ -155,13 +168,17 @@ fn untrusted_and_deny_by_default_requests_are_rejected_and_audited() {
         Some("no matching connection-scoped assignment")
     );
 
-    let entries = audit_service
-        .query(&dbflux_audit::query::AuditQueryFilter::default())
+    // Verify using the extended audit schema (record path)
+    // Results are ordered newest-first by id, so sort by id to get insertion order
+    let mut entries = audit_service
+        .query_extended(&dbflux_audit::query::AuditQueryFilter {
+            action: Some(MCP_AUTHORIZE.as_str().to_string()),
+            category: Some(EventCategory::Mcp.as_str().to_string()),
+            ..Default::default()
+        })
         .expect("audit query should succeed");
+    entries.sort_by_key(|e| e.id);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].reason.as_deref(), Some("untrusted client"));
-    assert_eq!(
-        entries[1].reason.as_deref(),
-        Some("no matching connection-scoped assignment")
-    );
+    assert_eq!(entries[0].error_code.as_deref(), Some("untrusted_client"));
+    assert_eq!(entries[1].error_code.as_deref(), Some("policy_denied"));
 }

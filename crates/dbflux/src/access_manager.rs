@@ -217,6 +217,7 @@ impl AccessManager for AppAccessManager {
 }
 
 impl AppAccessManager {
+    #[allow(clippy::result_large_err)]
     fn open_ssh(
         &self,
         ssh_tunnel_profile_id: &Uuid,

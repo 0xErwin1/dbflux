@@ -11,8 +11,6 @@ pub enum SettingsSectionId {
     McpRoles,
     #[cfg(feature = "mcp")]
     McpPolicies,
-    #[cfg(feature = "mcp")]
-    McpAudit,
     Keybindings,
     Proxies,
     SshTunnels,

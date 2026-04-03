@@ -525,3 +525,85 @@ async fn preview_mutation_remains_read_governed_for_readonly_clients() {
         "readonly clients must still be denied destructive tools"
     );
 }
+
+#[tokio::test]
+async fn mcp_execution_writes_correlated_audit_events() {
+    use dbflux_core::observability::{
+        EventCategory,
+        actions::{MCP_AUTHORIZE, QUERY_EXECUTE},
+    };
+
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let state = build_state_with_role(&connection_id, "builtin/read-only");
+    let middleware = GovernanceMiddleware::new(state.clone());
+
+    let result = middleware
+        .authorize_and_execute(
+            "select_data",
+            Some(&connection_id),
+            ExecutionClassification::Read,
+            || async { Ok(CallToolResult::success(vec![])) },
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "authorized tool should execute successfully"
+    );
+
+    let runtime = state.runtime.read().await;
+    let audit_service = runtime.audit_service();
+
+    let all_mcp_events = audit_service
+        .query_extended(&dbflux_audit::query::AuditQueryFilter {
+            category: Some(EventCategory::Mcp.as_str().to_string()),
+            ..Default::default()
+        })
+        .expect("audit query should succeed");
+
+    assert!(
+        !all_mcp_events.is_empty(),
+        "at least one MCP event should be recorded"
+    );
+
+    let mut correlation_groups: std::collections::HashMap<Option<String>, Vec<_>> =
+        std::collections::HashMap::new();
+    for event in &all_mcp_events {
+        correlation_groups
+            .entry(event.correlation_id.clone())
+            .or_default()
+            .push(event);
+    }
+
+    let mut max_group_size = 0;
+    for (_, group) in &correlation_groups {
+        if group.len() > max_group_size {
+            max_group_size = group.len();
+        }
+    }
+
+    assert_eq!(
+        max_group_size, 2,
+        "expected exactly 2 correlated events (mcp_authorize + query_execute), got {}",
+        max_group_size
+    );
+
+    let correlated_events: Vec<_> = correlation_groups
+        .into_iter()
+        .filter(|(_, events)| events.len() == 2)
+        .flat_map(|(_, events)| events)
+        .collect();
+
+    let actions: Vec<&str> = correlated_events
+        .iter()
+        .filter_map(|e| e.action.as_deref())
+        .collect();
+    assert!(
+        actions.contains(&MCP_AUTHORIZE.as_str()),
+        "correlated events should include mcp_authorize"
+    );
+    assert!(
+        actions.contains(&QUERY_EXECUTE.as_str()),
+        "correlated events should include query_execute for select_data tool"
+    );
+}
