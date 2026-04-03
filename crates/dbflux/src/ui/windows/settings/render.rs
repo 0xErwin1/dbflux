@@ -26,8 +26,6 @@ impl SettingsCoordinator {
             super::SettingsSectionId::McpRoles => "Roles",
             #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpPolicies => "Policies",
-            #[cfg(feature = "mcp")]
-            super::SettingsSectionId::McpAudit => "Audit",
             super::SettingsSectionId::Keybindings => "Keybindings",
             super::SettingsSectionId::Proxies => "Proxy",
             super::SettingsSectionId::SshTunnels => "SSH Tunnels",

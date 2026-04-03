@@ -30,6 +30,7 @@ pub(super) enum AuditFormRow {
     SaveButton,
 }
 
+#[allow(dead_code)]
 pub(super) struct AuditSection {
     pub(super) app_state: Entity<AppState>,
     pub(super) settings: AuditSettingsDto,
@@ -148,10 +149,7 @@ impl AuditSection {
     fn load_settings(app_state: Entity<AppState>, cx: &mut Context<Self>) -> AuditSettingsDto {
         let runtime = app_state.read(cx).storage_runtime();
         let repo = runtime.audit_settings();
-        repo.get()
-            .ok()
-            .flatten()
-            .unwrap_or_else(AuditSettingsDto::default)
+        repo.get().ok().flatten().unwrap_or_default()
     }
 
     fn audit_form_rows(&self) -> Vec<AuditFormRow> {
@@ -223,9 +221,9 @@ impl AuditSection {
                 self.settings.redact_sensitive_values = !self.settings.redact_sensitive_values;
                 cx.notify();
             }
-            // max_detail_bytes is stored but NOT yet applied to AuditService.
-            // Marked non-interactive in render.
-            Some(AuditFormRow::MaxDetailBytes) => {}
+            Some(AuditFormRow::MaxDetailBytes) => {
+                self.audit_focus_current_input(window, cx);
+            }
             Some(AuditFormRow::PurgeOnStartup) => {
                 self.settings.purge_on_startup = !self.settings.purge_on_startup;
                 cx.notify();
@@ -357,6 +355,7 @@ impl AuditSection {
         audit_service.set_enabled(self.settings.enabled);
         audit_service.set_redact_sensitive(self.settings.redact_sensitive_values);
         audit_service.set_capture_query_text(self.settings.capture_query_text);
+        audit_service.set_max_detail_bytes(self.settings.max_detail_bytes);
 
         self.original_settings = self.settings.clone();
 
@@ -558,7 +557,7 @@ impl AuditSection {
                         AuditFormRow::RetentionDays,
                         cx,
                     ))
-                    .child(self.render_audit_unsupported_input_field(
+                    .child(self.render_audit_input_field(
                         "Max detail bytes",
                         &self.input_max_detail_bytes,
                         is_at(AuditFormRow::MaxDetailBytes),
@@ -668,6 +667,7 @@ impl AuditSection {
             }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_audit_checkbox(
         &self,
         id: &'static str,
@@ -728,19 +728,6 @@ impl AuditSection {
         self.render_audit_input_field_impl(label, input, is_focused, primary, row, cx, false)
     }
 
-    /// Renders a non-interactive input field for unsupported settings.
-    fn render_audit_unsupported_input_field(
-        &self,
-        label: &str,
-        input: &Entity<InputState>,
-        is_focused: bool,
-        primary: Hsla,
-        row: AuditFormRow,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        self.render_audit_input_field_impl(label, input, is_focused, primary, row, cx, true)
-    }
-
     fn render_audit_unsupported_checkbox(
         &self,
         id: &'static str,
@@ -788,6 +775,7 @@ impl AuditSection {
 
     /// Internal implementation for input fields; `unsupported` dims the label
     /// and removes the on_mouse_down focus/input-switching behavior.
+    #[allow(clippy::too_many_arguments)]
     fn render_audit_input_field_impl(
         &self,
         label: &str,

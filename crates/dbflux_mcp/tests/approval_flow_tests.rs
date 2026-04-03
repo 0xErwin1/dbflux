@@ -22,14 +22,14 @@ fn approval_replays_exact_stored_plan_snapshot() {
     let mut changed_plan = original_plan.clone();
     changed_plan.payload = serde_json::json!({"query": "DROP TABLE users"});
 
-    let replay = approve_execution(&mut approval_service, &pending.id.to_string())
+    let approved = approve_execution(&mut approval_service, &pending.id.to_string())
         .expect("approval should succeed");
 
     assert_eq!(
-        replay.payload,
+        approved.replay_plan.payload,
         serde_json::json!({"query": "UPDATE users SET active = true"})
     );
-    assert_ne!(replay.payload, changed_plan.payload);
+    assert_ne!(approved.replay_plan.payload, changed_plan.payload);
     assert!(approval_service.list_pending().is_empty());
 }
 

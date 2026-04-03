@@ -133,6 +133,7 @@ impl DataTableState {
     /// Emits SelectionChanged so subscribers can validate that the preserved selection
     /// is still valid in the new model (row index might be out of bounds or point to
     /// different data).
+    #[allow(dead_code)]
     pub fn set_model(&mut self, model: Arc<TableModel>, cx: &mut Context<Self>) {
         self.model = model;
         // Emit SelectionChanged so the audit viewer's subscription can validate

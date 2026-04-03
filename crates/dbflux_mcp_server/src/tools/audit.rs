@@ -121,9 +121,12 @@ fn build_audit_filter(
         // Extended filter fields (not used in MCP governance path)
         level: None,
         category: None,
+        action: None,
         source_id: None,
         outcome: None,
+        object_type: None,
         free_text: None,
+        correlation_id: None,
     })
 }
 
@@ -233,7 +236,7 @@ impl DbFluxServer {
             .authorize_and_execute(
                 "export_audit_logs",
                 None,
-                ExecutionClassification::Admin,
+                ExecutionClassification::Read,
                 move || async move {
                     let filter = build_audit_filter(
                         actor_id, tool_id, decision, start_date, end_date, limit,

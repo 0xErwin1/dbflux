@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_core::observability::actions as audit_actions;
 
 fn evaluate_dangerous_with_effective_settings(
     kind: dbflux_core::DangerousQueryKind,
@@ -308,6 +309,7 @@ impl CodeDocument {
         let audit_service = self.app_state.read(cx).audit_service().clone();
         let task_target_for_audit = task_target.clone();
         let started_at = Instant::now();
+        let query_for_cancel = query.clone();
 
         // Capture honest connection metadata (connection_id string + driver_id) before spawn
         // so we can emit proper fallback events without needing cx in the async block.
@@ -334,7 +336,13 @@ impl CodeDocument {
                 }
 
                 let inner_result = this.update(cx, |doc, cx| {
-                    doc.complete_cancelled_query(task_id, exec_id, &task_target_for_audit, cx);
+                    doc.complete_cancelled_query(
+                        task_id,
+                        exec_id,
+                        &task_target_for_audit,
+                        Some(query_for_cancel),
+                        cx,
+                    );
                 });
                 // Fallback fires if the entity is gone (this.update failed). If this.update
                 // succeeded, the entity is alive and process_pending_result will emit via the
@@ -349,19 +357,22 @@ impl CodeDocument {
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
 
+                    let details_json = serde_json::json!({ "query": query }).to_string();
+
                     let mut event = EventRecord::new(
                         ts_ms,
                         EventSeverity::Warn,
                         EventCategory::Query,
                         EventOutcome::Cancelled,
                     )
-                    .with_action("query_execute")
+                    .with_typed_action(audit_actions::QUERY_CANCEL)
                     .with_summary("Query cancelled")
                     .with_connection_context(
                         fallback_conn_id.clone().unwrap_or_default(),
                         task_target_for_audit.database.clone().unwrap_or_default(),
                         fallback_driver_id.clone(),
-                    );
+                    )
+                    .with_details_json(details_json);
                     event.source_id = EventSourceId::Local;
                     event.actor_type = EventActorType::User;
                     event.duration_ms = Some(duration_ms);
@@ -381,9 +392,9 @@ impl CodeDocument {
             //
             // Extract outcome details BEFORE moving result into the closure so we can
             // emit the correct success/failure event when the entity is already gone.
-            let (outcome, severity, summary, error_detail) = match &result {
+            let (outcome, severity, summary, error_detail, action) = match &result {
                 Ok(qr) => {
-                    let affected_rows = qr.affected_rows.unwrap_or_else(|| qr.rows.len() as u64);
+                    let affected_rows = qr.affected_rows.unwrap_or(qr.rows.len() as u64);
                     let rows_label = if qr.affected_rows.is_some() {
                         "affected"
                     } else {
@@ -393,7 +404,13 @@ impl CodeDocument {
                         "Query executed successfully: {} rows {}",
                         affected_rows, rows_label
                     );
-                    (EventOutcome::Success, EventSeverity::Info, summary, None)
+                    (
+                        EventOutcome::Success,
+                        EventSeverity::Info,
+                        summary,
+                        None,
+                        audit_actions::QUERY_EXECUTE,
+                    )
                 }
                 Err(e) => {
                     let summary = format!("Query failed: {}", e);
@@ -402,6 +419,7 @@ impl CodeDocument {
                         EventSeverity::Error,
                         summary,
                         Some(e.to_string()),
+                        audit_actions::QUERY_EXECUTE_FAILED,
                     )
                 }
             };
@@ -439,7 +457,7 @@ impl CodeDocument {
                 let details_json = serde_json::json!({ "query": query_text }).to_string();
 
                 let mut event = EventRecord::new(ts_ms, severity, EventCategory::Query, outcome)
-                    .with_action("query_execute")
+                    .with_typed_action(action)
                     .with_summary(&summary)
                     .with_connection_context(
                         fallback_conn_id.clone().unwrap_or_default(),
@@ -490,15 +508,20 @@ impl CodeDocument {
         task_id: dbflux_core::TaskId,
         exec_id: Uuid,
         target: &TaskTarget,
+        query: Option<String>,
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
-        let is_script = self
-            .execution_history
-            .iter()
-            .find(|r| r.id == exec_id)
-            .map(|r| r.is_script)
-            .unwrap_or(false);
+        let is_script = match self.execution_history.iter().find(|r| r.id == exec_id) {
+            Some(r) => r.is_script,
+            None => {
+                log::warn!(
+                    "Execution record not found for exec_id={}, cannot determine is_script, defaulting to false",
+                    exec_id
+                );
+                false
+            }
+        };
 
         if let Some(record) = self
             .execution_history
@@ -540,14 +563,14 @@ impl CodeDocument {
             .find(|r| r.id == exec_id)
             .and_then(|r| {
                 r.finished_at
-                    .and_then(|finished| Some(finished.saturating_duration_since(r.started_at)))
+                    .map(|finished| finished.saturating_duration_since(r.started_at))
             })
             .map(|d| d.as_millis() as i64);
 
-        let (action, summary) = if is_script {
-            ("script_execute", "Script cancelled")
+        let summary = if is_script {
+            "Script cancelled"
         } else {
-            ("query_execute", "Query cancelled")
+            "Query cancelled"
         };
 
         self.emit_audit_event(
@@ -557,10 +580,10 @@ impl CodeDocument {
             } else {
                 EventCategory::Query
             },
-            action,
+            audit_actions::QUERY_CANCEL,
             EventOutcome::Cancelled,
             summary.to_string(),
-            None,
+            query.as_deref(),
             duration_ms,
             None,
         );
@@ -642,7 +665,7 @@ impl CodeDocument {
         // Compute duration before we start borrowing self for other operations
         let duration_ms = record
             .finished_at
-            .and_then(|finished| Some(finished.saturating_duration_since(record.started_at)))
+            .map(|finished| finished.saturating_duration_since(record.started_at))
             .map(|d| d.as_millis() as i64);
 
         let is_script = pending.is_script;
@@ -653,7 +676,7 @@ impl CodeDocument {
 
                 // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)
                 let affected_rows = qr.affected_rows;
-                let row_count = affected_rows.unwrap_or_else(|| qr.rows.len() as u64);
+                let row_count = affected_rows.unwrap_or(qr.rows.len() as u64);
                 let execution_time = qr.execution_time;
                 record.rows_affected = Some(row_count);
                 let arc_result = Arc::new(qr);
@@ -688,8 +711,8 @@ impl CodeDocument {
                 self.focus_mode = SqlQueryFocus::Results;
 
                 // Emit audit event for successful execution (query or script)
-                let (action, summary) = if is_script {
-                    ("script_execute", format!("Script executed successfully"))
+                let summary = if is_script {
+                    "Script executed successfully".to_string()
                 } else {
                     // Distinguish between mutation row counts and SELECT result counts
                     let rows_label = if affected_rows.is_some() {
@@ -697,12 +720,9 @@ impl CodeDocument {
                     } else {
                         "returned"
                     };
-                    (
-                        "query_execute",
-                        format!(
-                            "Query executed successfully: {} rows {}",
-                            row_count, rows_label
-                        ),
+                    format!(
+                        "Query executed successfully: {} rows {}",
+                        row_count, rows_label
                     )
                 };
 
@@ -710,7 +730,7 @@ impl CodeDocument {
                     self.emit_audit_event(
                         cx,
                         EventCategory::Script,
-                        action,
+                        audit_actions::SCRIPT_EXECUTE,
                         EventOutcome::Success,
                         summary,
                         Some(&pending.query),
@@ -721,7 +741,7 @@ impl CodeDocument {
                     self.emit_audit_event(
                         cx,
                         EventCategory::Query,
-                        action,
+                        audit_actions::QUERY_EXECUTE,
                         EventOutcome::Success,
                         summary,
                         Some(&pending.query),
@@ -739,17 +759,17 @@ impl CodeDocument {
                 cx.toast_error(format!("Query failed: {}", error_msg), window);
 
                 // Emit audit event for failed execution
-                let (action, summary) = if is_script {
-                    ("script_execute", format!("Script failed: {}", error_msg))
+                let summary = if is_script {
+                    format!("Script failed: {}", error_msg)
                 } else {
-                    ("query_execute", format!("Query failed: {}", error_msg))
+                    format!("Query failed: {}", error_msg)
                 };
 
                 if is_script {
                     self.emit_audit_event(
                         cx,
                         EventCategory::Script,
-                        action,
+                        audit_actions::SCRIPT_EXECUTE_FAILED,
                         EventOutcome::Failure,
                         summary,
                         Some(&pending.query),
@@ -760,7 +780,7 @@ impl CodeDocument {
                     self.emit_audit_event(
                         cx,
                         EventCategory::Query,
-                        action,
+                        audit_actions::QUERY_EXECUTE_FAILED,
                         EventOutcome::Failure,
                         summary,
                         Some(&pending.query),
@@ -1119,6 +1139,7 @@ impl CodeDocument {
         // Capture audit_service and script_started_at before spawning the deferred task so we can emit
         // audit events even if the document is closed before the task runs.
         let audit_service = self.app_state.read(cx).audit_service().clone();
+        let content_for_cancel = content.clone();
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -1130,10 +1151,16 @@ impl CodeDocument {
                     database: None,
                 };
                 let inner_result = this.update(cx, |doc, cx| {
-                    doc.complete_cancelled_query(task_id, exec_id, &dummy_target, cx);
+                    doc.complete_cancelled_query(
+                        task_id,
+                        exec_id,
+                        &dummy_target,
+                        Some(content_for_cancel),
+                        cx,
+                    );
                 });
-                let outer_result = cx.update(|_| ());
-                if inner_result.is_err() || outer_result.is_err() {
+                let _outer_result = cx.update(|_| ());
+                if inner_result.is_err() {
                     // Entity is gone (outer fails) or inner update failed; emit audit event directly
                     // so it is not silently dropped.
                     let ts_ms = std::time::SystemTime::now()
@@ -1141,17 +1168,18 @@ impl CodeDocument {
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let duration_ms = script_started_at.elapsed().as_millis() as i64;
-                    let mut event = EventRecord::new(
+                    let details_json = serde_json::json!({ "query": content }).to_string();
+                    let event = EventRecord::new(
                         ts_ms,
                         EventSeverity::Warn,
                         EventCategory::Script,
                         EventOutcome::Cancelled,
                     )
-                    .with_action("script_execute")
-                    .with_summary("Script cancelled");
-                    event.source_id = EventSourceId::Local;
-                    event.actor_type = EventActorType::User;
-                    event.duration_ms = Some(duration_ms);
+                    .with_typed_action(audit_actions::QUERY_CANCEL)
+                    .with_summary("Script cancelled")
+                    .with_origin(EventOrigin::script())
+                    .with_details_json(details_json)
+                    .with_duration_ms(duration_ms);
                     if let Err(e) = audit_service.record(event) {
                         log::warn!(
                             "Failed to emit cancelled script audit event via fallback: {}",
@@ -1167,7 +1195,7 @@ impl CodeDocument {
             //
             // Extract outcome details and duration BEFORE moving result into the closure so we can
             // emit the correct success/failure event when the entity is already gone.
-            let (outcome, severity, summary, error_detail, duration_ms) = match &result {
+            let (outcome, severity, summary, error_detail, duration_ms, action) = match &result {
                 Ok(qr) => {
                     // Script succeeded (output is in the QueryResult text_body)
                     let summary = "Script executed successfully".to_string();
@@ -1178,6 +1206,7 @@ impl CodeDocument {
                         summary,
                         None,
                         duration_ms,
+                        audit_actions::SCRIPT_EXECUTE,
                     )
                 }
                 Err(e) => {
@@ -1189,6 +1218,7 @@ impl CodeDocument {
                         summary,
                         Some(e.to_string()),
                         duration_ms,
+                        audit_actions::SCRIPT_EXECUTE_FAILED,
                     )
                 }
             };
@@ -1222,12 +1252,11 @@ impl CodeDocument {
 
                 // Scripts have no connection context; use nil profile_id.
                 let mut event = EventRecord::new(ts_ms, severity, EventCategory::Script, outcome)
-                    .with_action("script_execute")
+                    .with_typed_action(action)
                     .with_summary(&summary)
-                    .with_details_json(details_json);
-                event.source_id = EventSourceId::Local;
-                event.actor_type = EventActorType::User;
-                event.duration_ms = duration_ms;
+                    .with_origin(EventOrigin::script())
+                    .with_details_json(details_json)
+                    .with_duration_ms(duration_ms.unwrap_or(0));
                 if let Some(err) = error_detail {
                     event.error_message = Some(err);
                 }

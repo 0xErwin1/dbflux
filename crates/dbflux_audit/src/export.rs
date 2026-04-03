@@ -46,9 +46,25 @@ pub fn export_extended(
     events: &[AuditEventDto],
     format: AuditExportFormat,
 ) -> Result<String, serde_json::Error> {
+    let normalized: Vec<_> = events
+        .iter()
+        .cloned()
+        .map(|mut event| {
+            if event.tool_id.trim().is_empty() {
+                event.tool_id = event.legacy_tool_id();
+            }
+
+            if event.decision.trim().is_empty() {
+                event.decision = event.legacy_decision();
+            }
+
+            event
+        })
+        .collect();
+
     match format {
-        AuditExportFormat::Csv => Ok(export_extended_csv(events)),
-        AuditExportFormat::Json => serde_json::to_string_pretty(events),
+        AuditExportFormat::Csv => Ok(export_extended_csv(&normalized)),
+        AuditExportFormat::Json => serde_json::to_string_pretty(&normalized),
     }
 }
 

@@ -79,7 +79,7 @@ Every AI request is enforced through all of these layers in order:
 3. **Policy assignment**: actor must have a scoped assignment on that connection.
 4. **Tool + classification allowlist**: both the tool ID and its execution class must be permitted by the assigned policy.
 5. **Approval path**: write/destructive flows can require human approval before execution.
-6. **Audit trail**: every decision is appended to the SQLite audit store and is queryable/exportable.
+6. **Audit trail**: every decision is appended to `aud_audit_events` in the unified SQLite database and is queryable/exportable. See `docs/AUDIT.md` for the full event schema.
 
 All six layers run inside the server process on every `tools/call` request. None can be bypassed from the client side.
 
@@ -190,21 +190,26 @@ The MCP server reads these settings from disk on startup. If you change governan
 
 ## 8. Persisted Files and Paths
 
-DBFlux persists governance state under config/data directories resolved by `dirs` (`XDG_*` on Linux, `~/Library` on macOS).
+DBFlux persists all state in a single unified SQLite database and a few supporting directories. Paths are resolved by `dirs` (`XDG_*` on Linux, `~/Library` on macOS).
 
 Typical Linux defaults:
 
-| File | Contents |
+| Path | Contents |
 |------|----------|
-| `~/.config/dbflux/config.json` | Global app config — trusted clients, roles, policies, per-driver settings |
-| `~/.config/dbflux/profiles.json` | Connection profiles — includes per-connection MCP governance bindings |
-| `~/.config/dbflux/mcp_audit.sqlite` | MCP server audit store (written by `dbflux mcp`) |
-| `~/.config/dbflux/audit.sqlite` | GUI app audit store (written by DBFlux GUI) |
-| `~/.local/share/dbflux/` | Scripts, sessions, state |
+| `~/.local/share/dbflux/dbflux.db` | Unified database: profiles, auth, SSH tunnels, governance, audit events, history, sessions, UI state |
+| `~/.local/share/dbflux/sessions/` | Scratch and shadow files for auto-save session restore |
+| `~/.local/share/dbflux/scripts/` | User-authored scripts directory |
+
+The `dbflux.db` database contains all domain tables under prefixed schemas:
+
+- `cfg_*` — config (profiles, auth, governance, services, hooks, drivers)
+- `st_*` — state (sessions, query history, UI state, saved queries)
+- `aud_audit_events` — unified audit log (MCP events, query events, connections, hooks, scripts)
+- `sys_*` — system (migrations, legacy import tracking)
 
 Built-in policies and roles are synthesized at startup and never written to disk.
 
-Important for tests: do not use real user directories. Pass `--config-dir` to the binary or set `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME` to temp paths for isolated runs.
+Important for tests: do not use real user directories. Pass `--config-dir` to the binary or set `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME` to temp paths for isolated runs. The `dbflux_audit::temp_sqlite_path(name)` helper generates isolated paths for audit tests.
 
 ## 9. Rust Integration Pattern
 

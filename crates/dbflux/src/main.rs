@@ -18,7 +18,10 @@ mod ui;
 
 use app::AppState;
 use assets::Assets;
+use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
+use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
+use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing, init_process_auth_tokens,
@@ -34,16 +37,121 @@ use interprocess::local_socket::{
 use ipc_server::IpcServer;
 use log::info;
 use std::io::{self, Read, Write};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use ui::overlays::command_palette::command_palette_keybindings;
 use ui::views::workspace::Workspace;
+
+/// Global holder for the audit service, used by the panic hook.
+/// The panic hook needs access to the audit service, which is created
+/// inside GPUI's closure. We store it here so the panic hook can access it.
+static AUDIT_SERVICE_FOR_PANIC: Mutex<Option<AuditService>> = Mutex::new(None);
+
+/// Previous panic hook, chained after our hook.
+#[allow(clippy::type_complexity)]
+static PREV_PANIC_HOOK: Mutex<Option<Box<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync>>> =
+    Mutex::new(None);
 
 const TASK_CANCEL_TIMEOUT: Duration = Duration::from_millis(2000);
 const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(3000);
 const TOTAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(10000);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Installs a chained best-effort panic hook that:
+/// 1. Attempts to record the panic via AuditService::record_panic_best_effort
+/// 2. Falls back to stderr logging if the service is unavailable or fails
+/// 3. Always delegates to the previously installed panic hook
+fn install_panic_hook() {
+    // Capture the previous hook before installing ours
+    let prev = std::panic::take_hook();
+    *PREV_PANIC_HOOK.lock().unwrap() = Some(Box::new(prev));
+
+    // Install our hook
+    std::panic::set_hook(Box::new(|panic_info: &std::panic::PanicHookInfo| {
+        // Try to record panic via audit service (best-effort, non-blocking)
+        if let Some(audit_service) = AUDIT_SERVICE_FOR_PANIC.lock().unwrap().clone() {
+            // Format panic info for the audit record
+            let panic_location = panic_info
+                .location()
+                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+                .unwrap_or_else(|| "unknown location".to_string());
+
+            let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic payload".to_string()
+            };
+
+            let panic_info_str = format!("{} at {}", panic_message, panic_location);
+
+            // Try best-effort recording (never panics, uses try_lock internally)
+            // record_panic_best_effort returns Option<EventRecord>, None means it failed or audit disabled
+            match audit_service.record_panic_best_effort(&panic_info_str) {
+                Some(_) => {}
+                None => {
+                    eprintln!("[dbflux_audit] panic hook: record_panic_best_effort returned None");
+                }
+            }
+        } else {
+            eprintln!(
+                "[dbflux_audit] panic hook: audit service not available, panic at {}",
+                panic_info
+                    .location()
+                    .map(|loc| format!("{}:{}", loc.file(), loc.line()))
+                    .unwrap_or_else(|| "unknown location".to_string())
+            );
+        }
+
+        // Always chain to previous hook
+        if let Some(ref prev_hook) = *PREV_PANIC_HOOK.lock().unwrap() {
+            prev_hook(panic_info);
+        }
+    }));
+}
+
+/// Emits a system startup audit event via the provided audit service.
+fn emit_system_startup(audit_service: &AuditService) {
+    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+    let event = EventRecord::new(
+        now_ms,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_typed_action(SYSTEM_STARTUP)
+    .with_summary("DBFlux application started")
+    .with_actor_id("system");
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("Failed to record system_startup audit event: {}", e);
+    }
+}
+
+/// Emits a system shutdown audit event via the provided audit service.
+fn emit_system_shutdown(audit_service: &AuditService) {
+    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+    let event = EventRecord::new(
+        now_ms,
+        EventSeverity::Info,
+        EventCategory::System,
+        EventOutcome::Success,
+    )
+    .with_typed_action(SYSTEM_SHUTDOWN)
+    .with_summary("DBFlux application initiating shutdown")
+    .with_actor_id("system");
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("Failed to record system_shutdown audit event: {}", e);
+    }
+}
+
 fn main() {
+    // Install the panic hook early, before any significant processing.
+    // This ensures panics during startup are captured.
+    install_panic_hook();
+
     let args: Vec<String> = std::env::args().collect();
 
     // Handle MCP subcommand
@@ -152,6 +260,13 @@ fn run_gui() {
         ui::components::document_tree::init(cx);
         let app_state = cx.new(|_cx| AppState::new());
 
+        // Store audit service in global for panic hook access
+        let audit_service = app_state.read(cx).audit_service().clone();
+        *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
+
+        // Emit system startup audit event
+        emit_system_startup(&audit_service);
+
         let theme_setting = app_state.read(cx).general_settings().theme;
         ui::theme::apply_theme(theme_setting, None, cx);
 
@@ -196,6 +311,10 @@ fn run_gui() {
                         app_state_for_close.update(cx, |state, _| state.begin_shutdown());
 
                     if initiated_shutdown {
+                        // Emit system shutdown initiation event
+                        let audit_service = app_state_for_close.read(cx).audit_service().clone();
+                        emit_system_shutdown(&audit_service);
+
                         let app_state_shutdown = app_state_for_close.clone();
                         cx.spawn(async move |cx| {
                             run_shutdown_sequence(app_state_shutdown, cx).await;

@@ -444,9 +444,15 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `ApprovalService` manages approve/reject lifecycle
 
 **Audit** (`dbflux_audit`):
-- SQLite-backed audit log in `~/.local/share/dbflux/dbflux.db` (aud_audit_events table)
-- Queryable via `AuditQueryFilter` (actor, tool, date range)
-- Export to JSON/CSV
+- SQLite-backed audit log in `~/.local/share/dbflux/dbflux.db` (`aud_audit_events` table)
+- Events use the `EventRecord` type from `dbflux_core::observability` with category, severity, outcome, actor type, and structured fields
+- Events are emitted through the `EventSink` trait — inject `Arc<dyn EventSink>` into service layers rather than calling `AuditService` directly
+- Categories: `Query`, `Connection`, `Hook`, `Script`, `Mcp`, `Governance`, `Config`, `System`
+- By default: sensitive values are redacted, query text is replaced with a SHA256 fingerprint (not stored in full), details_json is capped at 64 KiB
+- Queryable via `AuditQueryFilter` (actor, tool, category, action, outcome, date range, free text)
+- Export to JSON/CSV via `AuditService::export()` (basic) or `export_extended()` (all fields including details_json)
+- Purge old events by retention policy: `AuditService::purge_old_events(days, batch_size)`
+- See `docs/AUDIT.md` for the full event schema, required fields per category, and usage patterns
 
 **Runtime** (`dbflux_mcp`):
 - `McpRuntime` implements `McpGovernanceService` trait
@@ -573,7 +579,14 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 | `crates/dbflux_policy/src/classification.rs`                      | ExecutionClassification enum                        |
 | `crates/dbflux_policy/src/trusted_clients.rs`                     | TrustedClientRegistry                               |
 | `crates/dbflux_approval/src/service.rs`                           | ApprovalService for pending executions              |
-| `crates/dbflux_audit/src/lib.rs`                                  | AuditService delegates to AuditRepository          |
+| `crates/dbflux_audit/src/lib.rs`                                  | AuditService: validate, preprocess, record events  |
+| `crates/dbflux_audit/src/query.rs`                                | AuditQueryFilter for querying audit events         |
+| `crates/dbflux_audit/src/export.rs`                               | CSV/JSON export (basic and extended schemas)       |
+| `crates/dbflux_audit/src/redaction.rs`                            | Sensitive value redaction logic                    |
+| `crates/dbflux_audit/src/purge.rs`                                | Retention-based event purge (batched)             |
+| `crates/dbflux_audit/src/store/sqlite.rs`                         | SQLite store adapter wrapping AuditRepository      |
+| `crates/dbflux_core/src/observability/types.rs`                   | EventRecord, EventCategory, EventSeverity, enums  |
+| `crates/dbflux_core/src/observability/actions.rs`                 | Canonical action string constants                  |
 | `crates/dbflux_storage/src/bootstrap.rs`                          | StorageRuntime with single dbflux.db connection    |
 | `crates/dbflux_storage/src/paths.rs`                              | dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db |
 | `crates/dbflux_storage/src/migrations/mod.rs`                     | MigrationRegistry, Migration trait                 |

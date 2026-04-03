@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use dbflux_approval::{ApprovalService, ExecutionPlan, InMemoryPendingExecutionStore};
 use dbflux_audit::AuditService;
 use dbflux_core::observability::{
-    EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+    EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
+    actions::{MCP_APPROVE_EXECUTION, MCP_REJECT_EXECUTION},
 };
 use dbflux_policy::{
     ConnectionPolicyAssignment, ExecutionClassification, PolicyRole, ToolPolicy,
@@ -240,18 +241,23 @@ impl McpGovernanceService for McpRuntime {
     }
 
     fn query_audit_entries(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, GovernanceError> {
-        let events = audit_handler::query_audit_logs(&self.audit_service, query)
+        let events = audit_handler::query_audit_logs_extended(&self.audit_service, query)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         Ok(events
             .into_iter()
-            .map(|event| AuditEntry {
-                id: event.id.to_string(),
-                actor_id: event.actor_id,
-                tool_id: event.tool_id,
-                decision: event.decision,
-                reason: event.reason,
-                created_at_epoch_ms: event.created_at_epoch_ms,
+            .map(|event| {
+                let tool_id = event.legacy_tool_id();
+                let decision = event.legacy_decision();
+
+                AuditEntry {
+                    id: event.id.to_string(),
+                    actor_id: event.actor_id,
+                    tool_id,
+                    decision,
+                    reason: event.reason,
+                    created_at_epoch_ms: event.created_at_epoch_ms,
+                }
             })
             .collect())
     }
@@ -261,7 +267,7 @@ impl McpGovernanceService for McpRuntime {
         query: &AuditQuery,
         format: AuditExportFormat,
     ) -> Result<String, GovernanceError> {
-        audit_handler::export_audit_logs(&self.audit_service, query, format)
+        audit_handler::export_audit_logs_extended(&self.audit_service, query, format)
             .map_err(|error| GovernanceError::Operation(error.to_string()))
     }
 }
@@ -365,86 +371,147 @@ impl McpRuntime {
         &mut self,
         pending_id: &str,
     ) -> Result<AuditEntry, GovernanceError> {
-        let replay_plan =
-            approval_handler::approve_execution(&mut self.approval_service, pending_id)
-                .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+        self.approve_pending_execution_as_mut(pending_id, "system")
+    }
+
+    pub fn approve_pending_execution_as_mut(
+        &mut self,
+        pending_id: &str,
+        approver_actor_id: &str,
+    ) -> Result<AuditEntry, GovernanceError> {
+        self.approve_pending_execution_with_origin_mut(
+            pending_id,
+            approver_actor_id,
+            EventOrigin::system(),
+        )
+    }
+
+    pub fn approve_pending_execution_with_origin_mut(
+        &mut self,
+        pending_id: &str,
+        approver_actor_id: &str,
+        origin: EventOrigin,
+    ) -> Result<AuditEntry, GovernanceError> {
+        let pending = approval_handler::get_pending_execution(&self.approval_service, pending_id)
+            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+        let replay_plan = &pending.plan;
 
         let ts_ms = now_epoch_ms();
-        let mut event = EventRecord::new(
+        let event = EventRecord::new(
             ts_ms,
             EventSeverity::Info,
             EventCategory::Mcp,
             EventOutcome::Success,
         )
-        .with_action("mcp_approve_execution")
+        .with_typed_action(MCP_APPROVE_EXECUTION)
+        .with_origin(origin)
         .with_summary(format!(
-            "MCP execution approved: tool={} actor={}",
-            replay_plan.tool_id, replay_plan.actor_id
+            "MCP execution approved: tool={} requester={} approver={}",
+            replay_plan.tool_id, replay_plan.actor_id, approver_actor_id
         ))
-        .with_actor_id(&replay_plan.actor_id)
+        .with_actor_id(approver_actor_id)
+        .with_object_ref("pending_execution", pending_id)
         .with_connection_context(
             &replay_plan.connection_id,
             "", // database_name not available
             "", // driver_id not available
+        )
+        .with_details_json(
+            serde_json::json!({
+                "requested_by": replay_plan.actor_id,
+                "approved_by": approver_actor_id,
+                "tool_id": replay_plan.tool_id,
+            })
+            .to_string(),
         );
 
-        event.source_id = EventSourceId::Mcp;
+        let recorded = self.record_audit_event(event)?;
 
-        let recorded = self
-            .audit_service
-            .record(event)
+        approval_handler::approve_execution(&mut self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
-        self.push_event(McpRuntimeEvent::AuditAppended);
 
-        Ok(AuditEntry {
-            id: recorded.id.unwrap_or(0).to_string(),
-            actor_id: recorded.actor_id.unwrap_or_default(),
-            tool_id: "approve_execution".to_string(),
-            decision: "allow".to_string(),
-            reason: None,
-            created_at_epoch_ms: recorded.ts_ms,
-        })
+        Ok(self.audit_entry_from_recorded(recorded, "approve_execution", "allow", None))
     }
 
     pub fn reject_pending_execution_mut(
         &mut self,
         pending_id: &str,
     ) -> Result<AuditEntry, GovernanceError> {
-        approval_handler::reject_execution(&mut self.approval_service, pending_id)
+        self.reject_pending_execution_as_mut(pending_id, "system", None)
+    }
+
+    pub fn reject_pending_execution_as_mut(
+        &mut self,
+        pending_id: &str,
+        rejector_actor_id: &str,
+        reason: Option<&str>,
+    ) -> Result<AuditEntry, GovernanceError> {
+        self.reject_pending_execution_with_origin_mut(
+            pending_id,
+            rejector_actor_id,
+            reason,
+            EventOrigin::system(),
+        )
+    }
+
+    pub fn reject_pending_execution_with_origin_mut(
+        &mut self,
+        pending_id: &str,
+        rejector_actor_id: &str,
+        reason: Option<&str>,
+        origin: EventOrigin,
+    ) -> Result<AuditEntry, GovernanceError> {
+        let pending = approval_handler::get_pending_execution(&self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+        let pending_plan = &pending.plan;
+        let rejection_reason = reason.unwrap_or("rejected by approver");
 
         let ts_ms = now_epoch_ms();
-        let mut event = EventRecord::new(
+        let event = EventRecord::new(
             ts_ms,
             EventSeverity::Warn,
             EventCategory::Mcp,
             EventOutcome::Failure,
         )
-        .with_action("mcp_reject_execution")
-        .with_summary("MCP execution rejected by approver")
-        .with_actor_id("system")
-        .with_error("rejected", "rejected by approver");
+        .with_typed_action(MCP_REJECT_EXECUTION)
+        .with_origin(origin)
+        .with_summary(format!(
+            "MCP execution rejected: tool={} requester={} rejector={}",
+            pending_plan.tool_id, pending_plan.actor_id, rejector_actor_id
+        ))
+        .with_actor_id(rejector_actor_id)
+        .with_object_ref("pending_execution", pending_id)
+        .with_connection_context(
+            &pending_plan.connection_id,
+            "", // database_name not available
+            "", // driver_id not available
+        )
+        .with_error("rejected", rejection_reason)
+        .with_details_json(
+            serde_json::json!({
+                "requested_by": pending_plan.actor_id,
+                "rejected_by": rejector_actor_id,
+                "tool_id": pending_plan.tool_id,
+                "reason": rejection_reason,
+            })
+            .to_string(),
+        );
 
-        event.source_id = EventSourceId::Mcp;
+        let recorded = self.record_audit_event(event)?;
 
-        let recorded = self
-            .audit_service
-            .record(event)
+        approval_handler::reject_execution(&mut self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
-        self.push_event(McpRuntimeEvent::AuditAppended);
 
-        Ok(AuditEntry {
-            id: recorded.id.unwrap_or(0).to_string(),
-            actor_id: recorded.actor_id.unwrap_or_default(),
-            tool_id: "reject_execution".to_string(),
-            decision: "deny".to_string(),
-            reason: Some("rejected by approver".to_string()),
-            created_at_epoch_ms: recorded.ts_ms,
-        })
+        Ok(self.audit_entry_from_recorded(
+            recorded,
+            "reject_execution",
+            "deny",
+            Some(rejection_reason.to_string()),
+        ))
     }
 
     pub fn request_execution_mut(&mut self, plan: ExecutionPlan) -> PendingExecutionSummary {
@@ -497,6 +564,36 @@ impl McpRuntime {
             payload,
         }
     }
+
+    fn record_audit_event(&mut self, event: EventRecord) -> Result<EventRecord, GovernanceError> {
+        let recorded = self
+            .audit_service
+            .record(event)
+            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+
+        if recorded.id.is_some() {
+            self.push_event(McpRuntimeEvent::AuditAppended);
+        }
+
+        Ok(recorded)
+    }
+
+    fn audit_entry_from_recorded(
+        &self,
+        recorded: EventRecord,
+        tool_id: &str,
+        decision: &str,
+        reason: Option<String>,
+    ) -> AuditEntry {
+        AuditEntry {
+            id: recorded.id.map(|id| id.to_string()).unwrap_or_default(),
+            actor_id: recorded.actor_id.unwrap_or_default(),
+            tool_id: tool_id.to_string(),
+            decision: decision.to_string(),
+            reason,
+            created_at_epoch_ms: recorded.ts_ms,
+        }
+    }
 }
 
 fn now_epoch_ms() -> i64 {
@@ -511,6 +608,10 @@ fn now_epoch_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use dbflux_core::observability::{
+        EventCategory,
+        actions::{MCP_APPROVE_EXECUTION, MCP_REJECT_EXECUTION},
+    };
     use dbflux_policy::ConnectionPolicyAssignment;
 
     use crate::{ConnectionPolicyAssignmentDto, McpGovernanceService, TrustedClientDto};
@@ -605,5 +706,186 @@ mod tests {
             McpRuntimeEvent::ConnectionPolicyUpdated { connection_id }
             if connection_id == "conn-a"
         )));
+    }
+
+    #[test]
+    fn approval_audit_events_store_pending_execution_object_id() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-approval-audit.sqlite");
+
+        let pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        runtime
+            .approve_pending_execution_as_mut(&pending.id, "reviewer-a")
+            .expect("approval should record an audit event");
+
+        let stored = runtime
+            .audit_service()
+            .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                action: Some(MCP_APPROVE_EXECUTION.as_str().to_string()),
+                category: Some(EventCategory::Mcp.as_str().to_string()),
+                ..Default::default()
+            })
+            .expect("audit query should succeed");
+
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].object_type.as_deref(), Some("pending_execution"));
+        assert_eq!(stored[0].object_id.as_deref(), Some(pending.id.as_str()));
+        assert_eq!(stored[0].actor_id, "reviewer-a");
+    }
+
+    #[test]
+    fn rejection_audit_events_store_rejector_identity_and_reason() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-rejection-audit.sqlite");
+
+        let pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        runtime
+            .reject_pending_execution_as_mut(&pending.id, "reviewer-b", Some("unsafe change"))
+            .expect("rejection should record an audit event");
+
+        let stored = runtime
+            .audit_service()
+            .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                action: Some(MCP_REJECT_EXECUTION.as_str().to_string()),
+                category: Some(EventCategory::Mcp.as_str().to_string()),
+                ..Default::default()
+            })
+            .expect("audit query should succeed");
+
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].actor_id, "reviewer-b");
+        assert_eq!(stored[0].error_message.as_deref(), Some("unsafe change"));
+        assert_eq!(stored[0].actor_type.as_deref(), Some("system"));
+        assert_eq!(stored[0].source_id.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn approval_audit_events_use_local_and_mcp_origins_when_requested() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-origin-audit.sqlite");
+
+        let local_pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        runtime
+            .approve_pending_execution_with_origin_mut(
+                &local_pending.id,
+                "local-reviewer",
+                dbflux_core::observability::EventOrigin::local(),
+            )
+            .expect("local approval should record an audit event");
+
+        let mcp_pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-b".to_string(),
+            "conn-b".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        runtime
+            .reject_pending_execution_with_origin_mut(
+                &mcp_pending.id,
+                "mcp-reviewer",
+                Some("unsafe change"),
+                dbflux_core::observability::EventOrigin::mcp(),
+            )
+            .expect("mcp rejection should record an audit event");
+
+        let stored = runtime
+            .audit_service()
+            .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                category: Some(EventCategory::Mcp.as_str().to_string()),
+                ..Default::default()
+            })
+            .expect("audit query should succeed");
+
+        assert_eq!(stored.len(), 2);
+
+        let local_event = stored
+            .iter()
+            .find(|event| event.actor_id == "local-reviewer")
+            .expect("local event should exist");
+        assert_eq!(local_event.actor_type.as_deref(), Some("user"));
+        assert_eq!(local_event.source_id.as_deref(), Some("local"));
+
+        let mcp_event = stored
+            .iter()
+            .find(|event| event.actor_id == "mcp-reviewer")
+            .expect("mcp event should exist");
+        assert_eq!(mcp_event.actor_type.as_deref(), Some("mcp_client"));
+        assert_eq!(mcp_event.source_id.as_deref(), Some("mcp"));
+    }
+
+    #[test]
+    fn disabled_audit_does_not_emit_audit_appended_or_fake_id() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-audit-disabled.sqlite");
+        runtime.audit_service().set_enabled(false);
+
+        let pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        let recorded = runtime
+            .approve_pending_execution_as_mut(&pending.id, "reviewer-a")
+            .expect("approval should still succeed");
+
+        assert!(recorded.id.is_empty());
+
+        let events = runtime.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::PendingExecutionsUpdated))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, McpRuntimeEvent::AuditAppended))
+        );
+    }
+
+    #[test]
+    fn approval_state_is_not_mutated_when_audit_persistence_fails() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-audit-failure.sqlite");
+        runtime.audit_service().set_max_detail_bytes(1);
+
+        let pending = runtime.request_execution_mut(runtime.classify_plan(
+            dbflux_policy::ExecutionClassification::Write,
+            serde_json::json!({ "sql": "DELETE FROM users" }),
+            "agent-a".to_string(),
+            "conn-a".to_string(),
+            "delete_rows".to_string(),
+        ));
+
+        let error = runtime
+            .approve_pending_execution_as_mut(&pending.id, "reviewer-a")
+            .expect_err("approval should fail when audit persistence fails");
+
+        assert!(error.to_string().contains("max_detail_bytes"));
+
+        let still_pending = runtime.approval_service().list_pending();
+        assert_eq!(still_pending.len(), 1);
+        assert_eq!(still_pending[0].id.to_string(), pending.id);
     }
 }

@@ -9,7 +9,10 @@ pub struct AuditQueryFilter {
     // Extended filter fields
     pub level: Option<String>,
     pub category: Option<String>,
+    pub action: Option<String>,
     pub source_id: Option<String>,
     pub outcome: Option<String>,
+    pub object_type: Option<String>,
     pub free_text: Option<String>,
+    pub correlation_id: Option<String>,
 }
