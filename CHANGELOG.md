@@ -2,6 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-dev.13] – 2026-04-02
+
+### Added
+
+* Audit architecture centralization: all audit events now flow through `AuditService::record()` with typed `AuditAction` constants (`MCP_AUTHORIZE`, `QUERY_EXECUTE`, `CONNECTION_CONNECT`, `HOOK_EXECUTE`, `CONFIG_CHANGE`, `SYSTEM_STARTUP`, etc.)
+* `EventOrigin` and `AuditContext` helpers for consistent actor/source mapping across MCP, UI, and system event origins
+* Global panic hook with chained best-effort panic recording via `record_panic_best_effort()`
+* MCP governance audit integration: authorization events with `correlation_id`, atomic `audit_execution()` policy-first audit, typed execution actions
+* Query/script boundary audit: typed events with `duration_ms`, `details_json` on cancel, dangerous query confirmation
+* Connection lifecycle and hook execution audit: typed events via `record()`
+* System lifecycle audit: `system_startup`, `system_shutdown`, `system_panic` events
+* Audit viewer UI redesign: CloudWatch-like inline expansion, shared chrome components, `RefreshPolicy` dropdown
+
+### Changed
+
+* Removed legacy `AuditService::append()` from public API; `record()` is now the only canonical path
+* Unified audit event validation with category-specific field requirements and `details_json` normalization before fingerprinting/redaction
+
 ## [0.4.0-dev.12] – 2026-03-31
 
 ### Added
