@@ -282,15 +282,35 @@ nix-shell
 ```
 dbflux/
 ├── crates/
-│   ├── dbflux/                    # App + UI (GPUI)
-│   │   ├── ui/
-│   │   │   ├── views/             # Workspace, sidebar, status bar, tasks panel
-│   │   │   ├── overlays/          # Modals (command palette, cell editor, etc.)
-│   │   │   ├── document/          # Document system (SQL query, data grid)
-│   │   │   ├── components/        # DataTable, DocumentTree, toast, dropdown
-│   │   │   ├── dock/              # SidebarDock, BottomDock
-│   │   │   └── windows/           # Connection manager, settings
-│   │   └── keymap/                # Keyboard system
+│   ├── dbflux/                    # Binary shell: main.rs, cli.rs only
+│   │   └── src/
+│   │       ├── main.rs            # App entry point, logging, window bootstrap
+│   │       └── cli.rs             # CLI arg parsing, single-instance IPC client
+│   ├── dbflux_ui/                 # GPUI UI layer: views, documents, overlays, components
+│   │   └── src/
+│   │       ├── app_state_entity.rs # AppStateEntity wrapper
+│   │       ├── ui/
+│   │       │   ├── views/         # Workspace, sidebar, status bar, tasks panel
+│   │       │   ├── overlays/      # Modals (command palette, cell editor, etc.)
+│   │       │   ├── document/      # Document system (SQL query, data grid)
+│   │       │   ├── components/    # DataTable, DocumentTree, toast, dropdown
+│   │       │   ├── dock/          # SidebarDock, BottomDock
+│   │       │   └── windows/       # Connection manager, settings
+│   │       ├── keymap/            # Keyboard system
+│   │       ├── ipc_server.rs      # App-control IPC server
+│   │       ├── assets.rs          # GPUI AssetSource for SVG icons
+│   │       └── platform.rs        # X11/Wayland detection
+│   ├── dbflux_app/                 # Runtime/domain: AppState (plain struct)
+│   │   └── src/
+│   │       ├── app_state.rs       # AppState (no GPUI dependency)
+│   │       ├── access_manager.rs  # Direct/managed access
+│   │       ├── auth_provider_registry.rs # Runtime auth providers
+│   │       ├── hook_executor.rs    # Composite hook executor
+│   │       ├── proxy.rs           # Proxy tunnel callback
+│   │       ├── config_loader.rs   # SQLite-backed config
+│   │       ├── history_manager_sqlite.rs # Query history
+│   │       ├── mcp_command.rs     # MCP subcommand
+│   │       └── keymap/            # Pure domain keyboard types
 │   ├── dbflux_core/               # Core types, traits, and driver capabilities
 │   │   ├── core/                  # Error, value, traits, shutdown
 │   │   ├── driver/                # Capabilities, form definitions

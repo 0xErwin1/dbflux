@@ -10,7 +10,9 @@ DBFlux is a keyboard-first database client built with Rust and GPUI (Zed's UI fr
 
 ```
 crates/
-├── dbflux/                    # App + UI (GPUI)
+├── dbflux/                    # Binary shell: main entry point, CLI, IPC server
+├── dbflux_ui/                 # GPUI UI layer: views, documents, overlays, components, keymap
+├── dbflux_app/                # Runtime/domain: AppState, managers, hooks, auth providers
 ├── dbflux_core/               # Traits, types, errors, driver capabilities (stable API)
 ├── dbflux_ipc/                # IPC envelopes, framing, and driver RPC protocol
 ├── dbflux_driver_ipc/         # External driver proxy over local IPC
@@ -34,7 +36,7 @@ crates/
 ├── dbflux_policy/             # Policy engine, roles, trusted clients, classification
 ├── dbflux_approval/           # Approval service and pending execution store
 ├── dbflux_audit/              # Audit logging with SQLite backend
-└── dbflux_storage/             # Unified storage: SQLite database, migrations, repositories
+└── dbflux_storage/            # Unified storage: SQLite database, migrations, repositories
 ```
 
 ## Build & Run Commands
@@ -272,6 +274,9 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 ### Crate Boundaries
 
+- `dbflux`: Binary shell — `main.rs`, `cli.rs`, single-instance IPC, window bootstrap. Does NOT contain UI or domain logic.
+- `dbflux_ui`: GPUI UI layer — all views, documents, overlays, components, windows, keymap (GPUI-bound parts), `AppStateEntity` wrapper, `ipc_server`, `assets`, `platform`. Depends on `dbflux_app` and `dbflux_core`.
+- `dbflux_app`: Runtime/domain — `AppState` (plain struct), `AppAccessManager`, `CompositeExecutor`, `AuthProviderRegistry`, config loader, history manager, `mcp_command`. **Zero GPUI dependency.** Depends on `dbflux_core`, `dbflux_storage`, drivers, audit, policy, MCP.
 - `dbflux_core`: Pure types/traits, driver capabilities, SQL generation, query generator trait, no DB-specific code
 - `dbflux_ipc`: Versioned app-control + driver RPC protocol contracts, framing, socket naming helpers
 - `dbflux_driver_ipc`: RPC client transport and `DbDriver` adapter for external services
@@ -288,7 +293,6 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_policy`: `PolicyEngine` with roles (`PolicyRole`) and tool policies (`ToolPolicy`); `TrustedClientRegistry`; `ExecutionClassification` enum
 - `dbflux_approval`: `ApprovalService` and `InMemoryPendingExecutionStore` for deferred executions requiring human approval
 - `dbflux_audit`: `AuditService` with SQLite backend for audit event logging, querying, and export
-- `dbflux`: UI only, drivers via feature flags
 
 ### Proxy and SSH Tunnels
 
@@ -310,12 +314,12 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 ### Auth, Access, and Connect Pipeline
 
-- Auth providers are runtime-registered in `AuthProviderRegistry` (`crates/dbflux/src/auth_provider_registry.rs`) instead of hardcoded through provider enums
+- Auth providers are runtime-registered in `AuthProviderRegistry` (`crates/dbflux_app/src/auth_provider_registry.rs`) instead of hardcoded through provider enums
 - `AuthProfile` is provider-agnostic (`provider_id` + `fields`) and includes compatibility migration from legacy AWS-only payloads
 - Access method supports provider-agnostic managed mode via `AccessKind::Managed { provider, params }`
 - Legacy SSM access JSON (`method = "ssm"`) is migrated transparently to managed access at deserialization time
 - Connect execution runs through `dbflux_core::pipeline::run_pipeline` with staged progress (`Authenticating`, `ResolvingValues`, `OpeningAccess`)
-- App-level access dispatch is centralized in `AppAccessManager` (`crates/dbflux/src/access_manager.rs`) and currently handles managed provider `aws-ssm`
+- App-level access dispatch is centralized in `AppAccessManager` (`crates/dbflux_app/src/access_manager.rs`) and currently handles managed provider `aws-ssm`
 
 ### Driver/UI Decoupling
 
@@ -525,7 +529,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 
 ### Platform Detection
 
-`crates/dbflux/src/platform.rs` handles X11/Wayland differences:
+`crates/dbflux_ui/src/platform.rs` handles X11/Wayland differences:
 - X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
 - `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
@@ -541,118 +545,141 @@ MCP provides a preview-before-execute workflow for schema changes:
 
 ## Key Files
 
+### Binary shell (`dbflux`)
+
 | File                                                              | Purpose                                             |
 | ----------------------------------------------------------------- | --------------------------------------------------- |
-| `crates/dbflux/src/app.rs`                                        | AppState, driver registry                           |
-| `crates/dbflux/src/access_manager.rs`                             | App AccessManager for direct/managed access         |
-| `crates/dbflux/src/auth_provider_registry.rs`                     | Runtime auth provider registry                      |
-| `crates/dbflux/src/main.rs`                                       | App entry point, logging, window setup              |
+| `crates/dbflux/src/main.rs`                                       | App entry point, logging, window bootstrap, IPC socket |
 | `crates/dbflux/src/cli.rs`                                        | CLI arg parsing, single-instance IPC client         |
-| `crates/dbflux/src/ipc_server.rs`                                 | App-control IPC server (Focus, OpenScript)          |
-| `crates/dbflux/src/hook_executor.rs`                              | Composite hook executor routing                     |
-| `crates/dbflux/src/proxy.rs`                                      | `create_proxy_tunnel` callback for `CreateTunnelFn` |
-| `crates/dbflux/src/ui/views/workspace/mod.rs`                     | Main layout, command dispatch                       |
-| `crates/dbflux/src/ui/dock/sidebar_dock.rs`                       | Collapsible, resizable sidebar                      |
-| `crates/dbflux/src/ui/views/sidebar/mod.rs`                       | Schema tree with lazy loading                       |
-| `crates/dbflux/src/ui/document/mod.rs`                            | Document system exports                             |
-| `crates/dbflux/src/ui/document/code/mod.rs`                       | Language-aware query and script editor              |
-| `crates/dbflux/src/ui/document/code/execution.rs`                 | Query/script execution, dangerous-query confirmation|
-| `crates/dbflux/src/ui/document/code/live_output.rs`               | Live output buffer for script execution             |
-| `crates/dbflux/src/ui/document/data_grid_panel/mod.rs`            | Data grid with table/document view modes            |
-| `crates/dbflux/src/ui/document/key_value/mod.rs`                  | Redis key-value document view                       |
-| `crates/dbflux/src/ui/document/tab_manager.rs`                    | MRU tab ordering                                    |
-| `crates/dbflux/src/ui/overlays/cell_editor_modal.rs`              | Modal editor for JSON/long text                     |
-| `crates/dbflux/src/ui/overlays/history_modal.rs`                  | Recent/saved queries modal                          |
-| `crates/dbflux/src/ui/overlays/sql_preview_modal.rs`              | SQL/query preview modal (dual-mode)                 |
-| `crates/dbflux/src/ui/overlays/command_palette.rs`                | Fuzzy command palette                               |
-| `crates/dbflux/src/ui/components/toast.rs`                        | Toast notification system                           |
-| `crates/dbflux/src/ui/components/data_table/table.rs`             | Virtualized data table with column resize           |
-| `crates/dbflux/src/ui/components/document_tree/state.rs`          | Document tree state (cursor, search, expansion)     |
-| `crates/dbflux/src/ui/components/tree_nav/mod.rs`                 | Reusable tree navigation (cursor, expand, select)   |
-| `crates/dbflux/src/ui/windows/settings/form_nav.rs`               | Generic 2D grid navigation for settings forms       |
-| `crates/dbflux/src/ui/windows/settings/auth_profiles_section.rs`  | Provider-driven auth profile CRUD UI                |
-| `crates/dbflux/src/ui/windows/settings/proxies.rs`                | Proxy CRUD form in Settings                         |
-| `crates/dbflux/src/ui/windows/settings/hooks.rs`                  | Hook definitions CRUD in Settings                   |
-| `crates/dbflux/src/ui/windows/settings/drivers.rs`                | Per-driver settings overrides UI                    |
-| `crates/dbflux/src/ui/windows/connection_manager/hooks_tab.rs`    | Per-profile hook bindings                           |
-| `crates/dbflux/src/ui/windows/connection_manager/access_tab.rs`   | Unified access editor (Direct/SSH/Proxy/SSM)        |
-| `crates/dbflux/src/keymap/defaults.rs`                            | Key bindings per context                            |
-| `crates/dbflux/src/keymap/command.rs`                             | Command enum and dispatch                           |
-| `crates/dbflux/src/keymap/focus.rs`                               | FocusTarget (Document/Sidebar/BackgroundTasks)      |
+
+### UI layer (`dbflux_ui`)
+
+| File                                                              | Purpose                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
+| `crates/dbflux_ui/src/app_state_entity.rs`                       | `AppStateEntity` wrapper (Deref + EventEmitter)    |
+| `crates/dbflux_ui/src/ui/views/workspace/mod.rs`                  | Main layout, command dispatch                       |
+| `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`                   | Collapsible, resizable sidebar                      |
+| `crates/dbflux_ui/src/ui/views/sidebar/mod.rs`                   | Schema tree with lazy loading                       |
+| `crates/dbflux_ui/src/ui/document/mod.rs`                        | Document system exports                             |
+| `crates/dbflux_ui/src/ui/document/code/mod.rs`                   | Language-aware query and script editor               |
+| `crates/dbflux_ui/src/ui/document/code/execution.rs`              | Query/script execution, dangerous-query confirmation|
+| `crates/dbflux_ui/src/ui/document/code/live_output.rs`            | Live output buffer for script execution             |
+| `crates/dbflux_ui/src/ui/document/data_grid_panel/mod.rs`        | Data grid with table/document view modes           |
+| `crates/dbflux_ui/src/ui/document/key_value/mod.rs`               | Redis key-value document view                       |
+| `crates/dbflux_ui/src/ui/document/tab_manager.rs`                | MRU tab ordering                                   |
+| `crates/dbflux_ui/src/ui/document/governance.rs`                  | MCP approvals view document                         |
+| `crates/dbflux_ui/src/ui/overlays/cell_editor_modal.rs`         | Modal editor for JSON/long text                    |
+| `crates/dbflux_ui/src/ui/overlays/history_modal.rs`              | Recent/saved queries modal                         |
+| `crates/dbflux_ui/src/ui/overlays/sql_preview_modal.rs`         | SQL/query preview modal (dual-mode)                 |
+| `crates/dbflux_ui/src/ui/overlays/command_palette.rs`            | Fuzzy command palette                              |
+| `crates/dbflux_ui/src/ui/overlays/login_modal.rs`                | SSO login waiting modal                            |
+| `crates/dbflux_ui/src/ui/overlays/sso_wizard.rs`                 | SSO account/role discovery wizard                   |
+| `crates/dbflux_ui/src/ui/components/toast.rs`                     | Toast notification system                           |
+| `crates/dbflux_ui/src/ui/components/data_table/table.rs`           | Virtualized data table with column resize          |
+| `crates/dbflux_ui/src/ui/components/document_tree/state.rs`         | Document tree state (cursor, search, expansion)     |
+| `crates/dbflux_ui/src/ui/components/tree_nav/mod.rs`              | Reusable tree navigation (cursor, expand, select)  |
+| `crates/dbflux_ui/src/ui/components/value_source_selector.rs`     | Value source dropdown (Env/Secret/Parameter/Auth)   |
+| `crates/dbflux_ui/src/ui/components/multi_select.rs`              | Multi-select dropdown component                    |
+| `crates/dbflux_ui/src/ui/windows/settings/form_nav.rs`             | Generic 2D grid navigation for settings forms      |
+| `crates/dbflux_ui/src/ui/windows/settings/auth_profiles_section.rs` | Provider-driven auth profile CRUD UI               |
+| `crates/dbflux_ui/src/ui/windows/settings/proxies.rs`               | Proxy CRUD form in Settings                        |
+| `crates/dbflux_ui/src/ui/windows/settings/hooks.rs`                | Hook definitions CRUD in Settings                  |
+| `crates/dbflux_ui/src/ui/windows/settings/drivers.rs`               | Per-driver settings overrides UI                   |
+| `crates/dbflux_ui/src/ui/windows/settings/mcp_section.rs`           | MCP settings (clients, roles, policies, audit)      |
+| `crates/dbflux_ui/src/ui/windows/settings/section_trait.rs`         | SettingsSection trait                              |
+| `crates/dbflux_ui/src/ui/windows/settings/form_section.rs`          | FormSection trait for keyboard navigation          |
+| `crates/dbflux_ui/src/ui/windows/connection_manager/hooks_tab.rs`  | Per-profile hook bindings                           |
+| `crates/dbflux_ui/src/ui/windows/connection_manager/access_tab.rs` | Unified access editor (Direct/SSH/Proxy/SSM)        |
+| `crates/dbflux_ui/src/keymap/defaults.rs`                        | Key bindings per context                          |
+| `crates/dbflux_ui/src/keymap/command.rs`                          | Command enum and dispatch                         |
+| `crates/dbflux_ui/src/keymap/focus.rs`                            | FocusTarget (Document/Sidebar/BackgroundTasks)    |
+| `crates/dbflux_ui/src/ipc_server.rs`                              | App-control IPC server (Focus, OpenScript)         |
+| `crates/dbflux_ui/src/assets.rs`                                   | GPUI AssetSource impl for embedded SVG icons      |
+| `crates/dbflux_ui/src/platform.rs`                                | X11/Wayland detection, window options            |
+
+### Runtime (`dbflux_app`)
+
+| File                                                              | Purpose                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
+| `crates/dbflux_app/src/app_state.rs`                             | AppState (plain struct, no GPUI)                   |
+| `crates/dbflux_app/src/access_manager.rs`                        | AppAccessManager for direct/managed access         |
+| `crates/dbflux_app/src/auth_provider_registry.rs`               | Runtime auth provider registry                      |
+| `crates/dbflux_app/src/hook_executor.rs`                          | Composite hook executor routing                     |
+| `crates/dbflux_app/src/proxy.rs`                                  | `create_proxy_tunnel` callback for `CreateTunnelFn` |
+| `crates/dbflux_app/src/config_loader.rs`                          | SQLite-backed configuration persistence             |
+| `crates/dbflux_app/src/history_manager_sqlite.rs`                 | SQLite-backed query history                        |
+| `crates/dbflux_app/src/mcp_command.rs`                            | MCP subcommand integration and arg parsing         |
+| `crates/dbflux_app/src/keymap/command.rs`                         | Command enum (pure domain)                         |
+| `crates/dbflux_app/src/keymap/focus.rs`                           | FocusTarget enum (pure domain)                     |
+
+### Core and supporting crates
+
+| File                                                              | Purpose                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
 | `crates/dbflux_core/src/core/traits.rs`                           | `DbDriver`, `Connection` traits                     |
 | `crates/dbflux_core/src/driver/capabilities.rs`                   | DatabaseCategory, QueryLanguage, DriverCapabilities |
-| `crates/dbflux_core/src/config/app.rs`                            | Legacy config.json import (deprecated) |
-| `crates/dbflux_core/src/access/mod.rs`                            | AccessKind + AccessManager contracts                |
-| `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                             |
-| `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration              |
-| `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors              |
+| `crates/dbflux_core/src/config/app.rs`                            | Legacy config.json import (deprecated)              |
+| `crates/dbflux_core/src/access/mod.rs`                            | AccessKind + AccessManager contracts               |
+| `crates/dbflux_core/src/auth/mod.rs`                              | Auth provider contracts                            |
+| `crates/dbflux_core/src/auth/types.rs`                            | Auth profile/session types + migration             |
+| `crates/dbflux_core/src/core/error_formatter.rs`                  | ErrorFormatter trait for driver errors             |
 | `crates/dbflux_core/src/query/generator.rs`                       | QueryGenerator trait, mutation/read templates       |
-| `crates/dbflux_core/src/query/column_ref.rs`                      | ColumnRef type for WHERE clause column references   |
+| `crates/dbflux_core/src/query/column_ref.rs`                     | ColumnRef type for WHERE clause column references  |
 | `crates/dbflux_core/src/query/classify.rs`                        | DDL classification (AdminSafe/Admin/AdminDestructive)|
-| `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration         |
-| `crates/dbflux_core/src/query/language_service.rs`                | Dangerous query detection (SQL, MongoDB, Redis)     |
-| `crates/dbflux_core/src/pipeline/mod.rs`                          | Provider-agnostic connect pipeline orchestration    |
-| `crates/dbflux_core/src/pipeline/resolve.rs`                      | ValueRef patching into DbConfig and managed access  |
+| `crates/dbflux_core/src/connection/hook.rs`                       | Hook types, HookRunner, phase orchestration        |
+| `crates/dbflux_core/src/query/language_service.rs`               | Dangerous query detection (SQL, MongoDB, Redis)   |
+| `crates/dbflux_core/src/pipeline/mod.rs`                          | Provider-agnostic connect pipeline orchestration   |
+| `crates/dbflux_core/src/pipeline/resolve.rs`                      | ValueRef patching into DbConfig and managed access |
 | `crates/dbflux_core/src/values/resolver.rs`                       | Composite secret/parameter/auth value resolver      |
-| `crates/dbflux_core/src/schema/types.rs`                          | Schema types with lazy loading support              |
-| `crates/dbflux_core/src/data/crud.rs`                             | CRUD mutation types for all database paradigms      |
-| `crates/dbflux_core/src/data/key_value.rs`                        | Key-value operation types (Hash, Set, List, ZSet)   |
-| `crates/dbflux_core/src/sql/dialect.rs`                           | SqlDialect trait for SQL flavor differences         |
+| `crates/dbflux_core/src/schema/types.rs`                          | Schema types with lazy loading support             |
+| `crates/dbflux_core/src/data/crud.rs`                             | CRUD mutation types for all database paradigms     |
+| `crates/dbflux_core/src/data/key_value.rs`                        | Key-value operation types (Hash, Set, List, ZSet)  |
+| `crates/dbflux_core/src/sql/dialect.rs`                           | SqlDialect trait for SQL flavor differences        |
 | `crates/dbflux_core/src/storage/session.rs`                       | Session persistence (scratch/shadow files, manifest)|
-| `crates/dbflux_core/src/config/scripts_directory.rs`              | Scripts folder tree (file/folder CRUD)              |
-| `crates/dbflux_lua/src/executor.rs`                               | Lua hook executor                                   |
-| `crates/dbflux_lua/src/engine.rs`                                 | Lua VM creation and sandbox setup                   |
-| `crates/dbflux_lua/src/api/dbflux.rs`                             | Lua logging, env, and process APIs                  |
-| `crates/dbflux_lua/src/api/connection.rs`                         | Lua connection.* API (exposes HookContext)          |
-| `crates/dbflux_lua/src/api/hook.rs`                               | Lua hook.* API (phase, failure policy)              |
-| `crates/dbflux_core/src/connection/context.rs`                    | Per-tab execution context (connection/database)     |
-| `crates/dbflux_driver_mongodb/src/driver.rs`                      | MongoDB driver implementation                       |
-| `crates/dbflux_driver_mongodb/src/query_parser.rs`                | MongoDB query syntax parser                         |
-| `crates/dbflux_driver_mongodb/src/query_generator.rs`             | MongoDB shell query generator                       |
-| `crates/dbflux_driver_redis/src/driver.rs`                        | Redis driver implementation                         |
-| `crates/dbflux_driver_redis/src/command_generator.rs`             | Redis command generator                             |
-| `crates/dbflux_driver_dynamodb/src/driver.rs`                     | DynamoDB driver implementation                      |
-| `crates/dbflux_driver_dynamodb/src/query_parser.rs`               | DynamoDB command envelope parser                    |
+| `crates/dbflux_core/src/config/scripts_directory.rs`              | Scripts folder tree (file/folder CRUD)             |
+| `crates/dbflux_core/src/connection/context.rs`                     | Per-tab execution context (connection/database)     |
+| `crates/dbflux_core/src/observability/types.rs`                   | EventRecord, EventCategory, EventSeverity, enums  |
+| `crates/dbflux_core/src/observability/actions.rs`                 | Canonical action string constants                  |
+| `crates/dbflux_lua/src/executor.rs`                               | Lua hook executor                                  |
+| `crates/dbflux_lua/src/engine.rs`                                 | Lua VM creation and sandbox setup                  |
+| `crates/dbflux_lua/src/api/dbflux.rs`                             | Lua logging, env, and process APIs                |
+| `crates/dbflux_lua/src/api/connection.rs`                        | Lua connection.* API (exposes HookContext)         |
+| `crates/dbflux_lua/src/api/hook.rs`                              | Lua hook.* API (phase, failure policy)             |
+| `crates/dbflux_driver_mongodb/src/driver.rs`                      | MongoDB driver implementation                      |
+| `crates/dbflux_driver_mongodb/src/query_parser.rs`                | MongoDB query syntax parser                        |
+| `crates/dbflux_driver_mongodb/src/query_generator.rs`             | MongoDB shell query generator                      |
+| `crates/dbflux_driver_redis/src/driver.rs`                        | Redis driver implementation                        |
+| `crates/dbflux_driver_redis/src/command_generator.rs`            | Redis command generator                           |
+| `crates/dbflux_driver_dynamodb/src/driver.rs`                     | DynamoDB driver implementation                    |
+| `crates/dbflux_driver_dynamodb/src/query_parser.rs`               | DynamoDB command envelope parser                   |
 | `crates/dbflux_driver_dynamodb/src/query_generator.rs`            | DynamoDB mutation envelope generator                |
 | `crates/dbflux_aws/src/auth.rs`                                   | AWS auth providers + SSO login flow                |
 | `crates/dbflux_aws/src/config.rs`                                 | AWS config parser/cache + profile write-back       |
-| `crates/dbflux_aws/src/accounts.rs`                               | AWS SSO account/role discovery                     |
-| `crates/dbflux_ipc/src/driver_protocol.rs`                        | Driver RPC protocol schema and DTOs                 |
-| `crates/dbflux_ipc/src/auth.rs`                                   | IPC auth token management                           |
-| `crates/dbflux_driver_ipc/src/driver.rs`                          | IpcDriver and managed host lifecycle                |
-| `crates/dbflux_driver_ipc/src/transport.rs`                       | Driver RPC client transport and handshake           |
-| `crates/dbflux_tunnel_core/src/lib.rs`                            | Tunnel, TunnelConnector, ForwardingConnection       |
-| `crates/dbflux_proxy/src/lib.rs`                                  | SOCKS5/HTTP CONNECT proxy tunnel                    |
-| `crates/dbflux_driver_host/src/main.rs`                           | External RPC host server entrypoint                 |
-| `crates/dbflux_mcp/src/runtime.rs`                                | MCP runtime with governance integration             |
-| `crates/dbflux_mcp/src/governance_service.rs`                     | McpGovernanceService trait and DTOs                 |
-| `crates/dbflux_mcp/src/tool_catalog.rs`                           | Canonical MCP tools and deferred tool definitions   |
-| `crates/dbflux_mcp_server/src/lib.rs`                             | MCP server library (called by `dbflux mcp`)          |
-| `crates/dbflux/src/mcp_command.rs`                                 | MCP subcommand integration and arg parsing           |
-| `crates/dbflux_policy/src/engine.rs`                              | PolicyEngine, PolicyRole, ToolPolicy                |
-| `crates/dbflux_policy/src/classification.rs`                      | ExecutionClassification enum                        |
-| `crates/dbflux_policy/src/trusted_clients.rs`                     | TrustedClientRegistry                               |
-| `crates/dbflux_approval/src/service.rs`                           | ApprovalService for pending executions              |
-| `crates/dbflux_audit/src/lib.rs`                                  | AuditService: validate, preprocess, record events  |
-| `crates/dbflux_audit/src/query.rs`                                | AuditQueryFilter for querying audit events         |
-| `crates/dbflux_audit/src/export.rs`                               | CSV/JSON export (basic and extended schemas)       |
-| `crates/dbflux_audit/src/redaction.rs`                            | Sensitive value redaction logic                    |
-| `crates/dbflux_audit/src/purge.rs`                                | Retention-based event purge (batched)             |
-| `crates/dbflux_audit/src/store/sqlite.rs`                         | SQLite store adapter wrapping AuditRepository      |
-| `crates/dbflux_core/src/observability/types.rs`                   | EventRecord, EventCategory, EventSeverity, enums  |
-| `crates/dbflux_core/src/observability/actions.rs`                 | Canonical action string constants                  |
-| `crates/dbflux_storage/src/bootstrap.rs`                          | StorageRuntime with single dbflux.db connection    |
-| `crates/dbflux_storage/src/paths.rs`                              | dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db |
-| `crates/dbflux_storage/src/migrations/mod.rs`                     | MigrationRegistry, Migration trait                 |
-| `crates/dbflux_storage/src/repositories/traits.rs`                 | Repository trait (all(), find_by_id(), upsert(), delete()) |
-| `crates/dbflux_storage/src/repositories/audit.rs`                  | AuditRepository with AuditEventDto                 |
-| `crates/dbflux_storage/src/legacy.rs`                             | JSON-to-SQLite import (profiles, auth, ssh, config) |
-| `crates/dbflux/src/platform.rs`                                   | X11/Wayland detection, window options               |
-| `crates/dbflux/src/ui/document/governance.rs`                     | MCP approvals view document                         |
-| `crates/dbflux/src/ui/overlays/login_modal.rs`                    | SSO login waiting modal                             |
-| `crates/dbflux/src/ui/overlays/sso_wizard.rs`                     | SSO account/role discovery wizard                   |
-| `crates/dbflux/src/ui/components/value_source_selector.rs`        | Value source dropdown (Env/Secret/Parameter/Auth)   |
-| `crates/dbflux/src/ui/components/multi_select.rs`                 | Multi-select dropdown component                     |
-| `crates/dbflux/src/ui/windows/settings/mcp_section.rs`            | MCP settings (clients, roles, policies, audit)      |
-| `crates/dbflux/src/ui/windows/settings/section_trait.rs`          | SettingsSection trait                               |
-| `crates/dbflux/src/ui/windows/settings/form_section.rs`           | FormSection trait for keyboard navigation           |
+| `crates/dbflux_aws/src/accounts.rs`                               | AWS SSO account/role discovery                    |
+| `crates/dbflux_ipc/src/driver_protocol.rs`                        | Driver RPC protocol schema and DTOs                |
+| `crates/dbflux_ipc/src/auth.rs`                                   | IPC auth token management                         |
+| `crates/dbflux_driver_ipc/src/driver.rs`                          | IpcDriver and managed host lifecycle               |
+| `crates/dbflux_driver_ipc/src/transport.rs`                       | Driver RPC client transport and handshake          |
+| `crates/dbflux_tunnel_core/src/lib.rs`                            | Tunnel, TunnelConnector, ForwardingConnection      |
+| `crates/dbflux_proxy/src/lib.rs`                                   | SOCKS5/HTTP CONNECT proxy tunnel                  |
+| `crates/dbflux_driver_host/src/main.rs`                           | External RPC host server entrypoint                |
+| `crates/dbflux_mcp/src/runtime.rs`                                 | MCP runtime with governance integration            |
+| `crates/dbflux_mcp/src/governance_service.rs`                      | McpGovernanceService trait and DTOs               |
+| `crates/dbflux_mcp/src/tool_catalog.rs`                            | Canonical MCP tools and deferred tool definitions  |
+| `crates/dbflux_mcp_server/src/lib.rs`                             | MCP server library (called by `dbflux mcp`)       |
+| `crates/dbflux_policy/src/engine.rs`                             | PolicyEngine, PolicyRole, ToolPolicy              |
+| `crates/dbflux_policy/src/classification.rs`                       | ExecutionClassification enum                       |
+| `crates/dbflux_policy/src/trusted_clients.rs`                      | TrustedClientRegistry                             |
+| `crates/dbflux_approval/src/service.rs`                           | ApprovalService for pending executions             |
+| `crates/dbflux_audit/src/lib.rs`                                   | AuditService: validate, preprocess, record events |
+| `crates/dbflux_audit/src/query.rs`                                 | AuditQueryFilter for querying audit events         |
+| `crates/dbflux_audit/src/export.rs`                                | CSV/JSON export (basic and extended schemas)      |
+| `crates/dbflux_audit/src/redaction.rs`                             | Sensitive value redaction logic                   |
+| `crates/dbflux_audit/src/purge.rs`                                 | Retention-based event purge (batched)             |
+| `crates/dbflux_audit/src/store/sqlite.rs`                          | SQLite store adapter wrapping AuditRepository     |
+| `crates/dbflux_storage/src/bootstrap.rs`                           | StorageRuntime with single dbflux.db connection   |
+| `crates/dbflux_storage/src/paths.rs`                               | dbflux_db_path() returns ~/.local/share/dbflux/dbflux.db |
+| `crates/dbflux_storage/src/migrations/mod.rs`                      | MigrationRegistry, Migration trait                |
+| `crates/dbflux_storage/src/repositories/traits.rs`                  | Repository trait (all(), find_by_id(), upsert(), delete()) |
+| `crates/dbflux_storage/src/repositories/audit.rs`                   | AuditRepository with AuditEventDto                |
+| `crates/dbflux_storage/src/legacy.rs`                              | JSON-to-SQLite import (profiles, auth, ssh, config) |
