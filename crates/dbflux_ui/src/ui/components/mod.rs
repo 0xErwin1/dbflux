@@ -2,6 +2,7 @@ pub mod context_menu;
 pub mod data_table;
 pub mod document_tree;
 pub mod dropdown;
+pub mod filter_bar;
 pub mod form_navigation;
 pub mod form_renderer;
 pub mod json_editor_view;

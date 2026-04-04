@@ -9,7 +9,18 @@ pub use source_adapter::AuditSourceAdapter;
 use std::collections::HashSet;
 
 use crate::app::AppStateEntity;
+use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
+// FilterBar item indices — used both when building the state and in dispatch_command.
+const FILTER_BAR_IDX_SEARCH: usize = 0;
+const FILTER_BAR_IDX_TIME: usize = 1;
+const FILTER_BAR_IDX_LEVEL: usize = 2;
+const FILTER_BAR_IDX_CATEGORY: usize = 3;
+const FILTER_BAR_IDX_OUTCOME: usize = 4;
+const FILTER_BAR_IDX_REFRESH: usize = 5;
+const FILTER_BAR_IDX_REFRESH_POLICY: usize = 6;
+const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -29,11 +40,64 @@ use gpui_component::scroll::ScrollableElement;
 use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 
+// ── Context menu ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditContextMenuAction {
+    CopyRowAsCsv,
+    CopySummary,
+    FilterByCorrelation,
+}
+
+#[derive(Debug, Clone)]
+struct AuditContextMenuState {
+    /// Index into `AuditDocument::events` that the menu targets.
+    row: usize,
+    /// Index of the highlighted item in the menu (for keyboard nav).
+    selected_index: usize,
+    /// Screen position where the menu should appear.
+    ///
+    /// - Right-click: the actual mouse position from `event.position`.
+    /// - Keyboard (m): approximated from `row * row_height`.
+    position: Point<Pixels>,
+}
+
+/// Flat list of context menu items.  Separators carry `action: None`.
+#[derive(Clone, Copy)]
+struct AuditMenuItem {
+    label: &'static str,
+    action: Option<AuditContextMenuAction>,
+    icon: Option<AppIcon>,
+}
+
+impl AuditMenuItem {
+    const fn item(label: &'static str, action: AuditContextMenuAction, icon: AppIcon) -> Self {
+        Self {
+            label,
+            action: Some(action),
+            icon: Some(icon),
+        }
+    }
+
+    const fn separator() -> Self {
+        Self {
+            label: "",
+            action: None,
+            icon: None,
+        }
+    }
+
+    fn is_separator(self) -> bool {
+        self.action.is_none()
+    }
+}
+
 /// Events emitted by AuditDocument.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub enum AuditDocumentEvent {
     Refresh,
+    /// The document was interacted with and wants workspace focus.
+    RequestFocus,
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 100;
@@ -63,6 +127,24 @@ pub struct AuditDocument {
     load_request_id: u64,
     _refresh_timer: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
+
+    // ── Keyboard navigation state ─────────────────────────────────────────
+    focus_handle: FocusHandle,
+    /// Currently highlighted row (0-based index into `events`).
+    selected_row: Option<usize>,
+    /// Open context menu, if any.
+    context_menu: Option<AuditContextMenuState>,
+    /// Toolbar focus-ring navigation (search input is item 0).
+    filter_bar: FilterBarState,
+    /// Absolute position of the document panel's top-left corner in window
+    /// coordinates. Updated each frame via a canvas element, identical to
+    /// `DataGridPanel::panel_origin`. Used to convert `event.position`
+    /// (window-absolute) to panel-local coordinates for context menu placement.
+    panel_origin: Point<Pixels>,
+    /// Whether this document or any of its children currently hold GPUI focus.
+    /// Updated in `Render` before rows are rendered, so row highlights are
+    /// suppressed when focus moves to the sidebar or another panel.
+    has_focus: bool,
 }
 
 impl AuditDocument {
@@ -72,6 +154,8 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let focus_handle = cx.focus_handle();
+
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search events..."));
 
         let dropdown_time_range = cx.new(|_cx| {
@@ -110,8 +194,18 @@ impl AuditDocument {
         let adapter = AuditSourceAdapter::new(audit_repo);
 
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::PressEnter { secondary: false }) {
-                this.handle_search_submit(cx);
+            match event {
+                InputEvent::PressEnter { secondary: false } => {
+                    this.handle_search_submit(cx);
+                }
+                // When the input loses focus (e.g. user presses Escape inside the input),
+                // transition the filter bar from Editing back to Navigating so the focus
+                // ring stays visible and the user can press Escape again to exit the toolbar.
+                InputEvent::Blur => {
+                    this.filter_bar.exit_editing();
+                    cx.notify();
+                }
+                _ => {}
             }
         });
 
@@ -176,6 +270,19 @@ impl AuditDocument {
             },
         );
 
+        // All navigable items in order: Search, Time, Level, Category, Outcome, Refresh, Clear.
+        // Indices must match the FILTER_BAR_IDX_* constants above.
+        let filter_bar = FilterBarState::new(vec![
+            FilterBarItem::input("Search:", search_input.clone()),
+            FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
+            FilterBarItem::dropdown("Level:", dropdown_level.clone()),
+            FilterBarItem::dropdown("Category:", dropdown_category.clone()),
+            FilterBarItem::dropdown("Outcome:", dropdown_outcome.clone()),
+            FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
+            FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
+            FilterBarItem::button("Clear"),
+        ]);
+
         Self {
             adapter,
             filters: Self::default_filters(),
@@ -210,6 +317,12 @@ impl AuditDocument {
                 outcome_sub,
                 refresh_dropdown_sub,
             ],
+            focus_handle,
+            selected_row: None,
+            context_menu: None,
+            filter_bar,
+            panel_origin: Point::default(),
+            has_focus: false,
         }
     }
 
@@ -664,6 +777,580 @@ impl AuditDocument {
         self.load_events(cx);
     }
 
+    // ── Focus ─────────────────────────────────────────────────────────────
+
+    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        self.focus_handle.focus(window);
+    }
+
+    /// Execute the button action for the currently focused FilterBar item.
+    /// Only called when `activate_input` returned `false` (Button variant).
+    fn execute_filter_bar_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.filter_bar.focused_index() {
+            FILTER_BAR_IDX_REFRESH => {
+                self.refresh(cx);
+                self.filter_bar.deactivate();
+                self.focus_handle.focus(window);
+            }
+            FILTER_BAR_IDX_CLEAR => {
+                self.clear_filters(window, cx);
+                self.filter_bar.deactivate();
+                self.focus_handle.focus(window);
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns the active `ContextId` for keyboard dispatch.
+    ///
+    /// Priority (highest first):
+    /// - `ContextMenu` — while the context menu is open
+    /// - `TextInput`   — while the search input has keyboard focus (Editing)
+    /// - `Audit`       — row list or toolbar focus-ring navigation
+    pub fn active_context(&self) -> ContextId {
+        if self.context_menu.is_some() {
+            return ContextId::ContextMenu;
+        }
+
+        if self.filter_bar.is_editing() {
+            return ContextId::TextInput;
+        }
+
+        ContextId::Audit
+    }
+
+    // ── Row cursor navigation ─────────────────────────────────────────────
+
+    #[allow(dead_code)]
+    fn row_count(&self) -> usize {
+        self.events.len()
+    }
+
+    fn select_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        if self.events.is_empty() {
+            return;
+        }
+
+        let row = row.min(self.events.len().saturating_sub(1));
+        self.selected_row = Some(row);
+        cx.notify();
+    }
+
+    fn select_next_row(&mut self, cx: &mut Context<Self>) {
+        let next = match self.selected_row {
+            None => 0,
+            Some(r) => (r + 1).min(self.events.len().saturating_sub(1)),
+        };
+        self.selected_row = Some(next);
+        cx.notify();
+    }
+
+    fn select_prev_row(&mut self, cx: &mut Context<Self>) {
+        let prev = match self.selected_row {
+            None => 0,
+            Some(0) => 0,
+            Some(r) => r - 1,
+        };
+        self.selected_row = Some(prev);
+        cx.notify();
+    }
+
+    fn select_first_row(&mut self, cx: &mut Context<Self>) {
+        if !self.events.is_empty() {
+            self.selected_row = Some(0);
+            cx.notify();
+        }
+    }
+
+    fn select_last_row(&mut self, cx: &mut Context<Self>) {
+        if !self.events.is_empty() {
+            self.selected_row = Some(self.events.len() - 1);
+            cx.notify();
+        }
+    }
+
+    /// Jump down by a partial page (same feel as Ctrl+D in Results).
+    fn page_down_rows(&mut self, cx: &mut Context<Self>) {
+        let step = (DEFAULT_PAGE_SIZE / 4) as usize;
+        let next = match self.selected_row {
+            None => step.min(self.events.len().saturating_sub(1)),
+            Some(r) => (r + step).min(self.events.len().saturating_sub(1)),
+        };
+        self.selected_row = Some(next);
+        cx.notify();
+    }
+
+    /// Jump up by a partial page.
+    fn page_up_rows(&mut self, cx: &mut Context<Self>) {
+        let step = (DEFAULT_PAGE_SIZE / 4) as usize;
+        let prev = match self.selected_row {
+            None => 0,
+            Some(r) => r.saturating_sub(step),
+        };
+        self.selected_row = Some(prev);
+        cx.notify();
+    }
+
+    /// Toggle expand/collapse for the selected row (Execute / Space).
+    fn toggle_selected_row_expanded(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.selected_row
+            && let Some(event) = self.events.get(row)
+        {
+            self.toggle_event_expanded(event.id, cx);
+        }
+    }
+
+    // ── Context menu ──────────────────────────────────────────────────────
+
+    /// Static menu item table — separators have `action: None`.
+    fn context_menu_items(has_correlation: bool) -> Vec<AuditMenuItem> {
+        let mut items = vec![
+            AuditMenuItem::item(
+                "Copy Row as CSV",
+                AuditContextMenuAction::CopyRowAsCsv,
+                AppIcon::Layers,
+            ),
+            AuditMenuItem::item(
+                "Copy Summary",
+                AuditContextMenuAction::CopySummary,
+                AppIcon::Layers,
+            ),
+        ];
+
+        if has_correlation {
+            items.push(AuditMenuItem::separator());
+            items.push(AuditMenuItem::item(
+                "Filter by Correlation",
+                AuditContextMenuAction::FilterByCorrelation,
+                AppIcon::ListFilter,
+            ));
+        }
+
+        items
+    }
+
+    fn open_context_menu_at_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row else {
+            return;
+        };
+
+        if row >= self.events.len() {
+            return;
+        }
+
+        // Keyboard-triggered: approximate position from row index.
+        const AUDIT_ROW_HEIGHT: f32 = 30.0;
+        let y = row as f32 * AUDIT_ROW_HEIGHT + AUDIT_ROW_HEIGHT;
+        let position = Point::new(px(8.0), px(y));
+
+        self.context_menu = Some(AuditContextMenuState {
+            row,
+            selected_index: 0,
+            position,
+        });
+        // Keep focus on the document's own handle so on_key_down continues
+        // to receive events while the context menu is open.
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    fn open_context_menu_at_mouse(
+        &mut self,
+        row: usize,
+        mouse_position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if row >= self.events.len() {
+            return;
+        }
+
+        self.select_row(row, cx);
+
+        // Convert from window-absolute coordinates to panel-local coordinates,
+        // exactly as DataGridPanel does: `menu_x = position.x - panel_origin.x`.
+        let local_position = Point::new(
+            mouse_position.x - self.panel_origin.x,
+            mouse_position.y - self.panel_origin.y,
+        );
+
+        self.context_menu = Some(AuditContextMenuState {
+            row,
+            selected_index: 0,
+            position: local_position,
+        });
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    fn close_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            self.context_menu = None;
+            self.focus_handle.focus(window);
+            cx.notify();
+        }
+    }
+
+    #[allow(dead_code)]
+    fn context_menu_item_count(&self) -> usize {
+        let Some(menu) = &self.context_menu else {
+            return 0;
+        };
+
+        let event = self.events.get(menu.row);
+        let has_correlation = event
+            .and_then(|e| e.correlation_id.as_deref())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        Self::context_menu_items(has_correlation)
+            .iter()
+            .filter(|i| !i.is_separator())
+            .count()
+    }
+
+    fn navigate_menu_down(&mut self, cx: &mut Context<Self>) {
+        let Some(ref mut menu) = self.context_menu else {
+            return;
+        };
+
+        let event = self.events.get(menu.row);
+        let has_correlation = event
+            .and_then(|e| e.correlation_id.as_deref())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        let items = Self::context_menu_items(has_correlation);
+        let navigable: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| !i.is_separator())
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if navigable.is_empty() {
+            return;
+        }
+
+        let current_pos = navigable
+            .iter()
+            .position(|&idx| idx == menu.selected_index)
+            .unwrap_or(0);
+
+        let next_pos = (current_pos + 1) % navigable.len();
+        menu.selected_index = navigable[next_pos];
+        cx.notify();
+    }
+
+    fn navigate_menu_up(&mut self, cx: &mut Context<Self>) {
+        let Some(ref mut menu) = self.context_menu else {
+            return;
+        };
+
+        let event = self.events.get(menu.row);
+        let has_correlation = event
+            .and_then(|e| e.correlation_id.as_deref())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        let items = Self::context_menu_items(has_correlation);
+        let navigable: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| !i.is_separator())
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if navigable.is_empty() {
+            return;
+        }
+
+        let current_pos = navigable
+            .iter()
+            .position(|&idx| idx == menu.selected_index)
+            .unwrap_or(0);
+
+        let prev_pos = if current_pos == 0 {
+            navigable.len() - 1
+        } else {
+            current_pos - 1
+        };
+
+        menu.selected_index = navigable[prev_pos];
+        cx.notify();
+    }
+
+    fn execute_selected_menu_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.context_menu.clone() else {
+            return;
+        };
+
+        let event = self.events.get(menu.row).cloned();
+        let has_correlation = event
+            .as_ref()
+            .and_then(|e| e.correlation_id.as_deref())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        let items = Self::context_menu_items(has_correlation);
+        let Some(item) = items.get(menu.selected_index) else {
+            return;
+        };
+
+        let Some(action) = item.action else {
+            return;
+        };
+
+        self.close_context_menu(window, cx);
+
+        match action {
+            AuditContextMenuAction::CopyRowAsCsv => {
+                if let Some(event) = event {
+                    let csv = Self::event_to_csv_row(&event);
+                    cx.write_to_clipboard(ClipboardItem::new_string(csv));
+                }
+            }
+            AuditContextMenuAction::CopySummary => {
+                if let Some(event) = event {
+                    let summary = event.summary.clone().unwrap_or_default();
+                    cx.write_to_clipboard(ClipboardItem::new_string(summary));
+                }
+            }
+            AuditContextMenuAction::FilterByCorrelation => {
+                if let Some(event) = event
+                    && let Some(correlation_id) = event.correlation_id.clone()
+                {
+                    self.filter_by_correlation(correlation_id, cx);
+                }
+            }
+        }
+    }
+
+    /// Dispatch a keyboard command to the document.
+    ///
+    /// Returns `true` if the command was handled.
+    ///
+    /// Structure mirrors `DataGridPanel::dispatch_command`: the toolbar block
+    /// runs first and either handles the command, exits early, or falls through
+    /// to the list commands below.
+    pub fn dispatch_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // While the context menu is open, all commands go to the menu.
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
+        }
+
+        // ── Open dropdown in toolbar ──────────────────────────────────────
+        // When the focused filter bar item is a Dropdown and it is open,
+        // route navigation commands directly to that dropdown. This mirrors
+        // how other list-based overlays (context menu, command palette) own
+        // the keyboard while they are visible.
+        if let Some(entity) = self.filter_bar.focused_dropdown_entity()
+            && entity.read(cx).is_open()
+        {
+            return match cmd {
+                Command::SelectNext => {
+                    entity.update(cx, |d, cx| d.select_next_item(cx));
+                    true
+                }
+                Command::SelectPrev => {
+                    entity.update(cx, |d, cx| d.select_prev_item(cx));
+                    true
+                }
+                Command::Execute => {
+                    entity.update(cx, |d, cx| d.accept_selection(cx));
+                    true
+                }
+                Command::Cancel => {
+                    entity.update(cx, |d, cx| d.close(cx));
+                    true
+                }
+                // Consume everything else so the list doesn't react while the
+                // dropdown is open.
+                _ => true,
+            };
+        }
+
+        // ── Toolbar mode (Navigating or Editing) ─────────────────────────
+        // This block mirrors the `if self.focus_mode == GridFocusMode::Toolbar`
+        // block in DataGridPanel. When the filter bar is active:
+        //   - Navigation commands (h/l, ←/→) move the ring between items.
+        //   - Enter activates the focused item.
+        //   - Escape / FocusUp exits toolbar and returns to the list.
+        //   - All list commands (j/k, g/G, etc.) are consumed without effect
+        //     so the list does not move while the toolbar is focused.
+        if self.filter_bar.is_active() {
+            if self.filter_bar.is_editing() {
+                // The input has GPUI focus; only Cancel/Escape is intercepted
+                // here to exit editing mode. Everything else goes to the input.
+                if cmd == Command::Cancel {
+                    self.filter_bar.exit_editing();
+                    self.focus_handle.focus(window);
+                    cx.notify();
+                    return true;
+                }
+                return false;
+            }
+
+            // Navigating mode: ring is visible, no input has GPUI focus.
+            return match cmd {
+                Command::ColumnLeft | Command::FocusLeft => {
+                    self.filter_bar.move_left();
+                    cx.notify();
+                    true
+                }
+                Command::ColumnRight | Command::FocusRight => {
+                    self.filter_bar.move_right();
+                    cx.notify();
+                    true
+                }
+                Command::Execute => {
+                    let activated = self.filter_bar.activate_input(window, cx);
+                    if !activated {
+                        // Button item: execute the action for this index.
+                        self.execute_filter_bar_button(window, cx);
+                    }
+                    cx.notify();
+                    true
+                }
+                Command::Cancel | Command::FocusUp => {
+                    self.filter_bar.deactivate();
+                    self.focus_handle.focus(window);
+                    cx.notify();
+                    true
+                }
+                // Consume all other list-navigation commands so the list
+                // does not respond while the toolbar ring is active.
+                _ => true,
+            };
+        }
+
+        // ── List mode ────────────────────────────────────────────────────
+        match cmd {
+            Command::SelectNext => {
+                self.select_next_row(cx);
+                true
+            }
+            Command::SelectPrev => {
+                self.select_prev_row(cx);
+                true
+            }
+            Command::SelectFirst => {
+                self.select_first_row(cx);
+                true
+            }
+            Command::SelectLast => {
+                self.select_last_row(cx);
+                true
+            }
+            Command::PageDown => {
+                self.page_down_rows(cx);
+                true
+            }
+            Command::PageUp => {
+                self.page_up_rows(cx);
+                true
+            }
+            Command::ResultsNextPage => {
+                self.go_to_next_page(cx);
+                true
+            }
+            Command::ResultsPrevPage => {
+                self.go_to_prev_page(cx);
+                true
+            }
+            Command::ExpandCollapse | Command::Execute => {
+                self.toggle_selected_row_expanded(cx);
+                true
+            }
+            Command::OpenContextMenu => {
+                self.open_context_menu_at_selection(window, cx);
+                true
+            }
+            Command::RefreshSchema => {
+                self.refresh(cx);
+                true
+            }
+            Command::FocusToolbar | Command::FocusSearch => {
+                self.filter_bar.enter(0);
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn dispatch_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match cmd {
+            Command::MenuDown | Command::SelectNext => {
+                self.navigate_menu_down(cx);
+                true
+            }
+            Command::MenuUp | Command::SelectPrev => {
+                self.navigate_menu_up(cx);
+                true
+            }
+            Command::MenuSelect | Command::Execute => {
+                self.execute_selected_menu_item(window, cx);
+                true
+            }
+            Command::MenuBack | Command::Cancel => {
+                self.close_context_menu(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // ── CSV formatting ────────────────────────────────────────────────────
+
+    /// Formats a single audit event as a CSV row with a header embedded.
+    ///
+    /// The format matches the full export schema so it is consistent with
+    /// what the "Export CSV" button produces.
+    fn event_to_csv_row(event: &AuditEventDto) -> String {
+        let header = "id,timestamp,level,category,outcome,actor_id,actor_type,action,source_id,\
+                      connection_id,driver_id,duration_ms,summary,error_message,correlation_id";
+
+        let escape_csv = |s: &str| -> String {
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s.to_string()
+            }
+        };
+
+        let row = format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            event.id,
+            event.created_at_epoch_ms,
+            escape_csv(event.level.as_deref().unwrap_or("")),
+            escape_csv(event.category.as_deref().unwrap_or("")),
+            escape_csv(event.outcome.as_deref().unwrap_or("")),
+            escape_csv(&event.actor_id),
+            escape_csv(event.actor_type.as_deref().unwrap_or("")),
+            escape_csv(event.action.as_deref().unwrap_or("")),
+            escape_csv(event.source_id.as_deref().unwrap_or("")),
+            escape_csv(event.connection_id.as_deref().unwrap_or("")),
+            escape_csv(event.driver_id.as_deref().unwrap_or("")),
+            event.duration_ms.map(|d| d.to_string()).unwrap_or_default(),
+            escape_csv(event.summary.as_deref().unwrap_or("")),
+            escape_csv(event.error_message.as_deref().unwrap_or("")),
+            escape_csv(event.correlation_id.as_deref().unwrap_or("")),
+        );
+
+        format!("{}\n{}", header, row)
+    }
+
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
         let adapter = self.adapter.clone();
         let filter = self.active_filter(None, None);
@@ -720,19 +1407,206 @@ impl AuditDocument {
         .detach();
     }
 
+    fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.context_menu.as_ref()?;
+        let theme = cx.theme().clone();
+
+        let event = self.events.get(menu.row)?;
+        let has_correlation = event
+            .correlation_id
+            .as_deref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        let items = Self::context_menu_items(has_correlation);
+        let selected_index = menu.selected_index;
+
+        let mut menu_elements: Vec<AnyElement> = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            if item.is_separator() {
+                menu_elements.push(
+                    div()
+                        .h(px(1.0))
+                        .mx(Spacing::SM)
+                        .my(Spacing::XS)
+                        .bg(theme.border)
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            let Some(action) = item.action else {
+                continue;
+            };
+
+            let is_selected = idx == selected_index;
+            let label = item.label;
+            let icon = item.icon;
+
+            // Icon color follows the DataGridPanel context menu convention.
+            let icon_color = if is_selected {
+                theme.accent_foreground
+            } else {
+                theme.muted_foreground
+            };
+
+            menu_elements.push(
+                div()
+                    .id(SharedString::from(format!("audit-ctx-{}", idx)))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .text_color(if is_selected {
+                        theme.accent_foreground
+                    } else {
+                        theme.foreground
+                    })
+                    .when(is_selected, |d| d.bg(theme.accent))
+                    .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                    // Icon or indent to keep label alignment consistent.
+                    .when_some(icon, |d, icon| {
+                        d.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                    })
+                    .when(icon.is_none(), |d| d.pl(px(20.0)))
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != idx
+                        {
+                            menu.selected_index = idx;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // Resolve the action again — the menu may have changed.
+                        let has_corr = this
+                            .context_menu
+                            .as_ref()
+                            .and_then(|m| this.events.get(m.row))
+                            .and_then(|e| e.correlation_id.as_deref())
+                            .map(|c| !c.is_empty())
+                            .unwrap_or(false);
+                        let items = Self::context_menu_items(has_corr);
+                        if let Some(item) = items.get(idx)
+                            && item.action == Some(action)
+                            && let Some(menu) = this.context_menu.clone()
+                        {
+                            let event = this.events.get(menu.row).cloned();
+                            this.close_context_menu(window, cx);
+                            match action {
+                                AuditContextMenuAction::CopyRowAsCsv => {
+                                    if let Some(event) = event {
+                                        let csv = Self::event_to_csv_row(&event);
+                                        cx.write_to_clipboard(ClipboardItem::new_string(csv));
+                                    }
+                                }
+                                AuditContextMenuAction::CopySummary => {
+                                    if let Some(event) = event {
+                                        let summary = event.summary.clone().unwrap_or_default();
+                                        cx.write_to_clipboard(ClipboardItem::new_string(summary));
+                                    }
+                                }
+                                AuditContextMenuAction::FilterByCorrelation => {
+                                    if let Some(event) = event
+                                        && let Some(correlation_id) = event.correlation_id.clone()
+                                    {
+                                        this.filter_by_correlation(correlation_id, cx);
+                                    }
+                                }
+                            }
+                        }
+                    }))
+                    .child(label)
+                    .into_any_element(),
+            );
+        }
+
+        let position = menu.position;
+
+        let element = deferred(
+            div()
+                .absolute()
+                // Position at the stored coordinates (mouse position or keyboard estimate).
+                .top(position.y)
+                .left(position.x)
+                .w(px(200.0))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(Radii::MD)
+                .shadow_lg()
+                .py(Spacing::XS)
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                    this.close_context_menu(window, cx);
+                }))
+                .children(menu_elements),
+        )
+        .with_priority(2)
+        .into_any_element();
+
+        Some(element)
+    }
+
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
-        // Search input — plain inline input like the WHERE filter in DataGridPanel.
+        // Compute which item (if any) has the keyboard focus ring.
+        let navigating = self.filter_bar.mode() == FilterBarMode::Navigating;
+        let focused_idx = self.filter_bar.focused_index();
+
+        let ring = |idx: usize| navigating && focused_idx == idx;
+
+        // Search input.
         let search_control = div()
             .flex()
             .items_center()
             .w(px(220.0))
             .rounded(Radii::SM)
+            .when(ring(FILTER_BAR_IDX_SEARCH), |d| {
+                d.border_1().border_color(theme.ring)
+            })
             .child(div().flex_1().child(Input::new(&self.search_input).small()));
 
-        // Refresh split button — identical to DataGridPanel:
-        // left part: action button; right part: compact_trigger dropdown for auto-refresh policy.
+        // Dropdown wrappers — ring goes around the whole labeled control.
+        let time_control = div()
+            .rounded(Radii::SM)
+            .when(ring(FILTER_BAR_IDX_TIME), |d| {
+                d.border_1().border_color(theme.ring)
+            })
+            .child(self.dropdown_time_range.clone());
+
+        let level_control = div()
+            .rounded(Radii::SM)
+            .when(ring(FILTER_BAR_IDX_LEVEL), |d| {
+                d.border_1().border_color(theme.ring)
+            })
+            .child(self.dropdown_level.clone());
+
+        let category_control = div()
+            .rounded(Radii::SM)
+            .when(ring(FILTER_BAR_IDX_CATEGORY), |d| {
+                d.border_1().border_color(theme.ring)
+            })
+            .child(self.dropdown_category.clone());
+
+        let outcome_control = div()
+            .rounded(Radii::SM)
+            .when(ring(FILTER_BAR_IDX_OUTCOME), |d| {
+                d.border_1().border_color(theme.ring)
+            })
+            .child(self.dropdown_outcome.clone());
+
+        // Refresh split button.
         let refresh_label = if self.refresh_policy.is_auto() {
             self.refresh_policy.label()
         } else {
@@ -753,8 +1627,11 @@ impl AuditDocument {
             .rounded(Radii::SM)
             .bg(theme.background)
             .border_1()
-            .border_color(theme.input)
-            // left: action
+            .border_color(if ring(FILTER_BAR_IDX_REFRESH) {
+                theme.ring
+            } else {
+                theme.input
+            })
             .child(
                 div()
                     .id("audit-refresh-action")
@@ -778,17 +1655,19 @@ impl AuditDocument {
                     )
                     .child(refresh_label),
             )
-            // divider
             .child(div().w(px(1.0)).h_full().bg(theme.input))
-            // right: policy dropdown
             .child(
                 div()
                     .w(px(28.0))
                     .h_full()
+                    .rounded_r(Radii::SM)
+                    .when(ring(FILTER_BAR_IDX_REFRESH_POLICY), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
                     .child(self.refresh_dropdown.clone()),
             );
 
-        // Clear — plain text action, same hover pattern as other muted controls.
+        // Clear button.
         let clear_btn = div()
             .id("audit-clear-btn")
             .h(Heights::BUTTON)
@@ -797,6 +1676,12 @@ impl AuditDocument {
             .px(Spacing::SM)
             .rounded(Radii::SM)
             .text_size(FontSizes::SM)
+            .border_1()
+            .border_color(if ring(FILTER_BAR_IDX_CLEAR) {
+                theme.ring
+            } else {
+                gpui::transparent_black()
+            })
             .text_color(theme.muted_foreground)
             .cursor_pointer()
             .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
@@ -805,20 +1690,16 @@ impl AuditDocument {
             }))
             .child("Clear");
 
-        let _ = window; // suppress unused warning
+        let _ = window;
 
         compact_top_bar(
             &theme,
             vec![
                 compact_labeled_control("Search:", search_control, &theme).into_any_element(),
-                compact_labeled_control("Time:", self.dropdown_time_range.clone(), &theme)
-                    .into_any_element(),
-                compact_labeled_control("Level:", self.dropdown_level.clone(), &theme)
-                    .into_any_element(),
-                compact_labeled_control("Category:", self.dropdown_category.clone(), &theme)
-                    .into_any_element(),
-                compact_labeled_control("Outcome:", self.dropdown_outcome.clone(), &theme)
-                    .into_any_element(),
+                compact_labeled_control("Time:", time_control, &theme).into_any_element(),
+                compact_labeled_control("Level:", level_control, &theme).into_any_element(),
+                compact_labeled_control("Category:", category_control, &theme).into_any_element(),
+                compact_labeled_control("Outcome:", outcome_control, &theme).into_any_element(),
                 div().flex_1().into_any_element(),
                 refresh_btn.into_any_element(),
                 clear_btn.into_any_element(),
@@ -896,8 +1777,11 @@ impl AuditDocument {
         }
 
         let mut rows = Vec::with_capacity(self.events.len());
-        for event in self.events.iter().cloned() {
-            rows.push(self.render_event_row(event, cx).into_any_element());
+        for (row_index, event) in self.events.iter().cloned().enumerate() {
+            rows.push(
+                self.render_event_row(row_index, event, cx)
+                    .into_any_element(),
+            );
         }
 
         div()
@@ -910,10 +1794,19 @@ impl AuditDocument {
             .into_any_element()
     }
 
-    fn render_event_row(&self, event: AuditEventDto, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_event_row(
+        &self,
+        row_index: usize,
+        event: AuditEventDto,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let event_id = event.id;
         let is_expanded = self.expanded_event_ids.contains(&event_id);
+        // Only highlight the selected row when this document has GPUI focus.
+        // When focus moves to the sidebar, the highlight disappears so the
+        // user isn't confused by three simultaneous focus indicators.
+        let is_selected = self.has_focus && self.selected_row == Some(row_index);
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
         let level = event.level.as_deref().unwrap_or("---");
         let summary = event.summary.clone().unwrap_or_default();
@@ -925,6 +1818,16 @@ impl AuditDocument {
         let category = Self::short_category_label(event.category.as_deref());
         let connection_driver =
             Self::format_connection_driver(&event.connection_id, &event.driver_id);
+
+        // Background priority: selected (keyboard cursor) > expanded > default.
+        // Use theme.list_active for the selected row — same token as key_value and sidebar.
+        let row_bg = if is_selected {
+            theme.list_active
+        } else if is_expanded {
+            theme.primary.opacity(0.08)
+        } else {
+            gpui::transparent_black()
+        };
 
         div()
             .w_full()
@@ -939,16 +1842,26 @@ impl AuditDocument {
                     .px_3()
                     .py_1p5()
                     .cursor_pointer()
-                    .bg(if is_expanded {
-                        theme.primary.opacity(0.08)
-                    } else {
-                        gpui::transparent_black()
-                    })
+                    .bg(row_bg)
+                    // Selected rows get a left-border accent to match other list views.
+                    .when(is_selected, |d| d.border_l_2().border_color(theme.accent))
                     .hover(|style| style.bg(theme.list_hover))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
+                            // Signal the workspace to update focus_target → Document so that
+                            // Ctrl+H and other panel-navigation bindings work correctly.
+                            cx.emit(AuditDocumentEvent::RequestFocus);
+                            this.select_row(row_index, cx);
                             this.toggle_event_expanded(event_id, cx);
+                            this.focus_handle.focus(window);
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            // Right-click: open at the actual mouse position.
+                            this.open_context_menu_at_mouse(row_index, event.position, window, cx);
                         }),
                     )
                     .child(
@@ -1437,8 +2350,8 @@ impl AuditDocument {
 }
 
 impl Focusable for AuditDocument {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        cx.focus_handle()
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -1453,7 +2366,13 @@ impl Render for AuditDocument {
 
         flush_pending_toast(self.pending_toast.take(), window, cx);
 
+        // Update focus state before rendering rows so the selection highlight
+        // is suppressed when focus moves to the sidebar or another panel.
+        self.has_focus = self.focus_handle.contains_focused(window, cx);
+
         let theme = cx.theme().clone();
+        let context_menu = self.render_context_menu(cx);
+        let focus_handle = self.focus_handle.clone();
 
         div()
             .size_full()
@@ -1461,14 +2380,38 @@ impl Render for AuditDocument {
             .flex_col()
             .overflow_hidden()
             .bg(theme.background)
+            // Capture panel origin for context-menu coordinate conversion,
+            // identical to DataGridPanel.
+            .child({
+                let this_entity = cx.entity().clone();
+                canvas(
+                    move |bounds, _, cx| {
+                        this_entity.update(cx, |this, _cx| {
+                            this.panel_origin = bounds.origin;
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
+            // track_focus keeps the handle alive so focus() works correctly
+            // when the workspace calls doc.focus() via set_focus(Document).
+            // There is NO on_key_down here — the workspace on_key_down is the
+            // single source of truth for keyboard dispatch, exactly as in
+            // DataGridPanel and CodeDocument. Adding a second on_key_down would
+            // cause both to fire with different context IDs, breaking navigation.
+            .track_focus(&focus_handle)
             .child(self.render_toolbar(window, cx))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .child(self.render_event_list(cx)),
+                    .child(self.render_event_list(cx))
+                    .children(context_menu),
             )
             .child(self.render_status_bar(cx))
     }

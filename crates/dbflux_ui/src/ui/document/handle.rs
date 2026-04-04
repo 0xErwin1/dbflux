@@ -266,7 +266,9 @@ impl DocumentHandle {
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
-            Self::Audit { .. } => false,
+            Self::Audit { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
+            }
         }
     }
 
@@ -283,9 +285,7 @@ impl DocumentHandle {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
             Self::Audit { entity, .. } => {
-                entity.update(cx, |doc, cx| {
-                    let _ = doc.focus_handle(cx);
-                });
+                entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
         }
     }
@@ -297,7 +297,7 @@ impl DocumentHandle {
             Self::Code { entity, .. } => entity.read(cx).active_context(cx),
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
-            Self::Audit { .. } => ContextId::Editor,
+            Self::Audit { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
@@ -331,8 +331,11 @@ impl DocumentHandle {
                 }
             }),
             Self::Audit { entity, .. } => {
-                cx.subscribe(entity, move |_entity, _event, _cx| {
-                    // AuditDocument doesn't emit document events yet
+                use super::audit::AuditDocumentEvent;
+                cx.subscribe(entity, move |_entity, event, cx| {
+                    if matches!(event, AuditDocumentEvent::RequestFocus) {
+                        callback(&DocumentEvent::RequestFocus, cx);
+                    }
                 })
             }
         }

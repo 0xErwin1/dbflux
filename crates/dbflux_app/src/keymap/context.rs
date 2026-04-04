@@ -51,6 +51,9 @@ pub enum ContextId {
 
     /// Execution context bar (Connection/Database/Schema dropdowns).
     ContextBar,
+
+    /// Audit event viewer row list.
+    Audit,
 }
 
 impl ContextId {
@@ -75,6 +78,7 @@ impl ContextId {
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
             ContextId::BackgroundTasks => Some(ContextId::Global),
+            ContextId::Audit => Some(ContextId::Global),
         }
     }
 
@@ -96,6 +100,11 @@ impl ContextId {
         )
     }
 
+    /// Returns true if this context is the audit viewer context.
+    pub fn is_audit(&self) -> bool {
+        matches!(self, ContextId::Audit)
+    }
+
     /// Returns a human-readable name for this context.
     #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
@@ -115,6 +124,7 @@ impl ContextId {
             ContextId::ConfirmModal => "Confirm",
             ContextId::FormNavigation => "Form Navigation",
             ContextId::ContextBar => "Context Bar",
+            ContextId::Audit => "Audit Viewer",
         }
     }
 
@@ -136,6 +146,7 @@ impl ContextId {
             ContextId::ConfirmModal,
             ContextId::FormNavigation,
             ContextId::ContextBar,
+            ContextId::Audit,
         ]
     }
 
@@ -157,6 +168,7 @@ impl ContextId {
             ContextId::ConfirmModal => "ConfirmModal",
             ContextId::FormNavigation => "FormNavigation",
             ContextId::ContextBar => "ContextBar",
+            ContextId::Audit => "Audit",
         }
     }
 }

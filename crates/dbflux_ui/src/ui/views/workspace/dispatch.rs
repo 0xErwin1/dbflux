@@ -415,7 +415,28 @@ impl CommandDispatcher for Workspace {
                 if self.is_sidebar_collapsed(cx) {
                     return false;
                 }
-                match self.focus_target {
+
+                // If a document is active (its context is visible), treat
+                // focus_target as Document even if the internal field is stale —
+                // this covers the case where the audit or results view received
+                // keyboard focus before any mouse click updated focus_target.
+                let active_doc_context = self
+                    .tab_manager
+                    .read(cx)
+                    .active_document()
+                    .map(|doc| doc.active_context(cx));
+                let effective_target = match active_doc_context {
+                    Some(ctx)
+                        if ctx == ContextId::Audit
+                            || ctx == ContextId::Results
+                            || ctx == ContextId::Editor =>
+                    {
+                        FocusTarget::Document
+                    }
+                    _ => self.focus_target,
+                };
+
+                match effective_target {
                     FocusTarget::Document | FocusTarget::BackgroundTasks => {
                         self.set_focus(FocusTarget::Sidebar, window, cx);
                         true

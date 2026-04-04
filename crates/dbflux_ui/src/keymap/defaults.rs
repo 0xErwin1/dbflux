@@ -18,6 +18,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(context_menu_layer());
     stack.add_layer(form_navigation_layer());
     stack.add_layer(context_bar_layer());
+    stack.add_layer(audit_layer());
 
     stack
 });
@@ -564,6 +565,96 @@ fn context_bar_layer() -> KeymapLayer {
     // Ctrl+h/l also navigate between dropdowns
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
+
+    layer
+}
+
+fn audit_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::Audit);
+
+    // Panel navigation (Ctrl+hjkl) — identical to Results layer.
+    layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
+    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusDown);
+    layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::FocusUp);
+    layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
+
+    // Focus the search/filter toolbar.
+    layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+
+    // Toolbar item navigation (h/l without ctrl) — only consumed by
+    // dispatch_command when the filter bar is in Navigating mode.
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
+    layer.bind(
+        KeyChord::new("left", Modifiers::none()),
+        Command::ColumnLeft,
+    );
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::ColumnRight,
+    );
+
+    // Row navigation — same bindings as Results and Sidebar.
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
+
+    // Pagination between pages.
+    layer.bind(
+        KeyChord::new("]", Modifiers::none()),
+        Command::ResultsNextPage,
+    );
+    layer.bind(
+        KeyChord::new("[", Modifiers::none()),
+        Command::ResultsPrevPage,
+    );
+
+    // Expand/collapse the selected row.
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+
+    // Context menu.
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenContextMenu,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenContextMenu,
+    );
+
+    // Refresh.
+    layer.bind(
+        KeyChord::new("r", Modifiers::none()),
+        Command::RefreshSchema,
+    );
+
+    // Dismiss / exit toolbar navigation.
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     layer
 }
