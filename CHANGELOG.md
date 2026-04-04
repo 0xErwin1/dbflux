@@ -2,6 +2,26 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.0-rc.0] – 2026-04-04
+
+First release candidate for v0.4.0. This is the feature-complete snapshot before the stable release — no new features are expected between here and v0.4.0, only bug fixes.
+
+### Added
+
+* Audit viewer: full keyboard navigation following the established workspace patterns — `j/k` to move between rows, `g/G`, `Ctrl+d/u`, `]/[` for pagination, `m` for context menu, `r` to refresh
+* Audit viewer: toolbar focus-ring mode (`f`/`/`) — navigate across all filter controls (Search, Time, Level, Category, Outcome, Refresh, auto-refresh policy, Clear) with `h/l`, activate with `Enter`, return to list with `Escape`
+* Audit viewer: dropdown keyboard navigation — when a dropdown is open from the toolbar, `j/k`, `Enter`, and `Escape` route directly to it
+* Audit viewer: right-click context menu with "Copy Row as CSV", "Copy Summary", and "Filter by Correlation" options, positioned at mouse coordinates
+* `FilterBarState` / `FilterBar` reusable component that encapsulates the Navigating → Editing state machine for toolbar focus rings; supports `Input`, `Dropdown`, and `Button` item kinds
+* `ContextId::Audit` keymap context with its own layer so audit bindings do not bleed into other views
+
+### Fixed
+
+* Audit viewer: row selection highlight is suppressed when focus moves to the sidebar — eliminates the three-simultaneous-focus-indicators bug
+* Audit viewer: `Ctrl+H` from the audit list now reliably navigates to the sidebar regardless of whether the document was reached by keyboard or mouse
+* Audit viewer: context menu icon style aligned with the rest of the app (uses `AppIcon`, no dot indicator)
+* Removed stale ATL configuration artifacts
+
 ## [0.4.0-dev.14] – 2026-04-03
 
 ### Changed
