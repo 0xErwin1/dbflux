@@ -74,6 +74,8 @@ dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui = { path = "crates/dbflux_ui" }
 mysql = "25"
 
+petgraph = "0.7"
+
 gpui = "0.2.2"
 gpui-component = { version = "0.5.0", features = ["tree-sitter-languages"] }
 core-text = ">=21.0.0, <21.1.0"

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use petgraph::algo::is_cyclic_directed;
 use petgraph::prelude::NodeIndex;
@@ -12,7 +12,6 @@ const NODE_ROW_HEIGHT: f32 = 22.0;
 const LAYER_SPACING_X: f32 = 280.0;
 const NODE_SPACING_Y: f32 = 40.0;
 const CELL_WIDTH: f32 = 300.0;
-const CELL_HEIGHT: f32 = 200.0;
 
 /// Layout information for a single node.
 #[derive(Clone, Debug)]
@@ -71,26 +70,25 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
 
     // BFS from root to assign layers.
     let mut layer: HashMap<NodeIndex, usize> = HashMap::new();
-    let mut queue: Vec<(NodeIndex, usize)> = vec![(root_idx, 0)];
+    let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::from([(root_idx, 0)]);
     layer.insert(root_idx, 0);
 
-    while !queue.is_empty() {
-        let (current, depth) = queue.remove(0);
-
+    while let Some((current, depth)) = queue.pop_front() {
         for edge in graph
             .graph
             .edges_directed(current, petgraph::Direction::Outgoing)
         {
             let neighbor = edge.target();
             if layer.insert(neighbor, depth + 1).is_none() {
-                queue.push((neighbor, depth + 1));
+                queue.push_back((neighbor, depth + 1));
             }
         }
     }
 
-    // Handle disconnected nodes: assign them to layer 0.
+    // Handle disconnected nodes: assign them to an isolated layer beyond max_layer.
+    let max_layer = layer.values().max().copied().unwrap_or(0);
     for idx in graph.graph.node_indices() {
-        layer.entry(idx).or_insert(0);
+        layer.entry(idx).or_insert(max_layer + 1);
     }
 
     // Group nodes by layer.
@@ -102,34 +100,48 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
     // Sort nodes within each layer by table name for determinism.
     for nodes in layers.values_mut() {
         nodes.sort_by(|a, b| {
-            let name_a = &graph.graph.node_weight(*a).unwrap().id.name;
-            let name_b = &graph.graph.node_weight(*b).unwrap().id.name;
+            let name_a = &graph
+                .graph
+                .node_weight(*a)
+                .expect("invariant: a is a node index from the same graph")
+                .id
+                .name;
+            let name_b = &graph
+                .graph
+                .node_weight(*b)
+                .expect("invariant: b is a node index from the same graph")
+                .id
+                .name;
             name_a.cmp(name_b)
         });
     }
 
-    let max_layer = layers.keys().max().copied().unwrap_or(0);
+    let computed_max_layer = layers.keys().max().copied().unwrap_or(0);
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
 
-    for (l, node_ids) in &layers {
-        let x = *l as f32 * LAYER_SPACING_X;
+    for (layer_num, node_ids) in &layers {
+        let x = *layer_num as f32 * LAYER_SPACING_X;
 
-        for (pos, &idx) in node_ids.iter().enumerate() {
-            let node_weight = graph.graph.node_weight(idx).unwrap();
+        // Per layer: compute y positions with a running cursor to avoid overlap.
+        let mut y_cursor = 0.0_f32;
+        for &idx in node_ids {
+            let node_weight = graph
+                .graph
+                .node_weight(idx)
+                .expect("invariant: idx is a node index from the same graph");
             let col_count = node_weight.columns.len().max(1) as f32;
             let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
-
-            let y = pos as f32 * (height + NODE_SPACING_Y);
 
             nodes.insert(
                 idx,
                 NodeLayout {
                     x,
-                    y,
+                    y: y_cursor,
                     width: NODE_WIDTH,
                     height,
                 },
             );
+            y_cursor += height + NODE_SPACING_Y;
         }
     }
 
@@ -158,9 +170,24 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         .collect();
 
     // Compute total bounds.
-    let total_width = (max_layer as f32 + 1.0) * LAYER_SPACING_X;
-    let total_height = layers.values().map(|ids| ids.len()).max().unwrap_or(0) as f32
-        * (CELL_HEIGHT + NODE_SPACING_Y);
+    let total_width = (computed_max_layer as f32 + 1.0) * LAYER_SPACING_X;
+    let total_height = layers
+        .values()
+        .map(|ids| {
+            ids.iter()
+                .map(|&idx| {
+                    let node_weight = graph
+                        .graph
+                        .node_weight(idx)
+                        .expect("invariant: idx is from the same graph");
+                    let col_count = node_weight.columns.len().max(1) as f32;
+                    NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT
+                })
+                .sum::<f32>()
+                + (ids.len().saturating_sub(1) as f32) * NODE_SPACING_Y
+        })
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0_f32);
 
     LayoutResult {
         nodes,
@@ -174,16 +201,50 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
 fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
     let n = graph.node_count();
     let cols = ((n as f32).sqrt().ceil() as usize).max(1);
+    let rows = (n + cols - 1) / cols;
 
+    // Sort nodes deterministically by table name before laying out.
+    let mut sorted_indices: Vec<NodeIndex> = graph.graph.node_indices().collect();
+    sorted_indices.sort_by_key(|&idx| {
+        graph
+            .graph
+            .node_weight(idx)
+            .map(|n| n.id.name.as_str())
+            .unwrap_or("")
+    });
+
+    // First pass: compute per-row max heights.
+    let mut row_max_heights = vec![0.0_f32; rows];
+    for (i, &idx) in sorted_indices.iter().enumerate() {
+        let node_weight = graph
+            .graph
+            .node_weight(idx)
+            .expect("invariant: idx is from node_indices() on the same graph");
+        let col_count = node_weight.columns.len().max(1) as f32;
+        let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
+        row_max_heights[i / cols] = row_max_heights[i / cols].max(height);
+    }
+
+    // Compute cumulative row y offsets.
+    let mut row_y_offsets = vec![0.0_f32; rows];
+    for r in 1..rows {
+        row_y_offsets[r] = row_y_offsets[r - 1] + row_max_heights[r - 1] + NODE_SPACING_Y;
+    }
+
+    // Second pass: place nodes using row y offsets.
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
-
-    for (i, idx) in graph.graph.node_indices().enumerate() {
-        let node_weight = graph.graph.node_weight(idx).unwrap();
+    for (i, &idx) in sorted_indices.iter().enumerate() {
+        let node_weight = graph
+            .graph
+            .node_weight(idx)
+            .expect("invariant: idx is from node_indices() on the same graph");
         let col_count = node_weight.columns.len().max(1) as f32;
         let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
 
-        let x = (i % cols) as f32 * CELL_WIDTH;
-        let y = (i / cols) as f32 * CELL_HEIGHT;
+        let col = i % cols;
+        let row = i / cols;
+        let x = col as f32 * CELL_WIDTH;
+        let y = row_y_offsets[row];
 
         nodes.insert(
             idx,
@@ -219,9 +280,11 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
         })
         .collect();
 
-    let rows = (n + cols - 1) / cols;
     let total_width = cols as f32 * CELL_WIDTH;
-    let total_height = rows as f32 * CELL_HEIGHT;
+    let total_height = row_y_offsets
+        .last()
+        .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
+        .unwrap_or(0.0_f32);
 
     LayoutResult {
         nodes,
@@ -356,5 +419,85 @@ mod tests {
         // Total width/height should be positive.
         assert!(layout.total_width > 0.0);
         assert!(layout.total_height > 0.0);
+    }
+
+    // ── 9.9: layered layout — chain A→B→C has increasing x ──────────────────
+
+    #[test]
+    fn test_layered_layout_layer_positions() {
+        // A → B → C
+        let tables = vec![
+            table(
+                "a",
+                vec![col("id", "integer", true)],
+                vec![fk("fk_a_b", vec!["id"], "b", vec!["id"])],
+            ),
+            table(
+                "b",
+                vec![col("id", "integer", true)],
+                vec![fk("fk_b_c", vec!["id"], "c", vec!["id"])],
+            ),
+            table("c", vec![col("id", "integer", true)], vec![]),
+        ];
+
+        let graph = SchemaGraph::build(&tables);
+        let layout = compute_layout(&graph);
+
+        // Find node indices by name.
+        let idx_by_name = |name: &str| -> NodeIndex {
+            graph
+                .nodes()
+                .find(|(_, n)| n.id.name == name)
+                .map(|(i, _)| i)
+                .unwrap()
+        };
+
+        let idx_a = idx_by_name("a");
+        let idx_b = idx_by_name("b");
+        let idx_c = idx_by_name("c");
+
+        let x_a = layout.nodes.get(&idx_a).map(|l| l.x).unwrap();
+        let x_b = layout.nodes.get(&idx_b).map(|l| l.x).unwrap();
+        let x_c = layout.nodes.get(&idx_c).map(|l| l.x).unwrap();
+
+        assert!(x_a < x_b, "A (x={x_a}) should be left of B (x={x_b})");
+        assert!(x_b < x_c, "B (x={x_b}) should be left of C (x={x_c})");
+    }
+
+    // ── 9.10: cyclic graph uses grid layout (multiple x values) ──────────────
+
+    #[test]
+    fn test_grid_fallback_chosen_for_cyclic() {
+        // A → B → C → A
+        let tables = vec![
+            table(
+                "a",
+                vec![col("id", "integer", true)],
+                vec![fk("fk_a_b", vec!["id"], "b", vec!["id"])],
+            ),
+            table(
+                "b",
+                vec![col("id", "integer", true)],
+                vec![fk("fk_b_c", vec!["id"], "c", vec!["id"])],
+            ),
+            table(
+                "c",
+                vec![col("id", "integer", true)],
+                vec![fk("fk_c_a", vec!["id"], "a", vec!["id"])],
+            ),
+        ];
+
+        let graph = SchemaGraph::build(&tables);
+        let layout = compute_layout(&graph);
+
+        // Collect x values from all nodes and check uniqueness.
+        let mut xs: Vec<_> = layout.nodes.values().map(|l| l.x).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        xs.dedup();
+        // Grid layout should produce at least 2 different x values.
+        assert!(
+            xs.len() >= 2,
+            "Cyclic graph should use grid layout with multiple columns; got x values: {xs:?}"
+        );
     }
 }
