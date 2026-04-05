@@ -844,7 +844,7 @@ impl Connection for SqliteConnection {
 
         Ok(TableInfo {
             name: table.to_string(),
-            schema: None,
+            schema: _schema.map(String::from),
             columns: Some(columns),
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
