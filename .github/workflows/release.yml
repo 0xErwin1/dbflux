@@ -98,6 +98,9 @@ jobs:
           cp resources/desktop/dbflux.desktop pkg/resources/desktop/
           cp resources/mime/dbflux-sql.xml pkg/resources/mime/
 
+          cp LICENSE-MIT pkg/
+          cp LICENSE-APACHE pkg/
+
           cp scripts/install.sh pkg/scripts/
           cp scripts/uninstall.sh pkg/scripts/
           chmod +x pkg/scripts/*.sh
@@ -129,6 +132,7 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
           mkdir -p AppDir/usr/share/mime/packages
+          mkdir -p AppDir/usr/share/licenses/dbflux
 
           cp target/${{ matrix.target }}/release/dbflux AppDir/usr/bin/
           chmod +x AppDir/usr/bin/dbflux
@@ -139,6 +143,9 @@ jobs:
           cp resources/icons/dbflux.svg AppDir/usr/share/icons/hicolor/scalable/apps/
 
           cp resources/mime/dbflux-sql.xml AppDir/usr/share/mime/packages/
+
+          cp LICENSE-MIT AppDir/usr/share/licenses/dbflux/
+          cp LICENSE-APACHE AppDir/usr/share/licenses/dbflux/
 
           ln -sf usr/bin/dbflux AppDir/AppRun
           ln -sf usr/share/applications/dbflux.desktop AppDir/dbflux.desktop

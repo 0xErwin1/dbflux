@@ -2,314 +2,68 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [0.4.0-rc.0] – 2026-04-04
-
-First release candidate for v0.4.0. This is the feature-complete snapshot before the stable release — no new features are expected between here and v0.4.0, only bug fixes.
-
-### Added
-
-* Audit viewer: full keyboard navigation following the established workspace patterns — `j/k` to move between rows, `g/G`, `Ctrl+d/u`, `]/[` for pagination, `m` for context menu, `r` to refresh
-* Audit viewer: toolbar focus-ring mode (`f`/`/`) — navigate across all filter controls (Search, Time, Level, Category, Outcome, Refresh, auto-refresh policy, Clear) with `h/l`, activate with `Enter`, return to list with `Escape`
-* Audit viewer: dropdown keyboard navigation — when a dropdown is open from the toolbar, `j/k`, `Enter`, and `Escape` route directly to it
-* Audit viewer: right-click context menu with "Copy Row as CSV", "Copy Summary", and "Filter by Correlation" options, positioned at mouse coordinates
-* `FilterBarState` / `FilterBar` reusable component that encapsulates the Navigating → Editing state machine for toolbar focus rings; supports `Input`, `Dropdown`, and `Button` item kinds
-* `ContextId::Audit` keymap context with its own layer so audit bindings do not bleed into other views
+## [0.4.1] – 2026-04-05
 
 ### Fixed
 
-* Audit viewer: row selection highlight is suppressed when focus moves to the sidebar — eliminates the three-simultaneous-focus-indicators bug
-* Audit viewer: `Ctrl+H` from the audit list now reliably navigates to the sidebar regardless of whether the document was reached by keyboard or mouse
-* Audit viewer: context menu icon style aligned with the rest of the app (uses `AppIcon`, no dot indicator)
-* Removed stale ATL configuration artifacts
+* PKGBUILD now downloads pre-built Linux binaries from GitHub Releases instead of compiling from source
+* Release artifacts (tar.gz, AppImage) now include LICENSE files
 
-## [0.4.0-dev.14] – 2026-04-03
+---
 
-### Changed
+## [0.4.0] – 2026-04-05
 
-* Architecture refactor: split codebase into `dbflux_app` (pure domain, no GPUI dependency) and `dbflux_ui` (all GPUI/UI code)
-* `dbflux` binary is now a thin shell that only bootstraps the application and IPC server
-* Keymap domain types moved from `dbflux_ui` to `dbflux_app`
+### Architecture
+
+* Codebase split into `dbflux_app` (pure domain, no GPUI) and `dbflux_ui` (all GPUI/UI code); `dbflux` binary is now a thin shell
 * `AppState` extracted as a plain struct in `dbflux_app`; `AppStateEntity` wrapper with GPUI event emission lives in `dbflux_ui`
+* `dbflux_core` reorganized from 50 flat files into 10 thematic subdirectories (`core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`)
 
-### Fixed
+### Drivers
 
-* Fixed clippy warnings: renamed `keymap/keymap.rs` to `keymap_layer.rs`, fixed `ToastHost` Default impl, removed unnecessary `WindowHandle` clones
-* Audit viewer: moved status bar outside flex_1 to fix render layout
-* Updated crate references throughout codebase following the app/UI split
+* **DynamoDB**: built-in driver with full CRUD, SSM tunnel integration, and AWS SSO auth
+* **PostgreSQL, MySQL, SQLite, MongoDB, Redis**: driver stability fixes, schema introspection, filter translation, pagination, and aggregate handling
+* Driver crates now include README files documenting features and limitations
 
-## [0.4.0-dev.13] – 2026-04-02
+### MCP Governance
 
-### Added
+* Policy engine with roles, trusted clients, and tool policies
+* Approval service for deferred destructive/write operations
+* SQLite-backed audit logging with CloudWatch-like viewer
+* Standalone MCP server (`dbflux mcp`) integrated as optional CLI subcommand
+* Granular MCP tools for query, schema, DDL preview, and more
 
-* Audit architecture centralization: all audit events now flow through `AuditService::record()` with typed `AuditAction` constants (`MCP_AUTHORIZE`, `QUERY_EXECUTE`, `CONNECTION_CONNECT`, `HOOK_EXECUTE`, `CONFIG_CHANGE`, `SYSTEM_STARTUP`, etc.)
-* `EventOrigin` and `AuditContext` helpers for consistent actor/source mapping across MCP, UI, and system event origins
-* Global panic hook with chained best-effort panic recording via `record_panic_best_effort()`
-* MCP governance audit integration: authorization events with `correlation_id`, atomic `audit_execution()` policy-first audit, typed execution actions
-* Query/script boundary audit: typed events with `duration_ms`, `details_json` on cancel, dangerous query confirmation
-* Connection lifecycle and hook execution audit: typed events via `record()`
-* System lifecycle audit: `system_startup`, `system_shutdown`, `system_panic` events
-* Audit viewer UI redesign: CloudWatch-like inline expansion, shared chrome components, `RefreshPolicy` dropdown
+### Connection Infrastructure
 
-### Changed
+* Proxy tunnel support: SOCKS5 and HTTP CONNECT with per-connection selection
+* SSH tunnel with adaptive sleep and host key verification
+* Connection hooks: reusable Bash/Python/Lua scripts bound to PreConnect, PostConnect, PreDisconnect, PostDisconnect phases
+* Unified SQLite storage in `~/.local/share/dbflux/dbflux.db`
 
-* Removed legacy `AuditService::append()` from public API; `record()` is now the only canonical path
-* Unified audit event validation with category-specific field requirements and `details_json` normalization before fingerprinting/redaction
+### UI/UX
 
-## [0.4.0-dev.12] – 2026-03-31
+* Tab context menu (Close, Close Others, Close All, Duplicate)
+* Settings sidebar with collapsible categories (TreeNav component)
+* Audit viewer with full keyboard navigation (`j/k`, `g/G`, `]/[`, `m` for context menu)
+* Language-specific script icons in sidebar
+* X11 window rendering fixes and platform-aware floating windows
+* Live output streaming for script execution
 
-### Added
+### Security
 
-* Unified SQLite storage: consolidated all state into a single `~/.local/share/dbflux/dbflux.db` with domain-prefixed tables (`cfg_*`, `st_*`, `aud_*`, `sys_*`) and proper foreign key constraints across previously isolated domains
-* SQLite-backed connection tree: migrated the connection tree from JSON file storage to native SQLite with a `TreeStore` trait abstraction
-* Flat-column schema migration: rewrote all repositories to replace JSON blob columns with dedicated flat tables for drivers, proxies, SSH tunnels, hooks, sessions, and governance policies
-* Internal SQLite bootstrap: the storage crate now bootstraps its own runtime, removing dependency on app-managed SQLite handles for internal state
-* Session and runtime state persistence: session metadata, runtime state, and durable config now persist directly to the state and config databases
-* Import diagnostics and reset tools: added tooling for diagnosing and resetting legacy JSON import state
+* `SecretString` end-to-end across core, drivers, and IPC handoff
+* Per-process authentication tokens for local IPC and driver RPC
+* URI passwords sanitized before persistence
+* Lua VM memory capped at 16 MiB
 
-## [0.4.0-dev.11] – 2026-03-27
+### AWS
 
-### Added
-
-* MCP governance foundation crates for policy evaluation, approval queues, and SQLite-backed audit logging
-* Standalone MCP server runtime, CLI integration, canonical tool catalog, and in-app governance/settings surfaces
-* Rich typed driver metadata and capability models, plus semantic planning and driver-owned query generation across the supported databases
-
-### Changed
-
-* Query execution and SQL/query previews now route through driver planning abstractions instead of raw, UI-owned generation paths
-* Connection and access plumbing now expose the metadata and governance hooks needed to keep MCP behavior aligned with app-managed connections
-* Connection Manager and Settings gained MCP-specific controls and reusable multi-select UI for governance configuration
-
-### Fixed
-
-* MCP tool safety rules were hardened so unsupported operations are rejected explicitly and preview flows stay read-only
-* PostgreSQL, MongoDB, SQLite, MySQL, Redis, and DynamoDB driver paths received follow-up fixes for connection stability, schema inspection, filter translation, pagination, and aggregate handling
-* Test isolation and governance/runtime coverage were expanded to catch regressions in the new MCP flow before release
-
-## [0.4.0-dev.9] – 2026-03-17
-
-### Fixed
-
-* X11 window management issues: windows now render correctly on all X11 compositors with proper min size hints for tiling WM support
-* Connection Manager keyboard navigation now includes auth profile and inline value source rows in the focus flow
-* Settings forms now use unified `FormSection` trait for consistent two-level focus model across all sections (Auth Profiles, Hooks, Drivers, Proxies, SSH Tunnels, Services)
-* Sidebar multi-select drag/drop and keyboard nesting stabilized with proper edge case handling
-* Nix build configuration updated for proper derivation structure
-
----
-
-## [0.4.0-dev.8] – 2026-03-12
-
-### Added
-
-* Built-in DynamoDB driver with end-to-end app integration, including schema browse and mutation/query support
-* In-app AWS SSO login flow and auth profile wizard, integrated across workspace overlays, Connection Manager, and Settings
-* Provider-agnostic dynamic value source flow for managed access fields (SSM, Secrets Manager, and Parameter Store references)
-* Language-specific script icons in the sidebar for Lua, Python, Bash, JavaScript, and InfluxDB files
-
-### Changed
-
-* Auth and managed access orchestration is now provider-driven via a runtime auth provider registry and generic pipeline stages
-* Saving SSO/shared AWS auth profiles now writes compatible `[profile ...]` entries to `~/.aws/config` with idempotent updates
-* Nix development builds now statically link OpenSSL for better portability outside Nix environments
-* Driver crates now include dedicated README files documenting current features and limitations
-
-### Fixed
-
-* DynamoDB filter expression generation no longer emits redundant logical wrapping that could trigger `ValidationException` errors
-
----
-
-## [0.4.0-dev.7] – 2026-03-07
-
-### Added
-
-* Native file browser button on the SQLite connection form so users can pick a database file instead of typing the full path
-* Per-process authentication tokens for app-control IPC and driver RPC host handshakes, preventing unauthorized local process access
-
-### Changed
-
-* Credentials now use `SecretString` end-to-end across core, drivers, IPC handoff, and UI; plain strings are only exposed at explicit boundaries (keyring write, driver connect)
-* `SecretStore::set()` accepts `&SecretString` instead of `&str`, pushing `expose_secret()` to the keyring boundary
-* Detached async tasks that silently discarded `cx.update()` failures now log warnings through an `AsyncUpdateResultExt` trait (38 call sites across 9 files)
-
-### Fixed
-
-* SSH tunnels now enforce host key TOFU verification instead of accepting any host key
-* Proxy tunnels enforce TLS when the target uses HTTPS, and `unreachable!` branches in proxy transport are replaced with safe fallbacks
-* PostgreSQL URI `sslmode` parameter is now honored during connection
-* URI passwords are sanitized before profile persistence to prevent accidental credential storage in plaintext config
-* Lua VM memory is capped at 16 MiB to prevent runaway scripts from exhausting host memory
-* Script rename validation rejects path traversal sequences
-* IPC mutex operations replaced with explicit error handling instead of panic-prone `unwrap()`
-* Proxy credentials are redacted in debug output
-* Lua hook settings now warn when a hook has `process.run` capability enabled
-
----
-
-## [0.4.0-dev.6] – 2026-03-07
-
-### Added
-
-* Script hooks now support Bash, Python, and embedded Lua with inline/file sources, interpreter overrides, and capability controls in Settings
-* Code documents can run Bash, Python, and Lua files directly, with live output streaming while scripts execute
-* New `dbflux_lua` crate provides sandboxed in-process Lua execution for hooks and editor-run scripts
-* Dedicated style CI workflow now runs `cargo fmt --check` and `cargo clippy --workspace -- -D warnings`
-
-### Changed
-
-* The old SQL query document evolved into a language-aware code document with script-specific execution UI and shared live-output plumbing for hooks and manual runs
-* Release workflow now waits for both test and style jobs before building artifacts
-* New connections and SSH tunnels now save credentials to the system keyring by default unless explicitly disabled
-
-### Fixed
-
-* Detached pre-connect hooks now wait for an explicit ready signal and a reachable TCP endpoint before opening the database connection
-* Hook-owned tunnel processes are cleaned up when startup fails or is cancelled, and MySQL `localhost` tunnel connections now consistently use IPv4
-* Query context selectors now refresh when connection state changes, and per-database query cancellation targets the correct connection so databases can be reopened cleanly
-* Typing `z` in the editor works again instead of toggling panels while text input is focused
-* PostgreSQL retry setup and live integration tests now compile cleanly under current type inference requirements
-* Restored the full `LICENSE-MIT` text in release artifacts
-
----
-
-## [0.4.0-dev.5] – 2026-03-05
-
-### Added
-
-* Tab context menu: right-click or Ctrl+M on workspace tabs to Close, Close Others, Close All, Close to the Left, Close to the Right; supports j/k and arrow key navigation
-* Sidebar: new folders auto-select, scroll into view, and enter rename mode immediately after creation
-* Sidebar: "Duplicate" option in connection profile context menu clones the profile including keyring passwords into the same folder
-* Shared `context_menu` component used by both sidebar and tab bar menus, replacing the old sidebar-specific implementation
-
-### Changed
-
-* `dbflux_core` reorganized from 50 flat files into 10 thematic subdirectories: `core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`; all public re-exports preserved for backward compatibility
-* UI layer reorganized: workspace, sidebar, status bar, and tasks panel moved into `views/`; modals into `overlays/`; toast and dropdown into `components/`
-* `key_value.rs` (4601 lines) split into 9 focused submodules; `settings.rs` split into lifecycle/dirty_state/sidebar_nav; `connection_manager/render.rs` split into per-section files
-* Documentation updated (ARCHITECTURE.md, AGENTS.md, CLAUDE.md, CODE_STYLE.md) to reflect new directory structure and `mod.rs` convention
-
----
-
-## [0.4.0-dev.4] – 2026-03-04
-
-### Added
-
-* Proxy tunnel support: SOCKS5 and HTTP CONNECT proxy profiles with full CRUD in Settings, per-connection proxy selection in Connection Manager, and automatic tunnel lifecycle (RAII)
-* New `dbflux_tunnel_core` crate extracting shared RAII tunnel lifecycle, `TunnelConnector` trait, `ForwardingConnection<R>` bidirectional forwarder, and adaptive sleep strategy
-* Proxy profiles stored in `~/.config/dbflux/proxies.json` with keyring-backed secret storage for Basic auth passwords
-* `no_proxy` pattern matching (curl/wget `NO_PROXY` semantics: wildcard, exact, suffix with/without leading dot)
-* Proxy tab in Connection Manager with dropdown selector, read-only details, and "Edit in Settings" button
-* Proxies section in Settings with full form CRUD, auth selection (None/Basic), enable/disable toggle, and keyboard navigation
-* Guard preventing simultaneous proxy and SSH tunnel on the same connection
-
-### Changed
-
-* `JsonStore<T>` generic replaces three near-identical store structs (profiles, SSH tunnels, proxies)
-* `ItemManager<T>` with `Identifiable` trait replaces duplicated `ProxyManager` and `SshTunnelManager` implementations
-* `HasSecretRef` trait unifies secret operations across SSH tunnel and proxy profiles
-* `FormGridNav<F>` generic extracts shared 2D grid navigation from proxy and SSH tunnel settings forms
-* SSH tunnel forwarding loop now uses `ForwardingConnection<ssh2::Channel>` from `dbflux_tunnel_core` and gains adaptive sleep (50ms idle / 1ms active)
-* SSH tunnel read-only mode in Connection Manager now shows saved tunnel details with "Edit in Settings" button
-* Connection Manager tab order changed to Main → Settings → SSH → Proxy
-
-### Fixed
-
-* HTTP CONNECT proxy `BufReader` could silently consume post-handshake bytes; replaced with byte-by-byte `read_http_line()`
-* Proxy tunnel handle is now preserved across database switches so the tunnel stays alive for the connection lifetime
-
----
-
-## [0.4.0-dev.3] – 2026-03-03
-
-### Added
-
-* Connection hooks system: define reusable command hooks in Settings and bind them to connection profiles for execution during connect/disconnect phases (PreConnect, PostConnect, PreDisconnect, PostDisconnect)
-* Each hook runs as an external process with command/args, optional cwd, custom env vars, timeout, and cancellation support
-* Per-hook failure policy: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
-* Hooks section in Settings with full CRUD for global hook definitions
-* Hooks tab in Connection Manager with dropdown binding and extra IDs per phase
-* Each hook executes as its own background task with stdout/stderr details visible in the Tasks panel (expandable with chevron toggle, 40-line truncation)
-* Reusable `TreeNav` component for tree-based navigation with cursor movement, expand/collapse, select-by-id, and dedicated unit coverage
-* New persisted UI state store (`UiStateStore`) in `~/.local/share/dbflux/state.json` to keep Settings category collapse state out of `config.json`
-* 56 tests covering hook types, serde, execution, runner orchestration, binding resolution, and end-to-end integration
-
-### Changed
-
-* Driver resolution and command routing centralized behind shared core contracts, removing driver-specific conditionals from UI code
-* Hook binding resolution moved from app layer to `dbflux_core` (`ConnectionHooks::resolve_from_bindings`) for testability
-* Disconnect flow changed from synchronous to async to support pre/post-disconnect hooks
-* Settings sidebar moved from a flat list to a tree with collapsible Network/Connection groups, persistent collapse state, and gutter connector lines
-* Tree gutter rendering is now shared between Settings and Sidebar for consistent connector visuals and row sizing
-
-### Fixed
-
-* Sidebar profile/database chevron interactions now behave correctly: connected profiles expand/collapse, disconnected profiles connect on first click, and active profile changes stay in sync with tree state
-
----
-
-## [0.4.0-dev.2] – 2026-03-01
-
-### Added
-
-* Settings now includes General, Services, and Drivers sections, with schema-backed per-driver override controls
-* New Services settings section for configuring external RPC driver services
-* Connection Manager now includes a Settings tab for per-connection overrides of global/driver policies and driver-owned settings
-
-### Changed
-
-* Driver settings now flow end-to-end through core types, AppState, and IPC contracts via `driver_key`-based resolution
-* Driver capability declarations were audited, and the Drivers UI now shows capability chips filtered by database category
-* Settings safety controls moved from toggle rows to explicit dropdowns, and theme changes now apply live
-
-### Fixed
-
-* False Drivers "Unsaved Changes" prompts were removed by switching dirty detection to deterministic value comparison against persisted settings
-* Settings sidebar now provides a dedicated Close action that respects unsaved-change confirmation
-* Save-password now defaults to enabled in the connection flow
-
----
-
-## [0.4.0-dev.1] – 2026-02-28
-
-### Added
-
-* Comprehensive live integration tests for all five database drivers (43 tests covering schema introspection, CRUD, browse/count, explain, describe, cancellation, code generators, document CRUD, and KeyValueApi)
-* Docker-based test infrastructure for PostgreSQL, MySQL, MongoDB, and Redis with automatic container lifecycle management
-* Driver contract validation tests for metadata, form definitions, and capability declarations
-* Explicit unsupported-value representation in query results (`UNSUPPORTED<type>`) to distinguish decode gaps from real `NULL` values
-* Full PostgreSQL `tsvector` and `tsquery` support in data grid (browsing, query results, filtering)
-
-### Changed
-
-* AppState now accepts an external driver registry (`new_with_drivers`), making driver wiring controllable across different runtime contexts
-* Document open and query connection selection extracted into explicit decision paths for consistent handling of missing connections and per-database routing
-* MySQL `information_schema` queries migrated from `format!()` string interpolation to parameterized queries (`conn.exec` with `?` placeholders)
-* MySQL nullable column reads (`Option<String>`) now use `row.get_opt()` to correctly distinguish SQL NULL from missing columns
-* PostgreSQL custom type text decoding limited to safe textual types (enum/domain variants) to avoid silent mis-decoding
-* Version bumped from `0.4.0-dev.0` to `0.4.0-dev.1`
-
-### Fixed
-
-* MySQL schema introspection panic on MySQL 8.4 where `column_key` in `information_schema.columns` can be NULL
-* MySQL constraint introspection panic where `GROUP_CONCAT` over a `LEFT JOIN` returns NULL for CHECK constraints without key columns
-* Windows portable builds no longer open a CMD console window when launched outside a terminal
-* False startup exit when the app-control IPC check raced with window creation
-* Filter submenu action dispatch repaired
-
----
-
-## [0.4.0-dev.0] – 2026-02-26
-
-### Added
-
-* First development pre-release line for v0.4 on the `dev` branch
-* IPC workspace crates integrated for local v0.4 testing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`)
-
-### Changed
-
-* Project version bumped from `0.3.4` to `0.4.0-dev.0`
-* Nix default package version bumped to `0.4.0-dev.0`
+* In-app AWS SSO login flow with account/role discovery wizard
+* Provider-agnostic auth with runtime-registered `AuthProviderRegistry` (AWS SSO, Static, Shared credentials)
+* Managed access via AWS SSM port-forward tunnels (no SSH key needed for RDS/EC2)
+* Value sources for managed access fields: SSM Parameter Store, Secrets Manager, environment variables
+* SSO auth profiles write back to `~/.aws/config` for compatibility with other AWS tools
+* DynamoDB driver uses same managed access pipeline for seamless AWS integration
 
 ---
 

@@ -1,21 +1,22 @@
 # Maintainer: Ignacio Perez <ignacio@feuer.me>
 
 pkgname=dbflux
-pkgver=0.4.0-rc.0
+pkgver=0.4.1
 pkgrel=1
 pkgdesc="A fast, keyboard-first database client"
-arch=(x86_64 aarch64)
+arch=('x86_64' 'aarch64')
 url="https://github.com/0xErwin1/dbflux"
 license=('MIT' 'Apache-2.0')
 depends=(
+    'glibc'
     'openssl'
-    'sqlite'
     'zstd'
     'zlib'
     'fontconfig'
     'freetype2'
     'wayland'
     'libxkbcommon'
+    'libxkbcommon-x11'
     'libx11'
     'libxcb'
     'libxcursor'
@@ -29,49 +30,32 @@ depends=(
     'libssh2'
     'dbus'
     'tree-sitter'
+    'hicolor-icon-theme'
 )
-makedepends=(
-    'rust'
-    'pkgconf'
-    'cmake'
-    'vulkan-headers'
-    'git'
-)
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
 
-build() {
-    cd "${pkgname}-${pkgver}"
+source_x86_64=("${url}/releases/download/v${pkgver}/dbflux-linux-amd64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/dbflux-linux-arm64.tar.gz")
 
-    export ZSTD_SYS_USE_PKG_CONFIG=1
-
-    cargo build --release --locked --package dbflux --features sqlite,postgres,mysql,mongodb,redis
-}
-
-check() {
-    cd "${pkgname}-${pkgver}"
-
-    cargo test --release --locked --package dbflux --features sqlite,postgres,mysql,mongodb,redis
-}
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
-    cd "${pkgname}-${pkgver}"
+    install -Dm755 dbflux "${pkgdir}/usr/bin/dbflux"
 
-    # Install binary
-    install -Dm755 "target/release/dbflux" "${pkgdir}/usr/bin/dbflux"
+    install -Dm644 resources/desktop/dbflux.desktop \
+        "${pkgdir}/usr/share/applications/dbflux.desktop"
+    sed -i 's|@EXEC_PATH@|/usr/bin/dbflux|g' \
+        "${pkgdir}/usr/share/applications/dbflux.desktop"
 
-    # Install desktop file
-    install -Dm644 "resources/desktop/dbflux.desktop" "${pkgdir}/usr/share/applications/dbflux.desktop"
-    # Replace placeholder with actual binary path
-    sed -i "s|@EXEC_PATH@|/usr/bin/dbflux|g" "${pkgdir}/usr/share/applications/dbflux.desktop"
+    install -Dm644 resources/icons/dbflux.svg \
+        "${pkgdir}/usr/share/icons/hicolor/scalable/apps/dbflux.svg"
 
-    # Install icon
-    install -Dm644 "resources/icons/dbflux.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/dbflux.svg"
+    install -Dm644 resources/mime/dbflux-sql.xml \
+        "${pkgdir}/usr/share/mime/packages/dbflux-sql.xml"
 
-    # Install mime type
-    install -Dm644 "resources/mime/dbflux-sql.xml" "${pkgdir}/usr/share/mime/packages/dbflux-sql.xml"
-
-    # Install license
-    install -Dm644 "LICENSE-MIT" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MIT" 2>/dev/null || true
-    install -Dm644 "LICENSE-APACHE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE" 2>/dev/null || true
+    install -Dm644 LICENSE-MIT \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE"
 }
+
