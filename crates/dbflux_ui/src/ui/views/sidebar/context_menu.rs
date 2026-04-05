@@ -149,8 +149,10 @@ impl Sidebar {
                     ],
                 );
 
-                // Add "View Relationships" for relational drivers with FK support
-                if self.is_relational_with_fk_support(item_id, cx) {
+                // Add "View Relationships" only for Table nodes (Views don't have FK metadata)
+                if node_kind == SchemaNodeKind::Table
+                    && self.is_relational_with_fk_support(item_id, cx)
+                {
                     items.push(ContextMenuItem {
                         label: "View Relationships".into(),
                         action: ContextMenuAction::ViewRelationships,
