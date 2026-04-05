@@ -207,7 +207,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
 fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
     let n = graph.node_count();
     let cols = ((n as f32).sqrt().ceil() as usize).max(1);
-    let rows = (n + cols - 1) / cols;
+    let rows = n.div_ceil(cols);
 
     // Sort nodes deterministically by table name before laying out.
     let mut sorted_indices: Vec<NodeIndex> = graph.graph.node_indices().collect();

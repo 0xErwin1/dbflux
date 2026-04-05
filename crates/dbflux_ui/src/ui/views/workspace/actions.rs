@@ -628,23 +628,72 @@ impl Workspace {
     }
 
     /// Opens a schema visualization document for a table.
-    /// TODO: implement in Batch C — create SchemaVizDocument and open in TabManager
     pub(super) fn open_schema_viz_document(
         &mut self,
         profile_id: uuid::Uuid,
         database: Option<String>,
         schema: Option<String>,
         table: String,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        // TODO: implement in Batch C — create SchemaVizDocument and open in TabManager
+        use crate::ui::document::schema_viz::{SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: check if a SchemaViz document for this (profile_id, table, database) already exists
+        let existing = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| {
+                if let crate::ui::document::DocumentHandle::SchemaViz { entity, .. } = doc {
+                    let doc = entity.read(cx);
+                    doc.profile_id == profile_id
+                        && doc.table_name() == Some(table.as_str())
+                        && doc.database.as_deref() == database.as_deref()
+                } else {
+                    false
+                }
+            })
+            .map(|doc| doc.id());
+
+        if let Some(existing_id) = existing {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            return;
+        }
+
+        // Create new document
+        let mode = SchemaVizMode::Focused {
+            table: table.clone(),
+            schema: schema.clone(),
+        };
+        let database_clone = database.clone();
+
+        let entity = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                database,
+                mode,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let handle = crate::ui::document::DocumentHandle::schema_viz(entity, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
         log::info!(
-            "open_schema_viz_document: {} (profile={}, db={:?}, schema={:?})",
+            "Opened schema viz document: {} (profile={}, db={:?}, schema={:?})",
             table,
             profile_id,
-            database,
-            schema
+            database_clone.as_deref(),
+            schema.as_deref()
         );
     }
 
