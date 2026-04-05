@@ -1,0 +1,10 @@
+[package]
+name = "dbflux_schema_viz"
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dbflux_core = { path = "../dbflux_core" }
+petgraph = "0.7"

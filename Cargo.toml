@@ -29,6 +29,7 @@ members = [
     "crates/dbflux_approval",
     "crates/dbflux_audit",
     "crates/dbflux_storage",
+    "crates/dbflux_schema_viz",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -67,6 +68,7 @@ dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
+dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui = { path = "crates/dbflux_ui" }
