@@ -4,6 +4,7 @@ use super::audit::AuditDocument;
 use super::code::CodeDocument;
 use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
+use super::schema_viz::SchemaVizDocument;
 use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
@@ -35,6 +36,11 @@ pub enum DocumentHandle {
         id: DocumentId,
         entity: Entity<AuditDocument>,
     },
+    /// Schema relationship diagram document.
+    SchemaViz {
+        id: DocumentId,
+        entity: Entity<SchemaVizDocument>,
+    },
 }
 
 impl DocumentHandle {
@@ -61,6 +67,12 @@ impl DocumentHandle {
         Self::Audit { id, entity }
     }
 
+    /// Creates a new SchemaViz document handle.
+    pub fn schema_viz(entity: Entity<SchemaVizDocument>, cx: &App) -> Self {
+        let id = entity.read(cx).id.clone();
+        Self::SchemaViz { id, entity }
+    }
+
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
@@ -68,6 +80,7 @@ impl DocumentHandle {
             Self::Data { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
             Self::Audit { id, .. } => *id,
+            Self::SchemaViz { id, .. } => *id,
         }
     }
 
@@ -78,6 +91,7 @@ impl DocumentHandle {
             Self::Data { .. } => DocumentKind::Data,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
             Self::Audit { .. } => DocumentKind::Audit,
+            Self::SchemaViz { .. } => DocumentKind::SchemaViz,
         }
     }
 
@@ -204,6 +218,18 @@ impl DocumentHandle {
                     connection_id: None,
                 }
             }
+            Self::SchemaViz { id, entity } => {
+                let doc = entity.read(cx);
+                DocumentMetaSnapshot {
+                    id: *id,
+                    kind: DocumentKind::SchemaViz,
+                    title: "Schema Diagram".to_string(),
+                    icon: DocumentIcon::SchemaViz,
+                    state: doc.state(),
+                    closable: true,
+                    connection_id: None,
+                }
+            }
         }
     }
 
@@ -219,6 +245,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
             Self::Audit { .. } => true,
+            Self::SchemaViz { .. } => true,
         }
     }
 
@@ -226,6 +253,7 @@ impl DocumentHandle {
         if let Self::Code { entity, .. } = self {
             entity.read(cx).flush_auto_save(cx);
         }
+        // SchemaVizDocument doesn't have auto-save
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
@@ -234,6 +262,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Audit { .. } => RefreshPolicy::default(),
+            Self::SchemaViz { .. } => RefreshPolicy::Manual,
         }
     }
 
@@ -250,6 +279,9 @@ impl DocumentHandle {
             }
             Self::Audit { .. } => {
                 // AuditDocument doesn't need tab state
+            }
+            Self::SchemaViz { .. } => {
+                // SchemaVizDocument doesn't use tabs
             }
         }
     }
@@ -268,6 +300,9 @@ impl DocumentHandle {
             Self::Audit { .. } => {
                 // AuditDocument doesn't use refresh policy
             }
+            Self::SchemaViz { .. } => {
+                // SchemaVizDocument doesn't use refresh policy
+            }
         }
     }
 
@@ -278,6 +313,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
             Self::Audit { entity, .. } => entity.clone().into_any_element(),
+            Self::SchemaViz { entity, .. } => entity.clone().into_any_element(),
         }
     }
 
@@ -296,6 +332,7 @@ impl DocumentHandle {
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
+            Self::SchemaViz { .. } => false,
         }
     }
 
@@ -314,6 +351,9 @@ impl DocumentHandle {
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
+            Self::SchemaViz { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.focus(window, cx));
+            }
         }
     }
 
@@ -325,6 +365,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
             Self::Audit { entity, .. } => entity.read(cx).active_context(),
+            Self::SchemaViz { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
@@ -375,6 +416,10 @@ impl DocumentHandle {
                         callback(&DocumentEvent::RequestFocus, cx);
                     }
                 })
+            }
+            Self::SchemaViz { .. } => {
+                // SchemaVizDocument doesn't emit events yet in Batch B scaffold
+                Subscription::new(|| ())
             }
         }
     }

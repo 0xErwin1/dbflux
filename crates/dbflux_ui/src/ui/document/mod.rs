@@ -15,8 +15,9 @@ mod handle;
 mod key_value;
 mod new_key_modal;
 mod result_view;
+pub mod schema_viz;
 pub mod tab_bar;
-mod tab_manager;
+pub mod tab_manager;
 mod task_runner;
 mod types;
 
@@ -32,6 +33,7 @@ pub use governance::McpApprovalsView;
 pub use handle::{DocumentEvent, DocumentHandle};
 pub use key_value::{KeyValueDocument, KeyValueDocumentEvent};
 pub use result_view::ResultViewMode;
+pub use schema_viz::SchemaVizDocument;
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{TabManager, TabManagerEvent};
 pub use task_runner::DocumentTaskRunner;
