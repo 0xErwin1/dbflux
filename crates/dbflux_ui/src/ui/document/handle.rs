@@ -69,7 +69,7 @@ impl DocumentHandle {
 
     /// Creates a new SchemaViz document handle.
     pub fn schema_viz(entity: Entity<SchemaVizDocument>, cx: &App) -> Self {
-        let id = entity.read(cx).id.clone();
+        let id = entity.read(cx).id();
         Self::SchemaViz { id, entity }
     }
 
@@ -220,6 +220,7 @@ impl DocumentHandle {
             }
             Self::SchemaViz { id, entity } => {
                 let doc = entity.read(cx);
+                // TODO: Batch C will populate with actual table/diagram name
                 DocumentMetaSnapshot {
                     id: *id,
                     kind: DocumentKind::SchemaViz,
@@ -417,10 +418,10 @@ impl DocumentHandle {
                     }
                 })
             }
-            Self::SchemaViz { .. } => {
-                // SchemaVizDocument doesn't emit events yet in Batch B scaffold
-                Subscription::new(|| ())
-            }
+            Self::SchemaViz { entity, .. } => cx.subscribe(entity, move |_entity, _event, cx| {
+                // SchemaVizDocument currently doesn't emit events - this is a no-op
+                let _ = cx;
+            }),
         }
     }
 }

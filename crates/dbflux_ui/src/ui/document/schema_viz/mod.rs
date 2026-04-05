@@ -2,12 +2,13 @@ use gpui::prelude::*;
 use gpui::*;
 
 use crate::keymap::ContextId;
+use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentKind, DocumentState};
 
 pub struct SchemaVizDocument {
-    pub id: DocumentId,
-    pub state: DocumentState,
-    pub focus_handle: FocusHandle,
+    id: DocumentId,
+    state: DocumentState,
+    focus_handle: FocusHandle,
 }
 
 impl SchemaVizDocument {
@@ -20,6 +21,10 @@ impl SchemaVizDocument {
         }
     }
 
+    pub fn id(&self) -> DocumentId {
+        self.id
+    }
+
     pub fn state(&self) -> DocumentState {
         self.state
     }
@@ -29,10 +34,12 @@ impl SchemaVizDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
-        // TODO: SchemaVizDocument should have its own context in Batch C
-        ContextId::Audit
+        // SchemaViz is a neutral document context - use Global as fallback
+        ContextId::Global
     }
 }
+
+impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 
 impl Render for SchemaVizDocument {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
