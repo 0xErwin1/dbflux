@@ -181,6 +181,13 @@ impl SchemaVizDocument {
             .table_details(&db_name, schema.as_deref(), &table)
             .map_err(|e| format!("Failed to fetch table details: {}", e))?;
 
+        log::info!(
+            "DEBUG load_focused_schema_blocking: focal_table name={:?} schema={:?} columns_count={:?}",
+            focal_table.name,
+            focal_table.schema,
+            focal_table.columns.as_ref().map(|c| c.len())
+        );
+
         let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
         all_table_names.insert((schema.clone(), table.clone()));
 
@@ -192,6 +199,19 @@ impl SchemaVizDocument {
 
         let mut all_tables = Vec::with_capacity(all_table_names.len());
         all_tables.push(focal_table.clone());
+
+        log::info!(
+            "DEBUG load_focused_schema_blocking: all_tables.len()={} tables={:?}",
+            all_tables.len(),
+            all_tables.iter().map(|t| {
+                format!(
+                    "{{ name: {:?}, schema: {:?}, columns_count: {:?} }}",
+                    t.name,
+                    t.schema,
+                    t.columns.as_ref().map(|c| c.len())
+                )
+            }).collect::<Vec<_>>()
+        );
 
         for (tbl_schema, tbl_name) in &all_table_names {
             if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
@@ -226,8 +246,34 @@ impl SchemaVizDocument {
         }
 
         let graph = SchemaGraph::build(&all_tables);
+        log::info!(
+            "DEBUG load_focused_schema_blocking: graph built: node_count={} edge_count={}",
+            graph.node_count(),
+            graph.edge_count()
+        );
+
         let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
+        log::info!(
+            "DEBUG load_focused_schema_blocking: neighborhood: node_count={} edge_count={}",
+            focused_graph.node_count(),
+            focused_graph.edge_count()
+        );
+
         let layout = dbflux_schema_viz::layout::compute_layout(&focused_graph);
+        log::info!(
+            "DEBUG load_focused_schema_blocking: layout: nodes.len={} edges.len={}",
+            layout.nodes.len(),
+            layout.edges.len()
+        );
+
+        log::info!(
+            "DEBUG load_focused_schema_blocking: RETURNING all_tables.len={} focused_graph node_count={} edge_count={} layout nodes={} edges={}",
+            all_tables.len(),
+            focused_graph.node_count(),
+            focused_graph.edge_count(),
+            layout.nodes.len(),
+            layout.edges.len()
+        );
 
         Ok((all_tables, focused_graph, layout))
     }
@@ -329,6 +375,12 @@ impl SchemaVizDocument {
         let zoom = self.zoom;
         let pan = self.pan_offset;
         let scale = zoom;
+
+        log::info!(
+            "DEBUG render_diagram: self.layout is {} self.graph is {}",
+            if self.layout.is_some() { "Some" } else { "None" },
+            if self.graph.is_some() { "Some" } else { "None" }
+        );
 
         // Grid cell size (spacing between nodes)
         let grid_size = 280.0 * scale;
@@ -498,8 +550,16 @@ impl SchemaVizDocument {
 
     fn render_nodes(&self, layout: &LayoutResult, zoom: f32, pan: Point<Pixels>, cx: &mut Context<Self>) -> Vec<Div> {
         let Some(graph) = &self.graph else {
+            log::info!("DEBUG render_nodes: self.graph is None, returning empty");
             return Vec::new();
         };
+
+        let node_count = graph.nodes().count();
+        log::info!(
+            "DEBUG render_nodes: graph.nodes() count={} layout.nodes.len={}",
+            node_count,
+            layout.nodes.len()
+        );
 
         let mouse_pos = self.mouse_position;
 

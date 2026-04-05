@@ -1,3 +1,4 @@
+use log;
 use petgraph::prelude::{DiGraph, EdgeRef, NodeIndex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -53,6 +54,19 @@ impl SchemaGraph {
     /// If a FK references a table not present in `tables`, that edge is
     /// skipped silently.
     pub fn build(tables: &[TableInfo]) -> Self {
+        log::info!(
+            "DEBUG SchemaGraph::build INPUT: tables.len={} tables={:?}",
+            tables.len(),
+            tables
+                .iter()
+                .map(|t| format!(
+                    "{{ name: {:?}, schema: {:?}, columns: {:?} }}",
+                    t.name,
+                    t.schema,
+                    t.columns.as_ref().map(|c| c.len())
+                ))
+                .collect::<Vec<_>>()
+        );
         let mut graph = DiGraph::with_capacity(tables.len(), tables.len());
         let mut node_index_by_id = HashMap::new();
 
@@ -127,10 +141,18 @@ impl SchemaGraph {
             }
         }
 
-        SchemaGraph {
+        let result = SchemaGraph {
             graph,
             node_index_by_id,
-        }
+        };
+
+        log::info!(
+            "DEBUG SchemaGraph::build OUTPUT: node_count={} edge_count={}",
+            result.node_count(),
+            result.edge_count()
+        );
+
+        result
     }
 
     /// Return a subgraph containing the focal table and all tables reachable
@@ -139,12 +161,24 @@ impl SchemaGraph {
     /// The focal table is identified by `name` and optional `schema`.
     /// Returns an empty `SchemaGraph` if the focal table is not found.
     pub fn neighborhood(&self, table: &str, schema: Option<&str>, depth: usize) -> SchemaGraph {
+        log::info!(
+            "DEBUG SchemaGraph::neighborhood INPUT: table={:?} schema={:?} depth={} self node_count={}",
+            table,
+            schema,
+            depth,
+            self.node_count()
+        );
+
         let focal_id = TableNodeId {
             schema: schema.map(str::to_owned),
             name: table.to_owned(),
         };
 
         let Some(&focal_idx) = self.node_index_by_id.get(&focal_id) else {
+            log::warn!(
+                "DEBUG SchemaGraph::neighborhood: focal_id {:?} not found in node_index_by_id",
+                focal_id
+            );
             return SchemaGraph {
                 graph: DiGraph::new(),
                 node_index_by_id: HashMap::new(),
@@ -239,10 +273,18 @@ impl SchemaGraph {
             })
             .collect();
 
-        SchemaGraph {
+        let result = SchemaGraph {
             graph: subgraph,
             node_index_by_id,
-        }
+        };
+
+        log::info!(
+            "DEBUG SchemaGraph::neighborhood OUTPUT: node_count={} edge_count={}",
+            result.node_count(),
+            result.edge_count()
+        );
+
+        result
     }
 
     /// Iterate over all nodes in the graph.
