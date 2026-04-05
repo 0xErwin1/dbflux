@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::{Scrollable, ScrollableElement};
+use tokio::task;
 
 use dbflux_core::{Connection, DbSchemaInfo, TableInfo};
 use dbflux_schema_viz::{
@@ -183,10 +184,18 @@ impl SchemaVizDocument {
 
         let db_name = database.ok_or_else(|| "No database specified".to_string())?;
 
-        // Fetch focal table details
-        let focal_table = connection
-            .table_details(db_name, schema, table)
-            .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+        // Fetch focal table details (blocking call, must run in spawn_blocking)
+        let focal_table = tokio::task::spawn_blocking({
+            let connection = connection.clone();
+            let db_name = db_name.clone();
+            let table = table.to_string();
+            let schema = schema.map(String::from);
+            #[allow(clippy::result_large_err)]
+            move || connection.table_details(&db_name, schema.as_deref(), &table)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| format!("Failed to fetch table details: {}", e))?;
 
         // Collect all tables needed: focal + neighbors
         let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
@@ -202,19 +211,7 @@ impl SchemaVizDocument {
             }
         }
 
-        // Get inbound FK neighbors (tables that reference this table)
-        let schema_snapshot = connection
-            .schema()
-            .map_err(|e| format!("Failed to fetch schema: {}", e))?;
-
-        let inbound_neighbors =
-            Self::find_inbound_references(&schema_snapshot, schema, table, &focal_table);
-
-        for (s, n) in inbound_neighbors {
-            all_table_names.insert((Some(s), n));
-        }
-
-        // Fetch details for all neighbor tables
+        // Fetch all neighbor tables first (blocking calls)
         let mut all_tables = Vec::with_capacity(all_table_names.len());
         all_tables.push(focal_table.clone());
 
@@ -223,7 +220,18 @@ impl SchemaVizDocument {
                 continue; // Already added focal table
             }
 
-            match connection.table_details(db_name, tbl_schema.as_deref(), tbl_name) {
+            let details = tokio::task::spawn_blocking({
+                let connection = connection.clone();
+                let db_name = db_name.clone();
+                let tbl_schema = tbl_schema.clone();
+                let tbl_name = tbl_name.clone();
+                #[allow(clippy::result_large_err)]
+                move || connection.table_details(&db_name, tbl_schema.as_deref(), &tbl_name)
+            })
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?;
+
+            match details {
                 Ok(details) => all_tables.push(details),
                 Err(e) => {
                     log::warn!(
@@ -232,6 +240,35 @@ impl SchemaVizDocument {
                         tbl_name,
                         e
                     );
+                }
+            }
+        }
+
+        // Find inbound FK neighbors using the already-fetched tables
+        let inbound_neighbors = Self::find_inbound_references(&all_tables, schema, table);
+
+        for (s, n) in inbound_neighbors {
+            all_table_names.insert((Some(s), n));
+        }
+
+        // Re-fetch any tables not yet fetched (should be rare, but handle it)
+        for (tbl_schema, tbl_name) in &all_table_names {
+            if !all_tables.iter().any(|t| {
+                t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref()
+            }) {
+                let details = tokio::task::spawn_blocking({
+                    let connection = connection.clone();
+                    let db_name = db_name.clone();
+                    let tbl_schema = tbl_schema.clone();
+                    let tbl_name = tbl_name.clone();
+                    #[allow(clippy::result_large_err)]
+                    move || connection.table_details(&db_name, tbl_schema.as_deref(), &tbl_name)
+                })
+                .await
+                .map_err(|e| format!("Task join error: {}", e))?;
+
+                if let Ok(details) = details {
+                    all_tables.push(details);
                 }
             }
         }
@@ -245,41 +282,26 @@ impl SchemaVizDocument {
     }
 
     /// Finds tables that reference the focal table via FK.
+    /// Uses the already-fetched tables (which have FK data populated via table_details).
     fn find_inbound_references(
-        schema: &dbflux_core::SchemaSnapshot,
+        tables: &[TableInfo],
         focal_schema: Option<&str>,
         focal_table: &str,
-        _focal_details: &TableInfo,
     ) -> Vec<(String, String)> {
         let mut neighbors = Vec::new();
 
-        // Helper to check if a table references the focal table
-        let references_focal = |tbl: &TableInfo| -> bool {
+        for tbl in tables {
             let Some(ref fks) = tbl.foreign_keys else {
-                return false;
+                continue;
             };
-            fks.iter().any(|fk| {
-                fk.referenced_table == focal_table
+            for fk in fks {
+                if fk.referenced_table == focal_table
                     && fk.referenced_schema.as_deref() == focal_schema
-            })
-        };
-
-        if let dbflux_core::DataStructure::Relational(rel) = &schema.structure {
-            // For PostgreSQL-style schemas with named schemas
-            if !rel.schemas.is_empty() {
-                for schema_info in &rel.schemas {
-                    for table in &schema_info.tables {
-                        if references_focal(table) {
-                            neighbors.push((schema_info.name.clone(), table.name.clone()));
-                        }
-                    }
-                }
-            } else {
-                // For SQLite-style flat schemas (no named schemas)
-                for table in &rel.tables {
-                    if references_focal(table) {
-                        neighbors.push(("main".to_string(), table.name.clone()));
-                    }
+                {
+                    neighbors.push((
+                        tbl.schema.clone().unwrap_or_else(|| "main".to_string()),
+                        tbl.name.clone(),
+                    ));
                 }
             }
         }
@@ -667,9 +689,9 @@ impl SchemaVizDocument {
                 let to_layout = layout.nodes.get(&edge.to_node)?;
 
                 let scale = zoom;
-                let from_x = px((from_layout.x + 220.0) * scale) + pan.x;
+                let from_x = px((from_layout.x + from_layout.width) * scale) + pan.x;
                 let from_y = px((from_layout.y + from_layout.height / 2.0) * scale) + pan.y;
-                let to_x = px(to_layout.x * scale) + pan.x;
+                let to_x = px((to_layout.x + to_layout.width) * scale) + pan.x;
 
                 // Draw a horizontal line connecting the two anchor points
                 let dx = to_x - from_x;
