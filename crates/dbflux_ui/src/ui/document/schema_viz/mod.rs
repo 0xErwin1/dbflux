@@ -54,9 +54,9 @@ pub struct SchemaVizDocument {
     pan_start: Point<Pixels>,
     pan_offset: Point<Pixels>,
     // Node interaction
-    hovered_node: Option<petgraph::graph::NodeIndex>,
     selected_node: Option<petgraph::graph::NodeIndex>,
     pending_details_panel: Option<petgraph::graph::NodeIndex>,
+    mouse_position: Point<Pixels>,
 }
 
 impl SchemaVizDocument {
@@ -104,9 +104,9 @@ impl SchemaVizDocument {
             is_panning: false,
             pan_start: Point::default(),
             pan_offset: Point::default(),
-            hovered_node: None,
             selected_node: None,
             pending_details_panel: None,
+            mouse_position: Point::default(),
         };
 
         // Spawn async loading task
@@ -485,11 +485,14 @@ impl SchemaVizDocument {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, _cx| {
-                            this.is_panning = true;
-                            this.pan_start = event.position;
+                            if event.click_count == 1 {
+                                this.is_panning = true;
+                                this.pan_start = event.position;
+                            }
                         }),
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _cx| {
+                        this.mouse_position = event.position;
                         if !this.is_panning {
                             return;
                         }
@@ -525,15 +528,18 @@ impl SchemaVizDocument {
             return Vec::new();
         };
 
+        let mouse_pos = self.mouse_position;
+
         graph
             .nodes()
             .filter_map(|(idx, node)| {
                 let node_layout = layout.nodes.get(&idx)?;
-                Some(self.render_node(node, node_layout, zoom, pan, idx, cx))
+                Some(self.render_node(node, node_layout, zoom, pan, idx, cx, mouse_pos))
             })
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_node(
         &self,
         node: &dbflux_schema_viz::graph::TableNode,
@@ -542,6 +548,7 @@ impl SchemaVizDocument {
         pan: Point<Pixels>,
         node_idx: petgraph::graph::NodeIndex,
         cx: &mut Context<Self>,
+        mouse_pos: Point<Pixels>,
     ) -> Div {
         let scale = zoom;
         let x = layout.x * scale;
@@ -549,7 +556,16 @@ impl SchemaVizDocument {
         let width = layout.width * scale;
         let height = layout.height * scale;
 
-        let is_hovered = self.hovered_node.as_ref() == Some(&node_idx);
+        // Hit-test for hover: is the mouse currently over this node?
+        let node_left = px(x) + pan.x;
+        let node_top = px(y) + pan.y;
+        let node_right = node_left + px(width);
+        let node_bottom = node_top + px(height);
+
+        let is_hovered = mouse_pos.x >= node_left
+            && mouse_pos.x <= node_right
+            && mouse_pos.y >= node_top
+            && mouse_pos.y <= node_bottom;
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
 
         // Border color changes on hover/select
