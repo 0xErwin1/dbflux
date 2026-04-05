@@ -280,7 +280,7 @@ impl Sidebar {
                                 Self::build_db_schema_content(
                                     profile_id,
                                     &db.name,
-                                    None,
+                                    Some(&db.name),
                                     db_schema,
                                     &connected.table_details,
                                     &connected.schema_types,
