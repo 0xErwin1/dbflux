@@ -1,5 +1,5 @@
 use petgraph::prelude::{DiGraph, EdgeRef, NodeIndex};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use dbflux_core::TableInfo;
 
@@ -153,12 +153,10 @@ impl SchemaGraph {
 
         // BFS in both outgoing and incoming directions, bounded by depth.
         let mut visited: HashSet<NodeIndex> = HashSet::new();
-        let mut queue: Vec<(NodeIndex, usize)> = vec![(focal_idx, 0)];
+        let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::from([(focal_idx, 0)]);
         visited.insert(focal_idx);
 
-        while !queue.is_empty() {
-            let (current, current_depth) = queue.remove(0);
-
+        while let Some((current, current_depth)) = queue.pop_front() {
             if current_depth >= depth {
                 continue;
             }
@@ -170,7 +168,7 @@ impl SchemaGraph {
             {
                 let neighbor = edge.target();
                 if visited.insert(neighbor) {
-                    queue.push((neighbor, current_depth + 1));
+                    queue.push_back((neighbor, current_depth + 1));
                 }
             }
 
@@ -181,27 +179,52 @@ impl SchemaGraph {
             {
                 let neighbor = edge.source();
                 if visited.insert(neighbor) {
-                    queue.push((neighbor, current_depth + 1));
+                    queue.push_back((neighbor, current_depth + 1));
                 }
             }
         }
 
         // Collect subgraph: nodes in `visited` + edges where both ends are in `visited`.
-        let mut subgraph = DiGraph::with_capacity(visited.len(), visited.len());
+        // Sort visited by table name for deterministic subgraph node insertion order.
+        let visited_set = visited.clone();
+        let mut sorted_visited: Vec<NodeIndex> = visited.into_iter().collect();
+        sorted_visited.sort_by_key(|&idx| {
+            self.graph
+                .node_weight(idx)
+                .map(|n| n.id.name.as_str())
+                .unwrap_or("")
+        });
+
+        let mut subgraph = DiGraph::with_capacity(sorted_visited.len(), sorted_visited.len());
         let mut new_index_by_old: HashMap<NodeIndex, NodeIndex> = HashMap::new();
 
-        for &old_idx in &visited {
-            let node = self.graph.node_weight(old_idx).unwrap().clone();
+        for &old_idx in &sorted_visited {
+            let node = self
+                .graph
+                .node_weight(old_idx)
+                .expect("invariant: old_idx is from the same source graph")
+                .clone();
             let new_idx = subgraph.add_node(node);
             new_index_by_old.insert(old_idx, new_idx);
         }
 
         for edge in self.graph.edge_indices() {
-            let (source, target) = self.graph.edge_endpoints(edge).unwrap();
-            if visited.contains(&source) && visited.contains(&target) {
-                let weight = self.graph.edge_weight(edge).unwrap().clone();
-                let new_source = *new_index_by_old.get(&source).unwrap();
-                let new_target = *new_index_by_old.get(&target).unwrap();
+            let (source, target) = self
+                .graph
+                .edge_endpoints(edge)
+                .expect("invariant: edge is from the same source graph");
+            if visited_set.contains(&source) && visited_set.contains(&target) {
+                let weight = self
+                    .graph
+                    .edge_weight(edge)
+                    .expect("invariant: edge is from the same source graph")
+                    .clone();
+                let new_source = *new_index_by_old
+                    .get(&source)
+                    .expect("invariant: source was visited and added to new_index_by_old");
+                let new_target = *new_index_by_old
+                    .get(&target)
+                    .expect("invariant: target was visited and added to new_index_by_old");
                 subgraph.add_edge(new_source, new_target, weight);
             }
         }
@@ -209,7 +232,9 @@ impl SchemaGraph {
         let node_index_by_id = new_index_by_old
             .iter()
             .map(|(_old_idx, &new_idx)| {
-                let node = subgraph.node_weight(new_idx).unwrap();
+                let node = subgraph
+                    .node_weight(new_idx)
+                    .expect("invariant: new_idx was added to subgraph via add_node");
                 (node.id.clone(), new_idx)
             })
             .collect();
@@ -222,9 +247,14 @@ impl SchemaGraph {
 
     /// Iterate over all nodes in the graph.
     pub fn nodes(&self) -> impl Iterator<Item = (NodeIndex, &TableNode)> {
-        self.graph
-            .node_indices()
-            .map(|idx| (idx, self.graph.node_weight(idx).unwrap()))
+        self.graph.node_indices().map(|idx| {
+            (
+                idx,
+                self.graph
+                    .node_weight(idx)
+                    .expect("invariant: idx is from node_indices() on the same graph"),
+            )
+        })
     }
 
     /// Iterate over all edges in the graph.
@@ -489,6 +519,39 @@ mod tests {
     }
 
     // ── 9.6: neighborhood — bidirectional ────────────────────────────────────
+
+    #[test]
+    fn test_build_empty() {
+        let graph = SchemaGraph::build(&[]);
+        assert_eq!(graph.node_count(), 0);
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_fk_fields_preserved() {
+        let a = make_table("a", None, vec![("id", "integer", true)], vec![]);
+        let b = make_table(
+            "b",
+            None,
+            vec![("id", "integer", true), ("a_id", "integer", false)],
+            vec![ForeignKeyInfo {
+                name: "fk_b_a".into(),
+                columns: vec!["a_id".into()],
+                referenced_table: "a".into(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".into()],
+                on_delete: Some("CASCADE".into()),
+                on_update: Some("RESTRICT".into()),
+            }],
+        );
+
+        let graph = SchemaGraph::build(&[a, b]);
+        let sub = graph.neighborhood("b", None, 1);
+
+        let edge = sub.edges().next().expect("expected one edge in subgraph");
+        assert_eq!(edge.on_delete.as_deref(), Some("CASCADE"));
+        assert_eq!(edge.on_update.as_deref(), Some("RESTRICT"));
+    }
 
     #[test]
     fn test_neighborhood_bidirectional() {
