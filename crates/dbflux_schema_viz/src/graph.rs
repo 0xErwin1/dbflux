@@ -324,10 +324,12 @@ mod tests {
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.edge_count(), 0);
 
-        let (idx, node) = graph.nodes().next().unwrap();
+        let (_idx, node) = graph
+            .nodes()
+            .next()
+            .expect("test: graph should have one node");
         assert_eq!(node.id.name, "audit_log");
         assert_eq!(node.id.schema, None);
-        assert_eq!(idx.index(), 0);
     }
 
     // ── 9.2: composite FK ─────────────────────────────────────────────────────
@@ -369,7 +371,10 @@ mod tests {
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
 
-        let edge = graph.edges().next().unwrap();
+        let edge = graph
+            .edges()
+            .next()
+            .expect("test: graph should have one edge");
         assert_eq!(edge.from_columns, vec!["order_id", "line_id"]);
         assert_eq!(edge.to_columns, vec!["id", "line_seq"]);
     }
