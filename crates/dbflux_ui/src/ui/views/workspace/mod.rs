@@ -611,6 +611,21 @@ impl Workspace {
                 } => {
                     this.open_key_value_document(*profile_id, database.clone(), window, cx);
                 }
+                SidebarEvent::OpenSchemaViz {
+                    profile_id,
+                    database,
+                    schema,
+                    table,
+                } => {
+                    this.open_schema_viz_document(
+                        *profile_id,
+                        database.clone(),
+                        schema.clone(),
+                        table.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,

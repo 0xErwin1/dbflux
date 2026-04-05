@@ -627,6 +627,27 @@ impl Workspace {
         });
     }
 
+    /// Opens a schema visualization document for a table.
+    /// TODO: implement in Batch C — create SchemaVizDocument and open in TabManager
+    pub(super) fn open_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: String,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // TODO: implement in Batch C — create SchemaVizDocument and open in TabManager
+        log::info!(
+            "open_schema_viz_document: {} (profile={}, db={:?}, schema={:?})",
+            table,
+            profile_id,
+            database,
+            schema
+        );
+    }
+
     pub(super) fn open_key_value_document(
         &mut self,
         profile_id: uuid::Uuid,
