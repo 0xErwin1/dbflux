@@ -66,7 +66,13 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         .externals(petgraph::Direction::Incoming)
         .next()
         .or_else(|| graph.graph.externals(petgraph::Direction::Outgoing).next())
-        .unwrap_or_else(|| NodeIndex::new(0));
+        .unwrap_or_else(|| {
+            graph
+                .graph
+                .node_indices()
+                .next()
+                .expect("layered_layout requires a non-empty graph")
+        });
 
     // BFS from root to assign layers.
     let mut layer: HashMap<NodeIndex, usize> = HashMap::new();
@@ -170,7 +176,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         .collect();
 
     // Compute total bounds.
-    let total_width = (computed_max_layer as f32 + 1.0) * LAYER_SPACING_X;
+    let total_width = computed_max_layer as f32 * LAYER_SPACING_X + NODE_WIDTH;
     let total_height = layers
         .values()
         .map(|ids| {
@@ -186,7 +192,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
                 .sum::<f32>()
                 + (ids.len().saturating_sub(1) as f32) * NODE_SPACING_Y
         })
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| a.total_cmp(b))
         .unwrap_or(0.0_f32);
 
     LayoutResult {
@@ -358,7 +364,10 @@ mod tests {
 
         assert_eq!(layout1.nodes.len(), layout2.nodes.len());
         for (idx, node_layout) in &layout1.nodes {
-            let other = layout2.nodes.get(idx).unwrap();
+            let other = layout2
+                .nodes
+                .get(idx)
+                .expect("test: node should exist in layout2");
             assert_eq!(node_layout.x, other.x, "x differs for node {idx:?}");
             assert_eq!(node_layout.y, other.y, "y differs for node {idx:?}");
         }
@@ -449,16 +458,28 @@ mod tests {
                 .nodes()
                 .find(|(_, n)| n.id.name == name)
                 .map(|(i, _)| i)
-                .unwrap()
+                .expect("test: node should exist")
         };
 
         let idx_a = idx_by_name("a");
         let idx_b = idx_by_name("b");
         let idx_c = idx_by_name("c");
 
-        let x_a = layout.nodes.get(&idx_a).map(|l| l.x).unwrap();
-        let x_b = layout.nodes.get(&idx_b).map(|l| l.x).unwrap();
-        let x_c = layout.nodes.get(&idx_c).map(|l| l.x).unwrap();
+        let x_a = layout
+            .nodes
+            .get(&idx_a)
+            .map(|l| l.x)
+            .expect("test: idx_a should be in layout");
+        let x_b = layout
+            .nodes
+            .get(&idx_b)
+            .map(|l| l.x)
+            .expect("test: idx_b should be in layout");
+        let x_c = layout
+            .nodes
+            .get(&idx_c)
+            .map(|l| l.x)
+            .expect("test: idx_c should be in layout");
 
         assert!(x_a < x_b, "A (x={x_a}) should be left of B (x={x_b})");
         assert!(x_b < x_c, "B (x={x_b}) should be left of C (x={x_c})");
@@ -492,12 +513,24 @@ mod tests {
 
         // Collect x values from all nodes and check uniqueness.
         let mut xs: Vec<_> = layout.nodes.values().map(|l| l.x).collect();
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        xs.sort_by(|a, b| a.total_cmp(b));
         xs.dedup();
         // Grid layout should produce at least 2 different x values.
         assert!(
             xs.len() >= 2,
             "Cyclic graph should use grid layout with multiple columns; got x values: {xs:?}"
         );
+
+        // Grid x positions must be multiples of CELL_WIDTH.
+        for (_, node_layout) in &layout.nodes {
+            let col = (node_layout.x / CELL_WIDTH).round();
+            let expected_x = col * CELL_WIDTH;
+            assert!(
+                (node_layout.x - expected_x).abs() < 0.01,
+                "x={} is not a multiple of CELL_WIDTH={}",
+                node_layout.x,
+                CELL_WIDTH
+            );
+        }
     }
 }
