@@ -10,6 +10,7 @@ use dbflux_schema_viz::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
+use petgraph::graph::NodeIndex;
 
 use crate::app::AppStateEntity;
 use crate::keymap::ContextId;
@@ -48,6 +49,14 @@ pub struct SchemaVizDocument {
     pub zoom: f32,
     pub focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
+    // Pan state
+    is_panning: bool,
+    pan_start: Point<Pixels>,
+    pan_offset: Point<Pixels>,
+    // Node interaction
+    hovered_node: Option<petgraph::graph::NodeIndex>,
+    selected_node: Option<petgraph::graph::NodeIndex>,
+    pending_details_panel: Option<petgraph::graph::NodeIndex>,
 }
 
 impl SchemaVizDocument {
@@ -92,6 +101,12 @@ impl SchemaVizDocument {
             zoom: 1.0,
             focus_handle,
             _subscriptions: Vec::new(),
+            is_panning: false,
+            pan_start: Point::default(),
+            pan_offset: Point::default(),
+            hovered_node: None,
+            selected_node: None,
+            pending_details_panel: None,
         };
 
         // Spawn async loading task
@@ -281,7 +296,7 @@ impl SchemaVizDocument {
             LoadStatus::Loading => DocumentState::Loading,
             LoadStatus::Ready => DocumentState::Clean,
             LoadStatus::Error(_) => DocumentState::Error,
-            LoadStatus::NotSupported => DocumentState::Clean,
+            LoadStatus::NotSupported => DocumentState::Error,
         }
     }
 
@@ -301,7 +316,22 @@ impl SchemaVizDocument {
             .size_full()
             .items_center()
             .justify_center()
-            .child("Loading schema...")
+            .bg(gpui::hsla(0.0, 0.0, 0.97, 1.0))
+            .flex_col()
+            .gap(Spacing::MD)
+            .child(
+                div()
+                    .size(px(32.0))
+                    .border_2()
+                    .border_color(gpui::hsla(0.6, 0.6, 0.5, 0.7))
+                    .rounded_full(),
+            )
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(gpui::hsla(0.0, 0.0, 0.4, 0.8))
+                    .child("Loading schema..."),
+            )
     }
 
     fn render_error(&self, msg: &str) -> Div {
@@ -322,37 +352,175 @@ impl SchemaVizDocument {
             .child("Schema diagram is not available for this database type")
     }
 
-    fn render_diagram(&self, _window: &mut Window, cx: &mut Context<Self>) -> Scrollable<Div> {
+    fn render_diagram(&self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         let zoom = self.zoom;
+        let pan = self.pan_offset;
+        let scale = zoom;
+
+        // Grid cell size (spacing between nodes)
+        let grid_size = 280.0 * scale;
+        let grid_color = gpui::hsla(0.0, 0.0, 0.85, 0.5);
 
         let inner = match &self.layout {
             Some(layout) => {
-                let total_width = layout.total_width * zoom;
-                let total_height = layout.total_height * zoom;
+                let total_width = layout.total_width * scale + 400.0;
+                let total_height = layout.total_height * scale + 400.0;
+
+                // Render grid background using layered divs
+                let grid_lines_x: Vec<Div> = (0..((total_width / grid_size) as usize + 2))
+                    .map(|i| {
+                        let x = i as f32 * grid_size;
+                        div()
+                            .absolute()
+                            .left(px(x))
+                            .top(px(0.0))
+                            .w(px(1.0))
+                            .h(px(total_height))
+                            .bg(grid_color)
+                    })
+                    .collect();
+
+                let grid_lines_y: Vec<Div> = (0..((total_height / grid_size) as usize + 2))
+                    .map(|i| {
+                        let y = i as f32 * grid_size;
+                        div()
+                            .absolute()
+                            .left(px(0.0))
+                            .top(px(y))
+                            .w(px(total_width))
+                            .h(px(1.0))
+                            .bg(grid_color)
+                    })
+                    .collect();
+
                 div()
                     .relative()
                     .w(px(total_width))
                     .h(px(total_height))
-                    .children(self.render_edges_overlay(layout, zoom))
-                    .children(self.render_nodes(layout, zoom))
+                    .bg(gpui::hsla(0.0, 0.0, 0.97, 1.0)) // #F8F9FA
+                    .children(grid_lines_x)
+                    .children(grid_lines_y)
+                    .children(self.render_edges_overlay(layout, scale, pan))
+                    .children(self.render_nodes(layout, scale, pan, cx))
             }
-            None => div().size_full().child(self.render_error("No layout computed")),
+            None => div()
+                .size_full()
+                .bg(gpui::hsla(0.0, 0.0, 0.97, 1.0))
+                .child(self.render_error("No layout computed")),
         };
+
+        // Zoom controls bar
+        let zoom_controls = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .px(Spacing::MD)
+            .py(px(6.0))
+            .bg(gpui::hsla(0.0, 0.0, 0.98, 0.95))
+            .border_b_1()
+            .border_color(gpui::hsla(0.0, 0.0, 0.85, 0.3))
+            .children([
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .text_color(gpui::hsla(0.0, 0.0, 0.4, 0.9))
+                            .child(format!("Zoom: {:.0}%", zoom * 100.0)),
+                    ),
+                div()
+                    .w(px(1.0))
+                    .h(px(16.0))
+                    .bg(gpui::hsla(0.0, 0.0, 0.85, 0.5)),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .when(self.zoom < 4.0, |d| {
+                        d.on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            this.zoom = (this.zoom * 1.25).min(4.0);
+                            cx.notify();
+                        }))
+                    })
+                    .child("+"),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .when(self.zoom > 0.25, |d| {
+                        d.on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            this.zoom = (this.zoom / 1.25).max(0.25);
+                            cx.notify();
+                        }))
+                    })
+                    .child("-"),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.zoom = 1.0;
+                        this.pan_offset = Point::default();
+                        cx.notify();
+                    }))
+                    .child("Reset"),
+            ]);
 
         div()
             .size_full()
-            .overflow_scrollbar()
-            .track_focus(&self.focus_handle)
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                let delta = event.delta.pixel_delta(px(1.0)).y;
-                let factor = if delta > px(0.0) { 0.9_f32 } else { 1.1_f32 };
-                this.zoom = (this.zoom * factor).clamp(0.25, 2.0);
-                cx.notify();
-            }))
-            .child(inner)
+            .flex()
+            .flex_col()
+            .bg(gpui::hsla(0.0, 0.0, 0.97, 1.0))
+            .child(zoom_controls)
+            .child(
+                div()
+                    .flex_1()
+                    .relative()
+                    .overflow_hidden()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, _cx| {
+                            this.is_panning = true;
+                            this.pan_start = event.position;
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _cx| {
+                        if !this.is_panning {
+                            return;
+                        }
+                        let dx = event.position.x - this.pan_start.x;
+                        let dy = event.position.y - this.pan_start.y;
+                        this.pan_offset = Point::new(
+                            this.pan_offset.x + dx,
+                            this.pan_offset.y + dy,
+                        );
+                        this.pan_start = event.position;
+                    }))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                        this.is_panning = false;
+                    }))
+                    .child(
+                        div()
+                            .size_full()
+                            .overflow_scrollbar()
+                            .track_focus(&self.focus_handle)
+                            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                                let delta = event.delta.pixel_delta(px(1.0)).y;
+                                let factor = if delta > px(0.0) { 0.9_f32 } else { 1.1_f32 };
+                                this.zoom = (this.zoom * factor).clamp(0.25, 4.0);
+                                cx.notify();
+                            }))
+                            .child(inner),
+                    ),
+            )
     }
 
-    fn render_nodes(&self, layout: &LayoutResult, zoom: f32) -> Vec<Div> {
+    fn render_nodes(&self, layout: &LayoutResult, zoom: f32, pan: Point<Pixels>, cx: &mut Context<Self>) -> Vec<Div> {
         let Some(graph) = &self.graph else {
             return Vec::new();
         };
@@ -361,7 +529,7 @@ impl SchemaVizDocument {
             .nodes()
             .filter_map(|(idx, node)| {
                 let node_layout = layout.nodes.get(&idx)?;
-                Some(self.render_node(node, node_layout, zoom))
+                Some(self.render_node(node, node_layout, zoom, pan, idx, cx))
             })
             .collect()
     }
@@ -371,12 +539,27 @@ impl SchemaVizDocument {
         node: &dbflux_schema_viz::graph::TableNode,
         layout: &NodeLayout,
         zoom: f32,
+        pan: Point<Pixels>,
+        node_idx: petgraph::graph::NodeIndex,
+        cx: &mut Context<Self>,
     ) -> Div {
         let scale = zoom;
         let x = layout.x * scale;
         let y = layout.y * scale;
         let width = layout.width * scale;
         let height = layout.height * scale;
+
+        let is_hovered = self.hovered_node.as_ref() == Some(&node_idx);
+        let is_selected = self.selected_node.as_ref() == Some(&node_idx);
+
+        // Border color changes on hover/select
+        let border_color = if is_selected {
+            gpui::hsla(0.6, 0.8, 0.5, 0.8) // blue selection
+        } else if is_hovered {
+            gpui::hsla(0.6, 0.6, 0.5, 0.7) // blue hover
+        } else {
+            gpui::hsla(0.0, 0.0, 0.5, 0.3)
+        };
 
         // Schema badge if non-default
         let schema_badge = node.id.schema.as_ref().map(|s| {
@@ -386,17 +569,26 @@ impl SchemaVizDocument {
                 .child(s.clone())
         });
 
+        let node_idx_clone = node_idx;
         div()
             .absolute()
-            .left(px(x))
-            .top(px(y))
+            .left(px(x) + pan.x)
+            .top(px(y) + pan.y)
             .w(px(width))
             .h(px(height))
             .border_1()
-            .border_color(gpui::hsla(0.0, 0.0, 0.5, 0.3))
+            .border_color(border_color)
             .rounded_md()
             .bg(gpui::white())
             .shadow_sm()
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, _, _cx| {
+                    this.selected_node = Some(node_idx_clone);
+                    this.pending_details_panel = Some(node_idx_clone);
+                }),
+            )
             .flex()
             .flex_col()
             .child(
@@ -407,7 +599,11 @@ impl SchemaVizDocument {
                     .gap(Spacing::SM)
                     .px(Spacing::SM)
                     .py(px(4.0))
-                    .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))
+                    .bg(if is_selected {
+                        gpui::hsla(0.6, 0.5, 0.95, 0.9)
+                    } else {
+                        gpui::hsla(0.0, 0.0, 0.5, 0.1)
+                    })
                     .border_b_1()
                     .border_color(gpui::hsla(0.0, 0.0, 0.5, 0.2))
                     .font_weight(gpui::FontWeight::BOLD)
@@ -437,7 +633,12 @@ impl SchemaVizDocument {
     /// Renders edges as CSS elements (horizontal connecting lines).
     /// Note: Full bezier edge rendering via GPUI canvas PathBuilder is not
     /// available in this codebase yet. This CSS fallback renders orthogonal connectors.
-    fn render_edges_overlay(&self, layout: &LayoutResult, zoom: f32) -> Vec<Div> {
+    fn render_edges_overlay(
+        &self,
+        layout: &LayoutResult,
+        zoom: f32,
+        pan: Point<Pixels>,
+    ) -> Vec<Div> {
         let edges = layout.edges.clone();
         if edges.is_empty() {
             return Vec::new();
@@ -450,21 +651,21 @@ impl SchemaVizDocument {
                 let to_layout = layout.nodes.get(&edge.to_node)?;
 
                 let scale = zoom;
-                let from_x = (from_layout.x + 220.0) * scale;
-                let from_y = (from_layout.y + from_layout.height / 2.0) * scale;
-                let to_x = to_layout.x * scale;
+                let from_x = px((from_layout.x + 220.0) * scale) + pan.x;
+                let from_y = px((from_layout.y + from_layout.height / 2.0) * scale) + pan.y;
+                let to_x = px(to_layout.x * scale) + pan.x;
 
                 // Draw a horizontal line connecting the two anchor points
                 let dx = to_x - from_x;
-                let line_width = dx.abs().max(1.0);
-                let line_left = if dx >= 0.0 { from_x } else { to_x };
+                let line_width = dx.abs().max(px(1.0));
+                let line_left = if dx >= px(0.0) { from_x } else { to_x };
 
                 Some(
                     div()
                         .absolute()
-                        .left(px(line_left))
-                        .top(px(from_y - 1.0))
-                        .w(px(line_width))
+                        .left(line_left)
+                        .top(from_y - px(1.0))
+                        .w(line_width)
                         .h(px(2.0))
                         .bg(gpui::hsla(0.0, 0.0, 0.5, 0.5)),
                 )
