@@ -1,7 +1,6 @@
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::{Scrollable, ScrollableElement};
-use tokio::task;
 
 use dbflux_core::{Connection, DbSchemaInfo, TableInfo};
 use dbflux_schema_viz::{
@@ -126,27 +125,14 @@ impl SchemaVizDocument {
         entity: Entity<Self>,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn(async move |_entity, cx| {
-            let load_result = match (mode, connection) {
-                (SchemaVizMode::Focused { ref table, ref schema }, Some(connection)) => {
-                    Self::load_focused_schema(
-                        database.as_ref(),
-                        table.as_str(),
-                        schema.as_deref(),
-                        connection,
-                    )
-                    .await
-                }
-                (SchemaVizMode::Focused { .. }, None) => {
-                    Err("Connection not found or not active".to_string())
-                }
-                (SchemaVizMode::Global, _) => {
-                    // Phase 2: implement global schema loading
-                    Err("Global schema view not yet implemented".to_string())
-                }
-            };
+        let task = cx.background_executor().spawn(async move {
+            Self::load_focused_schema_blocking(database, mode, connection)
+        });
 
-            // Apply results in foreground
+        let entity = entity.clone();
+        cx.spawn(async move |_entity, cx| {
+            let load_result = task.await;
+
             if let Err(error) = cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     match load_result {
@@ -169,14 +155,21 @@ impl SchemaVizDocument {
         .detach();
     }
 
-    /// Loads schema data for focused mode.
-    async fn load_focused_schema(
-        database: Option<&String>,
-        table: &str,
-        schema: Option<&str>,
-        connection: Arc<dyn Connection>,
+    /// Loads schema data for focused mode (blocking, runs on background executor).
+    fn load_focused_schema_blocking(
+        database: Option<String>,
+        mode: SchemaVizMode,
+        connection: Option<Arc<dyn Connection>>,
     ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult), String> {
-        // Check driver capabilities
+        let (table, schema) = match mode {
+            SchemaVizMode::Focused { table, schema } => (table, schema),
+            SchemaVizMode::Global => {
+                return Err("Global schema view not yet implemented".to_string());
+            }
+        };
+
+        let connection = connection.ok_or_else(|| "Connection not found or not active".to_string())?;
+
         let metadata = connection.metadata();
         if !metadata.capabilities.contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS) {
             return Err("Foreign keys not supported by this driver".to_string());
@@ -184,54 +177,28 @@ impl SchemaVizDocument {
 
         let db_name = database.ok_or_else(|| "No database specified".to_string())?;
 
-        // Fetch focal table details (blocking call, must run in spawn_blocking)
-        let focal_table = tokio::task::spawn_blocking({
-            let connection = connection.clone();
-            let db_name = db_name.clone();
-            let table = table.to_string();
-            let schema = schema.map(String::from);
-            #[allow(clippy::result_large_err)]
-            move || connection.table_details(&db_name, schema.as_deref(), &table)
-        })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
-        .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+        let focal_table = connection
+            .table_details(&db_name, schema.as_deref(), &table)
+            .map_err(|e| format!("Failed to fetch table details: {}", e))?;
 
-        // Collect all tables needed: focal + neighbors
         let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
-        all_table_names.insert((schema.map(String::from), table.to_string()));
+        all_table_names.insert((schema.clone(), table.clone()));
 
-        // Get outbound FK neighbors (tables this table references)
         if let Some(ref fks) = focal_table.foreign_keys {
             for fk in fks {
-                all_table_names.insert((
-                    fk.referenced_schema.clone(),
-                    fk.referenced_table.clone(),
-                ));
+                all_table_names.insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
             }
         }
 
-        // Fetch all neighbor tables first (blocking calls)
         let mut all_tables = Vec::with_capacity(all_table_names.len());
         all_tables.push(focal_table.clone());
 
         for (tbl_schema, tbl_name) in &all_table_names {
-            if tbl_name == table && tbl_schema.as_deref() == schema {
-                continue; // Already added focal table
+            if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
+                continue;
             }
 
-            let details = tokio::task::spawn_blocking({
-                let connection = connection.clone();
-                let db_name = db_name.clone();
-                let tbl_schema = tbl_schema.clone();
-                let tbl_name = tbl_name.clone();
-                #[allow(clippy::result_large_err)]
-                move || connection.table_details(&db_name, tbl_schema.as_deref(), &tbl_name)
-            })
-            .await
-            .map_err(|e| format!("Task join error: {}", e))?;
-
-            match details {
+            match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
                 Ok(details) => all_tables.push(details),
                 Err(e) => {
                     log::warn!(
@@ -244,38 +211,22 @@ impl SchemaVizDocument {
             }
         }
 
-        // Find inbound FK neighbors using the already-fetched tables
-        let inbound_neighbors = Self::find_inbound_references(&all_tables, schema, table);
+        let inbound_neighbors = Self::find_inbound_references(&all_tables, schema.as_deref(), &table);
 
         for (s, n) in inbound_neighbors {
             all_table_names.insert((Some(s), n));
         }
 
-        // Re-fetch any tables not yet fetched (should be rare, but handle it)
         for (tbl_schema, tbl_name) in &all_table_names {
             if !all_tables.iter().any(|t| {
                 t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref()
-            }) {
-                let details = tokio::task::spawn_blocking({
-                    let connection = connection.clone();
-                    let db_name = db_name.clone();
-                    let tbl_schema = tbl_schema.clone();
-                    let tbl_name = tbl_name.clone();
-                    #[allow(clippy::result_large_err)]
-                    move || connection.table_details(&db_name, tbl_schema.as_deref(), &tbl_name)
-                })
-                .await
-                .map_err(|e| format!("Task join error: {}", e))?;
-
-                if let Ok(details) = details {
-                    all_tables.push(details);
-                }
+            }) && let Ok(details) = connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
+                all_tables.push(details);
             }
         }
 
-        // Build graph and compute layout
         let graph = SchemaGraph::build(&all_tables);
-        let focused_graph = graph.neighborhood(table, schema, 1);
+        let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
         let layout = dbflux_schema_viz::layout::compute_layout(&focused_graph);
 
         Ok((all_tables, focused_graph, layout))

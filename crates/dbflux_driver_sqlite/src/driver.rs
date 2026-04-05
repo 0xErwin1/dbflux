@@ -800,7 +800,7 @@ impl Connection for SqliteConnection {
 
         Ok(SchemaSnapshot::relational(RelationalSchema {
             databases: Vec::new(),
-            current_database: None,
+            current_database: Some("main".to_string()),
             schemas: vec![main_schema],
             tables: Vec::new(),
             views: Vec::new(),
