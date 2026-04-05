@@ -220,15 +220,18 @@ impl DocumentHandle {
             }
             Self::SchemaViz { id, entity } => {
                 let doc = entity.read(cx);
-                // TODO: Batch C will populate with actual table/diagram name
+                let title = doc
+                    .table_name()
+                    .map(|t| format!("Schema: {}", t))
+                    .unwrap_or_else(|| "Schema Diagram".to_string());
                 DocumentMetaSnapshot {
                     id: *id,
                     kind: DocumentKind::SchemaViz,
-                    title: "Schema Diagram".to_string(),
+                    title,
                     icon: DocumentIcon::SchemaViz,
                     state: doc.state(),
                     closable: true,
-                    connection_id: None,
+                    connection_id: Some(doc.profile_id),
                 }
             }
         }

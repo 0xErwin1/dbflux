@@ -28,6 +28,7 @@ dbflux_mcp_server = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 dbflux_approval = { workspace = true, optional = true }
 dbflux_audit.workspace = true
+dbflux_schema_viz.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 uuid.workspace = true
 log.workspace = true
