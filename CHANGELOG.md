@@ -2,6 +2,15 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.1] – 2026-04-05
+
+### Fixed
+
+* PKGBUILD now downloads pre-built Linux binaries from GitHub Releases instead of compiling from source
+* Release artifacts (tar.gz, AppImage) now include LICENSE files
+
+---
+
 ## [0.4.0] – 2026-04-05
 
 ### Architecture
