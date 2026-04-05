@@ -639,7 +639,7 @@ impl Workspace {
     ) {
         use crate::ui::document::schema_viz::{SchemaVizDocument, SchemaVizMode};
 
-        // Deduplication: check if a SchemaViz document for this (profile_id, table, database) already exists
+        // Deduplication: check if a SchemaViz document for this (profile_id, table, schema, database) already exists
         let existing = self
             .tab_manager
             .read(cx)
@@ -648,9 +648,27 @@ impl Workspace {
             .find(|doc| {
                 if let crate::ui::document::DocumentHandle::SchemaViz { entity, .. } = doc {
                     let doc = entity.read(cx);
-                    doc.profile_id == profile_id
-                        && doc.table_name() == Some(table.as_str())
-                        && doc.database.as_deref() == database.as_deref()
+                    if doc.profile_id != profile_id {
+                        return false;
+                    }
+                    let doc_table = doc.table_name();
+                    let doc_schema = match &doc.mode {
+                        crate::ui::document::schema_viz::SchemaVizMode::Focused { schema, .. } => {
+                            schema.clone()
+                        }
+                        crate::ui::document::schema_viz::SchemaVizMode::Global => None,
+                    };
+                    // Table name and schema must match
+                    if doc_table != Some(table.as_str()) {
+                        return false;
+                    }
+                    if doc_schema.as_deref() != schema.as_deref() {
+                        return false;
+                    }
+                    if doc.database.as_deref() != database.as_deref() {
+                        return false;
+                    }
+                    true
                 } else {
                     false
                 }
@@ -669,12 +687,11 @@ impl Workspace {
             table: table.clone(),
             schema: schema.clone(),
         };
-        let database_clone = database.clone();
 
         let entity = cx.new(|cx| {
             SchemaVizDocument::new(
                 profile_id,
-                database,
+                database.clone(),
                 mode,
                 self.app_state.clone(),
                 window,
@@ -692,7 +709,7 @@ impl Workspace {
             "Opened schema viz document: {} (profile={}, db={:?}, schema={:?})",
             table,
             profile_id,
-            database_clone.as_deref(),
+            database.as_deref(),
             schema.as_deref()
         );
     }
