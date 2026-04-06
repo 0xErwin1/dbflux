@@ -1,0 +1,11 @@
+#!/bin/bash
+# Post-install script for dbflux .deb/.rpm
+# Registers MIME types after installation
+
+if command -v update-mime-database &>/dev/null; then
+    update-mime-database /usr/share/mime &>/dev/null || true
+fi
+
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications &>/dev/null || true
+fi

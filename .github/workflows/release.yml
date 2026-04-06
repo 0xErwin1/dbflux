@@ -43,9 +43,13 @@ jobs:
           - arch: amd64
             runs_on: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+            rpm_arch: x86_64
           - arch: arm64
             runs_on: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+            rpm_arch: aarch64
 
     steps:
       - name: Checkout repository
@@ -72,6 +76,8 @@ jobs:
           else
             sudo apt-get install -y libfuse2t64
           fi
+
+          sudo apt-get install -y gettext imagemagick
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -164,6 +170,50 @@ jobs:
       - name: Generate AppImage checksum
         run: sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
 
+      - name: Generate PNG icons
+        run: |
+          mkdir -p packaging/icons/256x256/apps
+          mkdir -p packaging/icons/128x128/apps
+          mkdir -p packaging/icons/64x64/apps
+          mkdir -p packaging/icons/48x48/apps
+          mkdir -p packaging/icons/32x32/apps
+          mkdir -p packaging/icons/16x16/apps
+
+          convert resources/icons/dbflux.svg -resize 256x256 packaging/icons/256x256/apps/dbflux.png
+          convert resources/icons/dbflux.svg -resize 128x128 packaging/icons/128x128/apps/dbflux.png
+          convert resources/icons/dbflux.svg -resize 64x64 packaging/icons/64x64/apps/dbflux.png
+          convert resources/icons/dbflux.svg -resize 48x48 packaging/icons/48x48/apps/dbflux.png
+          convert resources/icons/dbflux.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert resources/icons/dbflux.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+
+      - name: Setup nfpm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
+          fi
+
+          ARCH="${{ matrix.rpm_arch }}"
+          if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; fi
+          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.46.0/nfpm_Linux_${ARCH}.tar.gz -o nfpm.tar.gz
+          tar -xzf nfpm.tar.gz
+          chmod +x nfpm
+
+          export VERSION
+          export ARCH=${{ matrix.deb_arch }}
+          export TARGET=${{ matrix.target }}
+
+          envsubst < packaging/nfpm.yaml > nfpm.yaml
+
+          ./nfpm package --packager deb --config nfpm.yaml --target dbflux_${VERSION}_linux_${{ matrix.deb_arch }}.deb
+          ./nfpm package --packager rpm --config nfpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
+
+      - name: Generate package checksums
+        run: |
+          sha256sum dbflux_*.deb > dbflux_${{ matrix.arch }}.deb.sha256
+          sha256sum dbflux-*.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
+
       - name: Import GPG key
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
@@ -178,6 +228,10 @@ jobs:
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+          gpg --armor --detach-sign dbflux_*.deb
+          gpg --armor --detach-sign dbflux_${{ matrix.arch }}.deb.sha256
+          gpg --armor --detach-sign dbflux-*.rpm
+          gpg --armor --detach-sign dbflux_${{ matrix.arch }}.rpm.sha256
 
       - name: Upload artifacts
         if: env.ACT != 'true'
@@ -189,6 +243,10 @@ jobs:
             dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
             dbflux-linux-${{ matrix.arch }}.AppImage
             dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+            dbflux_*.deb
+            dbflux_${{ matrix.arch }}.deb.sha256
+            dbflux-*.rpm
+            dbflux_${{ matrix.arch }}.rpm.sha256
           retention-days: 90
 
       - name: Upload signatures
@@ -201,6 +259,10 @@ jobs:
             dbflux-linux-${{ matrix.arch }}.tar.gz.sha256.asc
             dbflux-linux-${{ matrix.arch }}.AppImage.asc
             dbflux-linux-${{ matrix.arch }}.AppImage.sha256.asc
+            dbflux_*.deb.asc
+            dbflux_${{ matrix.arch }}.deb.sha256.asc
+            dbflux-*.rpm.asc
+            dbflux_${{ matrix.arch }}.rpm.sha256.asc
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -211,9 +273,15 @@ jobs:
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_*.deb /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-*.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           if [ -f dbflux-linux-${{ matrix.arch }}.tar.gz.asc ]; then
             cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
             cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+            cp dbflux_*.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
+            cp dbflux-*.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           fi
 
   build-macos:
@@ -602,6 +670,10 @@ jobs:
             artifacts/linux-*/*.tar.gz.sha256
             artifacts/linux-*/*.AppImage
             artifacts/linux-*/*.AppImage.sha256
+            artifacts/linux-*/*.deb
+            artifacts/linux-*/*.deb.sha256
+            artifacts/linux-*/*.rpm
+            artifacts/linux-*/*.rpm.sha256
             artifacts/macos-*/*.dmg
             artifacts/macos-*/*.dmg.sha256
             artifacts/windows-*/*.zip
