@@ -3,6 +3,31 @@
 /// Different window systems have different behaviors and requirements.
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
+///
+/// # Title bar on GNOME Wayland
+///
+/// GNOME Wayland (43+) deliberately does not implement the `zxdg-decoration-v1`
+/// protocol for non-GTK apps. When GPUI requests server-side decorations (SSD),
+/// GNOME responds with `ClientSide`, causing GPUI to enter CSD mode. Because
+/// DBFlux does not render its own title bar, the window ends up with no title
+/// bar at all — impossible to move or close with the mouse.
+///
+/// Current workaround: the `.desktop` files force XWayland by setting
+/// `WAYLAND_DISPLAY=` (empty), so GPUI falls back to X11 where GNOME honors
+/// `_MOTIF_WM_HINTS` and renders a proper server-side title bar.
+///
+/// TODO(csd): Implement client-side decorations (CSD) for Linux, similar to
+/// how Zed renders its own title bar on GNOME Wayland. Steps:
+/// - Detect CSD mode via `Window::window_decorations()` returning
+///   `Decorations::Client { tiling }` and expose a flag to the root view.
+/// - Render a thin title bar strip at the top of the root view containing the
+///   window title, close/maximize/minimize buttons, and drag-to-move support
+///   (via `window.start_window_move()`).
+/// - Handle the `Tiling` bitflags from `Decorations::Client { tiling }` to
+///   suppress edge shadows/borders on tiled sides.
+/// - Once CSD is in place, remove the `WAYLAND_DISPLAY=` workaround from both
+///   `.desktop` files (`resources/desktop/` and `packaging/`).
+/// - Reference: Zed's `TitleBar` component for layout and button behavior.
 use gpui::{WindowKind, WindowOptions, px};
 
 /// Returns true if running on X11 (not Wayland, macOS, or Windows).

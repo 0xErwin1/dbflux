@@ -186,7 +186,15 @@ jobs:
           convert resources/icons/dbflux.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
           convert resources/icons/dbflux.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
-      - name: Setup nfpm
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Generate packages
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -194,20 +202,15 @@ jobs:
             VERSION="${VERSION#v}"
           fi
 
-          ARCH="${{ matrix.rpm_arch }}"
-          if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; fi
-          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.46.0/nfpm_Linux_${ARCH}.tar.gz -o nfpm.tar.gz
-          tar -xzf nfpm.tar.gz
-          chmod +x nfpm
-
           export VERSION
           export ARCH=${{ matrix.deb_arch }}
           export TARGET=${{ matrix.target }}
 
-          envsubst < packaging/nfpm.yaml > nfpm.yaml
-
-          ./nfpm package --packager deb --config nfpm.yaml --target dbflux_${VERSION}_linux_${{ matrix.deb_arch }}.deb
-          ./nfpm package --packager rpm --config nfpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
+          envsubst < packaging/nfpm.deb.yaml > nfpm.deb.yaml
+          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target dbflux_${VERSION}_linux_${{ matrix.deb_arch }}.deb
+          export ARCH=${{ matrix.rpm_arch }}
+          envsubst < packaging/nfpm.rpm.yaml > nfpm.rpm.yaml
+          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
 
       - name: Generate package checksums
         run: |

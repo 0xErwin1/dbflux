@@ -4,7 +4,7 @@ Type=Application
 Name=DBFlux
 GenericName=Database Client
 Comment=A fast, keyboard-first database client for SQL and NoSQL databases
-Exec=dbflux %F
+Exec=env WAYLAND_DISPLAY= dbflux %F
 Icon=dbflux
 Terminal=false
 StartupNotify=true
