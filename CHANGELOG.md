@@ -2,6 +2,14 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.2] – 2026-04-06
+
+### Features
+
+* Add deb and rpm package generation to Linux release workflow
+
+---
+
 ## [0.4.1] – 2026-04-05
 
 ### Fixed

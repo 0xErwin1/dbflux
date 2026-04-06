@@ -251,6 +251,12 @@ fn run_gui() {
                 title: Some("DBFlux".into()),
                 ..Default::default()
             }),
+            // Request server-side decorations explicitly so GNOME (and other
+            // compositors on Wayland and X11) render the native title bar with
+            // window controls. Without this, many Linux compositors do not paint
+            // a title bar, leaving the window impossible to move or close with
+            // the mouse. This field is ignored on macOS and Windows.
+            window_decorations: Some(WindowDecorations::Server),
             ..Default::default()
         };
         platform::apply_window_options(&mut main_window_options, 800.0, 600.0);
