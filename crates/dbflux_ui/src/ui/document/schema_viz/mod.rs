@@ -416,12 +416,15 @@ impl SchemaVizDocument {
 
         let inner = match &self.layout {
             Some(layout) => {
+                // Grid lines: render only enough lines to cover a ~3000px visible area.
+                // A 32000px canvas with 280px grid spacing would require 230+ div elements —
+                // that kills render performance. 12 lines in each axis covers any visible window.
                 let grid_size = 280.0;
-                let total_width = layout.total_width + 400.0;
-                let total_height = layout.total_height + 400.0;
-                let grid_color = border.opacity(0.5);
+                let grid_visible = 3200.0_f32;
+                let grid_count = (grid_visible / grid_size) as usize + 2;
+                let grid_color = border.opacity(0.3);
 
-                let grid_lines_x: Vec<Div> = (0..((total_width / grid_size) as usize + 2))
+                let grid_lines_x: Vec<Div> = (0..grid_count)
                     .map(|i| {
                         let x = i as f32 * grid_size;
                         div()
@@ -429,30 +432,30 @@ impl SchemaVizDocument {
                             .left(px(x))
                             .top(px(0.0))
                             .w(px(1.0))
-                            .h(px(total_height))
+                            .h(px(grid_visible))
                             .bg(grid_color)
                     })
                     .collect();
 
-                let grid_lines_y: Vec<Div> = (0..((total_height / grid_size) as usize + 2))
+                let grid_lines_y: Vec<Div> = (0..grid_count)
                     .map(|i| {
                         let y = i as f32 * grid_size;
                         div()
                             .absolute()
                             .left(px(0.0))
                             .top(px(y))
-                            .w(px(total_width))
+                            .w(px(grid_visible))
                             .h(px(1.0))
                             .bg(grid_color)
                     })
                     .collect();
 
-                let scaled_width = layout.total_width * zoom;
-                let scaled_height = layout.total_height * zoom;
+                let scaled_width = 32000.0_f32;
+                let scaled_height = 32000.0_f32;
                 let zoomed_layer = div()
                     .absolute()
-                    .left(pan.x)
-                    .top(pan.y)
+                    .left(px(0.0))
+                    .top(px(0.0))
                     .w(px(scaled_width))
                     .h(px(scaled_height))
                     .children(self.render_edges_overlay(layout, zoom, pan, &theme))
@@ -460,8 +463,7 @@ impl SchemaVizDocument {
 
                 div()
                     .relative()
-                    .w(px(total_width))
-                    .h(px(total_height))
+                    .size_full()
                     .bg(background)
                     .children(grid_lines_x)
                     .children(grid_lines_y)
@@ -671,7 +673,7 @@ impl SchemaVizDocument {
         node: &dbflux_schema_viz::graph::TableNode,
         layout: &NodeLayout,
         zoom: f32,
-        _pan: Point<Pixels>,
+        pan: Point<Pixels>,
         node_idx: petgraph::graph::NodeIndex,
         theme: &gpui_component::theme::Theme,
         dragging_node: Option<petgraph::graph::NodeIndex>,
@@ -680,11 +682,14 @@ impl SchemaVizDocument {
         let width = layout.width;
         let height = layout.height;
 
+        let pan_x: f32 = pan.x.into();
+        let pan_y: f32 = pan.y.into();
+
         let position_override = self.node_position_overrides.get(&node_idx);
         let (node_left, node_top) = if let Some(pos) = position_override {
-            (px(pos.x * zoom), px(pos.y * zoom))
+            (px(pos.x * zoom + pan_x), px(pos.y * zoom + pan_y))
         } else {
-            (px(layout.x * zoom), px(layout.y * zoom))
+            (px(layout.x * zoom + pan_x), px(layout.y * zoom + pan_y))
         };
 
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
@@ -708,7 +713,38 @@ impl SchemaVizDocument {
 
         let node_idx_clone = node_idx;
 
-        // Schema badge: "schema · table_name" with schema in primary color, separator muted, table name bold
+        let type_color = |type_name: &str, theme: &gpui_component::theme::Theme| -> Hsla {
+            let lower = type_name.to_lowercase();
+            if lower.contains("int")
+                || lower.contains("serial")
+                || lower.contains("numeric")
+                || lower.contains("float")
+                || lower.contains("double")
+                || lower.contains("real")
+                || lower.contains("decimal")
+            {
+                theme.primary
+            } else if lower.contains("bool") {
+                theme.muted_foreground.opacity(0.8)
+            } else if lower.contains("timestamp")
+                || lower.contains("date")
+                || lower.contains("time")
+                || lower.contains("interval")
+            {
+                theme.primary.opacity(0.7)
+            } else if lower.contains("json")
+                || lower.contains("xml")
+                || lower.contains("array")
+                || lower.contains("[]")
+            {
+                theme.accent_foreground
+            } else if lower.contains("uuid") {
+                theme.muted_foreground
+            } else {
+                theme.muted_foreground
+            }
+        };
+
         let header_title = if let Some(ref schema) = node.id.schema {
             div()
                 .flex()
@@ -745,7 +781,7 @@ impl SchemaVizDocument {
             .absolute()
             .left(node_left)
             .top(node_top)
-            .w(px(width.max(180.0)))
+            .w(px(width))
             .h(px(height))
             .border_1()
             .border_color(border_color)
@@ -764,19 +800,31 @@ impl SchemaVizDocument {
                         this.is_panning = false;
                         let zoom = this.zoom;
                         let node_x = this
-                            .layout
-                            .as_ref()
-                            .and_then(|l| l.nodes.get(&node_idx_clone))
-                            .map(|n| n.x)
+                            .node_position_overrides
+                            .get(&node_idx_clone)
+                            .map(|p| p.x)
+                            .or_else(|| {
+                                this.layout
+                                    .as_ref()
+                                    .and_then(|l| l.nodes.get(&node_idx_clone))
+                                    .map(|n| n.x)
+                            })
                             .unwrap_or(0.0);
                         let node_y = this
-                            .layout
-                            .as_ref()
-                            .and_then(|l| l.nodes.get(&node_idx_clone))
-                            .map(|n| n.y)
+                            .node_position_overrides
+                            .get(&node_idx_clone)
+                            .map(|p| p.y)
+                            .or_else(|| {
+                                this.layout
+                                    .as_ref()
+                                    .and_then(|l| l.nodes.get(&node_idx_clone))
+                                    .map(|n| n.y)
+                            })
                             .unwrap_or(0.0);
-                        let node_screen_x = px(node_x * zoom) + this.pan_offset.x;
-                        let node_screen_y = px(node_y * zoom) + this.pan_offset.y;
+                        let pan_x: f32 = this.pan_offset.x.into();
+                        let pan_y: f32 = this.pan_offset.y.into();
+                        let node_screen_x = px(node_x * zoom + pan_x);
+                        let node_screen_y = px(node_y * zoom + pan_y);
                         this.drag_offset = Point::new(
                             event.position.x - node_screen_x,
                             event.position.y - node_screen_y,
@@ -803,9 +851,8 @@ impl SchemaVizDocument {
                 div()
                     .flex()
                     .flex_col()
-                    .pt(px(2.0))
                     .px(px(10.0))
-                    .py(px(4.0))
+                    .py(px(2.0))
                     .children(node.columns.iter().map(|col| {
                         let type_label = if col.is_pk {
                             format!("{} [pk]", col.type_name)
@@ -814,6 +861,7 @@ impl SchemaVizDocument {
                         } else {
                             col.type_name.clone()
                         };
+                        let col_type_color = type_color(&col.type_name, theme);
                         div()
                             .flex()
                             .items_center()
@@ -830,10 +878,10 @@ impl SchemaVizDocument {
                             )
                             .child(
                                 div()
-                                    .w(px(80.0))
+                                    .flex_shrink_0()
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .text_color(muted_fg)
+                                    .text_color(col_type_color)
                                     .child(type_label),
                             )
                     })),
@@ -846,55 +894,97 @@ impl SchemaVizDocument {
         &self,
         layout: &LayoutResult,
         zoom: f32,
-        _pan: Point<Pixels>,
+        pan: Point<Pixels>,
         theme: &gpui_component::theme::Theme,
     ) -> Vec<Div> {
         let edge_color = theme.muted_foreground.opacity(0.5);
 
-        let edges = layout.edges.clone();
-        if edges.is_empty() {
+        let Some(graph) = &self.graph else {
             return Vec::new();
-        }
+        };
+
+        let pan_x: f32 = pan.x.into();
+        let pan_y: f32 = pan.y.into();
 
         let mut segments = Vec::new();
 
-        for edge in &edges {
-            let from_layout = match layout.nodes.get(&edge.from_node) {
+        for edge_idx in graph.edge_indices() {
+            let (source, target) = match graph.edge_endpoints(edge_idx) {
+                Some((s, t)) => (s, t),
+                None => continue,
+            };
+            let edge_weight = match graph.edge_weight(edge_idx) {
+                Some(w) => w,
+                None => continue,
+            };
+            let from_layout = match layout.nodes.get(&source) {
                 Some(l) => l,
                 None => continue,
             };
-            let to_layout = match layout.nodes.get(&edge.to_node) {
+            let to_layout = match layout.nodes.get(&target) {
                 Some(l) => l,
                 None => continue,
             };
 
-            // Use override positions if available
             let (from_x_base, from_y_base) = if let Some(pos) =
-                self.node_position_overrides.get(&edge.from_node)
+                self.node_position_overrides.get(&source)
             {
                 (pos.x, pos.y)
             } else {
                 (from_layout.x, from_layout.y)
             };
             let (to_x_base, to_y_base) = if let Some(pos) =
-                self.node_position_overrides.get(&edge.to_node)
+                self.node_position_overrides.get(&target)
             {
                 (pos.x, pos.y)
             } else {
                 (to_layout.x, to_layout.y)
             };
 
-            // Source: right edge of from_node, vertical center
-            let from_x = (from_x_base + from_layout.width) * zoom;
-            let from_y = (from_y_base + from_layout.height / 2.0) * zoom;
-            // Target: left edge of to_node, vertical center
-            let to_x = to_x_base * zoom;
-            let to_y = (to_y_base + to_layout.height / 2.0) * zoom;
+            let from_node_weight = match graph.node_weight(source) {
+                Some(n) => n,
+                None => continue,
+            };
+            let to_node_weight = match graph.node_weight(target) {
+                Some(n) => n,
+                None => continue,
+            };
 
-            // Midpoint x for L-shaped connector
+            let from_col_y = edge_weight
+                .from_columns
+                .first()
+                .and_then(|col_name| {
+                    from_node_weight
+                        .columns
+                        .iter()
+                        .position(|c| &c.name == col_name)
+                })
+                .map(|col_idx| {
+                    28.0 + 6.0 + col_idx as f32 * 22.0 + 11.0
+                })
+                .unwrap_or_else(|| from_layout.height / 2.0);
+
+            let to_col_y = edge_weight
+                .to_columns
+                .first()
+                .and_then(|col_name| {
+                    to_node_weight
+                        .columns
+                        .iter()
+                        .position(|c| &c.name == col_name)
+                })
+                .map(|col_idx| {
+                    28.0 + 6.0 + col_idx as f32 * 22.0 + 11.0
+                })
+                .unwrap_or_else(|| to_layout.height / 2.0);
+
+            let from_x = (from_x_base + from_layout.width) * zoom + pan_x;
+            let from_y = (from_y_base + from_col_y) * zoom + pan_y;
+            let to_x = to_x_base * zoom + pan_x;
+            let to_y = (to_y_base + to_col_y) * zoom + pan_y;
+
             let mid_x = (from_x + to_x) / 2.0;
 
-            // Segment 1: horizontal from source right to mid_x
             if (mid_x - from_x).abs() > 0.5 {
                 let seg_left = from_x.min(mid_x);
                 let seg_width = (mid_x - from_x).abs().max(1.0);
@@ -909,7 +999,6 @@ impl SchemaVizDocument {
                 );
             }
 
-            // Segment 2: vertical from from_y to to_y at mid_x
             let vert_top = from_y.min(to_y);
             let vert_height = (to_y - from_y).abs().max(1.0);
             segments.push(
@@ -922,7 +1011,6 @@ impl SchemaVizDocument {
                     .bg(edge_color),
             );
 
-            // Segment 3: horizontal from mid_x to target left
             if (to_x - mid_x).abs() > 0.5 {
                 let seg_left = mid_x.min(to_x);
                 let seg_width = (to_x - mid_x).abs().max(1.0);
