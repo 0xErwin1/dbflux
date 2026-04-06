@@ -404,29 +404,26 @@ impl SchemaVizDocument {
         let border = theme.border;
         let muted_foreground = theme.muted_foreground;
 
-        log::info!(
-            "DEBUG render_diagram: self.layout is {} self.graph is {}",
-            if self.layout.is_some() {
-                "Some"
-            } else {
-                "None"
-            },
-            if self.graph.is_some() { "Some" } else { "None" }
-        );
-
-        let inner = match &self.layout {
+        // The canvas is a single `relative()` div that fills the viewport.
+        // All children (grid lines, edges, nodes) are `absolute()` within it.
+        // Node screen position = graph_x * zoom + pan_x. No intermediate layer.
+        // This ensures mouse event coordinates from on_scroll_wheel and on_mouse_move
+        // are always in the same coordinate space as the pan_offset.
+        let canvas = match &self.layout {
             Some(layout) => {
-                // Grid lines: render only enough lines to cover a ~3000px visible area.
-                // A 32000px canvas with 280px grid spacing would require 230+ div elements —
-                // that kills render performance. 12 lines in each axis covers any visible window.
-                let grid_size = 280.0;
-                let grid_visible = 3200.0_f32;
-                let grid_count = (grid_visible / grid_size) as usize + 2;
-                let grid_color = border.opacity(0.3);
+                // Grid: ~14 lines per axis covers any visible window at normal sizes.
+                // Grid lines are in absolute canvas coords and do NOT move with pan/zoom —
+                // they serve as a static background texture. This is intentional.
+                let grid_size = 60.0_f32;
+                let grid_visible = 3000.0_f32;
+                let grid_count = (grid_visible / grid_size) as usize + 1;
+                let grid_color = border.opacity(0.15);
 
-                let grid_lines_x: Vec<Div> = (0..grid_count)
-                    .map(|i| {
-                        let x = i as f32 * grid_size;
+                let mut canvas_children: Vec<AnyElement> = Vec::new();
+
+                for i in 0..grid_count {
+                    let x = i as f32 * grid_size;
+                    canvas_children.push(
                         div()
                             .absolute()
                             .left(px(x))
@@ -434,12 +431,12 @@ impl SchemaVizDocument {
                             .w(px(1.0))
                             .h(px(grid_visible))
                             .bg(grid_color)
-                    })
-                    .collect();
-
-                let grid_lines_y: Vec<Div> = (0..grid_count)
-                    .map(|i| {
-                        let y = i as f32 * grid_size;
+                            .into_any_element(),
+                    );
+                }
+                for i in 0..grid_count {
+                    let y = i as f32 * grid_size;
+                    canvas_children.push(
                         div()
                             .absolute()
                             .left(px(0.0))
@@ -447,27 +444,22 @@ impl SchemaVizDocument {
                             .w(px(grid_visible))
                             .h(px(1.0))
                             .bg(grid_color)
-                    })
-                    .collect();
+                            .into_any_element(),
+                    );
+                }
 
-                let scaled_width = 32000.0_f32;
-                let scaled_height = 32000.0_f32;
-                let zoomed_layer = div()
-                    .absolute()
-                    .left(px(0.0))
-                    .top(px(0.0))
-                    .w(px(scaled_width))
-                    .h(px(scaled_height))
-                    .children(self.render_edges_overlay(layout, zoom, pan, &theme))
-                    .children(self.render_nodes(layout, zoom, pan, &theme, cx));
+                for seg in self.render_edges_overlay(layout, zoom, pan, &theme) {
+                    canvas_children.push(seg.into_any_element());
+                }
+                for node_div in self.render_nodes(layout, zoom, pan, &theme, cx) {
+                    canvas_children.push(node_div.into_any_element());
+                }
 
                 div()
                     .relative()
                     .size_full()
                     .bg(background)
-                    .children(grid_lines_x)
-                    .children(grid_lines_y)
-                    .child(zoomed_layer)
+                    .children(canvas_children)
             }
             None => div()
                 .size_full()
@@ -538,93 +530,93 @@ impl SchemaVizDocument {
                     .child("Reset"),
             ]);
 
+        // The viewport handles all pointer and scroll events.
+        // It is `relative()` so child `absolute()` elements are anchored to it.
+        // `overflow_hidden` clips elements outside the visible area.
+        let viewport = div()
+            .flex_1()
+            .relative()
+            .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, _cx| {
+                    if event.click_count == 1 && this.dragging_node.is_none() {
+                        this.is_panning = true;
+                        this.pan_start = event.position;
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if let Some(node_idx) = this.dragging_node {
+                    let screen_x: f32 = event.position.x.into();
+                    let screen_y: f32 = event.position.y.into();
+                    let off_x: f32 = this.drag_offset.x.into();
+                    let off_y: f32 = this.drag_offset.y.into();
+                    let pan_x: f32 = this.pan_offset.x.into();
+                    let pan_y: f32 = this.pan_offset.y.into();
+                    let zoom = this.zoom;
+                    // graph_x = (screen_x - drag_offset_x - pan_x) / zoom
+                    let new_graph_x = (screen_x - off_x - pan_x) / zoom;
+                    let new_graph_y = (screen_y - off_y - pan_y) / zoom;
+                    this.node_position_overrides
+                        .insert(node_idx, Point::new(new_graph_x, new_graph_y));
+                    cx.notify();
+                    return;
+                }
+                if !this.is_panning {
+                    return;
+                }
+                let dx = event.position.x - this.pan_start.x;
+                let dy = event.position.y - this.pan_start.y;
+                if dx.abs() > px(0.5) || dy.abs() > px(0.5) {
+                    this.pan_offset =
+                        Point::new(this.pan_offset.x + dx, this.pan_offset.y + dy);
+                    this.pan_start = event.position;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _cx| {
+                    this.is_panning = false;
+                    this.dragging_node = None;
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                // event.position is relative to this viewport div — same space as pan_offset.
+                let mouse = event.position;
+                let old_zoom = this.zoom;
+                let delta = event.delta.pixel_delta(px(1.0)).y;
+                let factor = if delta > px(0.0) { 1.1_f32 } else { 0.9_f32 };
+                let new_zoom = (old_zoom * factor).clamp(0.25, 4.0);
+
+                if (new_zoom - old_zoom).abs() < 0.001 {
+                    return;
+                }
+
+                // Keep the point under the mouse fixed:
+                // graph_pt = (screen - pan) / old_zoom
+                // new_pan  = screen - graph_pt * new_zoom
+                let pan = this.pan_offset;
+                let graph_x = (mouse.x - pan.x) / old_zoom;
+                let graph_y = (mouse.y - pan.y) / old_zoom;
+                let new_pan_x = mouse.x - graph_x * new_zoom;
+                let new_pan_y = mouse.y - graph_y * new_zoom;
+
+                this.pan_offset = Point::new(new_pan_x, new_pan_y);
+                this.zoom = new_zoom;
+                cx.notify();
+            }))
+            .child(canvas);
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(background)
             .child(zoom_controls)
-            .child(
-                div()
-                    .flex_1()
-                    .relative()
-                    .overflow_hidden()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, _cx| {
-                            if event.click_count == 1 && this.dragging_node.is_none() {
-                                this.is_panning = true;
-                                this.pan_start = event.position;
-                            }
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                        if let Some(node_idx) = this.dragging_node {
-                            let new_screen_x: f32 = event.position.x.into();
-                            let new_screen_y: f32 = event.position.y.into();
-                            let drag_offset_x: f32 = this.drag_offset.x.into();
-                            let drag_offset_y: f32 = this.drag_offset.y.into();
-                            let zoom = this.zoom;
-                            let pan_x: f32 = this.pan_offset.x.into();
-                            let pan_y: f32 = this.pan_offset.y.into();
-                            let new_graph_x = (new_screen_x - drag_offset_x - pan_x) / zoom;
-                            let new_graph_y = (new_screen_y - drag_offset_y - pan_y) / zoom;
-                            this.node_position_overrides
-                                .insert(node_idx, Point::new(new_graph_x, new_graph_y));
-                            cx.notify();
-                            return;
-                        }
-                        if !this.is_panning {
-                            return;
-                        }
-                        let dx = event.position.x - this.pan_start.x;
-                        let dy = event.position.y - this.pan_start.y;
-                        if dx.abs() > px(0.5) || dy.abs() > px(0.5) {
-                            this.pan_offset =
-                                Point::new(this.pan_offset.x + dx, this.pan_offset.y + dy);
-                            this.pan_start = event.position;
-                            cx.notify();
-                        }
-                    }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, _cx| {
-                            this.is_panning = false;
-                            this.dragging_node = None;
-                        }),
-                    )
-                    .child(
-                        div()
-                            .size_full()
-                            .overflow_scrollbar()
-                            .track_focus(&self.focus_handle)
-                            .on_scroll_wheel(cx.listener(
-                                |this, event: &ScrollWheelEvent, _, _cx| {
-                                    let mouse_screen = event.position;
-                                    let old_zoom = this.zoom;
-                                    let delta = event.delta.pixel_delta(px(1.0)).y;
-                                    let factor = if delta > px(0.0) { 1.1_f32 } else { 0.9_f32 };
-                                    let new_zoom = (old_zoom * factor).clamp(0.25, 4.0);
-
-                                    if (new_zoom - old_zoom).abs() < 0.001 {
-                                        return;
-                                    }
-
-                                    let pan = this.pan_offset;
-
-                                    let content_x = (mouse_screen.x - pan.x) / old_zoom;
-                                    let content_y = (mouse_screen.y - pan.y) / old_zoom;
-
-                                    let new_pan_x = mouse_screen.x - content_x * new_zoom;
-                                    let new_pan_y = mouse_screen.y - content_y * new_zoom;
-
-                                    this.pan_offset = Point::new(new_pan_x, new_pan_y);
-                                    this.zoom = new_zoom;
-                                },
-                            ))
-                            .child(inner),
-                    ),
-            )
+            .child(viewport)
     }
 
     fn render_nodes(
@@ -680,7 +672,6 @@ impl SchemaVizDocument {
         cx: &mut Context<Self>,
     ) -> Div {
         let width = layout.width;
-        let height = layout.height;
 
         let pan_x: f32 = pan.x.into();
         let pan_y: f32 = pan.y.into();
@@ -782,7 +773,6 @@ impl SchemaVizDocument {
             .left(node_left)
             .top(node_top)
             .w(px(width))
-            .h(px(height))
             .border_1()
             .border_color(border_color)
             .rounded_md()
