@@ -940,7 +940,18 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            let from_col_y = edge_weight
+            // Column row Y offsets are in fixed screen pixels — the node does NOT scale
+            // its internal layout with zoom. Only the node's origin (x_base, y_base) scales.
+            //
+            // Header: py(6) top + ~14px text + py(6) bottom + 1px border = ~27px.
+            // Body:   py(2) top, then each row is ~20px (XS text ~12px + 4px gap).
+            // These must match what render_node actually produces at zoom=1.
+            let header_px = 27.0_f32;
+            let body_top_px = 2.0_f32;
+            let row_px = 20.0_f32;
+            let row_center_px = row_px / 2.0;
+
+            let from_col_y_px = edge_weight
                 .from_columns
                 .first()
                 .and_then(|col_name| {
@@ -949,12 +960,10 @@ impl SchemaVizDocument {
                         .iter()
                         .position(|c| &c.name == col_name)
                 })
-                .map(|col_idx| {
-                    28.0 + 6.0 + col_idx as f32 * 22.0 + 11.0
-                })
-                .unwrap_or_else(|| from_layout.height / 2.0);
+                .map(|col_idx| header_px + body_top_px + col_idx as f32 * row_px + row_center_px)
+                .unwrap_or(header_px + from_layout.height / 2.0);
 
-            let to_col_y = edge_weight
+            let to_col_y_px = edge_weight
                 .to_columns
                 .first()
                 .and_then(|col_name| {
@@ -963,15 +972,14 @@ impl SchemaVizDocument {
                         .iter()
                         .position(|c| &c.name == col_name)
                 })
-                .map(|col_idx| {
-                    28.0 + 6.0 + col_idx as f32 * 22.0 + 11.0
-                })
-                .unwrap_or_else(|| to_layout.height / 2.0);
+                .map(|col_idx| header_px + body_top_px + col_idx as f32 * row_px + row_center_px)
+                .unwrap_or(header_px + to_layout.height / 2.0);
 
-            let from_x = (from_x_base + from_layout.width) * zoom + pan_x;
-            let from_y = (from_y_base + from_col_y) * zoom + pan_y;
+            // Screen position: origin scales with zoom+pan, internal offset is fixed px.
+            let from_x = from_x_base * zoom + pan_x + from_layout.width;
+            let from_y = from_y_base * zoom + pan_y + from_col_y_px;
             let to_x = to_x_base * zoom + pan_x;
-            let to_y = (to_y_base + to_col_y) * zoom + pan_y;
+            let to_y = to_y_base * zoom + pan_y + to_col_y_px;
 
             let mid_x = (from_x + to_x) / 2.0;
 
