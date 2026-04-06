@@ -1,5 +1,5 @@
 use log;
-use petgraph::prelude::{DiGraph, EdgeRef, NodeIndex};
+use petgraph::prelude::{DiGraph, EdgeIndex, EdgeRef, NodeIndex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use dbflux_core::TableInfo;
@@ -304,6 +304,26 @@ impl SchemaGraph {
         self.graph
             .edge_indices()
             .filter_map(move |idx| self.graph.edge_weight(idx))
+    }
+
+    /// Iterate over all edge indices.
+    pub fn edge_indices(&self) -> impl Iterator<Item = EdgeIndex> {
+        self.graph.edge_indices()
+    }
+
+    /// Get edge endpoints (source, target) by edge index.
+    pub fn edge_endpoints(&self, edge_idx: EdgeIndex) -> Option<(NodeIndex, NodeIndex)> {
+        self.graph.edge_endpoints(edge_idx)
+    }
+
+    /// Get edge weight by edge index.
+    pub fn edge_weight(&self, edge_idx: EdgeIndex) -> Option<&FkEdge> {
+        self.graph.edge_weight(edge_idx)
+    }
+
+    /// Get node weight by node index.
+    pub fn node_weight(&self, node_idx: NodeIndex) -> Option<&TableNode> {
+        self.graph.node_weight(node_idx)
     }
 
     /// Returns the total number of nodes in the graph.

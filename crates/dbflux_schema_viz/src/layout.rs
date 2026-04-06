@@ -6,12 +6,42 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::SchemaGraph;
 
-const NODE_WIDTH: f32 = 220.0;
 const NODE_HEADER_HEIGHT: f32 = 28.0;
 const NODE_ROW_HEIGHT: f32 = 22.0;
-const LAYER_SPACING_X: f32 = 280.0;
+const LAYER_SPACING_X: f32 = 320.0;
 const NODE_SPACING_Y: f32 = 40.0;
-const CELL_WIDTH: f32 = 300.0;
+const CELL_WIDTH: f32 = 360.0;
+
+/// Compute the width for a node based on its content.
+fn compute_node_width(node: &crate::graph::TableNode) -> f32 {
+    let chars_per_px = 7.0_f32;
+    let h_padding = 40.0_f32;
+
+    let header_text = match &node.id.schema {
+        Some(s) => format!("{} · {}", s, node.id.name),
+        None => node.id.name.clone(),
+    };
+    let header_width = header_text.len() as f32 * chars_per_px + h_padding;
+
+    let body_width = node
+        .columns
+        .iter()
+        .map(|col| {
+            let type_label = if col.is_pk {
+                format!("{} [pk]", col.type_name)
+            } else if col.is_fk {
+                format!("{} [fk]", col.type_name)
+            } else {
+                col.type_name.clone()
+            };
+            let name_w = col.name.len() as f32 * chars_per_px;
+            let type_w = type_label.len() as f32 * chars_per_px;
+            name_w + type_w + h_padding + 8.0
+        })
+        .fold(0.0_f32, f32::max);
+
+    header_width.max(body_width).max(180.0).min(400.0)
+}
 
 /// Layout information for a single node.
 #[derive(Clone, Debug)]
@@ -128,7 +158,6 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
     for (layer_num, node_ids) in &layers {
         let x = *layer_num as f32 * LAYER_SPACING_X;
 
-        // Per layer: compute y positions with a running cursor to avoid overlap.
         let mut y_cursor = 0.0_f32;
         for &idx in node_ids {
             let node_weight = graph
@@ -136,14 +165,15 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
                 .node_weight(idx)
                 .expect("invariant: idx is a node index from the same graph");
             let col_count = node_weight.columns.len().max(1) as f32;
-            let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
+            let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+            let width = compute_node_width(node_weight);
 
             nodes.insert(
                 idx,
                 NodeLayout {
                     x,
                     y: y_cursor,
-                    width: NODE_WIDTH,
+                    width,
                     height,
                 },
             );
@@ -151,7 +181,6 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         }
     }
 
-    // Build edge layouts.
     let edges: Vec<EdgeLayout> = graph
         .graph
         .edge_indices()
@@ -161,7 +190,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
             let to_layout = nodes.get(&target)?;
 
             let from_anchor = (
-                from_layout.x + NODE_WIDTH,
+                from_layout.x + from_layout.width,
                 from_layout.y + from_layout.height / 2.0,
             );
             let to_anchor = (to_layout.x, to_layout.y + to_layout.height / 2.0);
@@ -175,8 +204,8 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         })
         .collect();
 
-    // Compute total bounds.
-    let total_width = computed_max_layer as f32 * LAYER_SPACING_X + NODE_WIDTH;
+    let total_width = computed_max_layer as f32 * LAYER_SPACING_X
+        + nodes.values().map(|n| n.width).fold(0.0_f32, f32::max);
     let total_height = layers
         .values()
         .map(|ids| {
@@ -187,7 +216,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
                         .node_weight(idx)
                         .expect("invariant: idx is from the same graph");
                     let col_count = node_weight.columns.len().max(1) as f32;
-                    NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT
+                    NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT
                 })
                 .sum::<f32>()
                 + (ids.len().saturating_sub(1) as f32) * NODE_SPACING_Y
@@ -219,16 +248,19 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             .unwrap_or("")
     });
 
-    // First pass: compute per-row max heights.
+    // First pass: compute per-row max heights and collect all widths.
     let mut row_max_heights = vec![0.0_f32; rows];
+    let mut all_widths: Vec<f32> = Vec::with_capacity(sorted_indices.len());
     for (i, &idx) in sorted_indices.iter().enumerate() {
         let node_weight = graph
             .graph
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
         let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight);
         row_max_heights[i / cols] = row_max_heights[i / cols].max(height);
+        all_widths.push(width);
     }
 
     // Compute cumulative row y offsets.
@@ -236,6 +268,10 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
     for r in 1..rows {
         row_y_offsets[r] = row_y_offsets[r - 1] + row_max_heights[r - 1] + NODE_SPACING_Y;
     }
+
+    // Cell width based on maximum node width across all nodes.
+    let max_node_width = all_widths.iter().fold(0.0_f32, |acc, &w| acc.max(w));
+    let cell_width = max_node_width.max(CELL_WIDTH);
 
     // Second pass: place nodes using row y offsets.
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
@@ -245,11 +281,12 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
         let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + col_count * NODE_ROW_HEIGHT;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight);
 
         let col = i % cols;
         let row = i / cols;
-        let x = col as f32 * CELL_WIDTH;
+        let x = col as f32 * cell_width;
         let y = row_y_offsets[row];
 
         nodes.insert(
@@ -257,7 +294,7 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             NodeLayout {
                 x,
                 y,
-                width: NODE_WIDTH,
+                width,
                 height,
             },
         );
@@ -272,7 +309,7 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             let to_layout = nodes.get(&target)?;
 
             let from_anchor = (
-                from_layout.x + NODE_WIDTH,
+                from_layout.x + from_layout.width,
                 from_layout.y + from_layout.height / 2.0,
             );
             let to_anchor = (to_layout.x, to_layout.y + to_layout.height / 2.0);
@@ -286,7 +323,7 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
         })
         .collect();
 
-    let total_width = cols as f32 * CELL_WIDTH;
+    let total_width = cols as f32 * cell_width;
     let total_height = row_y_offsets
         .last()
         .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
