@@ -57,6 +57,9 @@ pub enum ContextId {
 
     /// Event-stream picker modal (collection child picker).
     EventStreamsPicker,
+
+    /// Schema visualization document.
+    SchemaViz,
 }
 
 impl ContextId {
@@ -83,6 +86,7 @@ impl ContextId {
             ContextId::Results => Some(ContextId::Global),
             ContextId::BackgroundTasks => Some(ContextId::Global),
             ContextId::Audit => Some(ContextId::Global),
+            ContextId::SchemaViz => Some(ContextId::Global),
         }
     }
 
@@ -131,6 +135,8 @@ impl ContextId {
             ContextId::ContextBar => "Context Bar",
             ContextId::Audit => "Audit Viewer",
             ContextId::EventStreamsPicker => "Event Streams Picker",
+            ContextId::EventStreamsPicker => "Event Streams Picker",
+            ContextId::SchemaViz => "Schema Viz",
         }
     }
 
@@ -154,6 +160,8 @@ impl ContextId {
             ContextId::ContextBar,
             ContextId::Audit,
             ContextId::EventStreamsPicker,
+            ContextId::EventStreamsPicker,
+            ContextId::SchemaViz,
         ]
     }
 
@@ -177,6 +185,8 @@ impl ContextId {
             ContextId::ContextBar => "ContextBar",
             ContextId::Audit => "Audit",
             ContextId::EventStreamsPicker => "EventStreamsPicker",
+            ContextId::EventStreamsPicker => "EventStreamsPicker",
+            ContextId::SchemaViz => "SchemaViz",
         }
     }
 }

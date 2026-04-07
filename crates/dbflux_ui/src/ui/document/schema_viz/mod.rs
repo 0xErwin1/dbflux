@@ -25,6 +25,71 @@ use crate::ui::document::types::{DocumentId, DocumentState};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Spacing};
 
+/// Direction for spatial selection navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Menu item for the schema viz context menu (top-level items).
+#[derive(Debug, Clone)]
+enum ContextMenuItem {
+    ZoomIn,
+    ZoomOut,
+    Separator,
+    LayoutMenu,
+    CopyAsMenu,
+    FocusOnTable,
+}
+
+/// Sub-menu that can be open inside the context menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubMenu {
+    Layout,
+    CopyAs,
+}
+
+impl SubMenu {
+    fn items(&self) -> Vec<SubMenuItem> {
+        match self {
+            SubMenu::Layout => vec![
+                SubMenuItem::LeftRight,
+                SubMenuItem::Snowflake,
+                SubMenuItem::Compact,
+            ],
+            SubMenu::CopyAs => vec![
+                SubMenuItem::CopyAsDbml,
+                SubMenuItem::CopyAsSql,
+            ],
+        }
+    }
+}
+
+/// Item inside a sub-menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubMenuItem {
+    LeftRight,
+    Snowflake,
+    Compact,
+    CopyAsDbml,
+    CopyAsSql,
+}
+
+impl SubMenuItem {
+    fn label(&self) -> &'static str {
+        match self {
+            SubMenuItem::LeftRight => "Left-Right",
+            SubMenuItem::Snowflake => "Snowflake",
+            SubMenuItem::Compact => "Compact",
+            SubMenuItem::CopyAsDbml => "Copy as DBML",
+            SubMenuItem::CopyAsSql => "Copy as SQL",
+        }
+    }
+}
+
 // Node layout constants — shared between render_node and render_edges_overlay
 // so that edge anchors always match rendered positions exactly.
 //
@@ -90,6 +155,13 @@ pub struct SchemaVizDocument {
     // Toolbar dropdowns
     layout_menu_open: bool,
     export_menu_open: bool,
+    // Context menu
+    context_menu_open: bool,
+    context_menu_position: Point<Pixels>,
+    context_menu_target: Option<petgraph::graph::NodeIndex>,
+    context_menu_selected_index: usize,
+    context_menu_submenu: Option<SubMenu>,
+    context_menu_submenu_selected_index: usize,
 }
 
 impl SchemaVizDocument {
@@ -160,6 +232,12 @@ impl SchemaVizDocument {
             pending_toast: None,
             layout_menu_open: false,
             export_menu_open: false,
+            context_menu_open: false,
+            context_menu_position: Point::default(),
+            context_menu_target: None,
+            context_menu_selected_index: 0,
+            context_menu_submenu: None,
+            context_menu_submenu_selected_index: 0,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -683,6 +761,147 @@ impl SchemaVizDocument {
         );
     }
 
+    /// Returns nodes sorted spatially: y first (top-to-bottom), then x (left-to-right).
+    fn spatial_sorted_nodes(&self) -> Vec<NodeIndex> {
+        let layout = match &self.layout {
+            Some(l) => l,
+            None => return Vec::new(),
+        };
+
+        let mut nodes: Vec<_> = layout
+            .nodes
+            .keys()
+            .copied()
+            .collect();
+
+        nodes.sort_by(|&a, &b| {
+            let pos_a = layout.nodes.get(&a);
+            let pos_b = layout.nodes.get(&b);
+            match (pos_a, pos_b) {
+                (Some(node_a), Some(node_b)) => {
+                    let y_cmp = node_a.y.partial_cmp(&node_b.y).unwrap_or(std::cmp::Ordering::Equal);
+                    if y_cmp != std::cmp::Ordering::Equal {
+                        y_cmp
+                    } else {
+                        node_a.x.partial_cmp(&node_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+
+        nodes
+    }
+
+    /// Finds the next node in the given direction from the currently selected node.
+    fn find_next_node(&self, direction: Direction) -> Option<NodeIndex> {
+        let current = self.selected_node?;
+        let sorted = self.spatial_sorted_nodes();
+        let _current_idx = sorted.iter().position(|&idx| idx == current)?;
+
+        let layout = self.layout.as_ref()?;
+        let current_pos = layout.nodes.get(&current)?;
+
+        let threshold = 20.0_f32;
+
+        match direction {
+            Direction::Left => {
+                // Find nodes with x < current.x, pick the one with highest x
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout.nodes.get(&idx).map(|n| n.x < current_pos.x - threshold).unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .max_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a.x.partial_cmp(&pos_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return rightmost node
+                        sorted.last().copied()
+                    })
+            }
+            Direction::Right => {
+                // Find nodes with x > current.x, pick the one with lowest x
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout.nodes.get(&idx).map(|n| n.x > current_pos.x + threshold).unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .min_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a.x.partial_cmp(&pos_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return leftmost node
+                        sorted.first().copied()
+                    })
+            }
+            Direction::Up => {
+                // Find nodes with y < current.y, pick the one with highest y
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout.nodes.get(&idx).map(|n| n.y < current_pos.y - threshold).unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .max_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a.y.partial_cmp(&pos_b.y).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return bottommost node
+                        sorted.last().copied()
+                    })
+            }
+            Direction::Down => {
+                // Find nodes with y > current.y, pick the one with lowest y
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout.nodes.get(&idx).map(|n| n.y > current_pos.y + threshold).unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .min_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a.y.partial_cmp(&pos_b.y).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return topmost node
+                        sorted.first().copied()
+                    })
+            }
+        }
+    }
+
     /// Export the current schema graph as DBML to clipboard.
     pub fn export_dbml(&mut self, cx: &mut Context<Self>) {
         let graph = match &self.graph {
@@ -797,7 +1016,7 @@ impl SchemaVizDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
-        ContextId::Global
+        ContextId::SchemaViz
     }
 
     // ── Rendering helpers ──────────────────────────────────────────────────────
@@ -987,6 +1206,399 @@ impl SchemaVizDocument {
                     cx.notify();
                 }))
                 .children(items),
+        )
+    }
+
+    /// Returns the top-level context menu items (not expanded).
+    fn context_menu_items(&self) -> Vec<ContextMenuItem> {
+        let mut items = Vec::new();
+        items.push(ContextMenuItem::ZoomIn);
+        items.push(ContextMenuItem::ZoomOut);
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::LayoutMenu);
+        items.push(ContextMenuItem::CopyAsMenu);
+        items.push(ContextMenuItem::Separator);
+        if self.selected_node.is_some() {
+            items.push(ContextMenuItem::FocusOnTable);
+        }
+        items
+    }
+
+    /// Renders the context menu with keyboard-navigable submenus.
+    fn render_context_menu(
+        &self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let theme_clone = theme.clone();
+        let layout_format = self.layout_format;
+        let has_node_selected = self.selected_node.is_some();
+
+        // Main menu items
+        let all_items = self.context_menu_items();
+        let visible_indices: Vec<usize> = all_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !matches!(item, ContextMenuItem::FocusOnTable) || has_node_selected)
+            .map(|(i, _)| i)
+            .collect();
+
+        // ── Main menu ────────────────────────────────────────────────────────
+        let main_menu = {
+            let selected_idx = self.context_menu_selected_index;
+            div()
+                .absolute()
+                .left(position.x)
+                .top(position.y)
+                .min_w(px(160.0))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded_md()
+                .shadow_lg()
+                .flex_col()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    use crate::keymap::key_chord_from_gpui;
+
+                    let chord = key_chord_from_gpui(&event.keystroke);
+
+                    // Count visible items in main menu
+                    let has_node = this.selected_node.is_some();
+                    let items = this.context_menu_items();
+                    let count = items
+                        .iter()
+                        .filter(|i| !matches!(i, ContextMenuItem::FocusOnTable) || has_node)
+                        .count();
+
+                    if this.context_menu_submenu.is_some() {
+                        // ── Submenu navigation ────────────────────────────────
+                        let sub_idx = &mut this.context_menu_submenu_selected_index;
+                        let submenu = this.context_menu_submenu.unwrap();
+                        let sub_count = submenu.items().len();
+
+                        match chord.key.as_str() {
+                            "up" | "k" => {
+                                if sub_count > 0 {
+                                    *sub_idx = (*sub_idx + sub_count - 1) % sub_count;
+                                    cx.notify();
+                                }
+                            }
+                            "down" | "j" => {
+                                if sub_count > 0 {
+                                    *sub_idx = (*sub_idx + 1) % sub_count;
+                                    cx.notify();
+                                }
+                            }
+                            "enter" | "l" => {
+                                // Activate submenu item and close
+                                let submenu = this.context_menu_submenu.unwrap();
+                                let sub_item = submenu.items()[this.context_menu_submenu_selected_index];
+                                match submenu {
+                                    SubMenu::Layout => {
+                                        let format = match sub_item {
+                                            SubMenuItem::LeftRight => LayoutFormat::LeftRight,
+                                            SubMenuItem::Snowflake => LayoutFormat::Snowflake,
+                                            SubMenuItem::Compact => LayoutFormat::Compact,
+                                            _ => return,
+                                        };
+                                        this.set_layout_format(format, cx);
+                                    }
+                                    SubMenu::CopyAs => {
+                                        match sub_item {
+                                            SubMenuItem::CopyAsDbml => this.export_dbml(cx),
+                                            SubMenuItem::CopyAsSql => this.copy_as_sql(cx),
+                                            _ => return,
+                                        }
+                                    }
+                                }
+                                this.context_menu_open = false;
+                                this.context_menu_submenu = None;
+                                cx.notify();
+                            }
+                            "escape" | "h" | "left" => {
+                                // Close submenu, return to main menu
+                                this.context_menu_submenu = None;
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // ── Main menu navigation ─────────────────────────────
+                        match chord.key.as_str() {
+                            "up" | "k" => {
+                                if count > 0 {
+                                    this.context_menu_selected_index =
+                                        (this.context_menu_selected_index + count - 1) % count;
+                                    cx.notify();
+                                }
+                            }
+                            "down" | "j" => {
+                                if count > 0 {
+                                    this.context_menu_selected_index =
+                                        (this.context_menu_selected_index + 1) % count;
+                                    cx.notify();
+                                }
+                            }
+                            "right" | "enter" | "l" => {
+                                // Open submenu if on LayoutMenu or CopyAsMenu, else activate
+                                let has_node = this.selected_node.is_some();
+                                let items = this.context_menu_items();
+                                let filtered: Vec<_> = items
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, i)| !matches!(i, ContextMenuItem::FocusOnTable) || has_node)
+                                    .collect();
+                                if let Some(&(_, item)) = filtered.get(this.context_menu_selected_index) {
+                                    match item {
+                                        ContextMenuItem::LayoutMenu => {
+                                            this.context_menu_submenu = Some(SubMenu::Layout);
+                                            this.context_menu_submenu_selected_index = 0;
+                                            cx.notify();
+                                        }
+                                        ContextMenuItem::CopyAsMenu => {
+                                            this.context_menu_submenu = Some(SubMenu::CopyAs);
+                                            this.context_menu_submenu_selected_index = 0;
+                                            cx.notify();
+                                        }
+                                        ContextMenuItem::ZoomIn => {
+                                            this.zoom = (this.zoom * 1.25).min(4.0);
+                                            this.context_menu_open = false;
+                                            cx.notify();
+                                        }
+                                        ContextMenuItem::ZoomOut => {
+                                            this.zoom = (this.zoom / 1.25).max(0.25);
+                                            this.context_menu_open = false;
+                                            cx.notify();
+                                        }
+                                        ContextMenuItem::Separator
+                                        | ContextMenuItem::FocusOnTable => {}
+                                    }
+                                }
+                            }
+                            "escape" | "h" | "left" => {
+                                this.context_menu_open = false;
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }
+                }))
+                .children(visible_indices.iter().enumerate().map(|(vis_idx, &orig_idx)| {
+                    let item = &all_items[orig_idx];
+                    let is_selected = vis_idx == selected_idx;
+                    let theme = theme_clone.clone();
+
+                    match item {
+                        ContextMenuItem::Separator => {
+                            div()
+                                .h(px(1.0))
+                                .mx(Spacing::SM)
+                                .my(Spacing::XS)
+                                .bg(theme.border)
+                                .into_any_element()
+                        }
+                        ContextMenuItem::ZoomIn => {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(rems(1.6))
+                                .px(Spacing::SM)
+                                .mx(Spacing::XS)
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .when(is_selected, |d| {
+                                    d.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(div().flex_1().child("Zoom In"))
+                                .into_any_element()
+                        }
+                        ContextMenuItem::ZoomOut => {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(rems(1.6))
+                                .px(Spacing::SM)
+                                .mx(Spacing::XS)
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .when(is_selected, |d| {
+                                    d.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(div().flex_1().child("Zoom Out"))
+                                .into_any_element()
+                        }
+                        ContextMenuItem::LayoutMenu => {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(rems(1.6))
+                                .px(Spacing::SM)
+                                .mx(Spacing::XS)
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .when(is_selected, |d| {
+                                    d.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(div().flex_1().child("Layout"))
+                                .child(
+                                    svg()
+                                        .path(AppIcon::ChevronRight.path())
+                                        .size_3()
+                                        .text_color(theme.muted_foreground),
+                                )
+                                .into_any_element()
+                        }
+                        ContextMenuItem::CopyAsMenu => {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(rems(1.6))
+                                .px(Spacing::SM)
+                                .mx(Spacing::XS)
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .when(is_selected, |d| {
+                                    d.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(div().flex_1().child("Copy as"))
+                                .child(
+                                    svg()
+                                        .path(AppIcon::ChevronRight.path())
+                                        .size_3()
+                                        .text_color(theme.muted_foreground),
+                                )
+                                .into_any_element()
+                        }
+                        ContextMenuItem::FocusOnTable => {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(rems(1.6))
+                                .px(Spacing::SM)
+                                .mx(Spacing::XS)
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .when(is_selected, |d| {
+                                    d.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(div().flex_1().child("Focus on this table"))
+                                .into_any_element()
+                        }
+                    }
+                }))
+        };
+
+        // ── Submenu (rendered to the right of main menu) ──────────────────
+        let submenu_element = if let Some(submenu) = &self.context_menu_submenu {
+            let sub_items = submenu.items();
+            let sub_idx = self.context_menu_submenu_selected_index;
+            let submenu_theme = theme.clone();
+
+            // Position submenu to the right of the main menu, aligned to the parent item
+            let main_width = px(160.0);
+
+            // Determine which layout sub-item is currently active
+            let active_layout = layout_format;
+
+            Some(
+                div()
+                    .absolute()
+                    .left(position.x + main_width + px(4.0))
+                    .top(position.y)
+                    .min_w(px(140.0))
+                    .bg(submenu_theme.popover)
+                    .border_1()
+                    .border_color(submenu_theme.border)
+                    .rounded_md()
+                    .shadow_lg()
+                    .flex_col()
+                    .children(sub_items.iter().enumerate().map(|(i, sub_item)| {
+                        let is_selected = i == sub_idx;
+                        let is_active = match (submenu, sub_item) {
+                            (SubMenu::Layout, SubMenuItem::LeftRight) => {
+                                active_layout == LayoutFormat::LeftRight
+                            }
+                            (SubMenu::Layout, SubMenuItem::Snowflake) => {
+                                active_layout == LayoutFormat::Snowflake
+                            }
+                            (SubMenu::Layout, SubMenuItem::Compact) => {
+                                active_layout == LayoutFormat::Compact
+                            }
+                            _ => false,
+                        };
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .h(rems(1.6))
+                            .px(Spacing::SM)
+                            .mx(Spacing::XS)
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_size(FontSizes::SM)
+                            .text_color(submenu_theme.foreground)
+                            .when(is_selected, |d| {
+                                d.bg(submenu_theme.accent)
+                                    .text_color(submenu_theme.accent_foreground)
+                            })
+                            .when(!is_selected, |d| d.hover(|d| d.bg(submenu_theme.secondary)))
+                            .child(div().flex_1().child(sub_item.label()))
+                            .when(is_active, |d| {
+                                d.child(
+                                    svg()
+                                        .path(AppIcon::CircleCheck.path())
+                                        .size_3()
+                                        .text_color(submenu_theme.primary),
+                                )
+                            })
+                            .into_any_element()
+                    })),
+            )
+        } else {
+            None
+        };
+
+        // Wrap in a transparent overlay that closes the menu when clicking outside
+        let menu_entity = cx.entity().clone();
+        deferred(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    menu_entity.update(cx, |this, cx| {
+                        this.context_menu_open = false;
+                        this.context_menu_submenu = None;
+                        cx.notify();
+                    });
+                })
+                .child(main_menu)
+                .when_some(submenu_element, |parent, sub| parent.child(sub)),
         )
     }
 
@@ -1278,6 +1890,186 @@ impl SchemaVizDocument {
                 this.zoom = new_zoom;
                 cx.notify();
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.context_menu_open = true;
+                    this.context_menu_position = event.position;
+                    this.context_menu_target = this.selected_node;
+                    this.context_menu_selected_index = 0;
+                    cx.notify();
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                use crate::keymap::{key_chord_from_gpui, Modifiers};
+
+                let chord = key_chord_from_gpui(&event.keystroke);
+                let mods = &chord.modifiers;
+
+                // Handle context menu navigation first
+                if this.context_menu_open {
+                    return;
+                }
+
+                // Zoom
+                if (chord.key == "+" || chord.key == "=")
+                    && mods.shift
+                    && !mods.ctrl
+                    && !mods.alt
+                {
+                    this.zoom = (this.zoom * 1.25).min(4.0);
+                    cx.notify();
+                    return;
+                }
+                if (chord.key == "-" || chord.key == "_")
+                    && !mods.shift
+                    && !mods.ctrl
+                    && !mods.alt
+                {
+                    this.zoom = (this.zoom / 1.25).max(0.25);
+                    cx.notify();
+                    return;
+                }
+
+                // Layout shortcuts
+                if !mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "s" => {
+                            this.set_layout_format(LayoutFormat::Snowflake, cx);
+                            return;
+                        }
+                        "c" => {
+                            this.set_layout_format(LayoutFormat::Compact, cx);
+                            return;
+                        }
+                        "r" => {
+                            this.set_layout_format(LayoutFormat::LeftRight, cx);
+                            return;
+                        }
+                        "m" => {
+                            this.context_menu_open = true;
+                            this.context_menu_position = Point::new(px(100.0), px(100.0));
+                            this.context_menu_target = this.selected_node;
+                            this.context_menu_selected_index = 0;
+                            cx.notify();
+                            return;
+                        }
+                        "escape" => {
+                            this.selected_node = None;
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Pan with arrow keys / h,j,k,l
+                if !mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "h" | "left" => {
+                            let pan_x: f32 = this.pan_offset.x.into();
+                            this.pan_offset = Point::new(px(pan_x + 50.0), this.pan_offset.y);
+                            cx.notify();
+                            return;
+                        }
+                        "l" | "right" => {
+                            let pan_x: f32 = this.pan_offset.x.into();
+                            this.pan_offset = Point::new(px(pan_x - 50.0), this.pan_offset.y);
+                            cx.notify();
+                            return;
+                        }
+                        "k" | "up" => {
+                            let pan_y: f32 = this.pan_offset.y.into();
+                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y + 50.0));
+                            cx.notify();
+                            return;
+                        }
+                        "j" | "down" => {
+                            let pan_y: f32 = this.pan_offset.y.into();
+                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y - 50.0));
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Selection navigation with Shift+arrows / Shift+hjkl
+                if mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "l" | "right" => {
+                            if let Some(next) = this.find_next_node(Direction::Right) {
+                                this.selected_node = Some(next);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "h" | "left" => {
+                            if let Some(next) = this.find_next_node(Direction::Left) {
+                                this.selected_node = Some(next);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "k" | "up" => {
+                            if let Some(next) = this.find_next_node(Direction::Up) {
+                                this.selected_node = Some(next);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "j" | "down" => {
+                            if let Some(next) = this.find_next_node(Direction::Down) {
+                                this.selected_node = Some(next);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Move selected table with Alt+arrows / Alt+hjkl
+                if mods.alt && !mods.shift && !mods.ctrl {
+                    let Some(selected) = this.selected_node else {
+                        return;
+                    };
+
+                    // Get current position (from override or layout)
+                    let current_pos = this
+                        .node_position_overrides
+                        .get(&selected)
+                        .copied()
+                        .or_else(|| {
+                            this.layout
+                                .as_ref()
+                                .and_then(|l| l.nodes.get(&selected))
+                                .map(|n| Point::new(n.x, n.y))
+                        })
+                        .unwrap_or(Point::new(0.0, 0.0));
+
+                    let mut new_pos = current_pos;
+
+                    match chord.key.as_str() {
+                        "h" | "left" => {
+                            new_pos.x -= 20.0;
+                        }
+                        "l" | "right" => {
+                            new_pos.x += 20.0;
+                        }
+                        "k" | "up" => {
+                            new_pos.y -= 20.0;
+                        }
+                        "j" | "down" => {
+                            new_pos.y += 20.0;
+                        }
+                        _ => return,
+                    }
+
+                    this.node_position_overrides.insert(selected, new_pos);
+                    cx.notify();
+                }
+            }))
             .child(canvas);
 
         let cap_warning = self.table_cap_warning.then(|| {
@@ -1292,6 +2084,11 @@ impl SchemaVizDocument {
                 .child("Showing first 100 tables — the schema has more.")
         });
 
+        // Context menu overlay
+        let context_menu = self.context_menu_open.then(|| {
+            self.render_context_menu(self.context_menu_position, cx)
+        });
+
         div()
             .size_full()
             .flex()
@@ -1300,6 +2097,7 @@ impl SchemaVizDocument {
             .child(zoom_controls)
             .children(cap_warning)
             .child(viewport)
+            .when_some(context_menu, |d, menu| d.child(menu))
     }
 
     fn render_nodes(
