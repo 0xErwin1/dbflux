@@ -3,7 +3,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::{Scrollable, ScrollableElement};
 
-use dbflux_core::{Connection, DbSchemaInfo, TableInfo, TaskTarget};
+use dbflux_core::observability::actions as audit_actions;
+use dbflux_core::observability::{
+    AuditAction, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
+};
+use dbflux_core::{CancelToken, Connection, DbSchemaInfo, TableInfo, TaskKind, TaskTarget};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
     layout::{LayoutFormat, LayoutResult, NodeLayout},
@@ -40,7 +44,7 @@ pub enum SchemaVizMode {
 }
 
 /// Loading status for the schema diagram.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum LoadStatus {
     Loading,
     Ready,
@@ -61,6 +65,8 @@ pub struct SchemaVizDocument {
     pub zoom: f32,
     pub focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
+    // Dependencies
+    app_state: Entity<AppStateEntity>,
     // Pan state
     is_panning: bool,
     pan_start: Point<Pixels>,
@@ -75,6 +81,8 @@ pub struct SchemaVizDocument {
     // Layout
     pub layout_format: LayoutFormat,
     pub table_cap_warning: bool,
+    // Cancellation
+    cancel_token: Option<Arc<CancelToken>>,
 }
 
 impl SchemaVizDocument {
@@ -130,6 +138,7 @@ impl SchemaVizDocument {
             zoom: 1.0,
             focus_handle,
             _subscriptions: Vec::new(),
+            app_state: app_state.clone(),
             is_panning: false,
             pan_start: Point::default(),
             pan_offset: Point::default(),
@@ -140,6 +149,7 @@ impl SchemaVizDocument {
             node_position_overrides: std::collections::HashMap::new(),
             layout_format: LayoutFormat::LeftRight,
             table_cap_warning: false,
+            cancel_token: None,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -148,34 +158,147 @@ impl SchemaVizDocument {
         doc
     }
 
+    /// Cancels any in-progress schema loading.
+    pub fn cancel_loading(&mut self, cx: &App) {
+        if let Some(ref cancel_token) = self.cancel_token {
+            cancel_token.cancel();
+        }
+
+        let mode_str = match &self.mode {
+            SchemaVizMode::Focused { .. } => "focused",
+            SchemaVizMode::Global => "global",
+        };
+        let tables_loaded = self.tables.len();
+        // Estimate total tables based on current state
+        let tables_total = if self.load_status == LoadStatus::Ready {
+            tables_loaded
+        } else {
+            0
+        };
+
+        let details = serde_json::json!({
+            "mode": mode_str,
+            "database": self.database,
+            "tables_loaded": tables_loaded,
+            "tables_total": tables_total,
+        });
+        self.emit_audit_event(
+            EventSeverity::Warn,
+            EventOutcome::Cancelled,
+            audit_actions::SCHEMA_VIZ_CANCEL,
+            details,
+            cx,
+        );
+    }
+
+    /// Emits an audit event for schema visualization operations.
+    fn emit_audit_event(
+        &self,
+        severity: EventSeverity,
+        outcome: EventOutcome,
+        action: AuditAction,
+        details: serde_json::Value,
+        cx: &App,
+    ) {
+        let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let event = EventRecord::new(now_ms, severity, EventCategory::Config, outcome)
+            .with_typed_action(action)
+            .with_origin(EventOrigin::local())
+            .with_actor_id("local")
+            .with_connection_context(
+                self.profile_id.to_string(),
+                self.database.as_deref().unwrap_or(""),
+                "",
+            );
+
+        let event = event.with_details_json(details.to_string());
+
+        if let Err(e) = self.app_state.read(cx).audit_service().record(event) {
+            log::warn!("Failed to record schema_viz audit event: {}", e);
+        }
+    }
+
     /// Spawns the background loading task for schema data.
     fn spawn_loading(
         &mut self,
-        _profile_id: Uuid,
+        profile_id: Uuid,
         database: Option<String>,
         mode: SchemaVizMode,
         connection: Option<Arc<dyn Connection>>,
         entity: Entity<Self>,
         cx: &mut Context<Self>,
     ) {
-        let task = cx
-            .background_executor()
-            .spawn(async move { Self::load_focused_schema_blocking(database, mode, connection) });
+        // Register the task with the TasksPanel before spawning
+        let (task_id, cancel_token) = {
+            let database_label = database.as_deref().unwrap_or("global");
+            let description = format!("Schema diagram: {}", database_label);
+            let target = TaskTarget {
+                profile_id,
+                database: database.clone(),
+            };
+            self.app_state.update(cx, |state, _cx| {
+                state.start_task_for_target(TaskKind::LoadSchema, description, Some(target))
+            })
+        };
+
+        // Store cancel token so it can be triggered from cancel_loading()
+        let cancel_token = Arc::new(cancel_token);
+        self.cancel_token = Some(cancel_token.clone());
+
+        let task = cx.background_executor().spawn(async move {
+            Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
+        });
 
         let entity = entity.clone();
+        let app_state = self.app_state.clone();
         cx.spawn(async move |_entity, cx| {
             let load_result = task.await;
+
+            // Determine if cancelled by checking if error message is "Cancelled"
+            let is_cancelled = load_result.as_ref().err().map(|e| e == "Cancelled").unwrap_or(false);
 
             if let Err(error) = cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     match load_result {
-                        Ok((tables, graph, layout, capped)) => {
+                        Ok((tables, graph, layout, capped, tables_loaded)) => {
                             let (focal_table, focal_schema) = match &doc.mode {
                                 SchemaVizMode::Focused { table, schema } => {
                                     (table.clone(), schema.clone())
                                 }
                                 SchemaVizMode::Global => ("".to_string(), None),
                             };
+                            let mode_str = match &doc.mode {
+                                SchemaVizMode::Focused { .. } => "focused",
+                                SchemaVizMode::Global => "global",
+                            };
+                            let table_count = tables.len();
+                            let edge_count = graph.edge_count();
+                            let layout_format = format!("{:?}", doc.layout_format);
+
+                            let details = serde_json::json!({
+                                "mode": mode_str,
+                                "table": focal_table,
+                                "schema": focal_schema,
+                                "database": doc.database,
+                                "table_count": table_count,
+                                "edge_count": edge_count,
+                                "layout_format": layout_format,
+                                "tables_loaded": tables_loaded,
+                            });
+                            doc.emit_audit_event(
+                                EventSeverity::Info,
+                                EventOutcome::Success,
+                                audit_actions::SCHEMA_VIZ_OPEN,
+                                details,
+                                cx,
+                            );
+
+                            // Complete the task in the TasksPanel
+                            app_state.update(cx, |state, cx| {
+                                state.complete_task(task_id);
+                                cx.emit(crate::app::AppStateChanged);
+                            });
+
                             let viewport_width = 800.0;
                             let viewport_height = 600.0;
                             let initial_pan = if let Some(focal_node) =
@@ -208,6 +331,51 @@ impl SchemaVizDocument {
                             }
                         }
                         Err(msg) => {
+                            let mode_str = match &doc.mode {
+                                SchemaVizMode::Focused { .. } => "focused",
+                                SchemaVizMode::Global => "global",
+                            };
+
+                            // Emit cancel or error audit event
+                            if is_cancelled {
+                                let details = serde_json::json!({
+                                    "mode": mode_str,
+                                    "database": doc.database,
+                                    "reason": "cancelled",
+                                });
+                                doc.emit_audit_event(
+                                    EventSeverity::Warn,
+                                    EventOutcome::Failure,
+                                    audit_actions::SCHEMA_VIZ_CANCEL,
+                                    details,
+                                    cx,
+                                );
+
+                                // Cancel the task in the TasksPanel
+                                app_state.update(cx, |state, cx| {
+                                    state.cancel_task(task_id);
+                                    cx.emit(crate::app::AppStateChanged);
+                                });
+                            } else {
+                                let details = serde_json::json!({
+                                    "mode": mode_str,
+                                    "error": msg,
+                                    "database": doc.database,
+                                });
+                                doc.emit_audit_event(
+                                    EventSeverity::Error,
+                                    EventOutcome::Failure,
+                                    audit_actions::SCHEMA_VIZ_ERROR,
+                                    details,
+                                    cx,
+                                );
+
+                                // Fail the task in the TasksPanel
+                                app_state.update(cx, |state, cx| {
+                                    state.fail_task(task_id, msg.clone());
+                                    cx.emit(crate::app::AppStateChanged);
+                                });
+                            }
                             doc.load_status = LoadStatus::Error(msg);
                         }
                     }
@@ -223,12 +391,17 @@ impl SchemaVizDocument {
     /// Loads schema data (blocking, runs on background executor).
     /// The connection must be the correct per-database connection (obtained via
     /// `connection_for_task_target` in `SchemaVizDocument::new`), not the primary connection.
+    ///
+    /// The `cancel_token` is checked at key points to allow cancellation.
+    /// Returns `(tables, graph, layout, capped, tables_loaded)` where `tables_loaded`
+    /// is the count of successfully loaded tables (useful for audit events on cancel).
     #[allow(clippy::collapsible_if)]
     fn load_focused_schema_blocking(
         database: Option<String>,
         mode: SchemaVizMode,
         connection: Option<Arc<dyn Connection>>,
-    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool), String> {
+        cancel_token: Arc<CancelToken>,
+    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool, usize), String> {
         let connection =
             connection.ok_or_else(|| "Connection not found or not active".to_string())?;
 
@@ -244,9 +417,17 @@ impl SchemaVizDocument {
                     return Err("Foreign keys not supported by this driver".to_string());
                 }
 
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
                 let focal_table = connection
                     .table_details(&db_name, schema.as_deref(), &table)
                     .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
 
                 let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
                 all_table_names.insert((schema.clone(), table.clone()));
@@ -259,14 +440,22 @@ impl SchemaVizDocument {
 
                 let mut all_tables = Vec::with_capacity(all_table_names.len());
                 all_tables.push(focal_table.clone());
+                let mut tables_loaded = 1; // focal table already loaded
 
                 for (tbl_schema, tbl_name) in &all_table_names {
                     if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
                         continue;
                     }
 
+                    if cancel_token.is_cancelled() {
+                        return Err("Cancelled".into());
+                    }
+
                     match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
-                        Ok(details) => all_tables.push(details),
+                        Ok(details) => {
+                            tables_loaded += 1;
+                            all_tables.push(details);
+                        }
                         Err(e) => {
                             log::warn!(
                                 "Failed to fetch details for table {}.{:?}: {}",
@@ -290,9 +479,14 @@ impl SchemaVizDocument {
                         .iter()
                         .any(|t| t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref())
                     {
+                        if cancel_token.is_cancelled() {
+                            return Err("Cancelled".into());
+                        }
+
                         if let Ok(details) =
                             connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name)
                         {
+                            tables_loaded += 1;
                             all_tables.push(details);
                         }
                     }
@@ -306,7 +500,7 @@ impl SchemaVizDocument {
                     Some((table.as_str(), schema.as_deref())),
                 );
 
-                Ok((all_tables, focused_graph, layout, false))
+                Ok((all_tables, focused_graph, layout, false, tables_loaded))
             }
             SchemaVizMode::Global => {
                 let metadata = connection.metadata();
@@ -322,14 +516,27 @@ impl SchemaVizDocument {
                     .schema_for_database(&db_name)
                     .map_err(|e| format!("Failed to list tables: {}", e))?;
 
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
                 const TABLE_CAP: usize = 100;
                 let capped = schema_info.tables.len() > TABLE_CAP;
                 let tables_to_load: Vec<_> = schema_info.tables.into_iter().take(TABLE_CAP).collect();
 
                 let mut all_table_details = Vec::with_capacity(tables_to_load.len());
+                let mut tables_loaded = 0;
+
                 for tbl in &tables_to_load {
+                    if cancel_token.is_cancelled() {
+                        return Err("Cancelled".into());
+                    }
+
                     match connection.table_details(&db_name, tbl.schema.as_deref(), &tbl.name) {
-                        Ok(details) => all_table_details.push(details),
+                        Ok(details) => {
+                            tables_loaded += 1;
+                            all_table_details.push(details);
+                        }
                         Err(e) => log::warn!("Failed to fetch details for {}: {}", tbl.name, e),
                     }
                 }
@@ -337,7 +544,7 @@ impl SchemaVizDocument {
                 let graph = SchemaGraph::build(&all_table_details);
                 let layout = dbflux_schema_viz::layout::compute_layout(&graph, LayoutFormat::Compact, None);
 
-                Ok((all_table_details, graph, layout, capped))
+                Ok((all_table_details, graph, layout, capped, tables_loaded))
             }
         }
     }
@@ -388,6 +595,7 @@ impl SchemaVizDocument {
     }
 
     pub fn set_layout_format(&mut self, format: LayoutFormat, cx: &mut Context<Self>) {
+        let old_format = self.layout_format;
         self.layout_format = format;
         if let Some(ref graph) = self.graph {
             let focal = match &self.mode {
@@ -415,6 +623,39 @@ impl SchemaVizDocument {
             self.node_position_overrides.clear();
         }
         cx.notify();
+
+        // Emit audit event after recomputation
+        let mode_str = match &self.mode {
+            SchemaVizMode::Focused { table, .. } => {
+                let details = serde_json::json!({
+                    "old_format": format!("{:?}", old_format),
+                    "new_format": format!("{:?}", format),
+                    "mode": "focused",
+                    "table": table,
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+                    details,
+                    cx,
+                );
+                return;
+            }
+            SchemaVizMode::Global => "global",
+        };
+        let details = serde_json::json!({
+            "old_format": format!("{:?}", old_format),
+            "new_format": format!("{:?}", format),
+            "mode": mode_str,
+        });
+        self.emit_audit_event(
+            EventSeverity::Info,
+            EventOutcome::Success,
+            audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+            details,
+            cx,
+        );
     }
 
     pub fn active_context(&self) -> ContextId {
