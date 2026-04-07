@@ -8,8 +8,11 @@ DBFlux is an open-source database client written in Rust, built with GPUI (Zed's
 
 The long-term goal is to provide a fully open-source alternative to DBeaver, supporting both relational and non-relational databases.
 
+![DBFlux](resources/dbflux.png)
+
 ## Documentation
 
+- [Audit](docs/AUDIT.md)
 - [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
 - [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
 - [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
@@ -40,17 +43,32 @@ chmod +x dbflux-linux-amd64.AppImage
 
 #### Arch Linux
 
-Using the provided PKGBUILD:
+Available in the AUR:
 
 ```bash
-cd scripts
-makepkg -si
+# Using an AUR helper
+paru -S dbflux
+# or
+yay -S dbflux
 ```
 
-Or with an AUR helper (once published):
+#### Debian / Ubuntu
+
+Download the `.deb` package from [Releases](https://github.com/0xErwin1/dbflux/releases):
 
 ```bash
-paru -S dbflux
+# Replace amd64 with arm64 for ARM
+wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.deb
+sudo dpkg -i dbflux-linux-amd64.deb
+```
+
+#### Fedora / RHEL / CentOS
+
+Download the `.rpm` package from [Releases](https://github.com/0xErwin1/dbflux/releases):
+
+```bash
+# Replace amd64 with arm64 for ARM
+sudo dnf install https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.rpm
 ```
 
 #### Nix
@@ -149,22 +167,6 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 # Remove user config and data too
 ./scripts/uninstall.sh --remove-config
 ```
-
-### Verify Downloads
-
-Releases triggered with `workflow_dispatch` and `sign=true` include GPG signatures (key `A614B7D25134987A`).
-
-```bash
-# Import the public key from keyserver (one time)
-gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
-
-# Verify checksum
-sha256sum -c dbflux-linux-amd64.tar.gz.sha256
-
-# Verify GPG signature (if the release includes .asc files)
-gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
-```
-
 ## Features
 
 ### Database Support
@@ -200,7 +202,6 @@ gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
 - Results toolbar: `f` to focus, `h`/`l` to navigate, `Enter` to edit/execute, `Esc` to exit
 - Toggle sidebar with `Ctrl+B`
 - Tab switching (MRU order) with `Ctrl+Tab` / `Ctrl+Shift+Tab`
-- History modal: `Ctrl+P` to open
 
 ### Query Management
 
@@ -247,13 +248,13 @@ xcode-select --install
 ### Building
 
 ```bash
-cargo build -p dbflux --release --features sqlite,postgres,mysql,mongodb,redis
+cargo build -p dbflux --release
 ```
 
 ### Running
 
 ```bash
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis
+cargo run -p dbflux
 ```
 
 ### Commands
@@ -275,76 +276,6 @@ nix develop
 
 # Traditional
 nix-shell
-```
-
-## Project Structure
-
-```
-dbflux/
-├── crates/
-│   ├── dbflux/                    # Binary shell: main.rs, cli.rs only
-│   │   └── src/
-│   │       ├── main.rs            # App entry point, logging, window bootstrap
-│   │       └── cli.rs             # CLI arg parsing, single-instance IPC client
-│   ├── dbflux_ui/                 # GPUI UI layer: views, documents, overlays, components
-│   │   └── src/
-│   │       ├── app_state_entity.rs # AppStateEntity wrapper
-│   │       ├── ui/
-│   │       │   ├── views/         # Workspace, sidebar, status bar, tasks panel
-│   │       │   ├── overlays/      # Modals (command palette, cell editor, etc.)
-│   │       │   ├── document/      # Document system (SQL query, data grid)
-│   │       │   ├── components/    # DataTable, DocumentTree, toast, dropdown
-│   │       │   ├── dock/          # SidebarDock, BottomDock
-│   │       │   └── windows/       # Connection manager, settings
-│   │       ├── keymap/            # Keyboard system
-│   │       ├── ipc_server.rs      # App-control IPC server
-│   │       ├── assets.rs          # GPUI AssetSource for SVG icons
-│   │       └── platform.rs        # X11/Wayland detection
-│   ├── dbflux_app/                 # Runtime/domain: AppState (plain struct)
-│   │   └── src/
-│   │       ├── app_state.rs       # AppState (no GPUI dependency)
-│   │       ├── access_manager.rs  # Direct/managed access
-│   │       ├── auth_provider_registry.rs # Runtime auth providers
-│   │       ├── hook_executor.rs    # Composite hook executor
-│   │       ├── proxy.rs           # Proxy tunnel callback
-│   │       ├── config_loader.rs   # SQLite-backed config
-│   │       ├── history_manager_sqlite.rs # Query history
-│   │       ├── mcp_command.rs     # MCP subcommand
-│   │       └── keymap/            # Pure domain keyboard types
-│   ├── dbflux_core/               # Core types, traits, and driver capabilities
-│   │   ├── core/                  # Error, value, traits, shutdown
-│   │   ├── driver/                # Capabilities, form definitions
-│   │   ├── schema/                # Schema types, builder, node IDs
-│   │   ├── sql/                   # Dialect, SQL generation, query builder
-│   │   ├── query/                 # Query types, generator, language service
-│   │   ├── connection/            # Profiles, hooks, proxies, SSH tunnels
-│   │   ├── storage/               # JSON store, session, history, secrets
-│   │   ├── data/                  # CRUD mutations, key-value ops, views
-│   │   ├── config/                # App config, refresh policy, scripts
-│   │   └── facade/                # High-level session facade
-│   ├── dbflux_ipc/                # IPC protocol and framing
-│   ├── dbflux_driver_ipc/         # External driver proxy over local IPC
-│   ├── dbflux_driver_host/        # RPC host process for out-of-process drivers
-│   ├── dbflux_driver_postgres/    # PostgreSQL driver
-│   ├── dbflux_driver_mysql/       # MySQL driver
-│   ├── dbflux_driver_sqlite/      # SQLite driver
-│   ├── dbflux_driver_mongodb/     # MongoDB driver
-│   ├── dbflux_driver_redis/       # Redis driver
-│   ├── dbflux_tunnel_core/        # Shared RAII tunnel infrastructure
-│   ├── dbflux_proxy/              # SOCKS5/HTTP CONNECT proxy tunnel
-│   ├── dbflux_ssh/                # SSH tunnel support
-│   ├── dbflux_export/             # Export (CSV, JSON, Text, Binary)
-│   └── dbflux_test_support/       # Docker containers and test fixtures
-├── resources/
-│   ├── desktop/                   # Linux desktop entry
-│   ├── icons/                     # Application icons (SVG)
-│   ├── macos/                     # macOS bundle resources
-│   ├── mime/                      # MIME type definitions
-│   └── windows/                   # Windows installer resources
-└── scripts/
-    ├── install.sh                 # Linux installer
-    ├── uninstall.sh               # Linux uninstaller
-    └── PKGBUILD                   # Arch Linux package
 ```
 
 ## License
