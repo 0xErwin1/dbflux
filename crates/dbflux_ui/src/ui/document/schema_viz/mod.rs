@@ -658,6 +658,52 @@ impl SchemaVizDocument {
         );
     }
 
+    /// Export the current schema graph as DBML to clipboard.
+    pub fn export_dbml(&self, cx: &mut Context<Self>) {
+        let graph = match &self.graph {
+            Some(g) => g,
+            None => return,
+        };
+
+        let scope = dbflux_schema_viz::DbmlScope::Subgraph;
+        let dbml_result = dbflux_schema_viz::to_dbml(graph, scope);
+
+        match dbml_result {
+            Ok(dbml_text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(dbml_text));
+
+                // Emit audit event
+                let details = serde_json::json!({
+                    "scope": "Subgraph",
+                    "table_count": graph.node_count(),
+                    "edge_count": graph.edge_count(),
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    details,
+                    cx,
+                );
+            }
+            Err(e) => {
+                log::error!("DBML export failed: {}", e);
+
+                // Emit error audit event
+                let details = serde_json::json!({
+                    "error": e,
+                });
+                self.emit_audit_event(
+                    EventSeverity::Error,
+                    EventOutcome::Failure,
+                    audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    details,
+                    cx,
+                );
+            }
+        }
+    }
+
     pub fn active_context(&self) -> ContextId {
         ContextId::Global
     }
@@ -882,6 +928,16 @@ impl SchemaVizDocument {
                         this.set_layout_format(LayoutFormat::Compact, cx);
                     }))
                     .child("CG"),
+                div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.export_dbml(cx);
+                    }))
+                    .child("DBML"),
             ]);
 
         // The viewport handles all pointer and scroll events.

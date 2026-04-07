@@ -36,6 +36,7 @@ bincode = "1"
 interprocess.workspace = true
 open = "5"
 indexmap.workspace = true
+dbml-rs = "1.0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
