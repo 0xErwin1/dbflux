@@ -491,5 +491,6 @@ MCP provides a preview-before-execute workflow for schema changes:
 4. Missing feature gates on driver code
 5. Creating closures per cell in tables — use row-level handlers with hit-testing instead
 6. Canvas re-rendering every frame — cache scroll state and only sync on meaningful changes
+7. Audit event validation — `EventCategory::Config` requires `summary`, `object_type`, AND `object_id`; missing any causes silent failure in `validate_event()`
 
 For key files and the cross-crate map, see `ARCHITECTURE.md`.

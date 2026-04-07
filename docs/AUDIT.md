@@ -227,6 +227,12 @@ Action strings are defined in `dbflux_core/src/observability/actions.rs`. Use co
 | `SCRIPT_EXECUTE_FAILED` | `script_execute_failed` | Script |
 | `MCP_TOOL_CALL` | `mcp_tool_call` | Mcp |
 | `MCP_TOOL_DENIED` | `mcp_tool_denied` | Mcp |
+| `SCHEMA_VIZ_OPEN` | `schema_viz_open` | Config |
+| `SCHEMA_VIZ_CANCEL` | `schema_viz_cancel` | Config |
+| `SCHEMA_VIZ_ERROR` | `schema_viz_error` | Config |
+| `SCHEMA_VIZ_LAYOUT_CHANGE` | `schema_viz_layout_change` | Config |
+| `SCHEMA_VIZ_EXPORT_DBML` | `schema_viz_export_dbml` | Config |
+| `SCHEMA_VIZ_EXPORT_SQL` | `schema_viz_export_sql` | Config |
 | `SYSTEM_PANIC` | `system_panic` | System |
 
 ### Required Fields Checklist

@@ -357,6 +357,12 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
+  dbflux_schema_viz/        # Schema visualization
+    src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
+    src/graph.rs            # SchemaGraph, TableNode, ForeignKeyEdge, ColumnRefNode
+    src/layout.rs           # Layout algorithms: ForceBased, Tree, Radial, Grid
+    src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, Full)
+    src/sql.rs              # SQL DDL export (3 scopes: CREATE TABLE + ALTER TABLE)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
@@ -392,6 +398,7 @@ crates/
 - **Data table**: `crates/dbflux_ui/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
 - **Document tree**: `crates/dbflux_ui/src/ui/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui/src/ui/document/key_value/` Redis-specific document view with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu.
+- **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes, FK edges, column ref nodes), layout algorithms (ForceBased, Tree, Radial, Grid), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui/src/ui/document/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading.
 - Cell editor modal: `crates/dbflux_ui/src/ui/overlays/cell_editor_modal.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_ui/src/ui/overlays/document_preview_modal.rs` full-screen JSON document preview with an inline JSON editor.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
