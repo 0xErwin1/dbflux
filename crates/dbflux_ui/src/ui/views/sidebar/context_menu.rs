@@ -350,6 +350,16 @@ impl Sidebar {
                         );
                     }
 
+                    if self.is_relational_with_fk_support(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "View Schema Diagram",
+                                ContextMenuAction::ViewSchemaDiagram,
+                            )],
+                        );
+                    }
+
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
@@ -955,6 +965,9 @@ impl Sidebar {
             }
             ContextMenuAction::ViewRelationships => {
                 self.open_schema_viz(&item_id, cx);
+            }
+            ContextMenuAction::ViewSchemaDiagram => {
+                self.open_schema_diagram(&item_id, cx);
             }
             ContextMenuAction::GenerateCode(generator_id) => {
                 self.generate_code(&item_id, &generator_id, cx);

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::f32::consts::PI as PI_F32;
 
 use petgraph::algo::is_cyclic_directed;
 use petgraph::prelude::NodeIndex;
@@ -6,11 +7,27 @@ use petgraph::visit::EdgeRef;
 
 use crate::graph::SchemaGraph;
 
+/// Layout algorithm to use when computing positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LayoutFormat {
+    /// Layered left-to-right. FK source tables on the left, referenced tables on the right.
+    /// This is the default.
+    #[default]
+    LeftRight,
+    /// Snowflake: focal table centered, neighbors arranged in a circle around it.
+    /// Falls back to LeftRight when there is no focal table (Global mode).
+    Snowflake,
+    /// Compact grid: tighter spacing, maximizes number of visible tables.
+    Compact,
+}
+
 const NODE_HEADER_HEIGHT: f32 = 28.0;
 const NODE_ROW_HEIGHT: f32 = 22.0;
 const LAYER_SPACING_X: f32 = 320.0;
 const NODE_SPACING_Y: f32 = 40.0;
 const CELL_WIDTH: f32 = 360.0;
+const COMPACT_CELL_SPACING_X: f32 = 20.0;
+const COMPACT_CELL_SPACING_Y: f32 = 20.0;
 
 /// Compute the width for a node based on its content.
 fn compute_node_width(node: &crate::graph::TableNode) -> f32 {
@@ -71,7 +88,11 @@ pub struct LayoutResult {
 }
 
 /// Compute a layout for the given `SchemaGraph`.
-pub fn compute_layout(graph: &SchemaGraph) -> LayoutResult {
+pub fn compute_layout(
+    graph: &SchemaGraph,
+    format: LayoutFormat,
+    focal: Option<(&str, Option<&str>)>,
+) -> LayoutResult {
     if graph.node_count() == 0 {
         return LayoutResult {
             nodes: HashMap::new(),
@@ -81,11 +102,28 @@ pub fn compute_layout(graph: &SchemaGraph) -> LayoutResult {
         };
     }
 
-    if is_cyclic_directed(&graph.graph) {
-        return grid_layout(graph);
+    match format {
+        LayoutFormat::LeftRight => {
+            if is_cyclic_directed(&graph.graph) {
+                grid_layout(graph)
+            } else {
+                layered_layout(graph)
+            }
+        }
+        LayoutFormat::Compact => compact_layout(graph),
+        LayoutFormat::Snowflake => {
+            if let Some((focal_name, focal_schema)) = focal {
+                snowflake_layout(graph, focal_name, focal_schema)
+            } else {
+                // No focal table — fall back to layered layout
+                if is_cyclic_directed(&graph.graph) {
+                    grid_layout(graph)
+                } else {
+                    layered_layout(graph)
+                }
+            }
+        }
     }
-
-    layered_layout(graph)
 }
 
 /// Layered layout for acyclic graphs.
@@ -181,28 +219,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
         }
     }
 
-    let edges: Vec<EdgeLayout> = graph
-        .graph
-        .edge_indices()
-        .filter_map(|edge_idx| {
-            let (source, target) = graph.graph.edge_endpoints(edge_idx)?;
-            let from_layout = nodes.get(&source)?;
-            let to_layout = nodes.get(&target)?;
-
-            let from_anchor = (
-                from_layout.x + from_layout.width,
-                from_layout.y + from_layout.height / 2.0,
-            );
-            let to_anchor = (to_layout.x, to_layout.y + to_layout.height / 2.0);
-
-            Some(EdgeLayout {
-                from_node: source,
-                to_node: target,
-                from_anchor,
-                to_anchor,
-            })
-        })
-        .collect();
+    let edges = build_edges(graph, &nodes);
 
     let total_width = computed_max_layer as f32 * LAYER_SPACING_X
         + nodes.values().map(|n| n.width).fold(0.0_f32, f32::max);
@@ -300,7 +317,286 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
         );
     }
 
-    let edges: Vec<EdgeLayout> = graph
+    let edges = build_edges(graph, &nodes);
+
+    let total_width = cols as f32 * cell_width;
+    let total_height = row_y_offsets
+        .last()
+        .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
+        .unwrap_or(0.0_f32);
+
+    LayoutResult {
+        nodes,
+        edges,
+        total_width,
+        total_height,
+    }
+}
+
+/// Compact grid layout with tighter spacing than grid_layout.
+fn compact_layout(graph: &SchemaGraph) -> LayoutResult {
+    let n = graph.node_count();
+    let cols = ((n as f32).sqrt().ceil() as usize).max(1);
+    let rows = n.div_ceil(cols);
+
+    // Sort nodes deterministically by table name before laying out.
+    let mut sorted_indices: Vec<NodeIndex> = graph.graph.node_indices().collect();
+    sorted_indices.sort_by_key(|&idx| {
+        graph
+            .graph
+            .node_weight(idx)
+            .map(|n| n.id.name.as_str())
+            .unwrap_or("")
+    });
+
+    // First pass: compute per-row max heights and collect all widths.
+    let mut row_max_heights = vec![0.0_f32; rows];
+    let mut all_widths: Vec<f32> = Vec::with_capacity(sorted_indices.len());
+    for (i, &idx) in sorted_indices.iter().enumerate() {
+        let node_weight = graph
+            .graph
+            .node_weight(idx)
+            .expect("invariant: idx is from node_indices() on the same graph");
+        let col_count = node_weight.columns.len().max(1) as f32;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight);
+        row_max_heights[i / cols] = row_max_heights[i / cols].max(height);
+        all_widths.push(width);
+    }
+
+    // Compute cumulative row y offsets.
+    let mut row_y_offsets = vec![0.0_f32; rows];
+    for r in 1..rows {
+        row_y_offsets[r] = row_y_offsets[r - 1] + row_max_heights[r - 1] + COMPACT_CELL_SPACING_Y;
+    }
+
+    // Cell width based on maximum node width across all nodes.
+    let max_node_width = all_widths.iter().fold(0.0_f32, |acc, &w| acc.max(w));
+    let cell_width = max_node_width.max(CELL_WIDTH);
+
+    // Second pass: place nodes using row y offsets.
+    let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
+    for (i, &idx) in sorted_indices.iter().enumerate() {
+        let node_weight = graph
+            .graph
+            .node_weight(idx)
+            .expect("invariant: idx is from node_indices() on the same graph");
+        let col_count = node_weight.columns.len().max(1) as f32;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight);
+
+        let col = i % cols;
+        let row = i / cols;
+        let x = col as f32 * (cell_width + COMPACT_CELL_SPACING_X);
+        let y = row_y_offsets[row];
+
+        nodes.insert(
+            idx,
+            NodeLayout {
+                x,
+                y,
+                width,
+                height,
+            },
+        );
+    }
+
+    let edges = build_edges(graph, &nodes);
+    let total_width = cols as f32 * (cell_width + COMPACT_CELL_SPACING_X);
+    let total_height = row_y_offsets
+        .last()
+        .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
+        .unwrap_or(0.0_f32);
+
+    LayoutResult {
+        nodes,
+        edges,
+        total_width,
+        total_height,
+    }
+}
+
+/// Snowflake layout: focal table at center, neighbors arranged in a circle.
+fn snowflake_layout(
+    graph: &SchemaGraph,
+    focal_name: &str,
+    focal_schema: Option<&str>,
+) -> LayoutResult {
+    // Find focal node index by name + schema.
+    let focal_id = crate::graph::TableNodeId {
+        schema: focal_schema.map(String::from),
+        name: focal_name.to_owned(),
+    };
+
+    let Some(&focal_idx) = graph.node_index_by_id.get(&focal_id) else {
+        // Focal node not found — fall back to layered layout
+        if is_cyclic_directed(&graph.graph) {
+            return grid_layout(graph);
+        } else {
+            return layered_layout(graph);
+        }
+    };
+
+    // Collect all neighbor indices (direct FK connections in either direction).
+    let mut neighbor_indices: Vec<NodeIndex> = Vec::new();
+
+    for edge in graph
+        .graph
+        .edges_directed(focal_idx, petgraph::Direction::Outgoing)
+    {
+        neighbor_indices.push(edge.target());
+    }
+    for edge in graph
+        .graph
+        .edges_directed(focal_idx, petgraph::Direction::Incoming)
+    {
+        neighbor_indices.push(edge.source());
+    }
+
+    // Sort neighbors by name for determinism.
+    neighbor_indices.sort_by_key(|&idx| {
+        graph
+            .graph
+            .node_weight(idx)
+            .map(|n| n.id.name.as_str())
+            .unwrap_or("")
+    });
+
+    let neighbor_count = neighbor_indices.len();
+
+    // Place focal node at center: use a fixed center for now.
+    let cx = 500.0_f32;
+    let cy = 400.0_f32;
+
+    let focal_width = compute_node_width(
+        graph
+            .graph
+            .node_weight(focal_idx)
+            .expect("focal_idx is valid"),
+    );
+    let focal_height = {
+        let nw = graph
+            .graph
+            .node_weight(focal_idx)
+            .expect("focal_idx is valid");
+        let col_count = nw.columns.len().max(1) as f32;
+        NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT
+    };
+
+    let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
+
+    // Focal node at center.
+    nodes.insert(
+        focal_idx,
+        NodeLayout {
+            x: cx - focal_width / 2.0,
+            y: cy - focal_height / 2.0,
+            width: focal_width,
+            height: focal_height,
+        },
+    );
+
+    // Place neighbors on a circle around the focal node.
+    let radius = 300.0_f32.max(neighbor_count as f32 * 80.0);
+    let angle_step = if neighbor_count > 0 {
+        2.0 * PI_F32 / neighbor_count as f32
+    } else {
+        0.0
+    };
+
+    for (i, &neighbor_idx) in neighbor_indices.iter().enumerate() {
+        let angle = angle_step * i as f32 - PI_F32 / 2.0; // Start from top
+        let node_weight = graph
+            .graph
+            .node_weight(neighbor_idx)
+            .expect("neighbor_idx is valid");
+        let width = compute_node_width(node_weight);
+        let col_count = node_weight.columns.len().max(1) as f32;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+
+        let node_x = cx + radius * angle.cos() - width / 2.0;
+        let node_y = cy + radius * angle.sin() - height / 2.0;
+
+        nodes.insert(
+            neighbor_idx,
+            NodeLayout {
+                x: node_x,
+                y: node_y,
+                width,
+                height,
+            },
+        );
+    }
+
+    // Nodes not in the immediate neighborhood use grid_layout, placed below.
+    // Collect nodes that aren't the focal or a neighbor.
+    let mut other_indices: Vec<NodeIndex> = graph
+        .graph
+        .node_indices()
+        .filter(|&idx| idx != focal_idx && !neighbor_indices.contains(&idx))
+        .collect();
+    other_indices.sort_by_key(|&idx| {
+        graph
+            .graph
+            .node_weight(idx)
+            .map(|n| n.id.name.as_str())
+            .unwrap_or("")
+    });
+
+    // Place other nodes in a grid below the snowflake.
+    // Use a fixed y offset for the grid start.
+    let grid_start_y = cy + radius + 150.0;
+    let grid_cols = 4;
+    for (i, &idx) in other_indices.iter().enumerate() {
+        let node_weight = graph.graph.node_weight(idx).expect("idx is valid");
+        let width = compute_node_width(node_weight);
+        let col_count = node_weight.columns.len().max(1) as f32;
+        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+
+        let col = i % grid_cols;
+        let row = i / grid_cols;
+        let x = col as f32 * (CELL_WIDTH + COMPACT_CELL_SPACING_X);
+        let y = grid_start_y + row as f32 * (height + COMPACT_CELL_SPACING_Y);
+
+        nodes.insert(
+            idx,
+            NodeLayout {
+                x,
+                y,
+                width,
+                height,
+            },
+        );
+    }
+
+    let edges = build_edges(graph, &nodes);
+
+    // Compute bounding box of all nodes + 100px margin.
+    let all_nodes: Vec<&NodeLayout> = nodes.values().collect();
+    let min_x = all_nodes.iter().map(|n| n.x).fold(0.0_f32, f32::min);
+    let min_y = all_nodes.iter().map(|n| n.y).fold(0.0_f32, f32::min);
+    let max_x = all_nodes
+        .iter()
+        .map(|n| n.x + n.width)
+        .fold(0.0_f32, f32::max);
+    let max_y = all_nodes
+        .iter()
+        .map(|n| n.y + n.height)
+        .fold(0.0_f32, f32::max);
+    let total_width = max_x - min_x + 100.0;
+    let total_height = max_y - min_y + 100.0;
+
+    LayoutResult {
+        nodes,
+        edges,
+        total_width,
+        total_height,
+    }
+}
+
+/// Compute edge layouts for all edges in the graph.
+fn build_edges(graph: &SchemaGraph, nodes: &HashMap<NodeIndex, NodeLayout>) -> Vec<EdgeLayout> {
+    graph
         .graph
         .edge_indices()
         .filter_map(|edge_idx| {
@@ -321,20 +617,7 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
                 to_anchor,
             })
         })
-        .collect();
-
-    let total_width = cols as f32 * cell_width;
-    let total_height = row_y_offsets
-        .last()
-        .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
-        .unwrap_or(0.0_f32);
-
-    LayoutResult {
-        nodes,
-        edges,
-        total_width,
-        total_height,
-    }
+        .collect()
 }
 
 #[cfg(test)]
@@ -396,8 +679,8 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout1 = compute_layout(&graph);
-        let layout2 = compute_layout(&graph);
+        let layout1 = compute_layout(&graph, LayoutFormat::LeftRight, None);
+        let layout2 = compute_layout(&graph, LayoutFormat::LeftRight, None);
 
         assert_eq!(layout1.nodes.len(), layout2.nodes.len());
         for (idx, node_layout) in &layout1.nodes {
@@ -434,7 +717,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
 
         // Check all nodes have non-overlapping bounding boxes.
         let node_list: Vec<(&NodeIndex, &NodeLayout)> = layout.nodes.iter().collect();
@@ -487,7 +770,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
 
         // Find node indices by name.
         let idx_by_name = |name: &str| -> NodeIndex {
@@ -546,7 +829,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
 
         // Collect x values from all nodes and check uniqueness.
         let mut xs: Vec<_> = layout.nodes.values().map(|l| l.x).collect();
