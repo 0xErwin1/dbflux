@@ -20,6 +20,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(context_bar_layer());
     stack.add_layer(audit_layer());
     stack.add_layer(event_streams_picker_layer());
+    stack.add_layer(schema_viz_layer());
 
     stack
 });
@@ -693,6 +694,30 @@ fn audit_layer() -> KeymapLayer {
 
     // Dismiss / exit toolbar navigation.
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+    layer
+}
+
+fn schema_viz_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::SchemaViz);
+
+    // Zoom (handled in-document via on_key_down, but register for completeness)
+    // + / = zoom in, - / _ zoom out — handled directly in viewport on_key_down
+
+    // Layout shortcuts — handled directly in viewport on_key_down
+    // s: snowflake, c: compact, r: left-right
+
+    // Pan with arrow keys / h,j,k,l — handled directly in viewport on_key_down
+
+    // Selection navigation with Shift — handled directly in viewport on_key_down
+
+    // Context menu
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenContextMenu,
+    );
+
+    // Escape — close menu / deselect (handled directly in viewport on_key_down)
 
     layer
 }
