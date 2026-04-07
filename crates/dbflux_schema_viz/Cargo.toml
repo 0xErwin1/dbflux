@@ -7,5 +7,6 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
+dbml-rs = "1.0"
 log.workspace = true
 petgraph.workspace = true

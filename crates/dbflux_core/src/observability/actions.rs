@@ -130,6 +130,8 @@ pub const SCHEMA_VIZ_CANCEL: AuditAction = AuditAction::new("schema_viz_cancel")
 pub const SCHEMA_VIZ_ERROR: AuditAction = AuditAction::new("schema_viz_error");
 /// Schema visualization layout changed.
 pub const SCHEMA_VIZ_LAYOUT_CHANGE: AuditAction = AuditAction::new("schema_viz_layout_change");
+/// Schema visualization exported to DBML.
+pub const SCHEMA_VIZ_EXPORT_DBML: AuditAction = AuditAction::new("schema_viz_export_dbml");
 
 // ============================================================================
 // System lifecycle actions
