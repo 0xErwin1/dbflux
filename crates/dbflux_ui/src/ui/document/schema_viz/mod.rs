@@ -19,8 +19,10 @@ use uuid::Uuid;
 
 use crate::app::AppStateEntity;
 use crate::keymap::ContextId;
+use crate::ui::components::toast::{flush_pending_toast, PendingToast, ToastExt};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentState};
+use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Spacing};
 
 // Node layout constants — shared between render_node and render_edges_overlay
@@ -83,6 +85,11 @@ pub struct SchemaVizDocument {
     pub table_cap_warning: bool,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
+    // Pending toast notification (set from sync context, flushed in render)
+    pending_toast: Option<PendingToast>,
+    // Toolbar dropdowns
+    layout_menu_open: bool,
+    export_menu_open: bool,
 }
 
 impl SchemaVizDocument {
@@ -150,6 +157,9 @@ impl SchemaVizDocument {
             layout_format: LayoutFormat::LeftRight,
             table_cap_warning: false,
             cancel_token: None,
+            pending_toast: None,
+            layout_menu_open: false,
+            export_menu_open: false,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -186,6 +196,7 @@ impl SchemaVizDocument {
             EventSeverity::Warn,
             EventOutcome::Cancelled,
             audit_actions::SCHEMA_VIZ_CANCEL,
+            "Schema diagram loading cancelled",
             details,
             cx,
         );
@@ -197,11 +208,19 @@ impl SchemaVizDocument {
         severity: EventSeverity,
         outcome: EventOutcome,
         action: AuditAction,
+        summary: &str,
         details: serde_json::Value,
         cx: &App,
     ) {
         let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let object_id = self
+            .database
+            .as_ref()
+            .map(|d| format!("{}/{}", self.profile_id, d))
+            .unwrap_or_else(|| self.profile_id.to_string());
+
         let event = EventRecord::new(now_ms, severity, EventCategory::Config, outcome)
+            .with_summary(summary)
             .with_typed_action(action)
             .with_origin(EventOrigin::local())
             .with_actor_id("local")
@@ -209,12 +228,13 @@ impl SchemaVizDocument {
                 self.profile_id.to_string(),
                 self.database.as_deref().unwrap_or(""),
                 "",
-            );
+            )
+            .with_object_ref("schema_diagram", object_id);
 
         let event = event.with_details_json(details.to_string());
 
         if let Err(e) = self.app_state.read(cx).audit_service().record(event) {
-            log::warn!("Failed to record schema_viz audit event: {}", e);
+            log::error!("CRITICAL: schema_viz audit event failed to record: {}", e);
         }
     }
 
@@ -289,6 +309,7 @@ impl SchemaVizDocument {
                                 EventSeverity::Info,
                                 EventOutcome::Success,
                                 audit_actions::SCHEMA_VIZ_OPEN,
+                                "Opened schema diagram",
                                 details,
                                 cx,
                             );
@@ -347,6 +368,7 @@ impl SchemaVizDocument {
                                     EventSeverity::Warn,
                                     EventOutcome::Failure,
                                     audit_actions::SCHEMA_VIZ_CANCEL,
+                                    "Schema diagram loading cancelled",
                                     details,
                                     cx,
                                 );
@@ -366,6 +388,7 @@ impl SchemaVizDocument {
                                     EventSeverity::Error,
                                     EventOutcome::Failure,
                                     audit_actions::SCHEMA_VIZ_ERROR,
+                                    "Schema diagram load error",
                                     details,
                                     cx,
                                 );
@@ -637,6 +660,7 @@ impl SchemaVizDocument {
                     EventSeverity::Info,
                     EventOutcome::Success,
                     audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+                    "Changed schema diagram layout",
                     details,
                     cx,
                 );
@@ -653,13 +677,14 @@ impl SchemaVizDocument {
             EventSeverity::Info,
             EventOutcome::Success,
             audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+            "Changed schema diagram layout",
             details,
             cx,
         );
     }
 
     /// Export the current schema graph as DBML to clipboard.
-    pub fn export_dbml(&self, cx: &mut Context<Self>) {
+    pub fn export_dbml(&mut self, cx: &mut Context<Self>) {
         let graph = match &self.graph {
             Some(g) => g,
             None => return,
@@ -672,6 +697,11 @@ impl SchemaVizDocument {
             Ok(dbml_text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(dbml_text));
 
+                self.pending_toast = Some(PendingToast {
+                    message: "Schema exported to DBML (copied to clipboard)".into(),
+                    is_error: false,
+                });
+
                 // Emit audit event
                 let details = serde_json::json!({
                     "scope": "Subgraph",
@@ -682,12 +712,18 @@ impl SchemaVizDocument {
                     EventSeverity::Info,
                     EventOutcome::Success,
                     audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    "Exported schema to DBML",
                     details,
                     cx,
                 );
             }
             Err(e) => {
                 log::error!("DBML export failed: {}", e);
+
+                self.pending_toast = Some(PendingToast {
+                    message: format!("DBML export failed: {}", e),
+                    is_error: true,
+                });
 
                 // Emit error audit event
                 let details = serde_json::json!({
@@ -697,6 +733,62 @@ impl SchemaVizDocument {
                     EventSeverity::Error,
                     EventOutcome::Failure,
                     audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    "DBML export failed",
+                    details,
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Copy the current schema graph as SQL DDL to clipboard.
+    pub fn copy_as_sql(&mut self, cx: &mut Context<Self>) {
+        let graph = match &self.graph {
+            Some(g) => g,
+            None => return,
+        };
+
+        let scope = dbflux_schema_viz::SqlScope::Subgraph;
+        let sql_result = dbflux_schema_viz::to_sql(graph, scope);
+
+        match sql_result {
+            Ok(sql_text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(sql_text.clone()));
+
+                self.pending_toast = Some(PendingToast {
+                    message: "Schema exported as SQL (copied to clipboard)".into(),
+                    is_error: false,
+                });
+
+                let details = serde_json::json!({
+                    "scope": "Subgraph",
+                    "table_count": graph.node_count(),
+                    "edge_count": graph.edge_count(),
+                    "sql_length": sql_text.len(),
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_EXPORT_SQL,
+                    "Exported schema as SQL",
+                    details,
+                    cx,
+                );
+            }
+            Err(e) => {
+                log::error!("SQL export failed: {}", e);
+
+                self.pending_toast = Some(PendingToast {
+                    message: format!("SQL export failed: {}", e),
+                    is_error: true,
+                });
+
+                let details = serde_json::json!({ "error": e });
+                self.emit_audit_event(
+                    EventSeverity::Error,
+                    EventOutcome::Failure,
+                    audit_actions::SCHEMA_VIZ_EXPORT_SQL,
+                    "SQL export failed",
                     details,
                     cx,
                 );
@@ -755,6 +847,147 @@ impl SchemaVizDocument {
             .items_center()
             .justify_center()
             .child("Schema diagram is not available for this database type")
+    }
+
+    fn layout_label(format: LayoutFormat) -> &'static str {
+        match format {
+            LayoutFormat::LeftRight => "Layout",
+            LayoutFormat::Snowflake => "Layout",
+            LayoutFormat::Compact => "Layout",
+        }
+    }
+
+    fn make_layout_menu_item(
+        &self,
+        label: &'static str,
+        format: LayoutFormat,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let is_selected = self.layout_format == format;
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .h(rems(1.6))
+            .px(Spacing::SM)
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(theme.foreground)
+            .when(is_selected, |d| d.bg(theme.primary.opacity(0.1)))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                this.set_layout_format(format, cx);
+                this.layout_menu_open = false;
+                cx.notify();
+            }))
+            .child(div().text_size(FontSizes::SM).child(label))
+                .when(is_selected, |d| {
+                d.child(
+                    svg()
+                        .path(AppIcon::CircleCheck.path())
+                        .size_3()
+                        .text_color(theme.primary),
+                )
+            })
+    }
+
+    fn render_layout_menu(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let items = vec![
+            self.make_layout_menu_item(
+                "Left-Right",
+                LayoutFormat::LeftRight,
+                theme,
+                cx,
+            ),
+            self.make_layout_menu_item(
+                "Snowflake",
+                LayoutFormat::Snowflake,
+                theme,
+                cx,
+            ),
+            self.make_layout_menu_item(
+                "Compact",
+                LayoutFormat::Compact,
+                theme,
+                cx,
+            ),
+        ];
+
+        self.build_dropdown_menu(items, cx)
+    }
+
+    fn render_export_menu(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let items: Vec<Div> = vec![
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(rems(1.6))
+                .px(Spacing::SM)
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(theme.foreground)
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.export_dbml(cx);
+                    this.export_menu_open = false;
+                    cx.notify();
+                }))
+                .child(div().text_size(FontSizes::SM).child("Copy as DBML")),
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(rems(1.6))
+                .px(Spacing::SM)
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(theme.foreground)
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.copy_as_sql(cx);
+                    this.export_menu_open = false;
+                    cx.notify();
+                }))
+                .child(div().text_size(FontSizes::SM).child("Copy as SQL")),
+        ];
+
+        self.build_dropdown_menu(items, cx)
+    }
+
+    fn build_dropdown_menu(&self, items: Vec<Div>, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        deferred(
+            div()
+                .absolute()
+                .top_full()
+                .mt_1()
+                .left_0()
+                .min_w(px(140.0))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded_md()
+                .shadow_lg()
+                .py(Spacing::XS)
+                .occlude()
+                .flex_col()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.layout_menu_open = false;
+                    this.export_menu_open = false;
+                    cx.notify();
+                }))
+                .children(items),
+        )
     }
 
     fn render_diagram(&self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -892,52 +1125,79 @@ impl SchemaVizDocument {
                     )
                     .child("Reset"),
                 div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
+                // Layout dropdown
                 div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .when(self.layout_format == LayoutFormat::LeftRight, |d| {
-                        d.bg(theme.primary.opacity(0.15))
-                    })
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                        this.set_layout_format(LayoutFormat::LeftRight, cx);
-                    }))
-                    .child("LR"),
-                div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .when(self.layout_format == LayoutFormat::Snowflake, |d| {
-                        d.bg(theme.primary.opacity(0.15))
-                    })
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                        this.set_layout_format(LayoutFormat::Snowflake, cx);
-                    }))
-                    .child("SF"),
-                div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .when(self.layout_format == LayoutFormat::Compact, |d| {
-                        d.bg(theme.primary.opacity(0.15))
-                    })
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                        this.set_layout_format(LayoutFormat::Compact, cx);
-                    }))
-                    .child("CG"),
+                    .relative()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(self.layout_menu_open, |d| {
+                                d.bg(theme.primary.opacity(0.15))
+                            })
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.layout_menu_open = !this.layout_menu_open;
+                                this.export_menu_open = false;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .child(Self::layout_label(self.layout_format)),
+                            )
+                            .child(
+                                svg()
+                                    .path(AppIcon::ChevronDown.path())
+                                    .size_3()
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    )
+                    .when(self.layout_menu_open, |d| {
+                        d.child(self.render_layout_menu(&theme, cx))
+                    }),
                 div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
+                // Export dropdown
                 div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                        this.export_dbml(cx);
-                    }))
-                    .child("DBML"),
+                    .relative()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(self.export_menu_open, |d| {
+                                d.bg(theme.primary.opacity(0.15))
+                            })
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.export_menu_open = !this.export_menu_open;
+                                this.layout_menu_open = false;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .child("Export"),
+                            )
+                            .child(
+                                svg()
+                                    .path(AppIcon::ChevronDown.path())
+                                    .size_3()
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    )
+                    .when(self.export_menu_open, |d| {
+                        d.child(self.render_export_menu(&theme, cx))
+                    }),
             ]);
 
         // The viewport handles all pointer and scroll events.
@@ -1456,6 +1716,8 @@ impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 
 impl Render for SchemaVizDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        flush_pending_toast(self.pending_toast.take(), window, cx);
+
         match &self.load_status {
             LoadStatus::Loading => self.render_loading(cx).into_any_element(),
             LoadStatus::Error(msg) => self.render_error(msg).into_any_element(),
