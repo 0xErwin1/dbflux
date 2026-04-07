@@ -1363,6 +1363,27 @@ impl Connection for SqliteConnection {
     fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
         Ok(translate_filter_to_sql(filter))
     }
+
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let tables = self.get_tables(&conn)?;
+        let views = self.get_views(&conn)?;
+        log::info!(
+            "[SCHEMA] schema_for_database({}): {} tables, {} views",
+            database,
+            tables.len(),
+            views.len()
+        );
+        Ok(DbSchemaInfo {
+            name: database.to_string(),
+            tables,
+            views,
+            custom_types: None,
+        })
+    }
 }
 
 impl RelationalConnection for SqliteConnection {}

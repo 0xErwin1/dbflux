@@ -335,6 +335,28 @@ impl SchemaGraph {
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
+
+    /// Returns the node with the most FK connections (both inbound and outbound).
+    /// Used to auto-select a focal table for global-mode snowflake layout.
+    pub fn most_connected_node(&self) -> Option<(NodeIndex, &TableNode)> {
+        if self.graph.node_count() == 0 {
+            return None;
+        }
+        let mut degree_by_node: HashMap<NodeIndex, usize> =
+            self.graph.node_indices().map(|idx| (idx, 0usize)).collect();
+
+        for edge_idx in self.graph.edge_indices() {
+            if let Some((from, to)) = self.graph.edge_endpoints(edge_idx) {
+                *degree_by_node.entry(from).or_insert(0) += 1;
+                *degree_by_node.entry(to).or_insert(0) += 1;
+            }
+        }
+
+        let max_node_idx = *degree_by_node.iter().max_by_key(|(_, deg)| *deg)?.0;
+
+        self.node_weight(max_node_idx)
+            .map(|node| (max_node_idx, node))
+    }
 }
 
 #[cfg(test)]
