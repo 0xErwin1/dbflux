@@ -6,7 +6,7 @@ use gpui_component::scroll::{Scrollable, ScrollableElement};
 use dbflux_core::{Connection, DbSchemaInfo, TableInfo, TaskTarget};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
-    layout::{LayoutResult, NodeLayout},
+    layout::{LayoutFormat, LayoutResult, NodeLayout},
 };
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
@@ -72,6 +72,9 @@ pub struct SchemaVizDocument {
     dragging_node: Option<petgraph::graph::NodeIndex>,
     drag_offset: Point<Pixels>,
     node_position_overrides: std::collections::HashMap<petgraph::graph::NodeIndex, Point<f32>>,
+    // Layout
+    pub layout_format: LayoutFormat,
+    pub table_cap_warning: bool,
 }
 
 impl SchemaVizDocument {
@@ -135,6 +138,8 @@ impl SchemaVizDocument {
             dragging_node: None,
             drag_offset: Point::default(),
             node_position_overrides: std::collections::HashMap::new(),
+            layout_format: LayoutFormat::LeftRight,
+            table_cap_warning: false,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -164,7 +169,7 @@ impl SchemaVizDocument {
             if let Err(error) = cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     match load_result {
-                        Ok((tables, graph, layout)) => {
+                        Ok((tables, graph, layout, capped)) => {
                             let (focal_table, focal_schema) = match &doc.mode {
                                 SchemaVizMode::Focused { table, schema } => {
                                     (table.clone(), schema.clone())
@@ -197,6 +202,7 @@ impl SchemaVizDocument {
                             doc.graph = Some(graph);
                             doc.layout = Some(layout);
                             doc.load_status = LoadStatus::Ready;
+                            doc.table_cap_warning = capped;
                             if let Some(pan) = initial_pan {
                                 doc.pan_offset = pan;
                             }
@@ -214,7 +220,7 @@ impl SchemaVizDocument {
         .detach();
     }
 
-    /// Loads schema data for focused mode (blocking, runs on background executor).
+    /// Loads schema data (blocking, runs on background executor).
     /// The connection must be the correct per-database connection (obtained via
     /// `connection_for_task_target` in `SchemaVizDocument::new`), not the primary connection.
     #[allow(clippy::collapsible_if)]
@@ -222,86 +228,118 @@ impl SchemaVizDocument {
         database: Option<String>,
         mode: SchemaVizMode,
         connection: Option<Arc<dyn Connection>>,
-    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult), String> {
-        let (table, schema) = match mode {
-            SchemaVizMode::Focused { table, schema } => (table, schema),
-            SchemaVizMode::Global => {
-                return Err("Global schema view not yet implemented".to_string());
-            }
-        };
-
+    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool), String> {
         let connection =
             connection.ok_or_else(|| "Connection not found or not active".to_string())?;
 
         let db_name = database.ok_or_else(|| "No database specified".to_string())?;
 
-        let metadata = connection.metadata();
-        if !metadata
-            .capabilities
-            .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
-        {
-            return Err("Foreign keys not supported by this driver".to_string());
-        }
-
-        let focal_table = connection
-            .table_details(&db_name, schema.as_deref(), &table)
-            .map_err(|e| format!("Failed to fetch table details: {}", e))?;
-
-        let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
-        all_table_names.insert((schema.clone(), table.clone()));
-
-        if let Some(ref fks) = focal_table.foreign_keys {
-            for fk in fks {
-                all_table_names.insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
-            }
-        }
-
-        let mut all_tables = Vec::with_capacity(all_table_names.len());
-        all_tables.push(focal_table.clone());
-
-        for (tbl_schema, tbl_name) in &all_table_names {
-            if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
-                continue;
-            }
-
-            match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
-                Ok(details) => all_tables.push(details),
-                Err(e) => {
-                    log::warn!(
-                        "Failed to fetch details for table {}.{:?}: {}",
-                        tbl_schema.as_deref().unwrap_or("<default>"),
-                        tbl_name,
-                        e
-                    );
-                }
-            }
-        }
-
-        let inbound_neighbors =
-            Self::find_inbound_references(&all_tables, schema.as_deref(), &table);
-
-        for (s, n) in inbound_neighbors {
-            all_table_names.insert((Some(s), n));
-        }
-
-        for (tbl_schema, tbl_name) in &all_table_names {
-            if !all_tables
-                .iter()
-                .any(|t| t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref())
-            {
-                if let Ok(details) =
-                    connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name)
+        match mode {
+            SchemaVizMode::Focused { table, schema } => {
+                let metadata = connection.metadata();
+                if !metadata
+                    .capabilities
+                    .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
                 {
-                    all_tables.push(details);
+                    return Err("Foreign keys not supported by this driver".to_string());
                 }
+
+                let focal_table = connection
+                    .table_details(&db_name, schema.as_deref(), &table)
+                    .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+
+                let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
+                all_table_names.insert((schema.clone(), table.clone()));
+
+                if let Some(ref fks) = focal_table.foreign_keys {
+                    for fk in fks {
+                        all_table_names.insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
+                    }
+                }
+
+                let mut all_tables = Vec::with_capacity(all_table_names.len());
+                all_tables.push(focal_table.clone());
+
+                for (tbl_schema, tbl_name) in &all_table_names {
+                    if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
+                        continue;
+                    }
+
+                    match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
+                        Ok(details) => all_tables.push(details),
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to fetch details for table {}.{:?}: {}",
+                                tbl_schema.as_deref().unwrap_or("<default>"),
+                                tbl_name,
+                                e
+                            );
+                        }
+                    }
+                }
+
+                let inbound_neighbors =
+                    Self::find_inbound_references(&all_tables, schema.as_deref(), &table);
+
+                for (s, n) in inbound_neighbors {
+                    all_table_names.insert((Some(s), n));
+                }
+
+                for (tbl_schema, tbl_name) in &all_table_names {
+                    if !all_tables
+                        .iter()
+                        .any(|t| t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref())
+                    {
+                        if let Ok(details) =
+                            connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name)
+                        {
+                            all_tables.push(details);
+                        }
+                    }
+                }
+
+                let graph = SchemaGraph::build(&all_tables);
+                let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
+                let layout = dbflux_schema_viz::layout::compute_layout(
+                    &focused_graph,
+                    LayoutFormat::LeftRight,
+                    Some((table.as_str(), schema.as_deref())),
+                );
+
+                Ok((all_tables, focused_graph, layout, false))
+            }
+            SchemaVizMode::Global => {
+                let metadata = connection.metadata();
+                if !metadata
+                    .capabilities
+                    .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
+                {
+                    return Err("Foreign keys not supported by this driver".to_string());
+                }
+
+                // Load ALL tables in the database
+                let schema_info = connection
+                    .schema_for_database(&db_name)
+                    .map_err(|e| format!("Failed to list tables: {}", e))?;
+
+                const TABLE_CAP: usize = 100;
+                let capped = schema_info.tables.len() > TABLE_CAP;
+                let tables_to_load: Vec<_> = schema_info.tables.into_iter().take(TABLE_CAP).collect();
+
+                let mut all_table_details = Vec::with_capacity(tables_to_load.len());
+                for tbl in &tables_to_load {
+                    match connection.table_details(&db_name, tbl.schema.as_deref(), &tbl.name) {
+                        Ok(details) => all_table_details.push(details),
+                        Err(e) => log::warn!("Failed to fetch details for {}: {}", tbl.name, e),
+                    }
+                }
+
+                let graph = SchemaGraph::build(&all_table_details);
+                let layout = dbflux_schema_viz::layout::compute_layout(&graph, LayoutFormat::Compact, None);
+
+                Ok((all_table_details, graph, layout, capped))
             }
         }
-
-        let graph = SchemaGraph::build(&all_tables);
-        let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
-        let layout = dbflux_schema_viz::layout::compute_layout(&focused_graph);
-
-        Ok((all_tables, focused_graph, layout))
     }
 
     /// Finds tables that reference the focal table via FK.
@@ -347,6 +385,27 @@ impl SchemaVizDocument {
 
     pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         self.focus_handle.focus(window);
+    }
+
+    pub fn set_layout_format(&mut self, format: LayoutFormat, cx: &mut Context<Self>) {
+        self.layout_format = format;
+        if let Some(ref graph) = self.graph {
+            let focal = match &self.mode {
+                SchemaVizMode::Focused { table, schema } => {
+                    Some((table.as_str(), schema.as_deref()))
+                }
+                SchemaVizMode::Global => None,
+            };
+            self.layout = Some(dbflux_schema_viz::layout::compute_layout(
+                graph,
+                format,
+                focal,
+            ));
+            self.zoom = 1.0;
+            self.pan_offset = Point::default();
+            self.node_position_overrides.clear();
+        }
+        cx.notify();
     }
 
     pub fn active_context(&self) -> ContextId {
@@ -484,7 +543,7 @@ impl SchemaVizDocument {
             .bg(tab_bar)
             .border_b_1()
             .border_color(border)
-            .children([
+            .children(vec![
                 div().flex().items_center().gap(px(4.0)).child(
                     div()
                         .text_size(FontSizes::SM)
@@ -536,6 +595,43 @@ impl SchemaVizDocument {
                         }),
                     )
                     .child("Reset"),
+                div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .when(self.layout_format == LayoutFormat::LeftRight, |d| {
+                        d.bg(theme.primary.opacity(0.15))
+                    })
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.set_layout_format(LayoutFormat::LeftRight, cx);
+                    }))
+                    .child("LR"),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .when(self.layout_format == LayoutFormat::Snowflake, |d| {
+                        d.bg(theme.primary.opacity(0.15))
+                    })
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.set_layout_format(LayoutFormat::Snowflake, cx);
+                    }))
+                    .child("SF"),
+                div()
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded_sm()
+                    .when(self.layout_format == LayoutFormat::Compact, |d| {
+                        d.bg(theme.primary.opacity(0.15))
+                    })
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.set_layout_format(LayoutFormat::Compact, cx);
+                    }))
+                    .child("CG"),
             ]);
 
         // The viewport handles all pointer and scroll events.
@@ -618,12 +714,25 @@ impl SchemaVizDocument {
             }))
             .child(canvas);
 
+        let cap_warning = self.table_cap_warning.then(|| {
+            div()
+                .px(Spacing::MD)
+                .py(px(4.0))
+                .bg(theme.primary.opacity(0.08))
+                .border_b_1()
+                .border_color(theme.border)
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Showing first 100 tables — the schema has more.")
+        });
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(background)
             .child(zoom_controls)
+            .children(cap_warning)
             .child(viewport)
     }
 

@@ -88,6 +88,11 @@ pub enum SidebarEvent {
         schema: Option<String>,
         table: String,
     },
+    /// Open global schema visualization for an entire database.
+    OpenGlobalSchemaViz {
+        profile_id: Uuid,
+        database: String,
+    },
     /// Pipeline connect started.
     PipelineStarted {
         profile_name: String,
@@ -233,6 +238,7 @@ pub enum ContextMenuAction {
     OpenChildPicker,
     ViewSchema,
     ViewRelationships,
+    ViewSchemaDiagram,
     GenerateCode(String),
     Connect,
     Disconnect,
@@ -306,6 +312,7 @@ impl ContextMenuAction {
             Self::OpenChildPicker => Some(AppIcon::ScrollText),
             Self::ViewSchema => Some(AppIcon::Table),
             Self::ViewRelationships => Some(AppIcon::Link2),
+            Self::ViewSchemaDiagram => Some(AppIcon::Link2),
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
             Self::Disconnect => Some(AppIcon::Unplug),
@@ -1230,6 +1237,20 @@ impl Sidebar {
                 table: name,
             });
         }
+    }
+
+    fn open_schema_diagram(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Database {
+            profile_id,
+            name,
+        }) = parse_node_id(item_id)
+        else {
+            return;
+        };
+        cx.emit(SidebarEvent::OpenGlobalSchemaViz {
+            profile_id,
+            database: name,
+        });
     }
 
     fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {

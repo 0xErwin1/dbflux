@@ -714,6 +714,61 @@ impl Workspace {
         );
     }
 
+    pub(super) fn open_global_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::schema_viz::{SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: one Global diagram per (profile_id, database)
+        let existing = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| {
+                if let crate::ui::document::DocumentHandle::SchemaViz { entity, .. } = doc {
+                    let d = entity.read(cx);
+                    d.profile_id == profile_id
+                        && d.database.as_deref() == Some(database.as_str())
+                        && matches!(d.mode, SchemaVizMode::Global)
+                } else {
+                    false
+                }
+            })
+            .map(|doc| doc.id());
+
+        if let Some(existing_id) = existing {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing_id, cx));
+            return;
+        }
+
+        let entity = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                Some(database.clone()),
+                SchemaVizMode::Global,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let handle = crate::ui::document::DocumentHandle::schema_viz(entity, cx);
+        self.tab_manager
+            .update(cx, |mgr, cx| mgr.open(handle, cx));
+
+        log::info!(
+            "Opened global schema viz for profile={} db={}",
+            profile_id,
+            database
+        );
+    }
+
     pub(super) fn open_key_value_document(
         &mut self,
         profile_id: uuid::Uuid,

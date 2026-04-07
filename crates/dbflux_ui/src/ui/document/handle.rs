@@ -220,10 +220,12 @@ impl DocumentHandle {
             }
             Self::SchemaViz { id, entity } => {
                 let doc = entity.read(cx);
-                let title = doc
-                    .table_name()
-                    .map(|t| format!("Schema: {}", t))
-                    .unwrap_or_else(|| "Schema Diagram".to_string());
+                let title = match doc.table_name() {
+                    Some(t) => format!("Schema: {}", t),
+                    None => {
+                        format!("Schema: {}", doc.database.as_deref().unwrap_or("database"))
+                    }
+                };
                 DocumentMetaSnapshot {
                     id: *id,
                     kind: DocumentKind::SchemaViz,
