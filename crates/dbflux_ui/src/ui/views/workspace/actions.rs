@@ -653,9 +653,9 @@ impl Workspace {
                     }
                     let doc_table = doc.table_name();
                     let doc_schema = match &doc.mode {
-                        crate::ui::document::schema_viz::SchemaVizMode::Focused { schema, .. } => {
-                            schema.clone()
-                        }
+                        crate::ui::document::schema_viz::SchemaVizMode::Focused {
+                            schema, ..
+                        } => schema.clone(),
                         crate::ui::document::schema_viz::SchemaVizMode::Global => None,
                     };
                     // Table name and schema must match

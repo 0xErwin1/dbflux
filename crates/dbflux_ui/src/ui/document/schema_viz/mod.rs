@@ -19,6 +19,14 @@ use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentState};
 use crate::ui::tokens::{FontSizes, Spacing};
 
+// Node layout constants — shared between render_node and render_edges_overlay
+// so that edge anchors always match rendered positions exactly.
+//
+// These must stay in sync with the padding/height values used in render_node.
+const NODE_HEADER_PX: f32 = 30.0; // py(6)*2 + line-height(SM 12px ~18px) + border(1px) = ~31, round to 30
+const NODE_BODY_TOP_PX: f32 = 2.0; // py(2) on the body container, top side
+const NODE_ROW_PX: f32 = 18.0;     // explicit h() given to each column row div
+
 /// Display mode for the schema diagram.
 #[derive(Clone)]
 pub enum SchemaVizMode {
@@ -855,6 +863,7 @@ impl SchemaVizDocument {
                         div()
                             .flex()
                             .items_center()
+                            .h(px(NODE_ROW_PX))
                             .gap(px(4.0))
                             .overflow_hidden()
                             .text_size(FontSizes::XS)
@@ -940,16 +949,12 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            // Column row Y offsets are in fixed screen pixels — the node does NOT scale
-            // its internal layout with zoom. Only the node's origin (x_base, y_base) scales.
+            // Column row Y offsets are fixed screen pixels — the node does NOT scale
+            // its internal size with zoom; only its origin (x_base, y_base) scales.
             //
-            // Header: py(6) top + ~14px text + py(6) bottom + 1px border = ~27px.
-            // Body:   py(2) top, then each row is ~20px (XS text ~12px + 4px gap).
-            // These must match what render_node actually produces at zoom=1.
-            let header_px = 27.0_f32;
-            let body_top_px = 2.0_f32;
-            let row_px = 20.0_f32;
-            let row_center_px = row_px / 2.0;
+            // NODE_HEADER_PX, NODE_BODY_TOP_PX, NODE_ROW_PX must match render_node exactly.
+            // Each column row has an explicit h(px(NODE_ROW_PX)) so the position is deterministic.
+            let row_center = NODE_ROW_PX / 2.0;
 
             let from_col_y_px = edge_weight
                 .from_columns
@@ -960,8 +965,10 @@ impl SchemaVizDocument {
                         .iter()
                         .position(|c| &c.name == col_name)
                 })
-                .map(|col_idx| header_px + body_top_px + col_idx as f32 * row_px + row_center_px)
-                .unwrap_or(header_px + from_layout.height / 2.0);
+                .map(|col_idx| {
+                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
+                })
+                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
 
             let to_col_y_px = edge_weight
                 .to_columns
@@ -972,8 +979,10 @@ impl SchemaVizDocument {
                         .iter()
                         .position(|c| &c.name == col_name)
                 })
-                .map(|col_idx| header_px + body_top_px + col_idx as f32 * row_px + row_center_px)
-                .unwrap_or(header_px + to_layout.height / 2.0);
+                .map(|col_idx| {
+                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
+                })
+                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
 
             // Screen position: origin scales with zoom+pan, internal offset is fixed px.
             let from_x = from_x_base * zoom + pan_x + from_layout.width;
