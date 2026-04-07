@@ -394,7 +394,16 @@ impl SchemaVizDocument {
                 SchemaVizMode::Focused { table, schema } => {
                     Some((table.as_str(), schema.as_deref()))
                 }
-                SchemaVizMode::Global => None,
+                SchemaVizMode::Global => {
+                    if format == LayoutFormat::Snowflake {
+                        // Auto-select the most-connected table as focal in global mode
+                        graph.most_connected_node().map(|(_, node)| {
+                            (node.id.name.as_str(), node.id.schema.as_deref())
+                        })
+                    } else {
+                        None
+                    }
+                }
             };
             self.layout = Some(dbflux_schema_viz::layout::compute_layout(
                 graph,
