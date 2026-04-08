@@ -18,7 +18,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app::AppStateEntity;
-use crate::keymap::ContextId;
+use crate::keymap::{Command, ContextId};
 use crate::ui::components::toast::{flush_pending_toast, PendingToast, ToastExt};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentState};
@@ -34,58 +34,176 @@ enum Direction {
     Down,
 }
 
-/// Menu item for the schema viz context menu (top-level items).
+/// Actions for the schema viz context menu.
 #[derive(Debug, Clone)]
-enum ContextMenuItem {
+enum SchemaVizMenuAction {
+    Separator,
     ZoomIn,
     ZoomOut,
-    Separator,
-    LayoutMenu,
-    CopyAsMenu,
+    LayoutSubmenu,
+    CopyAsSubmenu,
     FocusOnTable,
-}
-
-/// Sub-menu that can be open inside the context menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SubMenu {
-    Layout,
-    CopyAs,
-}
-
-impl SubMenu {
-    fn items(&self) -> Vec<SubMenuItem> {
-        match self {
-            SubMenu::Layout => vec![
-                SubMenuItem::LeftRight,
-                SubMenuItem::Snowflake,
-                SubMenuItem::Compact,
-            ],
-            SubMenu::CopyAs => vec![
-                SubMenuItem::CopyAsDbml,
-                SubMenuItem::CopyAsSql,
-            ],
-        }
-    }
-}
-
-/// Item inside a sub-menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SubMenuItem {
-    LeftRight,
-    Snowflake,
-    Compact,
+    // Submenu actions
+    LayoutLeftRight,
+    LayoutSnowflake,
+    LayoutCompact,
     CopyAsDbml,
     CopyAsSql,
 }
 
-impl SubMenuItem {
-    fn label(&self) -> &'static str {
+/// Context menu state following the app's standard pattern (see sidebar::ContextMenuState).
+struct SchemaVizContextMenuState {
+    selected_index: usize,
+    actions: Vec<SchemaVizMenuAction>,
+    parent_stack: Vec<(Vec<SchemaVizMenuAction>, usize)>,
+    position: Point<Pixels>,
+}
+
+impl SchemaVizMenuAction {
+    /// Converts this action to a MenuItem for rendering.
+    fn to_menu_item(&self) -> crate::ui::components::context_menu::MenuItem {
+        use crate::ui::components::context_menu::MenuItem;
+
         match self {
-            SubMenuItem::LeftRight => "Left-Right",
-            SubMenuItem::Snowflake => "Snowflake",
-            SubMenuItem::Compact => "Compact",
-            SubMenuItem::CopyAsDbml => "Copy as DBML",
-            SubMenuItem::CopyAsSql => "Copy as SQL",
+            SchemaVizMenuAction::Separator => MenuItem::separator(),
+            SchemaVizMenuAction::ZoomIn => MenuItem::new("Zoom In").icon(AppIcon::ZoomIn),
+            SchemaVizMenuAction::ZoomOut => MenuItem::new("Zoom Out").icon(AppIcon::ZoomOut),
+            SchemaVizMenuAction::LayoutSubmenu => MenuItem::new("Layout").icon(AppIcon::Layers).submenu(),
+            SchemaVizMenuAction::CopyAsSubmenu => MenuItem::new("Copy as").icon(AppIcon::Database).submenu(),
+            SchemaVizMenuAction::FocusOnTable => MenuItem::new("Focus on this table").icon(AppIcon::Maximize2),
+            SchemaVizMenuAction::LayoutLeftRight => MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight),
+            SchemaVizMenuAction::LayoutSnowflake => MenuItem::new("Snowflake").icon(AppIcon::Snowflake),
+            SchemaVizMenuAction::LayoutCompact => MenuItem::new("Compact").icon(AppIcon::Grid3x3),
+            SchemaVizMenuAction::CopyAsDbml => MenuItem::new("Copy as DBML").icon(AppIcon::Copy),
+            SchemaVizMenuAction::CopyAsSql => MenuItem::new("Copy as SQL").icon(AppIcon::Code),
+        }
+    }
+
+    /// Builds the MenuItem list from an action list (1:1 mapping).
+    fn to_menu_items(actions: &[Self]) -> Vec<crate::ui::components::context_menu::MenuItem> {
+        actions.iter().map(|a| a.to_menu_item()).collect()
+    }
+}
+
+impl SchemaVizContextMenuState {
+    fn new(position: Point<Pixels>, has_selected_node: bool) -> Self {
+        let actions = Self::build_main_actions(has_selected_node);
+        Self {
+            selected_index: 0,
+            actions,
+            parent_stack: Vec::new(),
+            position,
+        }
+    }
+
+    fn build_main_actions(has_selected_node: bool) -> Vec<SchemaVizMenuAction> {
+        let mut actions = vec![
+            SchemaVizMenuAction::ZoomIn,
+            SchemaVizMenuAction::ZoomOut,
+            SchemaVizMenuAction::Separator,
+            SchemaVizMenuAction::LayoutSubmenu,
+            SchemaVizMenuAction::CopyAsSubmenu,
+        ];
+
+        if has_selected_node {
+            actions.push(SchemaVizMenuAction::Separator);
+            actions.push(SchemaVizMenuAction::FocusOnTable);
+        }
+
+        actions
+    }
+
+    fn build_layout_actions() -> Vec<SchemaVizMenuAction> {
+        vec![
+            SchemaVizMenuAction::LayoutLeftRight,
+            SchemaVizMenuAction::LayoutSnowflake,
+            SchemaVizMenuAction::LayoutCompact,
+        ]
+    }
+
+    fn build_copy_as_actions() -> Vec<SchemaVizMenuAction> {
+        vec![
+            SchemaVizMenuAction::CopyAsDbml,
+            SchemaVizMenuAction::CopyAsSql,
+        ]
+    }
+
+    /// Returns rendered menu items for the current level.
+    fn menu_items(&self) -> Vec<crate::ui::components::context_menu::MenuItem> {
+        SchemaVizMenuAction::to_menu_items(&self.actions)
+    }
+
+    /// Returns rendered menu items for the parent level (if in submenu).
+    fn parent_menu_items(&self) -> Option<Vec<crate::ui::components::context_menu::MenuItem>> {
+        self.parent_stack
+            .last()
+            .map(|(actions, _)| SchemaVizMenuAction::to_menu_items(actions))
+    }
+
+    fn navigate_up(&mut self) -> bool {
+        let count = self.actions.len();
+        if count == 0 {
+            return false;
+        }
+        for _ in 0..count {
+            if self.selected_index > 0 {
+                self.selected_index -= 1;
+            } else {
+                self.selected_index = count - 1;
+            }
+            if !matches!(self.actions[self.selected_index], SchemaVizMenuAction::Separator) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn navigate_down(&mut self) -> bool {
+        let count = self.actions.len();
+        if count == 0 {
+            return false;
+        }
+        for _ in 0..count {
+            if self.selected_index < count - 1 {
+                self.selected_index += 1;
+            } else {
+                self.selected_index = 0;
+            }
+            if !matches!(self.actions[self.selected_index], SchemaVizMenuAction::Separator) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn go_into_submenu(&mut self) -> bool {
+        let action = match self.actions.get(self.selected_index) {
+            Some(a) => a.clone(),
+            None => return false,
+        };
+
+        let sub_actions = match action {
+            SchemaVizMenuAction::LayoutSubmenu => Self::build_layout_actions(),
+            SchemaVizMenuAction::CopyAsSubmenu => Self::build_copy_as_actions(),
+            _ => return false,
+        };
+
+        let current_actions = std::mem::take(&mut self.actions);
+        let current_index = self.selected_index;
+
+        self.parent_stack.push((current_actions, current_index));
+        self.actions = sub_actions;
+        self.selected_index = 0;
+        true
+    }
+
+    fn go_back(&mut self) -> bool {
+        if let Some((parent_actions, parent_index)) = self.parent_stack.pop() {
+            self.actions = parent_actions;
+            self.selected_index = parent_index;
+            true
+        } else {
+            false
         }
     }
 }
@@ -155,13 +273,12 @@ pub struct SchemaVizDocument {
     // Toolbar dropdowns
     layout_menu_open: bool,
     export_menu_open: bool,
-    // Context menu
-    context_menu_open: bool,
-    context_menu_position: Point<Pixels>,
-    context_menu_target: Option<petgraph::graph::NodeIndex>,
-    context_menu_selected_index: usize,
-    context_menu_submenu: Option<SubMenu>,
-    context_menu_submenu_selected_index: usize,
+    // Context menu (using app's standard component pattern)
+    context_menu: Option<SchemaVizContextMenuState>,
+    // When true, focus_handle.focus(window) is called at the start of the next render
+    pending_focus_restore: bool,
+    // Last mouse position for keyboard-opened menus
+    last_mouse_position: Point<Pixels>,
 }
 
 impl SchemaVizDocument {
@@ -232,12 +349,9 @@ impl SchemaVizDocument {
             pending_toast: None,
             layout_menu_open: false,
             export_menu_open: false,
-            context_menu_open: false,
-            context_menu_position: Point::default(),
-            context_menu_target: None,
-            context_menu_selected_index: 0,
-            context_menu_submenu: None,
-            context_menu_submenu_selected_index: 0,
+            context_menu: None,
+            pending_focus_restore: false,
+            last_mouse_position: Point::default(),
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -902,6 +1016,37 @@ impl SchemaVizDocument {
         }
     }
 
+    /// Centers the camera on the given node index, focusing on the table header.
+    fn center_on_node(&mut self, node_idx: NodeIndex) {
+        let layout = match &self.layout {
+            Some(l) => l,
+            None => return,
+        };
+
+        let node_layout = match layout.nodes.get(&node_idx) {
+            Some(n) => n,
+            None => return,
+        };
+
+        // Use viewport center (hardcoded for now, should be dynamic)
+        let viewport_width = 800.0;
+        let viewport_height = 600.0;
+
+        // Center horizontally on the node center
+        let node_center_x = node_layout.x + node_layout.width / 2.0;
+        let viewport_center_x = viewport_width / 2.0;
+
+        // Center vertically on the table HEADER (top of the node), not the center
+        // NODE_HEADER_PX is the height of the header
+        let header_y = node_layout.y + NODE_HEADER_PX / 2.0;
+        let viewport_center_y = viewport_height / 2.0;
+
+        self.pan_offset = Point::new(
+            px(viewport_center_x - node_center_x * self.zoom),
+            px(viewport_center_y - header_y * self.zoom),
+        );
+    }
+
     /// Export the current schema graph as DBML to clipboard.
     pub fn export_dbml(&mut self, cx: &mut Context<Self>) {
         let graph = match &self.graph {
@@ -1209,396 +1354,221 @@ impl SchemaVizDocument {
         )
     }
 
-    /// Returns the top-level context menu items (not expanded).
-    fn context_menu_items(&self) -> Vec<ContextMenuItem> {
-        let mut items = Vec::new();
-        items.push(ContextMenuItem::ZoomIn);
-        items.push(ContextMenuItem::ZoomOut);
-        items.push(ContextMenuItem::Separator);
-        items.push(ContextMenuItem::LayoutMenu);
-        items.push(ContextMenuItem::CopyAsMenu);
-        items.push(ContextMenuItem::Separator);
-        if self.selected_node.is_some() {
-            items.push(ContextMenuItem::FocusOnTable);
-        }
-        items
+    /// Opens the context menu at the given position.
+    fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.context_menu = Some(SchemaVizContextMenuState::new(
+            position,
+            self.selected_node.is_some(),
+        ));
+        cx.notify();
     }
 
-    /// Renders the context menu with keyboard-navigable submenus.
-    fn render_context_menu(
-        &self,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let theme_clone = theme.clone();
-        let layout_format = self.layout_format;
-        let has_node_selected = self.selected_node.is_some();
+    /// Closes the context menu and schedules focus restoration for the next render.
+    fn close_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.take().is_some() {
+            self.pending_focus_restore = true;
+            cx.notify();
+        }
+    }
 
-        // Main menu items
-        let all_items = self.context_menu_items();
-        let visible_indices: Vec<usize> = all_items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| !matches!(item, ContextMenuItem::FocusOnTable) || has_node_selected)
-            .map(|(i, _)| i)
-            .collect();
+    /// Dispatches a command from the workspace keymap system.
+    /// Returns true if the command was handled.
+    pub fn dispatch_command(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        match cmd {
+            Command::Cancel => {
+                if self.context_menu.is_some() {
+                    self.close_context_menu(cx);
+                    self.focus_handle.focus(window);
+                    return true;
+                }
+                if self.selected_node.is_some() {
+                    self.selected_node = None;
+                    cx.notify();
+                    return true;
+                }
+                false
+            }
+            Command::OpenContextMenu => {
+                let menu_pos = if self.last_mouse_position != Point::default() {
+                    self.last_mouse_position
+                } else {
+                    Point::new(px(400.0), px(300.0))
+                };
+                self.open_context_menu(menu_pos, cx);
+                true
+            }
+            _ => false,
+        }
+    }
 
-        // ── Main menu ────────────────────────────────────────────────────────
-        let main_menu = {
-            let selected_idx = self.context_menu_selected_index;
-            div()
-                .absolute()
-                .left(position.x)
-                .top(position.y)
-                .min_w(px(160.0))
-                .bg(theme.popover)
-                .border_1()
-                .border_color(theme.border)
-                .rounded_md()
-                .shadow_lg()
-                .flex_col()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    use crate::keymap::key_chord_from_gpui;
-
-                    let chord = key_chord_from_gpui(&event.keystroke);
-
-                    // Count visible items in main menu
-                    let has_node = this.selected_node.is_some();
-                    let items = this.context_menu_items();
-                    let count = items
-                        .iter()
-                        .filter(|i| !matches!(i, ContextMenuItem::FocusOnTable) || has_node)
-                        .count();
-
-                    if this.context_menu_submenu.is_some() {
-                        // ── Submenu navigation ────────────────────────────────
-                        let sub_idx = &mut this.context_menu_submenu_selected_index;
-                        let submenu = this.context_menu_submenu.unwrap();
-                        let sub_count = submenu.items().len();
-
-                        match chord.key.as_str() {
-                            "up" | "k" => {
-                                if sub_count > 0 {
-                                    *sub_idx = (*sub_idx + sub_count - 1) % sub_count;
-                                    cx.notify();
-                                }
-                            }
-                            "down" | "j" => {
-                                if sub_count > 0 {
-                                    *sub_idx = (*sub_idx + 1) % sub_count;
-                                    cx.notify();
-                                }
-                            }
-                            "enter" | "l" => {
-                                // Activate submenu item and close
-                                let submenu = this.context_menu_submenu.unwrap();
-                                let sub_item = submenu.items()[this.context_menu_submenu_selected_index];
-                                match submenu {
-                                    SubMenu::Layout => {
-                                        let format = match sub_item {
-                                            SubMenuItem::LeftRight => LayoutFormat::LeftRight,
-                                            SubMenuItem::Snowflake => LayoutFormat::Snowflake,
-                                            SubMenuItem::Compact => LayoutFormat::Compact,
-                                            _ => return,
-                                        };
-                                        this.set_layout_format(format, cx);
-                                    }
-                                    SubMenu::CopyAs => {
-                                        match sub_item {
-                                            SubMenuItem::CopyAsDbml => this.export_dbml(cx),
-                                            SubMenuItem::CopyAsSql => this.copy_as_sql(cx),
-                                            _ => return,
-                                        }
-                                    }
-                                }
-                                this.context_menu_open = false;
-                                this.context_menu_submenu = None;
-                                cx.notify();
-                            }
-                            "escape" | "h" | "left" => {
-                                // Close submenu, return to main menu
-                                this.context_menu_submenu = None;
-                                cx.notify();
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        // ── Main menu navigation ─────────────────────────────
-                        match chord.key.as_str() {
-                            "up" | "k" => {
-                                if count > 0 {
-                                    this.context_menu_selected_index =
-                                        (this.context_menu_selected_index + count - 1) % count;
-                                    cx.notify();
-                                }
-                            }
-                            "down" | "j" => {
-                                if count > 0 {
-                                    this.context_menu_selected_index =
-                                        (this.context_menu_selected_index + 1) % count;
-                                    cx.notify();
-                                }
-                            }
-                            "right" | "enter" | "l" => {
-                                // Open submenu if on LayoutMenu or CopyAsMenu, else activate
-                                let has_node = this.selected_node.is_some();
-                                let items = this.context_menu_items();
-                                let filtered: Vec<_> = items
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, i)| !matches!(i, ContextMenuItem::FocusOnTable) || has_node)
-                                    .collect();
-                                if let Some(&(_, item)) = filtered.get(this.context_menu_selected_index) {
-                                    match item {
-                                        ContextMenuItem::LayoutMenu => {
-                                            this.context_menu_submenu = Some(SubMenu::Layout);
-                                            this.context_menu_submenu_selected_index = 0;
-                                            cx.notify();
-                                        }
-                                        ContextMenuItem::CopyAsMenu => {
-                                            this.context_menu_submenu = Some(SubMenu::CopyAs);
-                                            this.context_menu_submenu_selected_index = 0;
-                                            cx.notify();
-                                        }
-                                        ContextMenuItem::ZoomIn => {
-                                            this.zoom = (this.zoom * 1.25).min(4.0);
-                                            this.context_menu_open = false;
-                                            cx.notify();
-                                        }
-                                        ContextMenuItem::ZoomOut => {
-                                            this.zoom = (this.zoom / 1.25).max(0.25);
-                                            this.context_menu_open = false;
-                                            cx.notify();
-                                        }
-                                        ContextMenuItem::Separator
-                                        | ContextMenuItem::FocusOnTable => {}
-                                    }
-                                }
-                            }
-                            "escape" | "h" | "left" => {
-                                this.context_menu_open = false;
-                                cx.notify();
-                            }
-                            _ => {}
-                        }
-                    }
-                }))
-                .children(visible_indices.iter().enumerate().map(|(vis_idx, &orig_idx)| {
-                    let item = &all_items[orig_idx];
-                    let is_selected = vis_idx == selected_idx;
-                    let theme = theme_clone.clone();
-
-                    match item {
-                        ContextMenuItem::Separator => {
-                            div()
-                                .h(px(1.0))
-                                .mx(Spacing::SM)
-                                .my(Spacing::XS)
-                                .bg(theme.border)
-                                .into_any_element()
-                        }
-                        ContextMenuItem::ZoomIn => {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .h(rems(1.6))
-                                .px(Spacing::SM)
-                                .mx(Spacing::XS)
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .when(is_selected, |d| {
-                                    d.bg(theme.accent).text_color(theme.accent_foreground)
-                                })
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .child(div().flex_1().child("Zoom In"))
-                                .into_any_element()
-                        }
-                        ContextMenuItem::ZoomOut => {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .h(rems(1.6))
-                                .px(Spacing::SM)
-                                .mx(Spacing::XS)
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .when(is_selected, |d| {
-                                    d.bg(theme.accent).text_color(theme.accent_foreground)
-                                })
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .child(div().flex_1().child("Zoom Out"))
-                                .into_any_element()
-                        }
-                        ContextMenuItem::LayoutMenu => {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .h(rems(1.6))
-                                .px(Spacing::SM)
-                                .mx(Spacing::XS)
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .when(is_selected, |d| {
-                                    d.bg(theme.accent).text_color(theme.accent_foreground)
-                                })
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .child(div().flex_1().child("Layout"))
-                                .child(
-                                    svg()
-                                        .path(AppIcon::ChevronRight.path())
-                                        .size_3()
-                                        .text_color(theme.muted_foreground),
-                                )
-                                .into_any_element()
-                        }
-                        ContextMenuItem::CopyAsMenu => {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .h(rems(1.6))
-                                .px(Spacing::SM)
-                                .mx(Spacing::XS)
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .when(is_selected, |d| {
-                                    d.bg(theme.accent).text_color(theme.accent_foreground)
-                                })
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .child(div().flex_1().child("Copy as"))
-                                .child(
-                                    svg()
-                                        .path(AppIcon::ChevronRight.path())
-                                        .size_3()
-                                        .text_color(theme.muted_foreground),
-                                )
-                                .into_any_element()
-                        }
-                        ContextMenuItem::FocusOnTable => {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::SM)
-                                .h(rems(1.6))
-                                .px(Spacing::SM)
-                                .mx(Spacing::XS)
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .when(is_selected, |d| {
-                                    d.bg(theme.accent).text_color(theme.accent_foreground)
-                                })
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .child(div().flex_1().child("Focus on this table"))
-                                .into_any_element()
-                        }
-                    }
-                }))
+    /// Executes the action at the given index in the current context menu.
+    fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let action = match self.context_menu.as_mut() {
+            Some(menu) => {
+                if index >= menu.actions.len() {
+                    return;
+                }
+                // Skip separators
+                if matches!(menu.actions[index], SchemaVizMenuAction::Separator) {
+                    return;
+                }
+                menu.selected_index = index;
+                menu.actions[index].clone()
+            }
+            None => return,
         };
 
-        // ── Submenu (rendered to the right of main menu) ──────────────────
-        let submenu_element = if let Some(submenu) = &self.context_menu_submenu {
-            let sub_items = submenu.items();
-            let sub_idx = self.context_menu_submenu_selected_index;
-            let submenu_theme = theme.clone();
+        match action {
+            SchemaVizMenuAction::LayoutSubmenu | SchemaVizMenuAction::CopyAsSubmenu => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.go_into_submenu();
+                }
+                cx.notify();
+            }
+            SchemaVizMenuAction::ZoomIn => {
+                self.zoom = (self.zoom * 1.25).min(4.0);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::ZoomOut => {
+                self.zoom = (self.zoom / 1.25).max(0.25);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::FocusOnTable => {
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutLeftRight => {
+                self.set_layout_format(LayoutFormat::LeftRight, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutSnowflake => {
+                self.set_layout_format(LayoutFormat::Snowflake, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutCompact => {
+                self.set_layout_format(LayoutFormat::Compact, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::CopyAsDbml => {
+                self.export_dbml(cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::CopyAsSql => {
+                self.copy_as_sql(cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::Separator => {}
+        }
+    }
 
-            // Position submenu to the right of the main menu, aligned to the parent item
-            let main_width = px(160.0);
+    /// Renders the context menu using the app's standard context_menu component.
+    fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use crate::ui::components::context_menu as ctx;
 
-            // Determine which layout sub-item is currently active
-            let active_layout = layout_format;
+        let menu = self.context_menu.as_ref()?;
+        let entity = cx.entity().clone();
 
-            Some(
-                div()
-                    .absolute()
-                    .left(position.x + main_width + px(4.0))
-                    .top(position.y)
-                    .min_w(px(140.0))
-                    .bg(submenu_theme.popover)
-                    .border_1()
-                    .border_color(submenu_theme.border)
-                    .rounded_md()
-                    .shadow_lg()
-                    .flex_col()
-                    .children(sub_items.iter().enumerate().map(|(i, sub_item)| {
-                        let is_selected = i == sub_idx;
-                        let is_active = match (submenu, sub_item) {
-                            (SubMenu::Layout, SubMenuItem::LeftRight) => {
-                                active_layout == LayoutFormat::LeftRight
-                            }
-                            (SubMenu::Layout, SubMenuItem::Snowflake) => {
-                                active_layout == LayoutFormat::Snowflake
-                            }
-                            (SubMenu::Layout, SubMenuItem::Compact) => {
-                                active_layout == LayoutFormat::Compact
-                            }
-                            _ => false,
-                        };
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .h(rems(1.6))
-                            .px(Spacing::SM)
-                            .mx(Spacing::XS)
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_size(FontSizes::SM)
-                            .text_color(submenu_theme.foreground)
-                            .when(is_selected, |d| {
-                                d.bg(submenu_theme.accent)
-                                    .text_color(submenu_theme.accent_foreground)
-                            })
-                            .when(!is_selected, |d| d.hover(|d| d.bg(submenu_theme.secondary)))
-                            .child(div().flex_1().child(sub_item.label()))
-                            .when(is_active, |d| {
-                                d.child(
-                                    svg()
-                                        .path(AppIcon::CircleCheck.path())
-                                        .size_3()
-                                        .text_color(submenu_theme.primary),
-                                )
-                            })
-                            .into_any_element()
-                    })),
-            )
+        let menu_x = menu.position.x;
+        let menu_y = menu.position.y;
+        let selected = menu.selected_index;
+
+        let in_submenu = !menu.parent_stack.is_empty();
+
+        // Layout constants (must match the sidebar pattern)
+        let menu_container_padding = px(4.0);
+        let menu_item_height = px(28.0);
+        let menu_width = px(160.0);
+        let menu_gap = px(4.0);
+
+        let submenu_y_offset = if let Some((_, parent_selected)) = menu.parent_stack.last() {
+            menu_container_padding + (menu_item_height * (*parent_selected as f32))
         } else {
-            None
+            px(0.0)
         };
 
-        // Wrap in a transparent overlay that closes the menu when clicking outside
-        let menu_entity = cx.entity().clone();
-        deferred(
+        // Build menu items from actions (same pattern as sidebar's to_menu_items)
+        let items = menu.menu_items();
+
+        let dismiss_entity = entity.clone();
+        let overlay = ctx::render_menu_overlay("schema-viz-menu-overlay", move |_, cx| {
+            dismiss_entity.update(cx, |this, cx| this.close_context_menu(cx));
+        });
+
+        let parent_menu = menu.parent_menu_items().map(|parent_items| {
+            let parent_selected = menu.parent_stack.last().map(|(_, idx)| *idx).unwrap_or(0);
+            let parent_click = entity.clone();
+            let parent_hover = entity.clone();
+            div().absolute().top(menu_y).left(menu_x).child(
+                ctx::render_menu_container(
+                    "schema-viz-parent-menu",
+                    &parent_items,
+                    Some(parent_selected),
+                    move |idx, cx| {
+                        parent_click.update(cx, |this, cx| {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.go_back();
+                            }
+                            this.context_menu_execute_at(idx, cx);
+                        });
+                    },
+                    move |idx, cx| {
+                        parent_hover.update(cx, |this, cx| {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.selected_index = idx;
+                                cx.notify();
+                            }
+                        });
+                    },
+                    cx,
+                ),
+            )
+        });
+
+        let click_entity = entity.clone();
+        let hover_entity = entity.clone();
+
+        let current_menu = div()
+            .absolute()
+            .top(menu_y + submenu_y_offset)
+            .left(if in_submenu {
+                menu_x + menu_width + menu_gap
+            } else {
+                menu_x
+            })
+            .child(ctx::render_menu_container(
+                "schema-viz-menu",
+                &items,
+                Some(selected),
+                move |idx, cx| {
+                    click_entity.update(cx, |this, cx| this.context_menu_execute_at(idx, cx));
+                },
+                move |idx, cx| {
+                    hover_entity.update(cx, |this, cx| {
+                        if let Some(menu) = this.context_menu.as_mut() {
+                            menu.selected_index = idx;
+                            cx.notify();
+                        }
+                    });
+                },
+                cx,
+            ));
+
+        Some(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .size_full()
-                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                    menu_entity.update(cx, |this, cx| {
-                        this.context_menu_open = false;
-                        this.context_menu_submenu = None;
-                        cx.notify();
-                    });
-                })
-                .child(main_menu)
-                .when_some(submenu_element, |parent, sub| parent.child(sub)),
+                .child(overlay)
+                .when_some(parent_menu, |d, m| d.child(m))
+                .child(current_menu),
         )
     }
 
@@ -1830,6 +1800,9 @@ impl SchemaVizDocument {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                // Always track mouse position for keyboard-opened menus
+                this.last_mouse_position = event.position;
+
                 if let Some(node_idx) = this.dragging_node {
                     let screen_x: f32 = event.position.x.into();
                     let screen_y: f32 = event.position.y.into();
@@ -1893,27 +1866,80 @@ impl SchemaVizDocument {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.context_menu_open = true;
-                    this.context_menu_position = event.position;
-                    this.context_menu_target = this.selected_node;
-                    this.context_menu_selected_index = 0;
-                    cx.notify();
+                    this.open_context_menu(event.position, cx);
                 }),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 use crate::keymap::{key_chord_from_gpui, Modifiers};
 
+                // SchemaViz is a fully keyboard-driven context. Every key event is consumed
+                // here and must NOT propagate to the workspace, which would steal focus.
+                cx.stop_propagation();
+
                 let chord = key_chord_from_gpui(&event.keystroke);
                 let mods = &chord.modifiers;
 
                 // Handle context menu navigation first
-                if this.context_menu_open {
+                if this.context_menu.is_some() {
+                    match chord.key.as_str() {
+                        "up" | "k" => {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.navigate_up();
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        "down" | "j" => {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.navigate_down();
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        "right" | "enter" | "l" => {
+                            let action = this
+                                .context_menu
+                                .as_ref()
+                                .and_then(|m| m.actions.get(m.selected_index).cloned());
+                            match action {
+                                Some(SchemaVizMenuAction::LayoutSubmenu)
+                                | Some(SchemaVizMenuAction::CopyAsSubmenu) => {
+                                    if let Some(menu) = this.context_menu.as_mut() {
+                                        menu.go_into_submenu();
+                                    }
+                                    cx.notify();
+                                    return;
+                                }
+                                _ => {
+                                    this.context_menu_execute_at(
+                                        this.context_menu.as_ref().map(|m| m.selected_index).unwrap_or(0),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        "escape" | "h" | "left" => {
+                            let went_back = if let Some(menu) = this.context_menu.as_mut() {
+                                menu.go_back()
+                            } else {
+                                false
+                            };
+                            if !went_back {
+                                this.close_context_menu(cx);
+                            } else {
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                    // Consume all key events while the context menu is open
                     return;
                 }
 
-                // Zoom
+                // Zoom in: + (with or without shift, since keyboard produces = when shift not held)
                 if (chord.key == "+" || chord.key == "=")
-                    && mods.shift
                     && !mods.ctrl
                     && !mods.alt
                 {
@@ -1921,7 +1947,8 @@ impl SchemaVizDocument {
                     cx.notify();
                     return;
                 }
-                if (chord.key == "-" || chord.key == "_")
+                // Zoom out: - (without shift)
+                if chord.key == "-"
                     && !mods.shift
                     && !mods.ctrl
                     && !mods.alt
@@ -1947,11 +1974,13 @@ impl SchemaVizDocument {
                             return;
                         }
                         "m" => {
-                            this.context_menu_open = true;
-                            this.context_menu_position = Point::new(px(100.0), px(100.0));
-                            this.context_menu_target = this.selected_node;
-                            this.context_menu_selected_index = 0;
-                            cx.notify();
+                            // Use last mouse position if available, otherwise center of viewport
+                            let menu_pos = if this.last_mouse_position != Point::default() {
+                                this.last_mouse_position
+                            } else {
+                                Point::new(px(400.0), px(300.0))
+                            };
+                            this.open_context_menu(menu_pos, cx);
                             return;
                         }
                         "escape" => {
@@ -1995,33 +2024,66 @@ impl SchemaVizDocument {
                 }
 
                 // Selection navigation with Shift+arrows / Shift+hjkl
+                // If no node is selected, selects the first node in the given direction
                 if mods.shift && !mods.ctrl && !mods.alt {
                     match chord.key.as_str() {
                         "l" | "right" => {
                             if let Some(next) = this.find_next_node(Direction::Right) {
                                 this.selected_node = Some(next);
+                                this.center_on_node(next);
                                 cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select leftmost node
+                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
+                                    this.selected_node = Some(first);
+                                    this.center_on_node(first);
+                                    cx.notify();
+                                }
                             }
                             return;
                         }
                         "h" | "left" => {
                             if let Some(next) = this.find_next_node(Direction::Left) {
                                 this.selected_node = Some(next);
+                                this.center_on_node(next);
                                 cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select rightmost node
+                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
+                                    this.selected_node = Some(last);
+                                    this.center_on_node(last);
+                                    cx.notify();
+                                }
                             }
                             return;
                         }
                         "k" | "up" => {
                             if let Some(next) = this.find_next_node(Direction::Up) {
                                 this.selected_node = Some(next);
+                                this.center_on_node(next);
                                 cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select bottommost node
+                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
+                                    this.selected_node = Some(last);
+                                    this.center_on_node(last);
+                                    cx.notify();
+                                }
                             }
                             return;
                         }
                         "j" | "down" => {
                             if let Some(next) = this.find_next_node(Direction::Down) {
                                 this.selected_node = Some(next);
+                                this.center_on_node(next);
                                 cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select topmost node
+                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
+                                    this.selected_node = Some(first);
+                                    this.center_on_node(first);
+                                    cx.notify();
+                                }
                             }
                             return;
                         }
@@ -2084,10 +2146,8 @@ impl SchemaVizDocument {
                 .child("Showing first 100 tables — the schema has more.")
         });
 
-        // Context menu overlay
-        let context_menu = self.context_menu_open.then(|| {
-            self.render_context_menu(self.context_menu_position, cx)
-        });
+        // Context menu overlay (rendered via app's standard component)
+        let context_menu = self.render_context_menu(cx);
 
         div()
             .size_full()
@@ -2269,6 +2329,7 @@ impl SchemaVizDocument {
                         this.pending_details_panel = Some(node_idx_clone);
                         this.dragging_node = Some(node_idx_clone);
                         this.is_panning = false;
+                        this.center_on_node(node_idx_clone);
                         let zoom = this.zoom;
                         let node_x = this
                             .node_position_overrides
@@ -2515,6 +2576,14 @@ impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 impl Render for SchemaVizDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         flush_pending_toast(self.pending_toast.take(), window, cx);
+
+        // Restore focus after context menu closes (the overlay dismiss callback
+        // runs in App context without Window, so it sets pending_focus_restore
+        // and we restore focus here where Window is available).
+        if self.pending_focus_restore && self.context_menu.is_none() {
+            self.pending_focus_restore = false;
+            self.focus_handle.focus(window);
+        }
 
         match &self.load_status {
             LoadStatus::Loading => self.render_loading(cx).into_any_element(),
