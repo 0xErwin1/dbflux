@@ -2,6 +2,19 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.3] – 2026-04-08
+
+### Features
+
+* Implement cooperative query cancellation for MongoDB driver (#11)
+* Wire proxy tunnels into the connect pipeline (#12)
+
+### Improvements
+
+* Update README with screenshot and installation options
+
+---
+
 ## [0.4.2] – 2026-04-06
 
 ### Features
