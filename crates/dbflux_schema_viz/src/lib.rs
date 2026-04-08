@@ -3,5 +3,5 @@ pub mod graph;
 pub mod layout;
 pub mod sql;
 
-pub use dbml::{to_dbml, DbmlScope};
-pub use sql::{to_sql, SqlScope};
+pub use dbml::{DbmlScope, to_dbml};
+pub use sql::{SqlScope, to_sql};

@@ -83,32 +83,28 @@ fn build_dbml_text(graph: &SchemaGraph) -> Result<String, String> {
 
         // Collect refs from edges where this node is the source
         for edge_idx in graph.edge_indices() {
-            if let Some((source_idx, target_idx)) = graph.edge_endpoints(edge_idx) {
-                if source_idx == node_idx {
-                    if let Some(edge) = graph.edge_weight(edge_idx) {
-                        if let Some(target_node) = graph.node_weight(target_idx) {
-                            let from_col = edge.from_columns.first().cloned().unwrap_or_default();
-                            let to_col = edge.to_columns.first().cloned().unwrap_or_default();
+            if let Some((source_idx, target_idx)) = graph.edge_endpoints(edge_idx)
+                && source_idx == node_idx
+                && let Some(edge) = graph.edge_weight(edge_idx)
+                && let Some(target_node) = graph.node_weight(target_idx)
+            {
+                let from_col = edge.from_columns.first().cloned().unwrap_or_default();
+                let to_col = edge.to_columns.first().cloned().unwrap_or_default();
 
-                            let from_table = build_table_name(&node.id);
-                            let to_table = build_table_name(&target_node.id);
+                let from_table = build_table_name(&node.id);
+                let to_table = build_table_name(&target_node.id);
 
-                            let mut ref_parts = format!(
-                                "Ref: {}.{} > {}.{}",
-                                from_table, from_col, to_table, to_col
-                            );
+                let mut ref_parts =
+                    format!("Ref: {}.{} > {}.{}", from_table, from_col, to_table, to_col);
 
-                            if let Some(ref on_delete) = edge.on_delete {
-                                ref_parts.push_str(&format!(" on_delete: {}", on_delete));
-                            }
-                            if let Some(ref on_update) = edge.on_update {
-                                ref_parts.push_str(&format!(" on_update: {}", on_update));
-                            }
-
-                            refs.push(ref_parts);
-                        }
-                    }
+                if let Some(ref on_delete) = edge.on_delete {
+                    ref_parts.push_str(&format!(" on_delete: {}", on_delete));
                 }
+                if let Some(ref on_update) = edge.on_update {
+                    ref_parts.push_str(&format!(" on_update: {}", on_update));
+                }
+
+                refs.push(ref_parts);
             }
         }
     }

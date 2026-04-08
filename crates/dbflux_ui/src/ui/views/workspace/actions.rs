@@ -759,8 +759,7 @@ impl Workspace {
         });
 
         let handle = crate::ui::document::DocumentHandle::schema_viz(entity, cx);
-        self.tab_manager
-            .update(cx, |mgr, cx| mgr.open(handle, cx));
+        self.tab_manager.update(cx, |mgr, cx| mgr.open(handle, cx));
 
         log::info!(
             "Opened global schema viz for profile={} db={}",

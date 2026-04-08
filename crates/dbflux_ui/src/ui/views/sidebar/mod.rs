@@ -1240,11 +1240,7 @@ impl Sidebar {
     }
 
     fn open_schema_diagram(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        let Some(SchemaNodeId::Database {
-            profile_id,
-            name,
-        }) = parse_node_id(item_id)
-        else {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
             return;
         };
         cx.emit(SidebarEvent::OpenGlobalSchemaViz {

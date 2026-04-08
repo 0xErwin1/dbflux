@@ -62,16 +62,16 @@ fn extract_focal_subgraph(
 
     for edge in graph.graph.edges(focal_idx) {
         let neighbor_idx = edge.source();
-        if neighbor_idx != focal_idx {
-            if let Some(neighbor) = graph.graph.node_weight(neighbor_idx) {
-                neighbor_ids.insert(neighbor.id.clone());
-            }
+        if neighbor_idx != focal_idx
+            && let Some(neighbor) = graph.graph.node_weight(neighbor_idx)
+        {
+            neighbor_ids.insert(neighbor.id.clone());
         }
         let neighbor_idx = edge.target();
-        if neighbor_idx != focal_idx {
-            if let Some(neighbor) = graph.graph.node_weight(neighbor_idx) {
-                neighbor_ids.insert(neighbor.id.clone());
-            }
+        if neighbor_idx != focal_idx
+            && let Some(neighbor) = graph.graph.node_weight(neighbor_idx)
+        {
+            neighbor_ids.insert(neighbor.id.clone());
         }
     }
 
@@ -135,7 +135,7 @@ fn build_sql_text(graph: &SchemaGraph) -> Result<String, String> {
         };
 
         output.push_str(&build_alter_table_add_fk(source_node, target_node, fk_edge));
-        output.push_str("\n");
+        output.push('\n');
     }
 
     Ok(output)
@@ -210,7 +210,7 @@ fn build_alter_table_add_fk(
         sql.push_str(&format!(" ON UPDATE {}", on_update));
     }
 
-    sql.push_str(";");
+    sql.push(';');
     sql
 }
 
