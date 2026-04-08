@@ -277,8 +277,13 @@ pub struct SchemaVizDocument {
     context_menu: Option<SchemaVizContextMenuState>,
     // When true, focus_handle.focus(window) is called at the start of the next render
     pending_focus_restore: bool,
-    // Last mouse position for keyboard-opened menus
+    // Last mouse position for keyboard-opened menus (window-absolute)
     last_mouse_position: Point<Pixels>,
+    // Absolute position of the document panel's top-left corner in window
+    // coordinates. Updated each frame via a canvas element. Used to convert
+    // event.position (window-absolute) to panel-local coordinates for context
+    // menu placement. Same pattern as DataGridPanel and AuditDocument.
+    panel_origin: Point<Pixels>,
 }
 
 impl SchemaVizDocument {
@@ -352,6 +357,7 @@ impl SchemaVizDocument {
             context_menu: None,
             pending_focus_restore: false,
             last_mouse_position: Point::default(),
+            panel_origin: Point::default(),
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -1587,7 +1593,7 @@ impl SchemaVizDocument {
         // Node screen position = graph_x * zoom + pan_x. No intermediate layer.
         // This ensures mouse event coordinates from on_scroll_wheel and on_mouse_move
         // are always in the same coordinate space as the pan_offset.
-        let canvas = match &self.layout {
+        let diagram_canvas = match &self.layout {
             Some(layout) => {
                 // Grid: ~14 lines per axis covers any visible window at normal sizes.
                 // Grid lines are in absolute canvas coords and do NOT move with pan/zoom —
@@ -1800,8 +1806,11 @@ impl SchemaVizDocument {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                // Always track mouse position for keyboard-opened menus
-                this.last_mouse_position = event.position;
+                // Track mouse position in panel-local coordinates for keyboard-opened menus
+                this.last_mouse_position = Point::new(
+                    event.position.x - this.panel_origin.x,
+                    event.position.y - this.panel_origin.y,
+                );
 
                 if let Some(node_idx) = this.dragging_node {
                     let screen_x: f32 = event.position.x.into();
@@ -1866,7 +1875,12 @@ impl SchemaVizDocument {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.open_context_menu(event.position, cx);
+                    // Convert window-absolute position to panel-local
+                    let local = Point::new(
+                        event.position.x - this.panel_origin.x,
+                        event.position.y - this.panel_origin.y,
+                    );
+                    this.open_context_menu(local, cx);
                 }),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
@@ -2132,7 +2146,7 @@ impl SchemaVizDocument {
                     cx.notify();
                 }
             }))
-            .child(canvas);
+            .child(diagram_canvas);
 
         let cap_warning = self.table_cap_warning.then(|| {
             div()
@@ -2146,14 +2160,34 @@ impl SchemaVizDocument {
                 .child("Showing first 100 tables — the schema has more.")
         });
 
+        // Clone entity before rendering to avoid borrow conflicts with canvas below.
+        let entity_for_origin = cx.entity().clone();
+
         // Context menu overlay (rendered via app's standard component)
         let context_menu = self.render_context_menu(cx);
 
+        // Track panel origin for context menu positioning (same pattern as
+        // DataGridPanel and AuditDocument). event.position from mouse events
+        // is window-absolute; the menu renders inside this div, so we need
+        // to subtract panel_origin to get local coordinates.
+        let origin_tracker = canvas(
+            move |bounds: gpui::Bounds<Pixels>, _, cx| {
+                entity_for_origin.update(cx, |this, _cx| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_: gpui::Bounds<Pixels>, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
             .bg(background)
+            .child(origin_tracker)
             .child(zoom_controls)
             .children(cap_warning)
             .child(viewport)
