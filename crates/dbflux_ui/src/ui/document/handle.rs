@@ -338,7 +338,9 @@ impl DocumentHandle {
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
-            Self::SchemaViz { .. } => false,
+            Self::SchemaViz { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
+            }
         }
     }
 
