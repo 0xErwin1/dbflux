@@ -630,12 +630,7 @@ impl Workspace {
                     profile_id,
                     database,
                 } => {
-                    this.open_global_schema_viz_document(
-                        *profile_id,
-                        database.clone(),
-                        window,
-                        cx,
-                    );
+                    this.open_global_schema_viz_document(*profile_id, database.clone(), window, cx);
                 }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,

@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
-use crate::ui::components::toast::{flush_pending_toast, PendingToast, ToastExt};
+use crate::ui::components::toast::{PendingToast, ToastExt, flush_pending_toast};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentState};
 use crate::ui::icons::AppIcon;
@@ -68,11 +68,21 @@ impl SchemaVizMenuAction {
             SchemaVizMenuAction::Separator => MenuItem::separator(),
             SchemaVizMenuAction::ZoomIn => MenuItem::new("Zoom In").icon(AppIcon::ZoomIn),
             SchemaVizMenuAction::ZoomOut => MenuItem::new("Zoom Out").icon(AppIcon::ZoomOut),
-            SchemaVizMenuAction::LayoutSubmenu => MenuItem::new("Layout").icon(AppIcon::Layers).submenu(),
-            SchemaVizMenuAction::CopyAsSubmenu => MenuItem::new("Copy as").icon(AppIcon::Database).submenu(),
-            SchemaVizMenuAction::FocusOnTable => MenuItem::new("Focus on this table").icon(AppIcon::Maximize2),
-            SchemaVizMenuAction::LayoutLeftRight => MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight),
-            SchemaVizMenuAction::LayoutSnowflake => MenuItem::new("Snowflake").icon(AppIcon::Snowflake),
+            SchemaVizMenuAction::LayoutSubmenu => {
+                MenuItem::new("Layout").icon(AppIcon::Layers).submenu()
+            }
+            SchemaVizMenuAction::CopyAsSubmenu => {
+                MenuItem::new("Copy as").icon(AppIcon::Database).submenu()
+            }
+            SchemaVizMenuAction::FocusOnTable => {
+                MenuItem::new("Focus on this table").icon(AppIcon::Maximize2)
+            }
+            SchemaVizMenuAction::LayoutLeftRight => {
+                MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight)
+            }
+            SchemaVizMenuAction::LayoutSnowflake => {
+                MenuItem::new("Snowflake").icon(AppIcon::Snowflake)
+            }
             SchemaVizMenuAction::LayoutCompact => MenuItem::new("Compact").icon(AppIcon::Grid3x3),
             SchemaVizMenuAction::CopyAsDbml => MenuItem::new("Copy as DBML").icon(AppIcon::Copy),
             SchemaVizMenuAction::CopyAsSql => MenuItem::new("Copy as SQL").icon(AppIcon::Code),
@@ -151,7 +161,10 @@ impl SchemaVizContextMenuState {
             } else {
                 self.selected_index = count - 1;
             }
-            if !matches!(self.actions[self.selected_index], SchemaVizMenuAction::Separator) {
+            if !matches!(
+                self.actions[self.selected_index],
+                SchemaVizMenuAction::Separator
+            ) {
                 return true;
             }
         }
@@ -169,7 +182,10 @@ impl SchemaVizContextMenuState {
             } else {
                 self.selected_index = 0;
             }
-            if !matches!(self.actions[self.selected_index], SchemaVizMenuAction::Separator) {
+            if !matches!(
+                self.actions[self.selected_index],
+                SchemaVizMenuAction::Separator
+            ) {
                 return true;
             }
         }
@@ -214,7 +230,7 @@ impl SchemaVizContextMenuState {
 // These must stay in sync with the padding/height values used in render_node.
 const NODE_HEADER_PX: f32 = 30.0; // py(6)*2 + line-height(SM 12px ~18px) + border(1px) = ~31, round to 30
 const NODE_BODY_TOP_PX: f32 = 2.0; // py(2) on the body container, top side
-const NODE_ROW_PX: f32 = 18.0;     // explicit h() given to each column row div
+const NODE_ROW_PX: f32 = 18.0; // explicit h() given to each column row div
 
 /// Display mode for the schema diagram.
 #[derive(Clone)]
@@ -473,7 +489,11 @@ impl SchemaVizDocument {
             let load_result = task.await;
 
             // Determine if cancelled by checking if error message is "Cancelled"
-            let is_cancelled = load_result.as_ref().err().map(|e| e == "Cancelled").unwrap_or(false);
+            let is_cancelled = load_result
+                .as_ref()
+                .err()
+                .map(|e| e == "Cancelled")
+                .unwrap_or(false);
 
             if let Err(error) = cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
@@ -655,7 +675,8 @@ impl SchemaVizDocument {
 
                 if let Some(ref fks) = focal_table.foreign_keys {
                     for fk in fks {
-                        all_table_names.insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
+                        all_table_names
+                            .insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
                     }
                 }
 
@@ -696,10 +717,9 @@ impl SchemaVizDocument {
                 }
 
                 for (tbl_schema, tbl_name) in &all_table_names {
-                    if !all_tables
-                        .iter()
-                        .any(|t| t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref())
-                    {
+                    if !all_tables.iter().any(|t| {
+                        t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref()
+                    }) {
                         if cancel_token.is_cancelled() {
                             return Err("Cancelled".into());
                         }
@@ -743,7 +763,8 @@ impl SchemaVizDocument {
 
                 const TABLE_CAP: usize = 100;
                 let capped = schema_info.tables.len() > TABLE_CAP;
-                let tables_to_load: Vec<_> = schema_info.tables.into_iter().take(TABLE_CAP).collect();
+                let tables_to_load: Vec<_> =
+                    schema_info.tables.into_iter().take(TABLE_CAP).collect();
 
                 let mut all_table_details = Vec::with_capacity(tables_to_load.len());
                 let mut tables_loaded = 0;
@@ -763,7 +784,8 @@ impl SchemaVizDocument {
                 }
 
                 let graph = SchemaGraph::build(&all_table_details);
-                let layout = dbflux_schema_viz::layout::compute_layout(&graph, LayoutFormat::Compact, None);
+                let layout =
+                    dbflux_schema_viz::layout::compute_layout(&graph, LayoutFormat::Compact, None);
 
                 Ok((all_table_details, graph, layout, capped, tables_loaded))
             }
@@ -826,18 +848,16 @@ impl SchemaVizDocument {
                 SchemaVizMode::Global => {
                     if format == LayoutFormat::Snowflake {
                         // Auto-select the most-connected table as focal in global mode
-                        graph.most_connected_node().map(|(_, node)| {
-                            (node.id.name.as_str(), node.id.schema.as_deref())
-                        })
+                        graph
+                            .most_connected_node()
+                            .map(|(_, node)| (node.id.name.as_str(), node.id.schema.as_deref()))
                     } else {
                         None
                     }
                 }
             };
             self.layout = Some(dbflux_schema_viz::layout::compute_layout(
-                graph,
-                format,
-                focal,
+                graph, format, focal,
             ));
             self.zoom = 1.0;
             self.pan_offset = Point::default();
@@ -888,22 +908,24 @@ impl SchemaVizDocument {
             None => return Vec::new(),
         };
 
-        let mut nodes: Vec<_> = layout
-            .nodes
-            .keys()
-            .copied()
-            .collect();
+        let mut nodes: Vec<_> = layout.nodes.keys().copied().collect();
 
         nodes.sort_by(|&a, &b| {
             let pos_a = layout.nodes.get(&a);
             let pos_b = layout.nodes.get(&b);
             match (pos_a, pos_b) {
                 (Some(node_a), Some(node_b)) => {
-                    let y_cmp = node_a.y.partial_cmp(&node_b.y).unwrap_or(std::cmp::Ordering::Equal);
+                    let y_cmp = node_a
+                        .y
+                        .partial_cmp(&node_b.y)
+                        .unwrap_or(std::cmp::Ordering::Equal);
                     if y_cmp != std::cmp::Ordering::Equal {
                         y_cmp
                     } else {
-                        node_a.x.partial_cmp(&node_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                        node_a
+                            .x
+                            .partial_cmp(&node_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     }
                 }
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -933,7 +955,11 @@ impl SchemaVizDocument {
                     .iter()
                     .filter(|&&idx| {
                         idx != current
-                            && layout.nodes.get(&idx).map(|n| n.x < current_pos.x - threshold).unwrap_or(false)
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.x < current_pos.x - threshold)
+                                .unwrap_or(false)
                     })
                     .collect();
 
@@ -942,7 +968,10 @@ impl SchemaVizDocument {
                     .max_by(|a, b| {
                         let pos_a = layout.nodes.get(a).unwrap();
                         let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a.x.partial_cmp(&pos_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                        pos_a
+                            .x
+                            .partial_cmp(&pos_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .copied()
                     .or_else(|| {
@@ -956,7 +985,11 @@ impl SchemaVizDocument {
                     .iter()
                     .filter(|&&idx| {
                         idx != current
-                            && layout.nodes.get(&idx).map(|n| n.x > current_pos.x + threshold).unwrap_or(false)
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.x > current_pos.x + threshold)
+                                .unwrap_or(false)
                     })
                     .collect();
 
@@ -965,7 +998,10 @@ impl SchemaVizDocument {
                     .min_by(|a, b| {
                         let pos_a = layout.nodes.get(a).unwrap();
                         let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a.x.partial_cmp(&pos_b.x).unwrap_or(std::cmp::Ordering::Equal)
+                        pos_a
+                            .x
+                            .partial_cmp(&pos_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .copied()
                     .or_else(|| {
@@ -979,7 +1015,11 @@ impl SchemaVizDocument {
                     .iter()
                     .filter(|&&idx| {
                         idx != current
-                            && layout.nodes.get(&idx).map(|n| n.y < current_pos.y - threshold).unwrap_or(false)
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.y < current_pos.y - threshold)
+                                .unwrap_or(false)
                     })
                     .collect();
 
@@ -988,7 +1028,10 @@ impl SchemaVizDocument {
                     .max_by(|a, b| {
                         let pos_a = layout.nodes.get(a).unwrap();
                         let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a.y.partial_cmp(&pos_b.y).unwrap_or(std::cmp::Ordering::Equal)
+                        pos_a
+                            .y
+                            .partial_cmp(&pos_b.y)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .copied()
                     .or_else(|| {
@@ -1002,7 +1045,11 @@ impl SchemaVizDocument {
                     .iter()
                     .filter(|&&idx| {
                         idx != current
-                            && layout.nodes.get(&idx).map(|n| n.y > current_pos.y + threshold).unwrap_or(false)
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.y > current_pos.y + threshold)
+                                .unwrap_or(false)
                     })
                     .collect();
 
@@ -1011,7 +1058,10 @@ impl SchemaVizDocument {
                     .min_by(|a, b| {
                         let pos_a = layout.nodes.get(a).unwrap();
                         let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a.y.partial_cmp(&pos_b.y).unwrap_or(std::cmp::Ordering::Equal)
+                        pos_a
+                            .y
+                            .partial_cmp(&pos_b.y)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .copied()
                     .or_else(|| {
@@ -1245,13 +1295,16 @@ impl SchemaVizDocument {
             .cursor_pointer()
             .text_color(theme.foreground)
             .when(is_selected, |d| d.bg(theme.primary.opacity(0.1)))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                this.set_layout_format(format, cx);
-                this.layout_menu_open = false;
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.set_layout_format(format, cx);
+                    this.layout_menu_open = false;
+                    cx.notify();
+                }),
+            )
             .child(div().text_size(FontSizes::SM).child(label))
-                .when(is_selected, |d| {
+            .when(is_selected, |d| {
                 d.child(
                     svg()
                         .path(AppIcon::CircleCheck.path())
@@ -1267,24 +1320,9 @@ impl SchemaVizDocument {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let items = vec![
-            self.make_layout_menu_item(
-                "Left-Right",
-                LayoutFormat::LeftRight,
-                theme,
-                cx,
-            ),
-            self.make_layout_menu_item(
-                "Snowflake",
-                LayoutFormat::Snowflake,
-                theme,
-                cx,
-            ),
-            self.make_layout_menu_item(
-                "Compact",
-                LayoutFormat::Compact,
-                theme,
-                cx,
-            ),
+            self.make_layout_menu_item("Left-Right", LayoutFormat::LeftRight, theme, cx),
+            self.make_layout_menu_item("Snowflake", LayoutFormat::Snowflake, theme, cx),
+            self.make_layout_menu_item("Compact", LayoutFormat::Compact, theme, cx),
         ];
 
         self.build_dropdown_menu(items, cx)
@@ -1305,11 +1343,14 @@ impl SchemaVizDocument {
                 .rounded_sm()
                 .cursor_pointer()
                 .text_color(theme.foreground)
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    this.export_dbml(cx);
-                    this.export_menu_open = false;
-                    cx.notify();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.export_dbml(cx);
+                        this.export_menu_open = false;
+                        cx.notify();
+                    }),
+                )
                 .child(div().text_size(FontSizes::SM).child("Copy as DBML")),
             div()
                 .flex()
@@ -1320,11 +1361,14 @@ impl SchemaVizDocument {
                 .rounded_sm()
                 .cursor_pointer()
                 .text_color(theme.foreground)
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    this.copy_as_sql(cx);
-                    this.export_menu_open = false;
-                    cx.notify();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.copy_as_sql(cx);
+                        this.export_menu_open = false;
+                        cx.notify();
+                    }),
+                )
                 .child(div().text_size(FontSizes::SM).child("Copy as SQL")),
         ];
 
@@ -1379,7 +1423,12 @@ impl SchemaVizDocument {
 
     /// Dispatches a command from the workspace keymap system.
     /// Returns true if the command was handled.
-    pub fn dispatch_command(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub fn dispatch_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match cmd {
             Command::Cancel => {
                 if self.context_menu.is_some() {
@@ -1511,8 +1560,11 @@ impl SchemaVizDocument {
             let parent_selected = menu.parent_stack.last().map(|(_, idx)| *idx).unwrap_or(0);
             let parent_click = entity.clone();
             let parent_hover = entity.clone();
-            div().absolute().top(menu_y).left(menu_x).child(
-                ctx::render_menu_container(
+            div()
+                .absolute()
+                .top(menu_y)
+                .left(menu_x)
+                .child(ctx::render_menu_container(
                     "schema-viz-parent-menu",
                     &parent_items,
                     Some(parent_selected),
@@ -1533,8 +1585,7 @@ impl SchemaVizDocument {
                         });
                     },
                     cx,
-                ),
-            )
+                ))
         });
 
         let click_entity = entity.clone();
@@ -1725,14 +1776,15 @@ impl SchemaVizDocument {
                             .py(px(2.0))
                             .rounded_sm()
                             .cursor_pointer()
-                            .when(self.layout_menu_open, |d| {
-                                d.bg(theme.primary.opacity(0.15))
-                            })
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.layout_menu_open = !this.layout_menu_open;
-                                this.export_menu_open = false;
-                                cx.notify();
-                            }))
+                            .when(self.layout_menu_open, |d| d.bg(theme.primary.opacity(0.15)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.layout_menu_open = !this.layout_menu_open;
+                                    this.export_menu_open = false;
+                                    cx.notify();
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_size(FontSizes::SM)
@@ -1762,14 +1814,15 @@ impl SchemaVizDocument {
                             .py(px(2.0))
                             .rounded_sm()
                             .cursor_pointer()
-                            .when(self.export_menu_open, |d| {
-                                d.bg(theme.primary.opacity(0.15))
-                            })
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.export_menu_open = !this.export_menu_open;
-                                this.layout_menu_open = false;
-                                cx.notify();
-                            }))
+                            .when(self.export_menu_open, |d| d.bg(theme.primary.opacity(0.15)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.export_menu_open = !this.export_menu_open;
+                                    this.layout_menu_open = false;
+                                    cx.notify();
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_size(FontSizes::SM)
@@ -1834,8 +1887,7 @@ impl SchemaVizDocument {
                 let dx = event.position.x - this.pan_start.x;
                 let dy = event.position.y - this.pan_start.y;
                 if dx.abs() > px(0.5) || dy.abs() > px(0.5) {
-                    this.pan_offset =
-                        Point::new(this.pan_offset.x + dx, this.pan_offset.y + dy);
+                    this.pan_offset = Point::new(this.pan_offset.x + dx, this.pan_offset.y + dy);
                     this.pan_start = event.position;
                     cx.notify();
                 }
@@ -1884,7 +1936,7 @@ impl SchemaVizDocument {
                 }),
             )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                use crate::keymap::{key_chord_from_gpui, Modifiers};
+                use crate::keymap::{Modifiers, key_chord_from_gpui};
 
                 // SchemaViz is a fully keyboard-driven context. Every key event is consumed
                 // here and must NOT propagate to the workspace, which would steal focus.
@@ -1926,7 +1978,10 @@ impl SchemaVizDocument {
                                 }
                                 _ => {
                                     this.context_menu_execute_at(
-                                        this.context_menu.as_ref().map(|m| m.selected_index).unwrap_or(0),
+                                        this.context_menu
+                                            .as_ref()
+                                            .map(|m| m.selected_index)
+                                            .unwrap_or(0),
                                         cx,
                                     );
                                     return;
@@ -1953,20 +2008,13 @@ impl SchemaVizDocument {
                 }
 
                 // Zoom in: + (with or without shift, since keyboard produces = when shift not held)
-                if (chord.key == "+" || chord.key == "=")
-                    && !mods.ctrl
-                    && !mods.alt
-                {
+                if (chord.key == "+" || chord.key == "=") && !mods.ctrl && !mods.alt {
                     this.zoom = (this.zoom * 1.25).min(4.0);
                     cx.notify();
                     return;
                 }
                 // Zoom out: - (without shift)
-                if chord.key == "-"
-                    && !mods.shift
-                    && !mods.ctrl
-                    && !mods.alt
-                {
+                if chord.key == "-" && !mods.shift && !mods.ctrl && !mods.alt {
                     this.zoom = (this.zoom / 1.25).max(0.25);
                     cx.notify();
                     return;
@@ -2220,16 +2268,7 @@ impl SchemaVizDocument {
             .nodes()
             .filter_map(|(idx, node)| {
                 let node_layout = layout.nodes.get(&idx)?;
-                Some(self.render_node(
-                    node,
-                    node_layout,
-                    zoom,
-                    pan,
-                    idx,
-                    theme,
-                    dragging_node,
-                    cx,
-                ))
+                Some(self.render_node(node, node_layout, zoom, pan, idx, theme, dragging_node, cx))
             })
             .collect()
     }
@@ -2304,8 +2343,6 @@ impl SchemaVizDocument {
                 || lower.contains("[]")
             {
                 theme.accent_foreground
-            } else if lower.contains("uuid") {
-                theme.muted_foreground
             } else {
                 theme.muted_foreground
             }
@@ -2413,46 +2450,41 @@ impl SchemaVizDocument {
                     .border_color(theme.border)
                     .child(header_title),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .px(px(10.0))
-                    .py(px(2.0))
-                    .children(node.columns.iter().map(|col| {
-                        let type_label = if col.is_pk {
-                            format!("{} [pk]", col.type_name)
-                        } else if col.is_fk {
-                            format!("{} [fk]", col.type_name)
-                        } else {
-                            col.type_name.clone()
-                        };
-                        let col_type_color = type_color(&col.type_name, theme);
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(NODE_ROW_PX))
-                            .gap(px(4.0))
-                            .overflow_hidden()
-                            .text_size(FontSizes::XS)
-                            .text_color(header_text)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(col.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .text_color(col_type_color)
-                                    .child(type_label),
-                            )
-                    })),
-            )
+            .child(div().flex().flex_col().px(px(10.0)).py(px(2.0)).children(
+                node.columns.iter().map(|col| {
+                    let type_label = if col.is_pk {
+                        format!("{} [pk]", col.type_name)
+                    } else if col.is_fk {
+                        format!("{} [fk]", col.type_name)
+                    } else {
+                        col.type_name.clone()
+                    };
+                    let col_type_color = type_color(&col.type_name, theme);
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(NODE_ROW_PX))
+                        .gap(px(4.0))
+                        .overflow_hidden()
+                        .text_size(FontSizes::XS)
+                        .text_color(header_text)
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(col.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(col_type_color)
+                                .child(type_label),
+                        )
+                }),
+            ))
     }
 
     /// Renders edges as L-shaped CSS connectors.
@@ -2493,20 +2525,18 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            let (from_x_base, from_y_base) = if let Some(pos) =
-                self.node_position_overrides.get(&source)
-            {
-                (pos.x, pos.y)
-            } else {
-                (from_layout.x, from_layout.y)
-            };
-            let (to_x_base, to_y_base) = if let Some(pos) =
-                self.node_position_overrides.get(&target)
-            {
-                (pos.x, pos.y)
-            } else {
-                (to_layout.x, to_layout.y)
-            };
+            let (from_x_base, from_y_base) =
+                if let Some(pos) = self.node_position_overrides.get(&source) {
+                    (pos.x, pos.y)
+                } else {
+                    (from_layout.x, from_layout.y)
+                };
+            let (to_x_base, to_y_base) =
+                if let Some(pos) = self.node_position_overrides.get(&target) {
+                    (pos.x, pos.y)
+                } else {
+                    (to_layout.x, to_layout.y)
+                };
 
             let from_node_weight = match graph.node_weight(source) {
                 Some(n) => n,

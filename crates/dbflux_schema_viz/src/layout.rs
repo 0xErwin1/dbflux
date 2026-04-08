@@ -57,7 +57,7 @@ fn compute_node_width(node: &crate::graph::TableNode) -> f32 {
         })
         .fold(0.0_f32, f32::max);
 
-    header_width.max(body_width).max(180.0).min(400.0)
+    header_width.max(body_width).clamp(180.0, 400.0)
 }
 
 /// Layout information for a single node.

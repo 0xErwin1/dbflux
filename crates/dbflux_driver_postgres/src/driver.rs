@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -3706,9 +3706,11 @@ mod tests {
     #[test]
     fn parse_uri_rejects_non_postgres_schemes() {
         let driver = PostgresDriver::new();
-        assert!(driver
-            .parse_uri("mysql://root@localhost:3306/app")
-            .is_none());
+        assert!(
+            driver
+                .parse_uri("mysql://root@localhost:3306/app")
+                .is_none()
+        );
     }
 
     #[test]
