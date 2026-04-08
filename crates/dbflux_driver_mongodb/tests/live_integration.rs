@@ -60,7 +60,7 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), DbError> {
         let (handle, _) =
             connection.execute_with_handle(&QueryRequest::new("db.runCommand({\"ping\": 1})"))?;
         let cancel = connection.cancel(&handle);
-        assert!(matches!(cancel, Err(DbError::NotSupported(_))));
+        assert!(cancel.is_ok());
 
         let schema = connection.schema()?;
         assert!(schema.is_document());
@@ -230,19 +230,19 @@ fn mongodb_browse_and_count_collection() -> Result<(), DbError> {
 }
 
 // ---------------------------------------------------------------------------
-// Cancel not supported
+// Cancel supported
 // ---------------------------------------------------------------------------
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn mongodb_cancel_not_supported() -> Result<(), DbError> {
+fn mongodb_cancel_returns_ok() -> Result<(), DbError> {
     containers::with_mongodb_url(|uri| {
         let connection = connect_mongodb(uri)?;
 
         let (handle, _) =
             connection.execute_with_handle(&QueryRequest::new("db.runCommand({\"ping\": 1})"))?;
         let cancel = connection.cancel(&handle);
-        assert!(matches!(cancel, Err(DbError::NotSupported(_))));
+        assert!(cancel.is_ok());
 
         assert!(connection.key_value_api().is_none());
 
