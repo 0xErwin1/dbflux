@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use std::sync::Arc;
@@ -16,15 +18,16 @@ use dbflux_core::{
     DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
     FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
-    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
-    Row, SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition,
-    TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
-    detect_dangerous_mongo, sanitize_uri,
+    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, Row, SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef,
+    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig,
+    TableInfo, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
+    ViewInfo, WhereOperator, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
+use uuid::Uuid;
 
 /// MongoDB driver metadata.
 pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -475,6 +478,9 @@ impl MongoDriver {
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
+            connection_uri: sanitize_uri(&uri),
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 
@@ -507,6 +513,9 @@ impl MongoDriver {
             default_database: database,
             schema_settings,
             ssh_tunnel: None,
+            connection_uri: sanitize_uri(&uri),
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 
@@ -583,6 +592,9 @@ impl MongoDriver {
             default_database: database,
             schema_settings,
             ssh_tunnel: Some(tunnel),
+            connection_uri: sanitize_uri(&uri),
+            active_query: RwLock::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }))
     }
 }
@@ -785,6 +797,57 @@ pub struct MongoConnection {
     schema_settings: MongoSchemaSettings,
     #[allow(dead_code)]
     ssh_tunnel: Option<SshTunnel>,
+    #[allow(dead_code)]
+    connection_uri: String,
+    active_query: RwLock<Option<Uuid>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct MongoCancelHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl QueryCancelHandle for MongoCancelHandle {
+    fn cancel(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+        log::info!("[CANCEL] MongoDB cancel flag set");
+        Ok(())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+struct ActiveQueryGuard<'a> {
+    active_query: &'a RwLock<Option<Uuid>>,
+}
+
+impl<'a> ActiveQueryGuard<'a> {
+    fn activate(active_query: &'a RwLock<Option<Uuid>>, query_id: Uuid) -> Result<Self, DbError> {
+        let mut active = active_query
+            .write()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+        *active = Some(query_id);
+        drop(active);
+        Ok(Self { active_query })
+    }
+}
+
+impl Drop for ActiveQueryGuard<'_> {
+    fn drop(&mut self) {
+        match self.active_query.write() {
+            Ok(mut active) => {
+                *active = None;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[CLEANUP] Failed to clear active MongoDB query state: {}",
+                    error
+                );
+            }
+        }
+    }
 }
 
 fn mongo_filter_json_from_request(
@@ -1228,6 +1291,10 @@ impl Connection for MongoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        self.cancelled.store(false, Ordering::SeqCst);
+        let query_id = Uuid::new_v4();
+        let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
+
         let start = Instant::now();
 
         let sql_preview = if req.sql.len() > 80 {
@@ -1235,17 +1302,19 @@ impl Connection for MongoConnection {
         } else {
             req.sql.clone()
         };
-        log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
+        log::debug!(
+            "[QUERY] Executing (id={}): {}",
+            query_id,
+            sql_preview.replace('\n', " ")
+        );
 
         let client = self
             .client
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        // Parse the query (supports both shell syntax and JSON format)
         let query: MongoQuery = crate::query_parser::parse_query(&req.sql)?;
 
-        // Determine database to use
         let db_name = query
             .database
             .as_ref()
@@ -1255,7 +1324,7 @@ impl Connection for MongoConnection {
 
         let db = client.database(db_name);
 
-        let result = execute_mongo_query(&client, &db, &query)?;
+        let result = execute_mongo_query(&client, &db, &query, self.cancelled.clone())?;
 
         let query_time = start.elapsed();
 
@@ -1270,11 +1339,60 @@ impl Connection for MongoConnection {
         Ok(qr)
     }
 
-    fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
-        // MongoDB sync driver doesn't support query cancellation
-        Err(DbError::NotSupported(
-            "Query cancellation not supported for MongoDB".to_string(),
-        ))
+    fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
+        let active = self
+            .active_query
+            .read()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        if *active != Some(handle.id) {
+            return Err(DbError::QueryFailed(
+                "No matching active query to cancel".to_string().into(),
+            ));
+        }
+
+        drop(active);
+
+        self.cancelled.store(true, Ordering::SeqCst);
+        log::info!("[CANCEL] MongoDB cancel requested for query {}", handle.id);
+        Ok(())
+    }
+
+    fn cancel_active(&self) -> Result<(), DbError> {
+        self.cancelled.store(true, Ordering::SeqCst);
+
+        let active = self
+            .active_query
+            .read()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        match *active {
+            Some(id) => {
+                drop(active);
+                log::info!("[CANCEL] MongoDB cancel requested for active query {}", id);
+                Ok(())
+            }
+            None => {
+                log::debug!("[CANCEL] No active MongoDB query to cancel");
+                Ok(())
+            }
+        }
+    }
+
+    fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
+        Arc::new(MongoCancelHandle {
+            cancelled: self.cancelled.clone(),
+        })
+    }
+
+    fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        if !self.cancelled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        log::info!("[CLEANUP] MongoDB connection cleanup after cancel");
+        self.cancelled.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
@@ -1646,9 +1764,7 @@ impl Connection for MongoConnection {
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
 
-        let docs: Vec<Document> = cursor
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format_mongo_query_error(&e))?;
+        let docs = collect_cursor_documents(cursor, &self.cancelled)?;
 
         let internal = documents_to_result(docs)?;
         let query_time = start.elapsed();
@@ -2128,10 +2244,27 @@ struct QueryResultInternal {
     affected_rows: Option<u64>,
 }
 
+fn collect_cursor_documents(
+    cursor: mongodb::sync::Cursor<Document>,
+    cancelled: &Arc<AtomicBool>,
+) -> Result<Vec<Document>, DbError> {
+    let mut documents = Vec::new();
+    for result in cursor {
+        if cancelled.load(Ordering::SeqCst) {
+            log::info!("[QUERY] MongoDB query cancelled during cursor iteration");
+            return Err(DbError::Cancelled);
+        }
+        let doc = result.map_err(|e| format_mongo_query_error(&e))?;
+        documents.push(doc);
+    }
+    Ok(documents)
+}
+
 fn execute_mongo_query(
     client: &Client,
     db: &Database,
     query: &MongoQuery,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<QueryResultInternal, DbError> {
     if query.collection.is_none() {
         return execute_db_operation(client, db, &query.operation);
@@ -2160,9 +2293,7 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents: Vec<Document> = cursor
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format_mongo_query_error(&e))?;
+            let documents = collect_cursor_documents(cursor, &cancelled)?;
 
             documents_to_result(documents)
         }
@@ -2173,9 +2304,7 @@ fn execute_mongo_query(
                 .run()
                 .map_err(|e| format_mongo_query_error(&e))?;
 
-            let documents: Vec<Document> = cursor
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format_mongo_query_error(&e))?;
+            let documents = collect_cursor_documents(cursor, &cancelled)?;
 
             documents_to_result(documents)
         }
