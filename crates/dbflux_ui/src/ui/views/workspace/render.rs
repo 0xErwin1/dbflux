@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform;
 
 impl Workspace {
     fn render_panel_header(
@@ -111,6 +112,9 @@ impl Render for Workspace {
         let bg_color = theme.background;
         let muted_fg = theme.muted_foreground;
         let header_size = px(25.0);
+
+        // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
+        let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
 
         let right_pane = if has_tabs {
             let tasks_header = self.render_panel_header(
@@ -527,6 +531,7 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .size_full()
+                    .when_some(linux_title_bar, |el, title_bar| el.child(title_bar))
                     .child(
                         div()
                             .flex()

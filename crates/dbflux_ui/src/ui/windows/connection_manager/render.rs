@@ -1,4 +1,5 @@
 use crate::keymap::ContextId;
+use crate::platform;
 use crate::ui::icons::AppIcon;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
@@ -1202,6 +1203,8 @@ impl Render for ConnectionManagerWindow {
             state.set_masked(!show_ssh_password, window, cx);
         });
 
+        let csd_title_bar = platform::render_csd_title_bar(window, cx, "Connection Manager");
+
         let theme = cx.theme();
 
         div()
@@ -1224,6 +1227,7 @@ impl Render for ConnectionManagerWindow {
             }))
             .size_full()
             .bg(theme.background)
+            .when_some(csd_title_bar, |el, title_bar| el.child(title_bar))
             .child(match self.view {
                 View::DriverSelect => self.render_driver_select(window, cx).into_any_element(),
                 View::EditForm => self.render_form(window, cx).into_any_element(),
