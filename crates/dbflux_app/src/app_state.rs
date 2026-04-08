@@ -2450,9 +2450,26 @@ impl AppState {
             })
             .collect();
 
+        let proxy_tunnels = self
+            .facade
+            .proxies
+            .items
+            .iter()
+            .map(|proxy| {
+                (
+                    proxy.id,
+                    dbflux_core::ResolvedProxy {
+                        profile: proxy.clone(),
+                        secret: self.facade.secrets.get_proxy_secret(proxy),
+                    },
+                )
+            })
+            .collect();
+
         let access_manager: Arc<dyn dbflux_core::access::AccessManager> =
             Arc::new(crate::access_manager::AppAccessManager::new(
                 ssh_tunnels,
+                proxy_tunnels,
                 #[cfg(feature = "aws")]
                 Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
                     aws_profile_name,
