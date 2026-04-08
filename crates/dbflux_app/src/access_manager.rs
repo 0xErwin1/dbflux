@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dbflux_core::DbError;
+use dbflux_core::ResolvedProxy;
 use dbflux_core::SshTunnelConfig;
 use dbflux_core::access::{AccessHandle, AccessKind, AccessManager};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -17,10 +18,10 @@ pub struct ResolvedSshTunnel {
 /// Concrete access manager for the app crate.
 ///
 /// Dispatches to the right tunnel infrastructure based on the `AccessKind`
-/// variant. Direct, SSH, and managed access are handled here. Proxy tunnels
-/// still use the app connection flow and are not yet supported by this manager.
+/// variant. Direct, SSH, managed, and proxy access are handled here.
 pub struct AppAccessManager {
     ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>,
+    proxy_tunnels: HashMap<Uuid, ResolvedProxy>,
     #[cfg(feature = "aws")]
     ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
 }
@@ -29,17 +30,25 @@ impl AppAccessManager {
     #[cfg(feature = "aws")]
     pub fn new(
         ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>,
+        proxy_tunnels: HashMap<Uuid, ResolvedProxy>,
         ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
     ) -> Self {
         Self {
             ssh_tunnels,
+            proxy_tunnels,
             ssm_factory,
         }
     }
 
     #[cfg(not(feature = "aws"))]
-    pub fn new(ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>) -> Self {
-        Self { ssh_tunnels }
+    pub fn new(
+        ssh_tunnels: HashMap<Uuid, ResolvedSshTunnel>,
+        proxy_tunnels: HashMap<Uuid, ResolvedProxy>,
+    ) -> Self {
+        Self {
+            ssh_tunnels,
+            proxy_tunnels,
+        }
     }
 }
 
@@ -52,18 +61,19 @@ mod tests {
 
     use dbflux_core::DbError;
     use dbflux_core::access::{AccessKind, AccessManager};
+    use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile, ResolvedProxy};
     use uuid::Uuid;
 
     use super::AppAccessManager;
 
     #[cfg(feature = "aws")]
     fn test_manager() -> AppAccessManager {
-        AppAccessManager::new(HashMap::new(), None)
+        AppAccessManager::new(HashMap::new(), HashMap::new(), None)
     }
 
     #[cfg(not(feature = "aws"))]
     fn test_manager() -> AppAccessManager {
-        AppAccessManager::new(HashMap::new())
+        AppAccessManager::new(HashMap::new(), HashMap::new())
     }
 
     fn run_ready_future<F>(future: F) -> F::Output
@@ -136,29 +146,159 @@ mod tests {
     }
 
     #[test]
-    fn proxy_mode_returns_structured_pipeline_error() {
+    fn proxy_mode_reports_missing_profile() {
         let manager = test_manager();
+        let missing_profile_id = Uuid::new_v4();
 
-        let proxy_result = run_ready_future(manager.open(
+        let result = run_ready_future(manager.open(
             &AccessKind::Proxy {
-                proxy_profile_id: Uuid::new_v4(),
+                proxy_profile_id: missing_profile_id,
             },
             "localhost",
             5432,
         ));
 
-        let proxy_error = match proxy_result {
-            Ok(_) => panic!("proxy mode should fail explicitly"),
+        let error = match result {
+            Ok(_) => panic!("missing proxy profile should fail explicitly"),
             Err(error) => error,
         };
 
-        let DbError::ConnectionFailed(proxy_error) = proxy_error else {
+        let DbError::ConnectionFailed(error) = error else {
             panic!("proxy mode should return a connection error");
         };
 
         assert_eq!(
-            proxy_error.message,
-            "Proxy tunnels are not supported by the connect pipeline yet"
+            error.message,
+            format!("Proxy profile '{}' was not found", missing_profile_id)
+        );
+    }
+
+    #[test]
+    fn proxy_mode_bypasses_when_no_proxy_matches() {
+        let profile_id = Uuid::new_v4();
+        let profile = ProxyProfile {
+            id: profile_id,
+            name: "test-proxy".to_string(),
+            kind: ProxyKind::Socks5,
+            host: "proxy.local".to_string(),
+            port: 1080,
+            auth: ProxyAuth::None,
+            no_proxy: Some("localhost,127.0.0.1,.internal".to_string()),
+            enabled: true,
+            save_secret: false,
+        };
+        let resolved = ResolvedProxy {
+            profile,
+            secret: None,
+        };
+        let mut proxy_tunnels = HashMap::new();
+        proxy_tunnels.insert(profile_id, resolved);
+
+        #[cfg(feature = "aws")]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels, None);
+        #[cfg(not(feature = "aws"))]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels);
+
+        let handle = run_ready_future(manager.open(
+            &AccessKind::Proxy {
+                proxy_profile_id: profile_id,
+            },
+            "localhost",
+            5432,
+        ))
+        .expect("proxy lookup should succeed");
+
+        assert!(!handle.is_tunneled());
+        assert_eq!(handle.local_port(), 0);
+    }
+
+    #[test]
+    fn proxy_mode_falls_back_to_direct_when_disabled() {
+        let profile_id = Uuid::new_v4();
+        let profile = ProxyProfile {
+            id: profile_id,
+            name: "disabled-proxy".to_string(),
+            kind: ProxyKind::Socks5,
+            host: "proxy.local".to_string(),
+            port: 1080,
+            auth: ProxyAuth::None,
+            no_proxy: None,
+            enabled: false,
+            save_secret: false,
+        };
+        let resolved = ResolvedProxy {
+            profile,
+            secret: None,
+        };
+        let mut proxy_tunnels = HashMap::new();
+        proxy_tunnels.insert(profile_id, resolved);
+
+        #[cfg(feature = "aws")]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels, None);
+        #[cfg(not(feature = "aws"))]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels);
+
+        let handle = run_ready_future(manager.open(
+            &AccessKind::Proxy {
+                proxy_profile_id: profile_id,
+            },
+            "db.example.com",
+            5432,
+        ))
+        .expect("proxy lookup should succeed");
+
+        assert!(!handle.is_tunneled());
+        assert_eq!(handle.local_port(), 0);
+    }
+
+    #[test]
+    fn proxy_mode_with_resolved_profile_attempts_connection() {
+        let profile_id = Uuid::new_v4();
+        let profile = ProxyProfile {
+            id: profile_id,
+            name: "test-proxy".to_string(),
+            kind: ProxyKind::Socks5,
+            host: "proxy.local".to_string(),
+            port: 1080,
+            auth: ProxyAuth::None,
+            no_proxy: None,
+            enabled: true,
+            save_secret: false,
+        };
+        let resolved = ResolvedProxy {
+            profile,
+            secret: None,
+        };
+        let mut proxy_tunnels = HashMap::new();
+        proxy_tunnels.insert(profile_id, resolved);
+
+        #[cfg(feature = "aws")]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels, None);
+        #[cfg(not(feature = "aws"))]
+        let manager = AppAccessManager::new(HashMap::new(), proxy_tunnels);
+
+        let result = run_ready_future(manager.open(
+            &AccessKind::Proxy {
+                proxy_profile_id: profile_id,
+            },
+            "db.example.com",
+            5432,
+        ));
+
+        let error = match result {
+            Ok(_) => panic!("proxy connection should fail when proxy is unreachable"),
+            Err(error) => error,
+        };
+
+        let error_msg = match error {
+            DbError::ConnectionFailed(e) => e.message.clone(),
+            other => panic!("expected ConnectionFailed, got {:?}", other),
+        };
+
+        assert!(
+            !error_msg.contains("was not found"),
+            "error should NOT be 'profile not found', got: {}",
+            error_msg
         );
     }
 
@@ -205,9 +345,9 @@ impl AccessManager for AppAccessManager {
                 ssh_tunnel_profile_id,
             } => self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port),
 
-            AccessKind::Proxy { .. } => Err(DbError::connection_failed(
-                "Proxy tunnels are not supported by the connect pipeline yet",
-            )),
+            AccessKind::Proxy { proxy_profile_id } => {
+                self.open_proxy(proxy_profile_id, remote_host, remote_port)
+            }
 
             AccessKind::Managed { provider, params } => {
                 self.open_managed(provider, params, remote_host).await
@@ -240,6 +380,47 @@ impl AppAccessManager {
         )?;
 
         let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
+        let local_port = tunnel.local_port();
+
+        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn open_proxy(
+        &self,
+        proxy_profile_id: &Uuid,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, DbError> {
+        let resolved = self.proxy_tunnels.get(proxy_profile_id).ok_or_else(|| {
+            DbError::connection_failed(format!(
+                "Proxy profile '{}' was not found",
+                proxy_profile_id
+            ))
+        })?;
+
+        if !resolved.profile.enabled {
+            log::warn!(
+                "Proxy profile '{}' is disabled, connecting directly",
+                resolved.profile.name
+            );
+            return Ok(AccessHandle::direct());
+        }
+
+        if let Some(patterns) = &resolved.profile.no_proxy
+            && dbflux_core::host_matches_no_proxy(remote_host, patterns)
+        {
+            log::info!("Bypassing proxy for '{}' (no_proxy match)", remote_host);
+            return Ok(AccessHandle::direct());
+        }
+
+        let config = dbflux_proxy::ProxyTunnelConfig::from_profile(
+            &resolved.profile,
+            resolved.secret.as_ref().map(|s| s.expose_secret()),
+        );
+
+        let tunnel =
+            dbflux_proxy::ProxyTunnel::start(config, remote_host.to_string(), remote_port)?;
         let local_port = tunnel.local_port();
 
         Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))

@@ -49,7 +49,7 @@ pub use connection::{
     RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
     SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
     SwitchDatabaseResult, TreeStore, detached_process_channel, execute_streaming_process,
-    output_channel,
+    host_matches_no_proxy, output_channel,
 };
 
 pub use core::{

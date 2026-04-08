@@ -45,7 +45,7 @@ pub use profile::{
     SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
 };
 pub use profile_manager::ProfileManager;
-pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile};
+pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile, host_matches_no_proxy};
 pub use proxy_manager::ProxyManager;
 pub use ssh_tunnel_manager::SshTunnelManager;
 pub use tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
