@@ -5,8 +5,8 @@
 /// adjust window creation accordingly.
 use crate::ui::icons::AppIcon;
 use gpui::{
-    div, px, svg, App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement,
-    Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions,
+    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, Stateful, Styled,
+    Window, WindowDecorations, WindowKind, WindowOptions, div, px, svg,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::InteractiveElementExt;
