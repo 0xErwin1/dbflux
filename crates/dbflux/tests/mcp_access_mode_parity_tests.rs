@@ -20,8 +20,8 @@ fn access_manager_declares_all_access_modes_without_legacy_wording() {
         "ssh failures should explain missing tunnel profile resolution"
     );
     assert!(
-        access_manager.contains("Proxy tunnels are not supported by the connect pipeline yet"),
-        "proxy failures should stay explicit"
+        access_manager.contains("Proxy profile '") && access_manager.contains("was not found"),
+        "proxy failures should explain missing proxy profile resolution"
     );
     assert!(
         !access_manager.contains("legacy connect path"),
