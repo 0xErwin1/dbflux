@@ -1345,17 +1345,24 @@ impl Connection for MongoConnection {
             .read()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
-        if *active != Some(handle.id) {
-            return Err(DbError::QueryFailed(
+        match *active {
+            Some(id) if id == handle.id => {
+                drop(active);
+                self.cancelled.store(true, Ordering::SeqCst);
+                log::info!("[CANCEL] MongoDB cancel requested for query {}", handle.id);
+                Ok(())
+            }
+            Some(_) => Err(DbError::QueryFailed(
                 "No matching active query to cancel".to_string().into(),
-            ));
+            )),
+            None => {
+                log::debug!(
+                    "[CANCEL] Query {} already completed, cancel is a no-op",
+                    handle.id
+                );
+                Ok(())
+            }
         }
-
-        drop(active);
-
-        self.cancelled.store(true, Ordering::SeqCst);
-        log::info!("[CANCEL] MongoDB cancel requested for query {}", handle.id);
-        Ok(())
     }
 
     fn cancel_active(&self) -> Result<(), DbError> {
