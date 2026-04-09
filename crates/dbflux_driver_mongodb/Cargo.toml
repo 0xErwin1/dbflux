@@ -15,7 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
-mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "bson-2", "compat-3-3-0"] }
+mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "bson-2", "compat-3-3-0", "dns-resolver"] }
 bson = "2"
 log.workspace = true
 serde_json.workspace = true

@@ -320,9 +320,11 @@ impl DbDriver for MongoDriver {
     }
 
     fn parse_uri(&self, uri: &str) -> Option<FormValues> {
-        let stripped = uri
-            .strip_prefix("mongodb+srv://")
-            .or_else(|| uri.strip_prefix("mongodb://"))?;
+        if uri.starts_with("mongodb+srv://") {
+            return Some(parse_srv_uri(uri));
+        }
+
+        let stripped = uri.strip_prefix("mongodb://")?;
 
         let mut values = HashMap::new();
         let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
@@ -343,6 +345,8 @@ impl DbDriver for MongoDriver {
                     .into_owned();
                 values.insert("user".to_string(), user);
             }
+        } else {
+            values.insert("user".to_string(), String::new());
         }
 
         let (host_port_db, query) = if let Some(q) = host_part.find('?') {
@@ -367,13 +371,18 @@ impl DbDriver for MongoDriver {
             values.insert("port".to_string(), "27017".to_string());
         }
 
+        let mut found_auth_source = false;
         if let Some(query_str) = query {
             for param in query_str.split('&') {
                 if let Some(val) = param.strip_prefix("authSource=") {
                     let auth_db = urlencoding::decode(val).unwrap_or_default().into_owned();
                     values.insert("auth_database".to_string(), auth_db);
+                    found_auth_source = true;
                 }
             }
+        }
+        if !found_auth_source {
+            values.insert("auth_database".to_string(), String::new());
         }
 
         Some(values)
@@ -679,32 +688,101 @@ fn build_mongodb_uri(
     uri
 }
 
+fn parse_srv_uri(uri: &str) -> FormValues {
+    let mut values = HashMap::new();
+    values.insert("use_uri".to_string(), "true".to_string());
+    values.insert("uri".to_string(), uri.to_string());
+    // Clear host/port so sync_uri_to_fields does not retain stale values
+    // from a previous non-SRV profile when switching to SRV URI mode.
+    values.insert("host".to_string(), String::new());
+    values.insert("port".to_string(), String::new());
+
+    let stripped = uri
+        .strip_prefix("mongodb+srv://")
+        .expect("caller verified mongodb+srv:// prefix");
+
+    let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
+        (&stripped[..at_pos], &stripped[at_pos + 1..])
+    } else {
+        ("", stripped)
+    };
+
+    if !credentials.is_empty() {
+        if let Some(colon) = credentials.find(':') {
+            let user = urlencoding::decode(&credentials[..colon])
+                .unwrap_or_default()
+                .into_owned();
+            values.insert("user".to_string(), user);
+        } else {
+            let user = urlencoding::decode(credentials)
+                .unwrap_or_default()
+                .into_owned();
+            values.insert("user".to_string(), user);
+        }
+    } else {
+        values.insert("user".to_string(), String::new());
+    }
+
+    let (host_port_db, query) = if let Some(q) = host_part.find('?') {
+        (&host_part[..q], Some(&host_part[q + 1..]))
+    } else {
+        (host_part, None)
+    };
+
+    if let Some(slash) = host_port_db.find('/') {
+        values.insert(
+            "database".to_string(),
+            host_port_db[slash + 1..].to_string(),
+        );
+    } else {
+        values.insert("database".to_string(), String::new());
+    }
+
+    let mut found_auth_source = false;
+    if let Some(query_str) = query {
+        for param in query_str.split('&') {
+            if let Some(val) = param.strip_prefix("authSource=") {
+                let auth_db = urlencoding::decode(val).unwrap_or_default().into_owned();
+                values.insert("auth_database".to_string(), auth_db);
+                found_auth_source = true;
+            }
+        }
+    }
+    if !found_auth_source {
+        values.insert("auth_database".to_string(), String::new());
+    }
+
+    values
+}
+
 fn inject_credentials_into_uri(
     base_uri: &str,
     user: Option<&str>,
     password: Option<&str>,
 ) -> String {
-    if user.is_none() && password.is_none() {
+    let user_val = user.unwrap_or("");
+
+    // Do not inject when there is no username — injecting ":password@" produces
+    // a malformed authority and would silently use the stored password against
+    // a URI that was never intended to carry credentials.
+    if user_val.is_empty() {
         return base_uri.to_string();
     }
-
-    let user = user.unwrap_or("");
-    let password = password.unwrap_or("");
 
     if base_uri.contains('@') {
         base_uri.to_string()
     } else if let Some(rest) = base_uri.strip_prefix("mongodb://") {
         format!(
             "mongodb://{}:{}@{}",
-            urlencoding::encode(user),
-            urlencoding::encode(password),
+            urlencoding::encode(user_val),
+            urlencoding::encode(password.unwrap_or("")),
             rest
         )
     } else if let Some(rest) = base_uri.strip_prefix("mongodb+srv://") {
         format!(
             "mongodb+srv://{}:{}@{}",
-            urlencoding::encode(user),
-            urlencoding::encode(password),
+            urlencoding::encode(user_val),
+            urlencoding::encode(password.unwrap_or("")),
             rest
         )
     } else {
@@ -3264,12 +3342,63 @@ mod tests {
             .parse_uri("mongodb+srv://user:pass@cluster0.example.net/main?authSource=admin")
             .expect("mongodb+srv uri should parse");
 
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
         assert_eq!(
-            values.get("host").map(String::as_str),
-            Some("cluster0.example.net")
+            values.get("uri").map(String::as_str),
+            Some("mongodb+srv://user:pass@cluster0.example.net/main?authSource=admin")
         );
-        assert_eq!(values.get("port").map(String::as_str), Some("27017"));
+        assert_eq!(values.get("user").map(String::as_str), Some("user"));
         assert_eq!(values.get("database").map(String::as_str), Some("main"));
+        assert_eq!(
+            values.get("auth_database").map(String::as_str),
+            Some("admin")
+        );
+        assert_eq!(values.get("host").map(String::as_str), Some(""));
+        assert_eq!(values.get("port").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn parse_uri_srv_preserves_original_string() {
+        let driver = MongoDriver::new();
+        let original = "mongodb+srv://user:pass@cluster.mongodb.net/mydb";
+        let values = driver.parse_uri(original).expect("SRV URI should parse");
+
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(values.get("uri").map(String::as_str), Some(original));
+    }
+
+    #[test]
+    fn parse_uri_srv_without_credentials() {
+        let driver = MongoDriver::new();
+        let values = driver
+            .parse_uri("mongodb+srv://cluster.mongodb.net/mydb")
+            .expect("SRV URI without credentials should parse");
+
+        assert_eq!(values.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(values.get("user").map(String::as_str), Some(""));
+        assert_eq!(values.get("database").map(String::as_str), Some("mydb"));
+        assert_eq!(values.get("auth_database").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn parse_uri_standard_mongodb_unchanged() {
+        let driver = MongoDriver::new();
+        let values = driver
+            .parse_uri("mongodb://user:pass@localhost:27017/mydb?authSource=admin")
+            .expect("standard mongodb uri should parse");
+
+        assert!(
+            values.get("use_uri").is_none(),
+            "standard URI should not set use_uri"
+        );
+        assert!(
+            values.get("uri").is_none(),
+            "standard URI should not set uri"
+        );
+        assert_eq!(values.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(values.get("port").map(String::as_str), Some("27017"));
+        assert_eq!(values.get("database").map(String::as_str), Some("mydb"));
+        assert_eq!(values.get("user").map(String::as_str), Some("user"));
         assert_eq!(
             values.get("auth_database").map(String::as_str),
             Some("admin")
@@ -3277,9 +3406,266 @@ mod tests {
     }
 
     #[test]
+    fn build_config_srv_uri_round_trip() {
+        let driver = MongoDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert(
+            "uri".to_string(),
+            "mongodb+srv://user:pass@cluster.mongodb.net/mydb".to_string(),
+        );
+
+        let config = driver.build_config(&values).expect("config should build");
+        let DbConfig::MongoDB {
+            use_uri,
+            uri,
+            host,
+            port,
+            ..
+        } = config
+        else {
+            panic!("expected mongodb config");
+        };
+
+        assert!(use_uri);
+        assert_eq!(
+            uri.as_deref(),
+            Some("mongodb+srv://user:pass@cluster.mongodb.net/mydb")
+        );
+        // host/port are defaults when use_uri=true
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 27017);
+    }
+
+    #[test]
     fn parse_uri_rejects_non_mongodb_scheme() {
         let driver = MongoDriver::new();
         assert!(driver.parse_uri("redis://localhost:6379/0").is_none());
+    }
+
+    #[test]
+    fn srv_uri_full_round_trip_parse_config_extract() {
+        let driver = MongoDriver::new();
+        let original = "mongodb+srv://user:pass@cluster.mongodb.net/mydb?authSource=admin";
+
+        // Phase 1: parse_uri (simulates user pasting URI into connection form)
+        let parsed = driver.parse_uri(original).expect("SRV URI should parse");
+        assert_eq!(parsed.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(parsed.get("uri").map(String::as_str), Some(original));
+
+        // Phase 2: build_config (simulates saving the profile)
+        let config = driver.build_config(&parsed).expect("config should build");
+        let DbConfig::MongoDB {
+            use_uri,
+            uri,
+            user,
+            database,
+            auth_database,
+            ..
+        } = config
+        else {
+            panic!("expected mongodb config");
+        };
+
+        assert!(use_uri);
+        assert_eq!(uri.as_deref(), Some(original));
+        assert_eq!(user.as_deref(), Some("user"));
+        assert_eq!(database.as_deref(), Some("mydb"));
+        assert_eq!(auth_database.as_deref(), Some("admin"));
+
+        // Phase 3: extract_values (simulates reloading profile for editing)
+        let reloaded = driver.extract_values(&DbConfig::MongoDB {
+            use_uri,
+            uri,
+            host: "localhost".to_string(),
+            port: 27017,
+            user,
+            database,
+            auth_database,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        });
+
+        assert_eq!(reloaded.get("use_uri").map(String::as_str), Some("true"));
+        assert_eq!(reloaded.get("uri").map(String::as_str), Some(original));
+        assert!(reloaded.get("uri").unwrap().starts_with("mongodb+srv://"));
+        assert!(!reloaded.get("uri").unwrap().contains(":27017"));
+    }
+
+    #[test]
+    fn standard_mongodb_uri_full_round_trip() {
+        let driver = MongoDriver::new();
+        let original = "mongodb://user:pass@localhost:27017/mydb?authSource=admin";
+
+        let parsed = driver
+            .parse_uri(original)
+            .expect("standard URI should parse");
+        assert!(parsed.get("use_uri").is_none());
+        assert!(parsed.get("uri").is_none());
+
+        // Standard URI uses host/port form, not URI mode
+        let config = driver.build_config(&parsed).expect("config should build");
+        let DbConfig::MongoDB {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            auth_database,
+            ..
+        } = config
+        else {
+            panic!("expected mongodb config");
+        };
+
+        assert!(!use_uri);
+        assert!(uri.is_none());
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 27017);
+        assert_eq!(user.as_deref(), Some("user"));
+        assert_eq!(database.as_deref(), Some("mydb"));
+        assert_eq!(auth_database.as_deref(), Some("admin"));
+
+        // Extract values round-trip preserves non-URI mode
+        let reloaded = driver.extract_values(&DbConfig::MongoDB {
+            use_uri,
+            uri,
+            host,
+            port,
+            user,
+            database,
+            auth_database,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        });
+
+        assert_eq!(reloaded.get("use_uri").map(String::as_str), Some(""));
+        assert_eq!(reloaded.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(reloaded.get("port").map(String::as_str), Some("27017"));
+    }
+
+    #[test]
+    fn inject_credentials_preserves_srv_prefix() {
+        let injected = inject_credentials_into_uri(
+            "mongodb+srv://cluster.mongodb.net/mydb",
+            Some("alice"),
+            Some("pw"),
+        );
+        assert!(injected.starts_with("mongodb+srv://"));
+        assert!(!injected.contains(":27017"));
+        assert_eq!(injected, "mongodb+srv://alice:pw@cluster.mongodb.net/mydb");
+
+        let untouched = inject_credentials_into_uri(
+            "mongodb+srv://existing:creds@cluster.mongodb.net/mydb",
+            Some("alice"),
+            Some("pw"),
+        );
+        assert_eq!(
+            untouched,
+            "mongodb+srv://existing:creds@cluster.mongodb.net/mydb"
+        );
+    }
+
+    #[test]
+    fn parse_srv_uri_clears_host_and_port_from_previous_non_srv() {
+        let driver = MongoDriver::new();
+
+        // Simulate previous non-SRV parse that set host/port
+        let old = driver
+            .parse_uri("mongodb://myhost:27017/mydb")
+            .expect("standard URI should parse");
+        assert_eq!(old.get("host").map(String::as_str), Some("myhost"));
+        assert_eq!(old.get("port").map(String::as_str), Some("27017"));
+
+        // Now parse an SRV URI — host/port must be cleared
+        let new = driver
+            .parse_uri("mongodb+srv://cluster.mongodb.net/otherdb")
+            .expect("SRV URI should parse");
+        assert_eq!(new.get("host").map(String::as_str), Some(""));
+        assert_eq!(new.get("port").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn standard_parse_uri_clears_user_and_auth_database_when_absent() {
+        let driver = MongoDriver::new();
+
+        let with_auth = driver
+            .parse_uri("mongodb://alice:pw@localhost/db?authSource=admin")
+            .expect("URI with auth should parse");
+        assert_eq!(with_auth.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(
+            with_auth.get("auth_database").map(String::as_str),
+            Some("admin")
+        );
+
+        let without_auth = driver
+            .parse_uri("mongodb://localhost/otherdb")
+            .expect("URI without auth should parse");
+        assert_eq!(without_auth.get("user").map(String::as_str), Some(""));
+        assert_eq!(
+            without_auth.get("auth_database").map(String::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn inject_credentials_skips_when_user_is_empty() {
+        let result = inject_credentials_into_uri(
+            "mongodb://cluster.mongodb.net/mydb",
+            Some(""),
+            Some("secretpw"),
+        );
+        assert_eq!(result, "mongodb://cluster.mongodb.net/mydb");
+
+        let result_none = inject_credentials_into_uri(
+            "mongodb+srv://cluster.mongodb.net/mydb",
+            None,
+            Some("secretpw"),
+        );
+        assert_eq!(result_none, "mongodb+srv://cluster.mongodb.net/mydb");
+
+        let both_none = inject_credentials_into_uri("mongodb://localhost:27017/admin", None, None);
+        assert_eq!(both_none, "mongodb://localhost:27017/admin");
+    }
+
+    #[test]
+    fn parse_srv_uri_clears_optional_fields_when_absent() {
+        let driver = MongoDriver::new();
+        let values = driver
+            .parse_uri("mongodb+srv://cluster.mongodb.net")
+            .expect("SRV URI without optional fields should parse");
+
+        assert_eq!(values.get("user").map(String::as_str), Some(""));
+        assert_eq!(values.get("database").map(String::as_str), Some(""));
+        assert_eq!(values.get("auth_database").map(String::as_str), Some(""));
+        assert_eq!(values.get("host").map(String::as_str), Some(""));
+        assert_eq!(values.get("port").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn parse_srv_uri_clears_previous_user_when_new_uri_has_none() {
+        let driver = MongoDriver::new();
+
+        let with_user = driver
+            .parse_uri("mongodb+srv://alice:pw@cluster.mongodb.net/db1?authSource=admin")
+            .expect("SRV URI with user should parse");
+        assert_eq!(with_user.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(with_user.get("database").map(String::as_str), Some("db1"));
+        assert_eq!(
+            with_user.get("auth_database").map(String::as_str),
+            Some("admin")
+        );
+
+        let without_user = driver
+            .parse_uri("mongodb+srv://cluster.mongodb.net")
+            .expect("SRV URI without user should parse");
+        assert_eq!(without_user.get("user").map(String::as_str), Some(""));
+        assert_eq!(without_user.get("database").map(String::as_str), Some(""));
+        assert_eq!(
+            without_user.get("auth_database").map(String::as_str),
+            Some("")
+        );
     }
 
     #[test]

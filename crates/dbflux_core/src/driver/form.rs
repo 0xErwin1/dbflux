@@ -361,7 +361,7 @@ pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDe
                                 "uri",
                                 "Connection URI",
                                 FormFieldKind::Text,
-                                "mongodb://localhost:27017",
+                                "mongodb://host:port or mongodb+srv://...",
                             ),
                             "use_uri",
                         ),
