@@ -1894,6 +1894,19 @@ impl ConnectionManagerWindow {
             return;
         };
 
+        // When use_uri is checked, the URI field is authoritative — do not
+        // regenerate it from host/port or the form will overwrite a saved
+        // mongodb+srv:// (or any URI-mode) connection with a reconstructed
+        // mongodb://host:port/... string built from fallback fields.
+        let use_uri = self
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+        if use_uri {
+            return;
+        }
+
         let has_dynamic_refs = self.has_dynamic_value_ref_for_field("host", cx)
             || self.has_dynamic_value_ref_for_field("database", cx)
             || self.has_dynamic_value_ref_for_field("user", cx)
