@@ -117,11 +117,23 @@ pub struct DropForeignKeyRequest<'a> {
     pub schema_name: Option<&'a str>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeAttributeDefinition {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDefinition {
-    Enum { values: Vec<String> },
-    Domain { base_type: String },
-    Composite,
+    Enum {
+        values: Vec<String>,
+    },
+    Domain {
+        base_type: String,
+    },
+    Composite {
+        attributes: Vec<TypeAttributeDefinition>,
+    },
 }
 
 #[derive(Debug, Clone)]

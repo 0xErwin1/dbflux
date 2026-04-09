@@ -282,9 +282,11 @@ impl Sidebar {
                 let caps = self.get_capabilities_for_item(item_id, cx);
                 let mut submenu = Vec::new();
 
-                if caps.contains(CodeGenCapabilities::CREATE_TYPE) {
+                if caps.contains(CodeGenCapabilities::CREATE_TYPE)
+                    && let Some(label) = self.create_type_sql_label(item_id, cx)
+                {
                     submenu.push(ContextMenuItem {
-                        label: "CREATE TYPE".into(),
+                        label: label.into(),
                         action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
                     });
                 }

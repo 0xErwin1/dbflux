@@ -178,7 +178,7 @@ pub enum ForeignKeySqlAction {
     DropConstraint,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum TypeSqlAction {
     Create,
     AddEnumValue,

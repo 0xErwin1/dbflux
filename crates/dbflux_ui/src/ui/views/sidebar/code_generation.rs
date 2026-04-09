@@ -340,29 +340,39 @@ impl Sidebar {
     }
 
     pub(super) fn is_enum_type(&self, item_id: &str, cx: &App) -> bool {
+        matches!(
+            self.custom_type_kind(item_id, cx),
+            Some(CustomTypeKind::Enum)
+        )
+    }
+
+    pub(super) fn create_type_sql_label(&self, item_id: &str, cx: &App) -> Option<&'static str> {
+        Some(match self.custom_type_kind(item_id, cx)? {
+            CustomTypeKind::Enum => "CREATE TYPE",
+            CustomTypeKind::Domain => "CREATE DOMAIN",
+            CustomTypeKind::Composite => return None,
+        })
+    }
+
+    fn custom_type_kind(&self, item_id: &str, cx: &App) -> Option<CustomTypeKind> {
         let Some(SchemaNodeId::CustomType {
             profile_id,
             schema: schema_name,
             name: type_name,
         }) = parse_node_id(item_id)
         else {
-            return false;
+            return None;
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections().get(&profile_id) else {
-            return false;
-        };
+        let conn = state.connections().get(&profile_id)?;
 
         let current_db = Self::get_current_database(conn);
         let cache_key = SchemaCacheKey::new(current_db, Some(schema_name));
-        if let Some(types) = conn.schema_types.get(&cache_key) {
-            return types
-                .iter()
-                .any(|t| t.name == type_name && t.kind == CustomTypeKind::Enum);
-        }
-
-        false
+        conn.schema_types
+            .get(&cache_key)
+            .and_then(|types| types.iter().find(|t| t.name == type_name))
+            .map(|type_info| type_info.kind)
     }
 
     pub(super) fn generate_index_sql(
@@ -636,31 +646,26 @@ impl Sidebar {
 
         let sql = match action {
             TypeSqlAction::Create => {
-                let definition = if let Some(type_info) = type_info {
-                    match type_info.kind {
-                        CustomTypeKind::Enum => {
-                            let values = type_info.enum_values.clone().unwrap_or_default();
-                            TypeDefinition::Enum { values }
-                        }
-                        CustomTypeKind::Domain => {
-                            let base = type_info
-                                .base_type
-                                .clone()
-                                .unwrap_or_else(|| "text".to_string());
-                            TypeDefinition::Domain { base_type: base }
-                        }
-                        CustomTypeKind::Composite => TypeDefinition::Composite,
-                    }
-                } else {
-                    TypeDefinition::Enum { values: vec![] }
-                };
+                let definition = type_info.and_then(|type_info| match type_info.kind {
+                    CustomTypeKind::Enum => type_info
+                        .enum_values
+                        .clone()
+                        .map(|values| TypeDefinition::Enum { values }),
+                    CustomTypeKind::Domain => type_info
+                        .base_type
+                        .clone()
+                        .map(|base_type| TypeDefinition::Domain { base_type }),
+                    CustomTypeKind::Composite => None,
+                });
 
-                let request = CreateTypeRequest {
-                    type_name: &type_name,
-                    schema_name: Some(&schema_name),
-                    definition,
-                };
-                code_gen.generate_create_type(&request)
+                definition.and_then(|definition| {
+                    let request = CreateTypeRequest {
+                        type_name: &type_name,
+                        schema_name: Some(&schema_name),
+                        definition,
+                    };
+                    code_gen.generate_create_type(&request)
+                })
             }
 
             TypeSqlAction::AddEnumValue => {
@@ -683,6 +688,19 @@ impl Sidebar {
 
         if let Some(sql) = sql {
             cx.emit(SidebarEvent::GenerateSql(sql));
+        } else if matches!(action, TypeSqlAction::Create)
+            && matches!(
+                type_info.map(|type_info| &type_info.kind),
+                Some(&CustomTypeKind::Composite)
+            )
+        {
+            self.pending_toast = Some(PendingToast {
+                message:
+                    "Composite CREATE TYPE SQL is unavailable from the sidebar because composite attribute metadata is not loaded"
+                        .to_string(),
+                is_error: true,
+            });
+            cx.notify();
         }
     }
 

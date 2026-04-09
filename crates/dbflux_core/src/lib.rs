@@ -121,9 +121,9 @@ pub use sql::{
     CreateIndexRequest, CreateTypeRequest, DefaultSqlDialect, DropForeignKeyRequest,
     DropIndexRequest, DropTypeRequest, NoOpCodeGenerator, PlaceholderStyle, ReindexRequest,
     SqlDialect, SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder,
-    SqlValueMode, TypeDefinition, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
-    generate_truncate, generate_update_template,
+    SqlValueMode, TypeAttributeDefinition, TypeDefinition, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_sql, generate_truncate, generate_update_template,
 };
 
 pub use pipeline::{
