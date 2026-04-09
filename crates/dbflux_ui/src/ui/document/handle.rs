@@ -97,6 +97,24 @@ impl DocumentHandle {
         }
     }
 
+    /// Checks if this is a table document matching the given table AND database.
+    /// Unlike `is_table`, this also compares the database field, which is necessary
+    /// when the same profile can browse tables across multiple databases.
+    pub fn is_table_with_database(
+        &self,
+        table: &dbflux_core::TableRef,
+        database: Option<&str>,
+        cx: &App,
+    ) -> bool {
+        match self {
+            Self::Data { entity, .. } => {
+                let doc = entity.read(cx);
+                doc.table_ref(cx).as_ref() == Some(table) && doc.database(cx).as_deref() == database
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_collection(&self, collection: &dbflux_core::CollectionRef, cx: &App) -> bool {
         match self {
             Self::Data { entity, .. } => {
@@ -113,6 +131,15 @@ impl DocumentHandle {
                 doc.connection_id() == Some(profile_id) && doc.database_name() == database
             }
             _ => false,
+        }
+    }
+
+    /// Returns the connection (profile) ID for data and key-value documents.
+    pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
+        match self {
+            Self::Data { entity, .. } => entity.read(cx).connection_id(cx),
+            Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
+            _ => None,
         }
     }
 

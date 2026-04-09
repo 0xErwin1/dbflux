@@ -1,11 +1,14 @@
 use crate::keymap::ContextId;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
+use std::path::PathBuf;
+use uuid::Uuid;
 
 actions!(command_palette, [SelectNext, SelectPrev, Close, Execute]);
 
@@ -21,6 +24,195 @@ pub fn command_palette_keybindings() -> Vec<KeyBinding> {
     ]
 }
 
+/// A searchable item in the command palette.
+#[derive(Clone)]
+pub enum PaletteItem {
+    Action {
+        id: &'static str,
+        name: &'static str,
+        category: &'static str,
+        shortcut: Option<&'static str>,
+    },
+    Connection {
+        profile_id: Uuid,
+        name: String,
+        is_connected: bool,
+    },
+    Resource(ResourceItem),
+    Script {
+        /// Absolute filesystem path (used to open the script).
+        path: PathBuf,
+        /// File name (e.g., "health-check.sql").
+        name: String,
+        /// Path relative to the scripts root directory (for display/search).
+        relative_path: String,
+    },
+}
+
+/// Schema resource variants surfaced by connected profiles.
+#[derive(Clone)]
+pub enum ResourceItem {
+    Table {
+        profile_id: Uuid,
+        profile_name: String,
+        database: Option<String>,
+        schema: Option<String>,
+        name: String,
+    },
+    Collection {
+        profile_id: Uuid,
+        profile_name: String,
+        database: String,
+        name: String,
+    },
+    View {
+        profile_id: Uuid,
+        profile_name: String,
+        database: Option<String>,
+        schema: Option<String>,
+        name: String,
+    },
+    KeyValueDb {
+        profile_id: Uuid,
+        profile_name: String,
+        database: String,
+    },
+}
+
+impl PaletteItem {
+    /// Text searched by `SkimMatcherV2`.
+    pub fn search_text(&self) -> String {
+        match self {
+            Self::Action { category, name, .. } => format!("{} {}", category, name),
+            Self::Connection { name, .. } => format!("Connection {}", name),
+            Self::Resource(r) => match r {
+                ResourceItem::Table {
+                    profile_name,
+                    database,
+                    schema,
+                    name,
+                    ..
+                } => {
+                    let mut parts = format!("Table {} {}", profile_name, name);
+                    if let Some(db) = database {
+                        parts.push_str(&format!(" {}", db));
+                    }
+                    if let Some(s) = schema {
+                        parts.push_str(&format!(" {}", s));
+                    }
+                    parts
+                }
+                ResourceItem::Collection {
+                    profile_name,
+                    database,
+                    name,
+                    ..
+                } => format!("Collection {} {} {}", profile_name, name, database),
+                ResourceItem::View {
+                    profile_name,
+                    database,
+                    schema,
+                    name,
+                    ..
+                } => {
+                    let mut parts = format!("View {} {}", profile_name, name);
+                    if let Some(db) = database {
+                        parts.push_str(&format!(" {}", db));
+                    }
+                    if let Some(s) = schema {
+                        parts.push_str(&format!(" {}", s));
+                    }
+                    parts
+                }
+                ResourceItem::KeyValueDb {
+                    profile_name,
+                    database,
+                    ..
+                } => format!("Keyspace {} {}", profile_name, database),
+            },
+            Self::Script {
+                name,
+                relative_path,
+                ..
+            } => {
+                format!("Script {} {}", name, relative_path)
+            }
+        }
+    }
+
+    /// Returns `(category_label, display_name)`.
+    pub fn display_label(&self) -> (String, String) {
+        match self {
+            Self::Action { category, name, .. } => (category.to_string(), name.to_string()),
+            Self::Connection { name, .. } => ("Connection".to_string(), name.clone()),
+            Self::Resource(r) => match r {
+                ResourceItem::Table { name, .. } => ("Table".to_string(), name.clone()),
+                ResourceItem::Collection { name, .. } => ("Collection".to_string(), name.clone()),
+                ResourceItem::View { name, .. } => ("View".to_string(), name.clone()),
+                ResourceItem::KeyValueDb { database, .. } => {
+                    ("Keyspace".to_string(), database.clone())
+                }
+            },
+            Self::Script { name, .. } => ("Script".to_string(), name.clone()),
+        }
+    }
+
+    /// Type priority for tiebreaking (lower = higher priority).
+    pub fn type_priority(&self) -> u8 {
+        match self {
+            Self::Action { .. } => 0,
+            Self::Connection { .. } => 1,
+            Self::Resource(_) => 2,
+            Self::Script { .. } => 3,
+        }
+    }
+
+    /// Optional qualifier text shown after the item name.
+    pub fn qualifier(&self) -> Option<String> {
+        match self {
+            Self::Action { shortcut, .. } => shortcut.map(|s| s.to_string()),
+            Self::Resource(r) => match r {
+                ResourceItem::Table {
+                    profile_name,
+                    database,
+                    schema,
+                    ..
+                }
+                | ResourceItem::View {
+                    profile_name,
+                    database,
+                    schema,
+                    ..
+                } => {
+                    let mut parts = profile_name.clone();
+                    if let Some(db) = database {
+                        parts.push_str(&format!(" / {}", db));
+                    }
+                    if let Some(s) = schema {
+                        parts.push_str(&format!(" / {}", s));
+                    }
+                    Some(parts)
+                }
+                ResourceItem::Collection {
+                    profile_name,
+                    database,
+                    ..
+                } => Some(format!("{} / {}", profile_name, database)),
+                ResourceItem::KeyValueDb { profile_name, .. } => Some(profile_name.clone()),
+            },
+            Self::Script { relative_path, .. } => {
+                if relative_path.contains('/') {
+                    Some(relative_path.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Legacy static command descriptor kept for `default_commands()` backwards compat.
 #[derive(Clone)]
 pub struct PaletteCommand {
     pub id: &'static str,
@@ -45,7 +237,18 @@ impl PaletteCommand {
     }
 }
 
-struct FilteredCommand {
+impl From<PaletteCommand> for PaletteItem {
+    fn from(cmd: PaletteCommand) -> Self {
+        PaletteItem::Action {
+            id: cmd.id,
+            name: cmd.name,
+            category: cmd.category,
+            shortcut: cmd.shortcut,
+        }
+    }
+}
+
+struct FilteredItem {
     index: usize,
     score: i64,
 }
@@ -54,23 +257,51 @@ const VISIBLE_ITEMS: usize = 8;
 
 pub struct CommandPalette {
     visible: bool,
-    commands: Vec<PaletteCommand>,
-    filtered: Vec<FilteredCommand>,
+    items: Vec<PaletteItem>,
+    filtered: Vec<FilteredItem>,
     selected_index: usize,
     scroll_offset: usize,
     input_state: Entity<InputState>,
     matcher: SkimMatcherV2,
 }
 
-pub struct CommandExecuted {
-    pub command_id: &'static str,
+/// Event emitted when the user selects a palette item.
+pub enum PaletteSelection {
+    Command {
+        id: &'static str,
+    },
+    Connect {
+        profile_id: Uuid,
+    },
+    OpenTable {
+        profile_id: Uuid,
+        table: TableRef,
+        database: Option<String>,
+    },
+    OpenCollection {
+        profile_id: Uuid,
+        collection: CollectionRef,
+    },
+    OpenKeyValue {
+        profile_id: Uuid,
+        database: String,
+    },
+    FocusConnection {
+        profile_id: Uuid,
+    },
+    OpenScript {
+        path: PathBuf,
+    },
 }
 
 pub struct CommandPaletteClosed;
 
 impl CommandPalette {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command..."));
+        let input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search commands, connections, tables, scripts...")
+        });
 
         cx.subscribe_in(
             &input_state,
@@ -90,7 +321,7 @@ impl CommandPalette {
 
         Self {
             visible: false,
-            commands: Vec::new(),
+            items: Vec::new(),
             filtered: Vec::new(),
             selected_index: 0,
             scroll_offset: 0,
@@ -99,14 +330,36 @@ impl CommandPalette {
         }
     }
 
-    pub fn register_commands(&mut self, commands: Vec<PaletteCommand>) {
-        self.commands = commands;
+    /// Set items and reset filter state. Called by Workspace on each toggle.
+    pub fn open_with_items(
+        &mut self,
+        items: Vec<PaletteItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.items = items;
         self.filtered = self
-            .commands
+            .items
             .iter()
             .enumerate()
-            .map(|(index, _)| FilteredCommand { index, score: 0 })
+            .map(|(index, _)| FilteredItem { index, score: 0 })
             .collect();
+
+        self.visible = true;
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+
+        self.input_state.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            state.focus(window, cx);
+        });
+
+        cx.notify();
+    }
+
+    pub fn register_commands(&mut self, _commands: Vec<PaletteCommand>) {
+        // No-op; items are now set via open_with_items.
+        // Kept to avoid breaking the call site during migration.
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -120,10 +373,10 @@ impl CommandPalette {
             self.selected_index = 0;
             self.scroll_offset = 0;
             self.filtered = self
-                .commands
+                .items
                 .iter()
                 .enumerate()
-                .map(|(index, _)| FilteredCommand { index, score: 0 })
+                .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
         }
 
@@ -144,25 +397,32 @@ impl CommandPalette {
     fn update_filter(&mut self, query: &str, cx: &mut Context<Self>) {
         if query.is_empty() {
             self.filtered = self
-                .commands
+                .items
                 .iter()
                 .enumerate()
-                .map(|(index, _)| FilteredCommand { index, score: 0 })
+                .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
         } else {
-            let mut scored: Vec<FilteredCommand> = self
-                .commands
+            let mut scored: Vec<FilteredItem> = self
+                .items
                 .iter()
                 .enumerate()
-                .filter_map(|(index, cmd)| {
-                    let search_text = format!("{} {}", cmd.category, cmd.name);
+                .filter_map(|(index, item)| {
+                    let search_text = item.search_text();
                     self.matcher
                         .fuzzy_match(&search_text, query)
-                        .map(|score| FilteredCommand { index, score })
+                        .map(|score| FilteredItem { index, score })
                 })
                 .collect();
 
-            scored.sort_by_key(|s| std::cmp::Reverse(s.score));
+            scored.sort_by(|a, b| {
+                b.score.cmp(&a.score).then_with(|| {
+                    self.items[a.index]
+                        .type_priority()
+                        .cmp(&self.items[b.index].type_priority())
+                })
+            });
+
             self.filtered = scored;
         }
 
@@ -192,18 +452,15 @@ impl CommandPalette {
     }
 
     fn ensure_selected_visible(&mut self) {
-        // If selected is above visible window, scroll up
         if self.selected_index < self.scroll_offset {
             self.scroll_offset = self.selected_index;
         }
-        // If selected is below visible window, scroll down
         if self.selected_index >= self.scroll_offset + VISIBLE_ITEMS {
             self.scroll_offset = self.selected_index - VISIBLE_ITEMS + 1;
         }
     }
 
     fn scroll_down(&mut self, cx: &mut Context<Self>) {
-        // Move selection down (same as select_next but doesn't wrap)
         if self.selected_index < self.filtered.len().saturating_sub(1) {
             self.selected_index += 1;
             self.ensure_selected_visible();
@@ -212,7 +469,6 @@ impl CommandPalette {
     }
 
     fn scroll_up(&mut self, cx: &mut Context<Self>) {
-        // Move selection up (same as select_prev but doesn't wrap)
         if self.selected_index > 0 {
             self.selected_index -= 1;
             self.ensure_selected_visible();
@@ -222,37 +478,141 @@ impl CommandPalette {
 
     fn execute_selected(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(filtered) = self.filtered.get(self.selected_index)
-            && let Some(cmd) = self.commands.get(filtered.index)
+            && let Some(item) = self.items.get(filtered.index)
         {
-            let command_id = cmd.id;
+            let selection = match item {
+                PaletteItem::Action { id, .. } => PaletteSelection::Command { id },
+                PaletteItem::Connection {
+                    profile_id,
+                    is_connected,
+                    ..
+                } => {
+                    if *is_connected {
+                        PaletteSelection::FocusConnection {
+                            profile_id: *profile_id,
+                        }
+                    } else {
+                        PaletteSelection::Connect {
+                            profile_id: *profile_id,
+                        }
+                    }
+                }
+                PaletteItem::Resource(r) => match r {
+                    ResourceItem::Table {
+                        profile_id,
+                        schema,
+                        name,
+                        database,
+                        ..
+                    }
+                    | ResourceItem::View {
+                        profile_id,
+                        schema,
+                        name,
+                        database,
+                        ..
+                    } => PaletteSelection::OpenTable {
+                        profile_id: *profile_id,
+                        table: TableRef {
+                            schema: schema.clone(),
+                            name: name.clone(),
+                        },
+                        database: database.clone(),
+                    },
+                    ResourceItem::Collection {
+                        profile_id,
+                        database,
+                        name,
+                        ..
+                    } => PaletteSelection::OpenCollection {
+                        profile_id: *profile_id,
+                        collection: CollectionRef {
+                            database: database.clone(),
+                            name: name.clone(),
+                        },
+                    },
+                    ResourceItem::KeyValueDb {
+                        profile_id,
+                        database,
+                        ..
+                    } => PaletteSelection::OpenKeyValue {
+                        profile_id: *profile_id,
+                        database: database.clone(),
+                    },
+                },
+                PaletteItem::Script { path, .. } => {
+                    PaletteSelection::OpenScript { path: path.clone() }
+                }
+            };
+
             self.visible = false;
-            cx.emit(CommandExecuted { command_id });
+            cx.emit(selection);
             cx.notify();
         }
     }
 
-    fn render_command_item(
+    fn render_palette_item(
         idx: usize,
-        cmd: PaletteCommand,
+        item: &PaletteItem,
         is_selected: bool,
         theme: &gpui_component::theme::Theme,
     ) -> Stateful<Div> {
-        let shortcut_el = cmd.shortcut.map(|shortcut| {
-            div()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .rounded(Radii::SM)
-                .text_size(FontSizes::XS)
-                .font_family("monospace")
-                .when(is_selected, |d| {
-                    d.bg(theme.primary_foreground.opacity(0.2))
-                        .text_color(theme.primary_foreground)
-                })
-                .when(!is_selected, |d| {
-                    d.bg(theme.secondary).text_color(theme.muted_foreground)
-                })
-                .child(shortcut)
-        });
+        let (category, name) = item.display_label();
+
+        let right_el = match item {
+            PaletteItem::Action { shortcut, .. } => shortcut.map(|s| {
+                div()
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .font_family("monospace")
+                    .when(is_selected, |d| {
+                        d.bg(theme.primary_foreground.opacity(0.2))
+                            .text_color(theme.primary_foreground)
+                    })
+                    .when(!is_selected, |d| {
+                        d.bg(theme.secondary).text_color(theme.muted_foreground)
+                    })
+                    .child(s)
+            }),
+            PaletteItem::Connection { is_connected, .. } => {
+                let indicator = if *is_connected {
+                    div()
+                        .size(px(8.0))
+                        .rounded_full()
+                        .bg(gpui::green())
+                        .when(is_selected, |d| {
+                            d.border_1()
+                                .border_color(theme.primary_foreground.opacity(0.5))
+                        })
+                } else {
+                    div()
+                        .size(px(8.0))
+                        .rounded_full()
+                        .bg(theme.muted_foreground.opacity(0.4))
+                };
+                Some(indicator)
+            }
+            PaletteItem::Resource(_) => item.qualifier().map(|q| {
+                div()
+                    .text_size(FontSizes::XS)
+                    .when(is_selected, |d| {
+                        d.text_color(theme.primary_foreground.opacity(0.6))
+                    })
+                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
+                    .child(q)
+            }),
+            PaletteItem::Script { .. } => item.qualifier().map(|q| {
+                div()
+                    .text_size(FontSizes::XS)
+                    .when(is_selected, |d| {
+                        d.text_color(theme.primary_foreground.opacity(0.6))
+                    })
+                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
+                    .child(q)
+            }),
+        };
 
         div()
             .id(("cmd", idx))
@@ -284,20 +644,20 @@ impl CommandPalette {
                                 d.text_color(theme.primary_foreground.opacity(0.7))
                             })
                             .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                            .child(cmd.category),
+                            .child(category),
                     )
                     .child(
                         div()
                             .text_size(FontSizes::SM)
                             .font_weight(FontWeight::MEDIUM)
-                            .child(cmd.name),
+                            .child(name),
                     ),
             )
-            .when_some(shortcut_el, |d, el| d.child(el))
+            .when_some(right_el, |d, el| d.child(el))
     }
 }
 
-impl EventEmitter<CommandExecuted> for CommandPalette {}
+impl EventEmitter<PaletteSelection> for CommandPalette {}
 impl EventEmitter<CommandPaletteClosed> for CommandPalette {}
 
 impl Render for CommandPalette {
@@ -309,16 +669,16 @@ impl Render for CommandPalette {
         let theme = cx.theme();
         let input_state = self.input_state.clone();
 
-        let commands_to_render: Vec<(usize, PaletteCommand, bool)> = self
+        let items_to_render: Vec<(usize, PaletteItem, bool)> = self
             .filtered
             .iter()
             .enumerate()
             .skip(self.scroll_offset)
             .take(VISIBLE_ITEMS)
             .map(|(idx, filtered)| {
-                let cmd = self.commands[filtered.index].clone();
+                let item = self.items[filtered.index].clone();
                 let is_selected = idx == self.selected_index;
-                (idx, cmd, is_selected)
+                (idx, item, is_selected)
             })
             .collect();
 
@@ -388,9 +748,9 @@ impl Render for CommandPalette {
                                     }
                                 },
                             ))
-                            .children(commands_to_render.into_iter().map(
-                                |(idx, cmd, is_selected)| {
-                                    Self::render_command_item(idx, cmd, is_selected, theme)
+                            .children(items_to_render.into_iter().map(
+                                |(idx, item, is_selected)| {
+                                    Self::render_palette_item(idx, &item, is_selected, theme)
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                             cx.stop_propagation();
                                         })
@@ -409,7 +769,7 @@ impl Render for CommandPalette {
                                         .justify_center()
                                         .text_size(FontSizes::SM)
                                         .text_color(theme.muted_foreground)
-                                        .child("No matching commands"),
+                                        .child("No matching items"),
                                 )
                             }),
                     )
@@ -433,7 +793,7 @@ impl Render for CommandPalette {
                                     .child("↵ Execute")
                                     .child("Esc Close"),
                             )
-                            .child(format!("{} commands", self.filtered.len())),
+                            .child(format!("{} items", self.filtered.len())),
                     ),
             )
             .into_any_element()

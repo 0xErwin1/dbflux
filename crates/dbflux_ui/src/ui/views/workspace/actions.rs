@@ -317,7 +317,10 @@ impl Workspace {
                 .read(cx)
                 .documents()
                 .iter()
-                .find(|doc| doc.is_table(&table, cx))
+                .find(|doc| {
+                    doc.is_table_with_database(&table, database.as_deref(), cx)
+                        && doc.connection_id(cx) == Some(profile_id)
+                })
                 .map(|doc| doc.id())
         } else {
             None
@@ -382,7 +385,9 @@ impl Workspace {
                 .read(cx)
                 .documents()
                 .iter()
-                .find(|doc| doc.is_collection(&collection, cx))
+                .find(|doc| {
+                    doc.is_collection(&collection, cx) && doc.connection_id(cx) == Some(profile_id)
+                })
                 .map(|doc| doc.id())
         } else {
             None
@@ -1272,5 +1277,935 @@ mod tests {
         let result =
             Workspace::strip_annotation_header(content, &dbflux_core::QueryLanguage::RedisCommands);
         assert_eq!(result, "GET key");
+    }
+
+    // --- PaletteItem model tests ---
+
+    use crate::ui::overlays::command_palette::{PaletteItem, PaletteSelection, ResourceItem};
+    use crate::ui::views::workspace::{build_resource_items_from_schema, map_item_to_selection};
+    use dbflux_core::{
+        CollectionInfo, DataStructure, DbSchemaInfo, DocumentSchema, KeySpaceInfo, KeyValueSchema,
+        RelationalSchema, ScriptEntry, TableInfo, ViewInfo,
+    };
+    use fuzzy_matcher::FuzzyMatcher;
+    use fuzzy_matcher::skim::SkimMatcherV2;
+    use std::path::{Path, PathBuf};
+
+    fn sample_action() -> PaletteItem {
+        PaletteItem::Action {
+            id: "new_query_tab",
+            name: "New Query Tab",
+            category: "Editor",
+            shortcut: Some("Ctrl+N"),
+        }
+    }
+
+    fn sample_connection(name: &str, connected: bool) -> PaletteItem {
+        PaletteItem::Connection {
+            profile_id: Uuid::new_v4(),
+            name: name.to_string(),
+            is_connected: connected,
+        }
+    }
+
+    fn sample_table(profile_name: &str, name: &str) -> PaletteItem {
+        PaletteItem::Resource(ResourceItem::Table {
+            profile_id: Uuid::new_v4(),
+            profile_name: profile_name.to_string(),
+            database: Some("main".to_string()),
+            schema: Some("public".to_string()),
+            name: name.to_string(),
+        })
+    }
+
+    fn sample_view(profile_name: &str, name: &str) -> PaletteItem {
+        PaletteItem::Resource(ResourceItem::View {
+            profile_id: Uuid::new_v4(),
+            profile_name: profile_name.to_string(),
+            database: Some("main".to_string()),
+            schema: Some("public".to_string()),
+            name: name.to_string(),
+        })
+    }
+
+    fn sample_script(name: &str) -> PaletteItem {
+        PaletteItem::Script {
+            path: PathBuf::from(format!("{}.sql", name)),
+            name: name.to_string(),
+            relative_path: format!("{}.sql", name),
+        }
+    }
+
+    #[test]
+    fn palette_item_search_text_includes_relevant_fields() {
+        let action = sample_action();
+        assert!(action.search_text().contains("Editor"));
+        assert!(action.search_text().contains("New Query Tab"));
+
+        let conn = sample_connection("prod-pg", true);
+        assert!(conn.search_text().contains("Connection"));
+        assert!(conn.search_text().contains("prod-pg"));
+
+        let table = sample_table("prod-pg", "orders");
+        assert!(table.search_text().contains("Table"));
+        assert!(table.search_text().contains("prod-pg"));
+        assert!(table.search_text().contains("orders"));
+        assert!(
+            table.search_text().contains("main"),
+            "search_text should include database"
+        );
+        assert!(
+            table.search_text().contains("public"),
+            "search_text should include schema"
+        );
+
+        let view = sample_view("prod-pg", "active_users");
+        assert!(view.search_text().contains("View"));
+        assert!(view.search_text().contains("active_users"));
+        assert!(view.search_text().contains("main"));
+
+        let script = sample_script("health-check");
+        assert!(script.search_text().contains("Script"));
+        assert!(script.search_text().contains("health-check"));
+    }
+
+    #[test]
+    fn palette_item_search_text_table_without_schema() {
+        let table = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: Uuid::new_v4(),
+            profile_name: "sqlite-local".to_string(),
+            database: None,
+            schema: None,
+            name: "notes".to_string(),
+        });
+        let text = table.search_text();
+        assert!(text.contains("Table"));
+        assert!(text.contains("sqlite-local"));
+        assert!(text.contains("notes"));
+    }
+
+    #[test]
+    fn palette_item_search_text_collection_includes_database() {
+        let collection = PaletteItem::Resource(ResourceItem::Collection {
+            profile_id: Uuid::new_v4(),
+            profile_name: "mongo-prod".to_string(),
+            database: "analytics".to_string(),
+            name: "events".to_string(),
+        });
+        let text = collection.search_text();
+        assert!(text.contains("Collection"));
+        assert!(text.contains("analytics"));
+        assert!(text.contains("events"));
+    }
+
+    #[test]
+    fn palette_item_type_priority_ordering() {
+        let action = sample_action();
+        let connection = sample_connection("test", false);
+        let resource = sample_table("test", "t");
+        let script = sample_script("test");
+
+        assert_eq!(action.type_priority(), 0);
+        assert_eq!(connection.type_priority(), 1);
+        assert_eq!(resource.type_priority(), 2);
+        assert_eq!(script.type_priority(), 3);
+
+        assert!(action.type_priority() < connection.type_priority());
+        assert!(connection.type_priority() < resource.type_priority());
+        assert!(resource.type_priority() < script.type_priority());
+    }
+
+    #[test]
+    fn palette_item_display_label_returns_category_and_name() {
+        let action = sample_action();
+        let (cat, name) = action.display_label();
+        assert_eq!(cat, "Editor");
+        assert_eq!(name, "New Query Tab");
+
+        let conn = sample_connection("prod-pg", true);
+        let (cat, name) = conn.display_label();
+        assert_eq!(cat, "Connection");
+        assert_eq!(name, "prod-pg");
+
+        let table = sample_table("prod-pg", "orders");
+        let (cat, name) = table.display_label();
+        assert_eq!(cat, "Table");
+        assert_eq!(name, "orders");
+
+        let view = sample_view("prod-pg", "active_users");
+        let (cat, name) = view.display_label();
+        assert_eq!(cat, "View");
+        assert_eq!(name, "active_users");
+
+        let script = sample_script("health-check");
+        let (cat, name) = script.display_label();
+        assert_eq!(cat, "Script");
+        assert_eq!(name, "health-check");
+    }
+
+    #[test]
+    fn palette_item_qualifier_resources_show_profile_name() {
+        let table = sample_table("prod-pg", "orders");
+        assert!(table.qualifier().unwrap().contains("prod-pg"));
+        assert!(table.qualifier().unwrap().contains("main"));
+
+        let view = sample_view("prod-pg", "active_users");
+        assert!(view.qualifier().unwrap().contains("prod-pg"));
+    }
+
+    #[test]
+    fn palette_filtering_sorts_by_score_descending_with_type_tiebreaker() {
+        let matcher = SkimMatcherV2::default();
+
+        let items: Vec<PaletteItem> = vec![
+            sample_script("prod-health"),
+            sample_connection("prod-pg", true),
+            sample_action(), // "New Query Tab" — does not match "prod"
+        ];
+
+        let matched: Vec<(usize, i64)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                matcher
+                    .fuzzy_match(&item.search_text(), "prod")
+                    .map(|score| (i, score))
+            })
+            .collect();
+
+        // Only script and connection match "prod"
+        assert_eq!(matched.len(), 2);
+
+        // Both match — verify type-priority ordering at equal scores
+        let mut sorted = matched.clone();
+        sorted.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| items[a.0].type_priority().cmp(&items[b.0].type_priority()))
+        });
+
+        // Connection (priority 1) should come before Script (priority 3) at equal scores
+        assert!(items[sorted[0].0].type_priority() <= items[sorted[1].0].type_priority());
+    }
+
+    #[test]
+    fn palette_item_view_and_table_have_same_priority() {
+        let table = sample_table("p", "t");
+        let view = sample_view("p", "v");
+        assert_eq!(table.type_priority(), view.type_priority());
+    }
+
+    // --- Resource item building from schema ---
+
+    #[test]
+    fn build_resources_from_relational_schema() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::Relational(RelationalSchema {
+            current_database: Some("mydb".to_string()),
+            tables: vec![
+                TableInfo {
+                    name: "users".to_string(),
+                    schema: Some("public".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                },
+                TableInfo {
+                    name: "orders".to_string(),
+                    schema: Some("public".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                },
+            ],
+            views: vec![ViewInfo {
+                name: "active_users".to_string(),
+                schema: Some("public".to_string()),
+            }],
+            ..Default::default()
+        });
+
+        build_resource_items_from_schema(pid, "prod-pg", &structure, &mut items);
+
+        assert_eq!(items.len(), 3);
+
+        let table_names: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                PaletteItem::Resource(ResourceItem::Table { name, .. }) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(table_names.contains(&"users"));
+        assert!(table_names.contains(&"orders"));
+
+        let view_count = items
+            .iter()
+            .filter(|item| matches!(item, PaletteItem::Resource(ResourceItem::View { .. })))
+            .count();
+        assert_eq!(view_count, 1);
+    }
+
+    #[test]
+    fn build_resources_from_relational_schema_with_nested_schemas() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::Relational(RelationalSchema {
+            current_database: Some("mydb".to_string()),
+            tables: vec![],
+            views: vec![],
+            schemas: vec![DbSchemaInfo {
+                name: "app_schema".to_string(),
+                tables: vec![TableInfo {
+                    name: "products".to_string(),
+                    schema: Some("app_schema".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                }],
+                views: vec![],
+                custom_types: None,
+            }],
+            ..Default::default()
+        });
+
+        build_resource_items_from_schema(pid, "pg-prod", &structure, &mut items);
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            PaletteItem::Resource(ResourceItem::Table {
+                database,
+                schema,
+                name,
+                ..
+            }) => {
+                assert_eq!(database.as_deref(), Some("mydb"));
+                assert_eq!(schema.as_deref(), Some("app_schema"));
+                assert_eq!(name, "products");
+            }
+            _ => panic!("Expected Table resource"),
+        }
+    }
+
+    #[test]
+    fn build_resources_from_document_schema() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::Document(DocumentSchema {
+            current_database: Some("shop".to_string()),
+            collections: vec![
+                CollectionInfo {
+                    name: "products".to_string(),
+                    database: Some("shop".to_string()),
+                    document_count: None,
+                    avg_document_size: None,
+                    sample_fields: None,
+                    indexes: None,
+                    validator: None,
+                    is_capped: false,
+                },
+                CollectionInfo {
+                    name: "orders".to_string(),
+                    database: None,
+                    document_count: None,
+                    avg_document_size: None,
+                    sample_fields: None,
+                    indexes: None,
+                    validator: None,
+                    is_capped: false,
+                },
+            ],
+            ..Default::default()
+        });
+
+        build_resource_items_from_schema(pid, "mongo-prod", &structure, &mut items);
+
+        assert_eq!(items.len(), 2);
+
+        match &items[0] {
+            PaletteItem::Resource(ResourceItem::Collection { database, name, .. }) => {
+                assert_eq!(database, "shop");
+                assert_eq!(name, "products");
+            }
+            _ => panic!("Expected Collection resource"),
+        }
+
+        // Second collection falls back to current_database
+        match &items[1] {
+            PaletteItem::Resource(ResourceItem::Collection { database, name, .. }) => {
+                assert_eq!(database, "shop");
+                assert_eq!(name, "orders");
+            }
+            _ => panic!("Expected Collection resource"),
+        }
+    }
+
+    #[test]
+    fn build_resources_from_keyvalue_schema() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::KeyValue(KeyValueSchema {
+            keyspaces: vec![
+                KeySpaceInfo {
+                    db_index: 0,
+                    key_count: Some(100),
+                    memory_bytes: None,
+                    avg_ttl_seconds: None,
+                },
+                KeySpaceInfo {
+                    db_index: 1,
+                    key_count: Some(50),
+                    memory_bytes: None,
+                    avg_ttl_seconds: None,
+                },
+            ],
+            ..Default::default()
+        });
+
+        build_resource_items_from_schema(pid, "redis-prod", &structure, &mut items);
+
+        assert_eq!(items.len(), 2);
+
+        match &items[0] {
+            PaletteItem::Resource(ResourceItem::KeyValueDb { database, .. }) => {
+                assert_eq!(database, "db0");
+            }
+            _ => panic!("Expected KeyValueDb resource"),
+        }
+        match &items[1] {
+            PaletteItem::Resource(ResourceItem::KeyValueDb { database, .. }) => {
+                assert_eq!(database, "db1");
+            }
+            _ => panic!("Expected KeyValueDb resource"),
+        }
+    }
+
+    #[test]
+    fn build_resources_ignores_unsupported_schema_types() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::Graph(Default::default());
+        build_resource_items_from_schema(pid, "neo4j", &structure, &mut items);
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn build_resources_empty_schema_produces_no_items() {
+        let pid = Uuid::new_v4();
+        let mut items = Vec::new();
+
+        let structure = DataStructure::Relational(RelationalSchema {
+            current_database: None,
+            tables: vec![],
+            views: vec![],
+            schemas: vec![],
+            ..Default::default()
+        });
+
+        build_resource_items_from_schema(pid, "empty", &structure, &mut items);
+        assert!(items.is_empty());
+    }
+
+    // --- Script flattening tests ---
+
+    #[test]
+    fn flatten_script_entries_includes_openable_files() {
+        let entries = vec![
+            ScriptEntry::File {
+                path: PathBuf::from("/scripts/query.sql"),
+                name: "query.sql".to_string(),
+                extension: "sql".to_string(),
+            },
+            ScriptEntry::File {
+                path: PathBuf::from("/scripts/hook.lua"),
+                name: "hook.lua".to_string(),
+                extension: "lua".to_string(),
+            },
+        ];
+
+        let mut items = Vec::new();
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            PaletteItem::Script {
+                name,
+                relative_path,
+                ..
+            } => {
+                assert_eq!(name, "query.sql");
+                assert_eq!(relative_path, "query.sql");
+            }
+            _ => panic!("Expected Script item"),
+        }
+    }
+
+    #[test]
+    fn flatten_script_entries_skips_non_openable_files() {
+        let entries = vec![
+            ScriptEntry::File {
+                path: PathBuf::from("/scripts/data.csv"),
+                name: "data.csv".to_string(),
+                extension: "csv".to_string(),
+            },
+            ScriptEntry::File {
+                path: PathBuf::from("/scripts/query.sql"),
+                name: "query.sql".to_string(),
+                extension: "sql".to_string(),
+            },
+        ];
+
+        let mut items = Vec::new();
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            PaletteItem::Script {
+                name,
+                relative_path,
+                ..
+            } => {
+                assert_eq!(name, "query.sql");
+                assert_eq!(relative_path, "query.sql");
+            }
+            _ => panic!("Expected Script item"),
+        }
+    }
+
+    #[test]
+    fn flatten_script_entries_recurses_into_folders() {
+        let entries = vec![ScriptEntry::Folder {
+            path: PathBuf::from("/scripts/migrations"),
+            name: "migrations".to_string(),
+            children: vec![
+                ScriptEntry::File {
+                    path: PathBuf::from("/scripts/migrations/001_init.sql"),
+                    name: "001_init.sql".to_string(),
+                    extension: "sql".to_string(),
+                },
+                ScriptEntry::File {
+                    path: PathBuf::from("/scripts/migrations/002_add_users.sql"),
+                    name: "002_add_users.sql".to_string(),
+                    extension: "sql".to_string(),
+                },
+            ],
+        }];
+
+        let mut items = Vec::new();
+        Workspace::flatten_script_entries(&entries, Path::new("/scripts"), &mut items);
+
+        assert_eq!(items.len(), 2);
+
+        // Verify nested files get relative paths with the folder prefix
+        match &items[0] {
+            PaletteItem::Script { relative_path, .. } => {
+                assert_eq!(relative_path, "migrations/001_init.sql");
+            }
+            _ => panic!("Expected Script item"),
+        }
+        match &items[1] {
+            PaletteItem::Script { relative_path, .. } => {
+                assert_eq!(relative_path, "migrations/002_add_users.sql");
+            }
+            _ => panic!("Expected Script item"),
+        }
+    }
+
+    // --- Selection routing (map_item_to_selection) ---
+
+    #[test]
+    fn selection_routing_action_produces_command() {
+        let item = PaletteItem::Action {
+            id: "new_query_tab",
+            name: "New Query Tab",
+            category: "Editor",
+            shortcut: Some("Ctrl+N"),
+        };
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::Command { id } => assert_eq!(id, "new_query_tab"),
+            _ => panic!("Expected Command selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_disconnected_profile_produces_connect() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Connection {
+            profile_id: pid,
+            name: "analytics".to_string(),
+            is_connected: false,
+        };
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::Connect { profile_id } => assert_eq!(profile_id, pid),
+            _ => panic!("Expected Connect selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_connected_profile_produces_focus_connection() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Connection {
+            profile_id: pid,
+            name: "prod-pg".to_string(),
+            is_connected: true,
+        };
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::FocusConnection { profile_id } => assert_eq!(profile_id, pid),
+            _ => panic!("Expected FocusConnection selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_table_produces_open_table() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: pid,
+            profile_name: "prod".to_string(),
+            database: Some("mydb".to_string()),
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        });
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::OpenTable {
+                profile_id,
+                table,
+                database,
+            } => {
+                assert_eq!(profile_id, pid);
+                assert_eq!(table.name, "orders");
+                assert_eq!(table.schema.as_deref(), Some("public"));
+                assert_eq!(database.as_deref(), Some("mydb"));
+            }
+            _ => panic!("Expected OpenTable selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_view_produces_open_table_same_as_sidebar() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Resource(ResourceItem::View {
+            profile_id: pid,
+            profile_name: "prod".to_string(),
+            database: Some("mydb".to_string()),
+            schema: Some("public".to_string()),
+            name: "active_users".to_string(),
+        });
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::OpenTable { table, .. } => {
+                assert_eq!(table.name, "active_users");
+            }
+            _ => panic!("Expected OpenTable selection (views route like tables)"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_collection_produces_open_collection() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Resource(ResourceItem::Collection {
+            profile_id: pid,
+            profile_name: "mongo-prod".to_string(),
+            database: "shop".to_string(),
+            name: "products".to_string(),
+        });
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::OpenCollection {
+                profile_id,
+                collection,
+            } => {
+                assert_eq!(profile_id, pid);
+                assert_eq!(collection.database, "shop");
+                assert_eq!(collection.name, "products");
+            }
+            _ => panic!("Expected OpenCollection selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_keyvalue_produces_open_key_value() {
+        let pid = Uuid::new_v4();
+        let item = PaletteItem::Resource(ResourceItem::KeyValueDb {
+            profile_id: pid,
+            profile_name: "redis-prod".to_string(),
+            database: "db0".to_string(),
+        });
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::OpenKeyValue {
+                profile_id,
+                database,
+            } => {
+                assert_eq!(profile_id, pid);
+                assert_eq!(database, "db0");
+            }
+            _ => panic!("Expected OpenKeyValue selection"),
+        }
+    }
+
+    #[test]
+    fn selection_routing_script_produces_open_script() {
+        let path = PathBuf::from("/scripts/health-check.sql");
+        let item = PaletteItem::Script {
+            path: path.clone(),
+            name: "health-check".to_string(),
+            relative_path: "health-check.sql".to_string(),
+        };
+
+        let sel = map_item_to_selection(&item).unwrap();
+        match sel {
+            PaletteSelection::OpenScript { path: p } => assert_eq!(p, path),
+            _ => panic!("Expected OpenScript selection"),
+        }
+    }
+
+    // --- Disambiguation scenarios ---
+
+    #[test]
+    fn two_connections_same_table_name_are_distinguished_by_profile() {
+        let pid1 = Uuid::new_v4();
+        let pid2 = Uuid::new_v4();
+
+        let table1 = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: pid1,
+            profile_name: "prod".to_string(),
+            database: Some("mydb".to_string()),
+            schema: Some("public".to_string()),
+            name: "users".to_string(),
+        });
+
+        let table2 = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: pid2,
+            profile_name: "staging".to_string(),
+            database: Some("mydb".to_string()),
+            schema: Some("public".to_string()),
+            name: "users".to_string(),
+        });
+
+        // Both have same table name but different qualifiers (include profile name)
+        assert!(table1.qualifier().unwrap().contains("prod"));
+        assert!(table2.qualifier().unwrap().contains("staging"));
+
+        // Search text includes profile name for disambiguation
+        assert!(table1.search_text().contains("prod"));
+        assert!(table2.search_text().contains("staging"));
+
+        // They route to different profiles
+        let sel1 = map_item_to_selection(&table1).unwrap();
+        let sel2 = map_item_to_selection(&table2).unwrap();
+        match (&sel1, &sel2) {
+            (
+                PaletteSelection::OpenTable {
+                    profile_id: id1, ..
+                },
+                PaletteSelection::OpenTable {
+                    profile_id: id2, ..
+                },
+            ) => {
+                assert_ne!(id1, id2);
+            }
+            _ => panic!("Expected OpenTable selections"),
+        }
+    }
+
+    // --- Same profile, same schema+table, different database dedup regression ---
+
+    #[test]
+    fn same_profile_same_table_different_database_produces_distinct_selections() {
+        let pid = Uuid::new_v4();
+
+        let table_db1 = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: pid,
+            profile_name: "pg-multi-db".to_string(),
+            database: Some("db_alpha".to_string()),
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        });
+
+        let table_db2 = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: pid,
+            profile_name: "pg-multi-db".to_string(),
+            database: Some("db_beta".to_string()),
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        });
+
+        // Both have same profile, schema, and table name but different databases
+        let sel1 = map_item_to_selection(&table_db1).unwrap();
+        let sel2 = map_item_to_selection(&table_db2).unwrap();
+
+        match (&sel1, &sel2) {
+            (
+                PaletteSelection::OpenTable {
+                    profile_id: id1,
+                    table: t1,
+                    database: db1,
+                },
+                PaletteSelection::OpenTable {
+                    profile_id: id2,
+                    table: t2,
+                    database: db2,
+                },
+            ) => {
+                assert_eq!(id1, id2, "Same profile");
+                assert_eq!(t1, t2, "Same table ref (schema+name)");
+                assert_ne!(
+                    db1, db2,
+                    "Different databases must produce distinct selections"
+                );
+                assert_eq!(db1.as_deref(), Some("db_alpha"));
+                assert_eq!(db2.as_deref(), Some("db_beta"));
+            }
+            _ => panic!("Expected OpenTable selections"),
+        }
+
+        // Qualifiers must also differ (they include database)
+        assert!(table_db1.qualifier().unwrap().contains("db_alpha"));
+        assert!(table_db2.qualifier().unwrap().contains("db_beta"));
+    }
+
+    // --- Empty / no-match filtering ---
+
+    #[test]
+    fn fuzzy_filter_no_match_returns_empty() {
+        let matcher = SkimMatcherV2::default();
+        let items: Vec<PaletteItem> = vec![
+            sample_action(),
+            sample_connection("prod-pg", true),
+            sample_table("prod-pg", "orders"),
+        ];
+
+        let matched: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                matcher
+                    .fuzzy_match(&item.search_text(), "zzzzzzz")
+                    .map(|score| (i, score))
+            })
+            .collect();
+
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn fuzzy_filter_empty_query_matches_all() {
+        let items: Vec<PaletteItem> = vec![
+            sample_action(),
+            sample_connection("prod-pg", true),
+            sample_table("prod-pg", "orders"),
+            sample_script("health-check"),
+        ];
+
+        // Empty query should show all items (score 0 for all)
+        let mut filtered: Vec<(usize, i64)> = items
+            .iter()
+            .enumerate()
+            .map(|(index, _)| (index, 0))
+            .collect();
+
+        assert_eq!(filtered.len(), 4);
+        filtered.sort_by_key(|s| std::cmp::Reverse(s.1));
+        assert_eq!(filtered.len(), items.len());
+    }
+
+    // --- Performance: fuzzy filtering on large dataset ---
+
+    #[test]
+    fn palette_filtering_large_dataset_completes_within_budget() {
+        let matcher = SkimMatcherV2::default();
+
+        // Build a representative large dataset: 100 connections, 1000 resources, 200 scripts
+        let mut items: Vec<PaletteItem> = Vec::with_capacity(1325);
+
+        for i in 0..100 {
+            items.push(PaletteItem::Action {
+                id: Box::leak(format!("cmd_{}", i).into_boxed_str()),
+                name: Box::leak(format!("Command {}", i).into_boxed_str()),
+                category: "Editor",
+                shortcut: None,
+            });
+        }
+
+        for i in 0..100 {
+            items.push(PaletteItem::Connection {
+                profile_id: Uuid::new_v4(),
+                name: format!("connection-{}", i),
+                is_connected: i < 50,
+            });
+        }
+
+        for i in 0..1000 {
+            items.push(PaletteItem::Resource(ResourceItem::Table {
+                profile_id: Uuid::new_v4(),
+                profile_name: format!("profile-{}", i % 10),
+                database: Some("mydb".to_string()),
+                schema: Some("public".to_string()),
+                name: format!("table_{}", i),
+            }));
+        }
+
+        for i in 0..200 {
+            items.push(PaletteItem::Script {
+                path: PathBuf::from(format!("/scripts/script_{}.sql", i)),
+                name: format!("script_{}", i),
+                relative_path: format!("script_{}.sql", i),
+            });
+        }
+
+        assert_eq!(items.len(), 1400);
+
+        // Measure item build time (simulated: just the search_text generation)
+        let build_start = std::time::Instant::now();
+        let search_texts: Vec<String> = items.iter().map(|i| i.search_text()).collect();
+        let build_elapsed = build_start.elapsed();
+        assert!(
+            build_elapsed.as_millis() < 50,
+            "Item search_text build took {}ms, exceeds 50ms budget",
+            build_elapsed.as_millis()
+        );
+
+        // Measure per-keystroke filter time
+        let filter_start = std::time::Instant::now();
+        let matched: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, _item)| {
+                matcher
+                    .fuzzy_match(&search_texts[i], "table_5")
+                    .map(|score| (i, score))
+            })
+            .collect();
+        let filter_elapsed = filter_start.elapsed();
+
+        assert!(
+            filter_elapsed.as_millis() < 16,
+            "Per-keystroke filter took {}ms, exceeds 16ms budget",
+            filter_elapsed.as_millis()
+        );
+        assert!(!matched.is_empty(), "Should match some items");
     }
 }

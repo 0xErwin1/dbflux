@@ -23,7 +23,8 @@ use crate::ui::document::{
 use crate::ui::document::{McpApprovalsView, McpAuditView};
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
-    CommandExecuted, CommandPalette, CommandPaletteClosed, PaletteCommand,
+    CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
+    ResourceItem,
 };
 use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
@@ -35,6 +36,8 @@ use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
+#[cfg(test)]
+use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -42,6 +45,160 @@ use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use std::path::PathBuf;
+
+/// Extract resource items from a schema snapshot into a palette item list.
+///
+/// Separated from `Workspace` for testability — this is pure data transformation
+/// with no GPUI dependency.
+pub(super) fn build_resource_items_from_schema(
+    profile_id: uuid::Uuid,
+    profile_name: &str,
+    structure: &dbflux_core::DataStructure,
+    items: &mut Vec<PaletteItem>,
+) {
+    match structure {
+        dbflux_core::DataStructure::Relational(rel) => {
+            let database = rel.current_database.clone();
+            for table in &rel.tables {
+                items.push(PaletteItem::Resource(ResourceItem::Table {
+                    profile_id,
+                    profile_name: profile_name.to_string(),
+                    database: database.clone(),
+                    schema: table.schema.clone(),
+                    name: table.name.clone(),
+                }));
+            }
+            for view in &rel.views {
+                items.push(PaletteItem::Resource(ResourceItem::View {
+                    profile_id,
+                    profile_name: profile_name.to_string(),
+                    database: database.clone(),
+                    schema: view.schema.clone(),
+                    name: view.name.clone(),
+                }));
+            }
+            for db_schema in &rel.schemas {
+                let schema_name = db_schema.name.clone();
+                for table in &db_schema.tables {
+                    items.push(PaletteItem::Resource(ResourceItem::Table {
+                        profile_id,
+                        profile_name: profile_name.to_string(),
+                        database: database.clone(),
+                        schema: Some(schema_name.clone()),
+                        name: table.name.clone(),
+                    }));
+                }
+                for view in &db_schema.views {
+                    items.push(PaletteItem::Resource(ResourceItem::View {
+                        profile_id,
+                        profile_name: profile_name.to_string(),
+                        database: database.clone(),
+                        schema: Some(schema_name.clone()),
+                        name: view.name.clone(),
+                    }));
+                }
+            }
+        }
+        dbflux_core::DataStructure::Document(doc) => {
+            let default_db = doc
+                .current_database
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            for collection in &doc.collections {
+                items.push(PaletteItem::Resource(ResourceItem::Collection {
+                    profile_id,
+                    profile_name: profile_name.to_string(),
+                    database: collection
+                        .database
+                        .clone()
+                        .unwrap_or_else(|| default_db.clone()),
+                    name: collection.name.clone(),
+                }));
+            }
+        }
+        dbflux_core::DataStructure::KeyValue(kv) => {
+            for ks in &kv.keyspaces {
+                items.push(PaletteItem::Resource(ResourceItem::KeyValueDb {
+                    profile_id,
+                    profile_name: profile_name.to_string(),
+                    database: format!("db{}", ks.db_index),
+                }));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Map a `PaletteItem` to its corresponding `PaletteSelection`.
+///
+/// Separated from `CommandPalette` for testability — pure data transformation.
+#[cfg(test)]
+pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelection> {
+    match item {
+        PaletteItem::Action { id, .. } => Some(PaletteSelection::Command { id }),
+        PaletteItem::Connection {
+            profile_id,
+            is_connected,
+            ..
+        } => {
+            if *is_connected {
+                Some(PaletteSelection::FocusConnection {
+                    profile_id: *profile_id,
+                })
+            } else {
+                Some(PaletteSelection::Connect {
+                    profile_id: *profile_id,
+                })
+            }
+        }
+        PaletteItem::Resource(r) => match r {
+            ResourceItem::Table {
+                profile_id,
+                schema,
+                name,
+                database,
+                ..
+            }
+            | ResourceItem::View {
+                profile_id,
+                schema,
+                name,
+                database,
+                ..
+            } => Some(PaletteSelection::OpenTable {
+                profile_id: *profile_id,
+                table: TableRef {
+                    schema: schema.clone(),
+                    name: name.clone(),
+                },
+                database: database.clone(),
+            }),
+            ResourceItem::Collection {
+                profile_id,
+                database,
+                name,
+                ..
+            } => Some(PaletteSelection::OpenCollection {
+                profile_id: *profile_id,
+                collection: CollectionRef {
+                    database: database.clone(),
+                    name: name.clone(),
+                },
+            }),
+            ResourceItem::KeyValueDb {
+                profile_id,
+                database,
+                ..
+            } => Some(PaletteSelection::OpenKeyValue {
+                profile_id: *profile_id,
+                database: database.clone(),
+            }),
+        },
+        PaletteItem::Script { path, .. } => {
+            Some(PaletteSelection::OpenScript { path: path.clone() })
+        }
+    }
+}
 
 /// State for collapsible panels (tasks panel).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -148,11 +305,7 @@ impl Workspace {
         #[cfg(feature = "mcp")]
         let mcp_audit_view = cx.new(|cx| McpAuditView::new(app_state.clone(), window, cx));
 
-        let command_palette = cx.new(|cx| {
-            let mut palette = CommandPalette::new(window, cx);
-            palette.register_commands(Self::default_commands());
-            palette
-        });
+        let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
@@ -164,10 +317,62 @@ impl Workspace {
         })
         .detach();
 
-        cx.subscribe(&command_palette, |this, _, event: &CommandExecuted, cx| {
-            this.pending_command = Some(event.command_id);
-            cx.notify();
-        })
+        cx.subscribe_in(
+            &command_palette,
+            window,
+            |this, _, event: &PaletteSelection, window, cx| match event {
+                PaletteSelection::Command { id } => {
+                    this.pending_command = Some(id);
+                    cx.notify();
+                }
+                PaletteSelection::Connect { profile_id } => {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.connect_to_profile(*profile_id, cx);
+                    });
+                }
+                PaletteSelection::FocusConnection { profile_id } => {
+                    // Mirror sidebar's execute_item for connected profiles:
+                    // set the connection as active in AppState, then focus the sidebar.
+                    this.app_state.update(cx, |state, cx| {
+                        state.set_active_connection(*profile_id);
+                        cx.emit(AppStateChanged);
+                    });
+                    if this.is_sidebar_collapsed(cx) {
+                        this.toggle_sidebar(cx);
+                    }
+                    this.pending_focus = Some(FocusTarget::Sidebar);
+                    cx.notify();
+                }
+                PaletteSelection::OpenTable {
+                    profile_id,
+                    table,
+                    database,
+                } => {
+                    this.open_table_document(
+                        *profile_id,
+                        table.clone(),
+                        database.clone(),
+                        window,
+                        cx,
+                    );
+                }
+                PaletteSelection::OpenCollection {
+                    profile_id,
+                    collection,
+                } => {
+                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
+                }
+                PaletteSelection::OpenKeyValue {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                }
+                PaletteSelection::OpenScript { path } => {
+                    this.open_script_from_path(path.clone(), cx);
+                }
+            },
+        )
         .detach();
 
         cx.subscribe(&command_palette, |this, _, _: &CommandPaletteClosed, cx| {
@@ -729,12 +934,89 @@ impl Workspace {
 
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let was_visible = self.command_palette.read(cx).is_visible();
-        self.command_palette.update(cx, |palette, cx| {
-            palette.toggle(window, cx);
-        });
 
-        if was_visible {
+        if !was_visible {
+            let items = self.build_palette_items(cx);
+            self.command_palette.update(cx, |palette, cx| {
+                palette.open_with_items(items, window, cx);
+            });
+        } else {
+            self.command_palette.update(cx, |palette, cx| {
+                palette.hide(cx);
+            });
             self.focus_handle.focus(window);
+        }
+    }
+
+    /// Build the palette item list from current app state.
+    fn build_palette_items(&self, cx: &Context<Self>) -> Vec<PaletteItem> {
+        let mut items: Vec<PaletteItem> = Self::default_commands()
+            .into_iter()
+            .map(|cmd| cmd.into())
+            .collect();
+
+        let app_state = self.app_state.read(cx);
+        let connections = app_state.connections();
+
+        for profile in app_state.profiles() {
+            let is_connected = connections.contains_key(&profile.id);
+            items.push(PaletteItem::Connection {
+                profile_id: profile.id,
+                name: profile.name.clone(),
+                is_connected,
+            });
+        }
+
+        for (&profile_id, connected) in connections.iter() {
+            let profile_name = connected.profile.name.clone();
+
+            if let Some(schema) = &connected.schema {
+                build_resource_items_from_schema(
+                    profile_id,
+                    &profile_name,
+                    &schema.structure,
+                    &mut items,
+                );
+            }
+        }
+
+        if let Some(dir) = app_state.scripts_directory() {
+            let root = dir.root_path().to_path_buf();
+            Self::flatten_script_entries(dir.entries(), &root, &mut items);
+        }
+
+        items
+    }
+
+    /// Recursively flatten script directory entries into palette items.
+    fn flatten_script_entries(
+        entries: &[dbflux_core::ScriptEntry],
+        scripts_root: &std::path::Path,
+        items: &mut Vec<PaletteItem>,
+    ) {
+        use dbflux_core::ScriptEntry;
+
+        for entry in entries {
+            match entry {
+                ScriptEntry::File { path, name, .. } => {
+                    if !dbflux_core::is_openable_script(path) {
+                        continue;
+                    }
+                    let relative_path = path
+                        .strip_prefix(scripts_root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .to_string();
+                    items.push(PaletteItem::Script {
+                        path: path.clone(),
+                        name: name.clone(),
+                        relative_path,
+                    });
+                }
+                ScriptEntry::Folder { children, .. } => {
+                    Self::flatten_script_entries(children, scripts_root, items);
+                }
+            }
         }
     }
 

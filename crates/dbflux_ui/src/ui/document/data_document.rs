@@ -214,6 +214,15 @@ impl DataDocument {
         self.data_grid.read(cx).source().table_ref().cloned()
     }
 
+    /// Returns the database name if this is a table document.
+    pub fn database(&self, cx: &App) -> Option<String> {
+        self.data_grid
+            .read(cx)
+            .source()
+            .database()
+            .map(|s| s.to_string())
+    }
+
     pub fn collection_ref(&self, cx: &App) -> Option<CollectionRef> {
         self.data_grid.read(cx).source().collection_ref().cloned()
     }
