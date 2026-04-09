@@ -1,4 +1,5 @@
 use crate::app::{AppStateChanged, AppStateEntity, AuthProfileCreated};
+use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Spacing};
@@ -274,10 +275,24 @@ impl EventEmitter<SsoWizardEvent> for SsoWizard {}
 
 impl Render for SsoWizard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.visible {
-            return div().into_any_element();
-        }
+        let csd_title_bar = platform::render_csd_title_bar(_window, cx, "AWS SSO Wizard");
 
+        let content = if !self.visible {
+            div().into_any_element()
+        } else {
+            self.render_visible(_window, cx)
+        };
+
+        div()
+            .size_full()
+            .when_some(csd_title_bar, |el, title_bar| el.child(title_bar))
+            .child(content)
+            .into_any_element()
+    }
+}
+
+impl SsoWizard {
+    fn render_visible(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
             let _ = close_entity.update(cx, |this, cx| this.close(cx));

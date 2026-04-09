@@ -1,3 +1,4 @@
+use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Heights;
@@ -258,33 +259,43 @@ impl Render for SettingsCoordinator {
 
         let _ = self.app_state.read(cx);
 
+        let csd_title_bar = platform::render_csd_title_bar(_window, cx, "Settings");
+
         div()
             .size_full()
             .bg(cx.theme().background)
             .flex()
+            .flex_col()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_event(event, window, cx);
             }))
-            .child(
-                div()
-                    .h_full()
-                    .w(self.sidebar_width)
-                    .flex()
-                    .flex_row()
-                    .child(div().h_full().flex_1().child(self.render_sidebar(cx)))
-                    .child(self.render_sidebar_grip(cx)),
-            )
+            .when_some(csd_title_bar, |el, title_bar| el.child(title_bar))
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .h_full()
                     .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .bg(cx.theme().background)
-                    .child(self.active_section_view.clone()),
+                    .child(
+                        div()
+                            .h_full()
+                            .w(self.sidebar_width)
+                            .flex()
+                            .flex_row()
+                            .child(div().h_full().flex_1().child(self.render_sidebar(cx)))
+                            .child(self.render_sidebar_grip(cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .bg(cx.theme().background)
+                            .child(self.active_section_view.clone()),
+                    ),
             )
             .when_some(self.pending_section_confirm, |element, target_section| {
                 let confirm_entity = cx.entity().clone();
