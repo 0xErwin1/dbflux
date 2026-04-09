@@ -36,6 +36,10 @@ fn global_layer() -> KeymapLayer {
         KeyChord::new("p", Modifiers::ctrl_shift()),
         Command::ToggleCommandPalette,
     );
+    layer.bind(
+        KeyChord::new(":", Modifiers::none()),
+        Command::ToggleCommandPalette,
+    );
 
     // Tab management
     layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
