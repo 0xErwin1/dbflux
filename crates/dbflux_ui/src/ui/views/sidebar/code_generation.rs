@@ -365,16 +365,14 @@ impl Sidebar {
         };
 
         let state = self.app_state.read(cx);
-        let Some(conn) = state.connections().get(&profile_id) else {
-            return None;
-        };
+        let conn = state.connections().get(&profile_id)?;
 
         let current_db = Self::get_current_database(conn);
         let cache_key = SchemaCacheKey::new(current_db, Some(schema_name));
         conn.schema_types
             .get(&cache_key)
             .and_then(|types| types.iter().find(|t| t.name == type_name))
-            .map(|type_info| type_info.kind.clone())
+            .map(|type_info| type_info.kind)
     }
 
     pub(super) fn generate_index_sql(

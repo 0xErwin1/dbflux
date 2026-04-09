@@ -193,6 +193,17 @@ pub struct DropDatabaseParams {
     pub confirm: String,
 }
 
+#[derive(Debug, Clone)]
+struct CreateTypeRequestParams {
+    connection_id: String,
+    name: String,
+    type_type: String,
+    values: Option<Vec<String>>,
+    attributes: Option<Vec<TypeAttribute>>,
+    base_type: Option<String>,
+    if_not_exists: bool,
+}
+
 const DROP_TABLE_CONFIRMATION_ERROR: &str = "Confirmation string must match table name exactly";
 const DROP_DATABASE_CONFIRMATION_ERROR: &str =
     "Confirmation string must match database name exactly";
@@ -879,13 +890,15 @@ impl DbFluxServer {
         validate_create_type_params(&params).map_err(|e| ErrorData::invalid_params(e, None))?;
 
         let state = self.state.clone();
-        let connection_id = params.connection_id.clone();
-        let name = params.name.clone();
-        let type_type = params.r#type.clone();
-        let values = params.values.clone();
-        let attributes = params.attributes.clone();
-        let base_type = params.base_type.clone();
-        let if_not_exists = params.if_not_exists.unwrap_or(true);
+        let request = CreateTypeRequestParams {
+            connection_id: params.connection_id.clone(),
+            name: params.name.clone(),
+            type_type: params.r#type.clone(),
+            values: params.values.clone(),
+            attributes: params.attributes.clone(),
+            base_type: params.base_type.clone(),
+            if_not_exists: params.if_not_exists.unwrap_or(true),
+        };
 
         self.governance
             .authorize_and_execute(
@@ -893,18 +906,9 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Admin,
                 move || async move {
-                    let result = Self::create_type_impl(
-                        state,
-                        &connection_id,
-                        &name,
-                        &type_type,
-                        values.as_deref(),
-                        attributes.as_deref(),
-                        base_type.as_deref(),
-                        if_not_exists,
-                    )
-                    .await
-                    .map_err(|e| e.into_error_data())?;
+                    let result = Self::create_type_impl(state, &request)
+                        .await
+                        .map_err(|e| e.into_error_data())?;
 
                     Ok(CallToolResult::success(vec![Content::text(
                         serde_json::to_string_pretty(&result).unwrap(),
@@ -1357,15 +1361,9 @@ impl DbFluxServer {
 
     async fn create_type_impl(
         state: ServerState,
-        connection_id: &str,
-        name: &str,
-        type_type: &str,
-        values: Option<&[String]>,
-        attributes: Option<&[crate::tools::TypeAttribute]>,
-        base_type: Option<&str>,
-        if_not_exists: bool,
+        request: &CreateTypeRequestParams,
     ) -> Result<serde_json::Value, String> {
-        let connection = Self::get_or_connect(state, connection_id).await?;
+        let connection = Self::get_or_connect(state, &request.connection_id).await?;
 
         if connection.kind() != DbKind::Postgres
             || !connection
@@ -1375,11 +1373,16 @@ impl DbFluxServer {
             return Err(CREATE_TYPE_POSTGRES_ONLY_ERROR.to_string());
         }
 
-        let type_ref = normalize_table_ref(name);
-        let requested_kind = CreateTypeKind::parse(type_type)?;
-        let definition = build_create_type_definition(type_type, values, attributes, base_type)?;
+        let type_ref = normalize_table_ref(&request.name);
+        let requested_kind = CreateTypeKind::parse(&request.type_type)?;
+        let definition = build_create_type_definition(
+            &request.type_type,
+            request.values.as_deref(),
+            request.attributes.as_deref(),
+            request.base_type.as_deref(),
+        )?;
 
-        if if_not_exists {
+        if request.if_not_exists {
             let existing_kind =
                 lookup_postgres_custom_type_kind(connection.clone(), &type_ref).await?;
 
@@ -1401,17 +1404,17 @@ impl DbFluxServer {
             })
             .ok_or_else(|| CREATE_TYPE_POSTGRES_ONLY_ERROR.to_string())?;
 
-        let request = QueryRequest::new(sql);
+        let query_request = QueryRequest::new(sql);
         match Self::execute_connection_blocking(connection.clone(), move |connection| {
             connection
-                .execute(&request)
+                .execute(&query_request)
                 .map_err(|e| format!("Create type error: {}", e))
                 .map(|_| ())
         })
         .await
         {
             Ok(()) => {}
-            Err(error) if if_not_exists && is_postgres_duplicate_type_error(&error) => {
+            Err(error) if request.if_not_exists && is_postgres_duplicate_type_error(&error) => {
                 if lookup_postgres_custom_type_kind(connection.clone(), &type_ref)
                     .await
                     .ok()
