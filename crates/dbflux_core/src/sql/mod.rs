@@ -6,7 +6,7 @@ pub(crate) mod query_builder;
 pub use code_generation::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenerator,
     CreateIndexRequest, CreateTypeRequest, DropForeignKeyRequest, DropIndexRequest,
-    DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeDefinition,
+    DropTypeRequest, NoOpCodeGenerator, ReindexRequest, TypeAttributeDefinition, TypeDefinition,
 };
 pub use dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};
 pub use generation::{

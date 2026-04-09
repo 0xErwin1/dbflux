@@ -16,7 +16,10 @@ use crate::{
     helper::{IntoErrorData, *},
     state::ServerState,
 };
-use dbflux_core::{AddForeignKeyRequest, DropForeignKeyRequest, QueryRequest, TableRef};
+use dbflux_core::{
+    AddForeignKeyRequest, CodeGenCapabilities, Connection, CreateTypeRequest, DbKind,
+    DropForeignKeyRequest, QueryRequest, TableRef, TypeAttributeDefinition, TypeDefinition, Value,
+};
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData},
@@ -24,6 +27,7 @@ use rmcp::{
     tool, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 fn default_true() -> Option<bool> {
     Some(true)
@@ -153,6 +157,9 @@ pub struct CreateTypeParams {
     #[schemars(description = "Attributes for composite type")]
     pub attributes: Option<Vec<TypeAttribute>>,
 
+    #[schemars(description = "Base type for domain type")]
+    pub base_type: Option<String>,
+
     pub if_not_exists: Option<bool>,
 }
 
@@ -189,6 +196,182 @@ pub struct DropDatabaseParams {
 const DROP_TABLE_CONFIRMATION_ERROR: &str = "Confirmation string must match table name exactly";
 const DROP_DATABASE_CONFIRMATION_ERROR: &str =
     "Confirmation string must match database name exactly";
+const CREATE_TYPE_POSTGRES_ONLY_ERROR: &str =
+    "CREATE TYPE is only supported for PostgreSQL connections";
+const POSTGRES_DUPLICATE_OBJECT_SQLSTATE: &str = "42710";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateTypeKind {
+    Enum,
+    Composite,
+    Domain,
+}
+
+impl CreateTypeKind {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "enum" => Ok(Self::Enum),
+            "composite" => Ok(Self::Composite),
+            "domain" => Ok(Self::Domain),
+            other => Err(format!(
+                "Unsupported type '{}'. Expected one of: enum, composite, domain",
+                other
+            )),
+        }
+    }
+}
+
+fn is_simple_postgres_identifier(identifier: &str) -> bool {
+    let mut chars = identifier.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+}
+
+fn validate_postgres_type_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+
+    if trimmed.contains('"') {
+        return Err(
+            "Quoted PostgreSQL type names are not supported; use unquoted name or schema.name"
+                .to_string(),
+        );
+    }
+
+    let parts: Vec<&str> = trimmed.split('.').map(str::trim).collect();
+    if parts.len() > 2
+        || parts
+            .iter()
+            .any(|part| !is_simple_postgres_identifier(part))
+    {
+        return Err(
+            "Type name must be an unquoted PostgreSQL identifier or schema-qualified pair"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_postgres_type_expression(expression: &str, field_name: &str) -> Result<(), String> {
+    let trimmed = expression.trim();
+
+    if trimmed.is_empty() {
+        return Err(format!("{} must be a non-empty string", field_name));
+    }
+
+    if trimmed.contains('"') {
+        return Err(format!(
+            "{} does not support quoted PostgreSQL identifiers",
+            field_name
+        ));
+    }
+
+    if trimmed.contains('"')
+        || trimmed.contains('\'')
+        || trimmed.contains(';')
+        || trimmed.contains("--")
+        || trimmed.contains("/*")
+        || trimmed.contains("*/")
+    {
+        return Err(format!(
+            "{} contains unsupported PostgreSQL type syntax",
+            field_name
+        ));
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut paren_depth = 0usize;
+    let mut saw_identifier = false;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        match ch {
+            'A'..='Z' | 'a'..='z' | '_' => saw_identifier = true,
+            '0'..='9' | ' ' | '\t' | '\n' | '\r' | '.' | ',' => {}
+            '(' => paren_depth += 1,
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(format!("{} has unbalanced parentheses", field_name));
+                }
+                paren_depth -= 1;
+            }
+            '[' => {
+                if chars.get(index + 1) != Some(&']') {
+                    return Err(format!("{} contains unsupported array syntax", field_name));
+                }
+                index += 1;
+            }
+            _ => {
+                return Err(format!(
+                    "{} contains unsupported character '{}'",
+                    field_name, ch
+                ));
+            }
+        }
+
+        index += 1;
+    }
+
+    if paren_depth != 0 {
+        return Err(format!("{} has unbalanced parentheses", field_name));
+    }
+
+    if !saw_identifier {
+        return Err(format!(
+            "{} must include a PostgreSQL type name",
+            field_name
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_postgres_duplicate_type_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+
+    normalized.contains(POSTGRES_DUPLICATE_OBJECT_SQLSTATE)
+        || normalized.contains("duplicate_object")
+        || normalized.contains("already exists")
+}
+
+fn normalize_table_ref(name: &str) -> TableRef {
+    let trimmed = name.trim();
+
+    if let Some((schema, type_name)) = trimmed.split_once('.') {
+        TableRef::with_schema(schema.trim(), type_name.trim())
+    } else {
+        TableRef::new(trimmed)
+    }
+}
+
+fn normalize_type_expression(expression: &str) -> String {
+    expression.trim().to_string()
+}
+
+fn normalize_identifier(identifier: &str) -> String {
+    identifier.trim().to_string()
+}
+
+fn validate_unique_trimmed_values(values: &[String], field_name: &str) -> Result<(), String> {
+    let mut seen = HashSet::new();
+
+    for value in values {
+        let normalized = value.trim();
+        if !seen.insert(normalized.to_string()) {
+            return Err(format!("{} must be unique", field_name));
+        }
+    }
+
+    Ok(())
+}
 
 /// Classify ALTER TABLE operations based on their risk level.
 ///
@@ -363,6 +546,179 @@ pub fn validate_drop_database_params(params: &DropDatabaseParams) -> Result<(), 
     Ok(())
 }
 
+pub fn validate_create_type_params(params: &CreateTypeParams) -> Result<(), String> {
+    if params.name.trim().is_empty() {
+        return Err("Type name is required".to_string());
+    }
+
+    validate_postgres_type_name(&params.name)?;
+
+    let kind = CreateTypeKind::parse(&params.r#type)?;
+
+    match kind {
+        CreateTypeKind::Enum => {
+            let values = params
+                .values
+                .as_ref()
+                .ok_or_else(|| "Enum type requires values".to_string())?;
+
+            if values.is_empty() {
+                return Err("Enum type requires at least one value".to_string());
+            }
+
+            if values.iter().any(|value| value.trim().is_empty()) {
+                return Err("Enum values must be non-empty strings".to_string());
+            }
+
+            validate_unique_trimmed_values(values, "Enum values")?;
+
+            if params.attributes.is_some() {
+                return Err("Enum type does not accept attributes".to_string());
+            }
+
+            if params.base_type.is_some() {
+                return Err("Enum type does not accept base_type".to_string());
+            }
+        }
+        CreateTypeKind::Composite => {
+            let attributes = params
+                .attributes
+                .as_ref()
+                .ok_or_else(|| "Composite type requires attributes".to_string())?;
+
+            if attributes.is_empty() {
+                return Err("Composite type requires at least one attribute".to_string());
+            }
+
+            if attributes.iter().any(|attribute| {
+                attribute.name.trim().is_empty() || attribute.r#type.trim().is_empty()
+            }) {
+                return Err("Composite attributes require non-empty name and type".to_string());
+            }
+
+            let attribute_names = attributes
+                .iter()
+                .map(|attribute| attribute.name.clone())
+                .collect::<Vec<_>>();
+            validate_unique_trimmed_values(&attribute_names, "Composite attribute names")?;
+
+            for attribute in attributes {
+                validate_postgres_type_expression(
+                    &attribute.r#type,
+                    &format!("Composite attribute '{}' type", attribute.name),
+                )?;
+            }
+
+            if params.values.is_some() {
+                return Err("Composite type does not accept enum values".to_string());
+            }
+
+            if params.base_type.is_some() {
+                return Err("Composite type does not accept base_type".to_string());
+            }
+        }
+        CreateTypeKind::Domain => {
+            let base_type = params
+                .base_type
+                .as_deref()
+                .ok_or_else(|| "Domain type requires base_type".to_string())?;
+
+            if base_type.trim().is_empty() {
+                return Err("Domain base_type must be a non-empty string".to_string());
+            }
+
+            validate_postgres_type_expression(base_type, "Domain base_type")?;
+
+            if params.values.is_some() {
+                return Err("Domain type does not accept enum values".to_string());
+            }
+
+            if params.attributes.is_some() {
+                return Err("Domain type does not accept attributes".to_string());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_create_type_definition(
+    type_type: &str,
+    values: Option<&[String]>,
+    attributes: Option<&[crate::tools::TypeAttribute]>,
+    base_type: Option<&str>,
+) -> Result<TypeDefinition, String> {
+    match CreateTypeKind::parse(type_type)? {
+        CreateTypeKind::Enum => Ok(TypeDefinition::Enum {
+            values: values
+                .unwrap_or_default()
+                .iter()
+                .map(|value| normalize_identifier(value))
+                .collect(),
+        }),
+        CreateTypeKind::Composite => Ok(TypeDefinition::Composite {
+            attributes: attributes
+                .unwrap_or_default()
+                .iter()
+                .map(|attribute| TypeAttributeDefinition {
+                    name: normalize_identifier(&attribute.name),
+                    type_name: normalize_type_expression(&attribute.r#type),
+                })
+                .collect(),
+        }),
+        CreateTypeKind::Domain => Ok(TypeDefinition::Domain {
+            base_type: normalize_type_expression(base_type.unwrap_or_default()),
+        }),
+    }
+}
+
+fn build_postgres_custom_type_kind_sql(type_ref: &TableRef) -> String {
+    let type_name = type_ref.name.replace('\'', "''");
+
+    let schema_filter = match type_ref.schema.as_deref() {
+        Some(schema) => format!("n.nspname = '{}'", schema.replace('\'', "''")),
+        None => "n.nspname = current_schema()".to_string(),
+    };
+
+    format!(
+        "SELECT CASE\n    WHEN t.typtype = 'e' THEN 'enum'\n    WHEN t.typtype = 'd' THEN 'domain'\n    WHEN t.typtype = 'c' AND c.relkind = 'c' THEN 'composite'\n    ELSE NULL\nEND AS type_kind\nFROM pg_catalog.pg_type t\nJOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace\nLEFT JOIN pg_catalog.pg_class c ON c.oid = t.typrelid\nWHERE t.typname = '{}'\n  AND {}\n  AND (\n        t.typtype IN ('e', 'd')\n     OR (t.typtype = 'c' AND c.relkind = 'c')\n  )\nLIMIT 1",
+        type_name, schema_filter
+    )
+}
+
+fn parse_custom_type_kind_result(
+    result: &dbflux_core::QueryResult,
+) -> Result<Option<CreateTypeKind>, String> {
+    let Some(value) = result.rows.first().and_then(|row| row.first()) else {
+        return Ok(None);
+    };
+
+    match value {
+        Value::Text(type_kind) => CreateTypeKind::parse(type_kind).map(Some),
+        Value::Null => Ok(None),
+        other => Err(format!(
+            "CREATE TYPE existence check returned unsupported value: {}",
+            other
+        )),
+    }
+}
+
+async fn lookup_postgres_custom_type_kind(
+    connection: std::sync::Arc<dyn Connection>,
+    type_ref: &TableRef,
+) -> Result<Option<CreateTypeKind>, String> {
+    let sql = build_postgres_custom_type_kind_sql(type_ref);
+    let request = QueryRequest::new(sql);
+
+    DbFluxServer::execute_connection_blocking(connection, move |connection| {
+        connection
+            .execute(&request)
+            .map_err(|e| format!("Create type existence check error: {}", e))
+    })
+    .await
+    .and_then(|result| parse_custom_type_kind_result(&result))
+}
+
 #[tool_router(router = ddl_router, vis = "pub")]
 impl DbFluxServer {
     #[tool(description = "Create a new table with columns and constraints")]
@@ -513,12 +869,14 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Create a custom type (enum, composite) - PostgreSQL only")]
+    #[tool(description = "Create a custom type (enum, composite, domain) - PostgreSQL only")]
     async fn create_type(
         &self,
         Parameters(params): Parameters<CreateTypeParams>,
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
+
+        validate_create_type_params(&params).map_err(|e| ErrorData::invalid_params(e, None))?;
 
         let state = self.state.clone();
         let connection_id = params.connection_id.clone();
@@ -526,6 +884,7 @@ impl DbFluxServer {
         let type_type = params.r#type.clone();
         let values = params.values.clone();
         let attributes = params.attributes.clone();
+        let base_type = params.base_type.clone();
         let if_not_exists = params.if_not_exists.unwrap_or(true);
 
         self.governance
@@ -541,6 +900,7 @@ impl DbFluxServer {
                         &type_type,
                         values.as_deref(),
                         attributes.as_deref(),
+                        base_type.as_deref(),
                         if_not_exists,
                     )
                     .await
@@ -996,17 +1356,83 @@ impl DbFluxServer {
     }
 
     async fn create_type_impl(
-        _state: ServerState,
-        _connection_id: &str,
-        _name: &str,
-        _type_type: &str,
-        _values: Option<&[String]>,
-        _attributes: Option<&[crate::tools::TypeAttribute]>,
-        _if_not_exists: bool,
+        state: ServerState,
+        connection_id: &str,
+        name: &str,
+        type_type: &str,
+        values: Option<&[String]>,
+        attributes: Option<&[crate::tools::TypeAttribute]>,
+        base_type: Option<&str>,
+        if_not_exists: bool,
     ) -> Result<serde_json::Value, String> {
-        // This is PostgreSQL-specific and requires special handling
-        // For now, return a not supported response
-        Err("CREATE TYPE is database-specific and not yet fully implemented.".to_string())
+        let connection = Self::get_or_connect(state, connection_id).await?;
+
+        if connection.kind() != DbKind::Postgres
+            || !connection
+                .code_generator()
+                .supports(CodeGenCapabilities::CREATE_TYPE)
+        {
+            return Err(CREATE_TYPE_POSTGRES_ONLY_ERROR.to_string());
+        }
+
+        let type_ref = normalize_table_ref(name);
+        let requested_kind = CreateTypeKind::parse(type_type)?;
+        let definition = build_create_type_definition(type_type, values, attributes, base_type)?;
+
+        if if_not_exists {
+            let existing_kind =
+                lookup_postgres_custom_type_kind(connection.clone(), &type_ref).await?;
+
+            if existing_kind == Some(requested_kind) {
+                return Ok(serde_json::json!({
+                    "created": false,
+                    "type": type_ref.qualified_name(),
+                    "skipped": true,
+                }));
+            }
+        }
+
+        let sql = connection
+            .code_generator()
+            .generate_create_type(&CreateTypeRequest {
+                type_name: &type_ref.name,
+                schema_name: type_ref.schema.as_deref(),
+                definition,
+            })
+            .ok_or_else(|| CREATE_TYPE_POSTGRES_ONLY_ERROR.to_string())?;
+
+        let request = QueryRequest::new(sql);
+        match Self::execute_connection_blocking(connection.clone(), move |connection| {
+            connection
+                .execute(&request)
+                .map_err(|e| format!("Create type error: {}", e))
+                .map(|_| ())
+        })
+        .await
+        {
+            Ok(()) => {}
+            Err(error) if if_not_exists && is_postgres_duplicate_type_error(&error) => {
+                if lookup_postgres_custom_type_kind(connection.clone(), &type_ref)
+                    .await
+                    .ok()
+                    == Some(Some(requested_kind))
+                {
+                    return Ok(serde_json::json!({
+                        "created": false,
+                        "type": type_ref.qualified_name(),
+                        "skipped": true,
+                    }));
+                }
+
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+
+        Ok(serde_json::json!({
+            "created": true,
+            "type": type_ref.qualified_name(),
+        }))
     }
 }
 
@@ -1108,6 +1534,247 @@ mod tests {
         };
         let result = validate_drop_database_params(&params);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_create_type_enum_success() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "mood".to_string(),
+            r#type: "enum".to_string(),
+            values: Some(vec!["happy".to_string(), "sad".to_string()]),
+            attributes: None,
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        assert!(validate_create_type_params(&params).is_ok());
+    }
+
+    #[test]
+    fn test_validate_create_type_composite_requires_attributes() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "inventory_item".to_string(),
+            r#type: "composite".to_string(),
+            values: None,
+            attributes: Some(Vec::new()),
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        let result = validate_create_type_params(&params);
+        assert_eq!(
+            result.expect_err("empty composite attributes should fail"),
+            "Composite type requires at least one attribute"
+        );
+    }
+
+    #[test]
+    fn test_validate_create_type_domain_requires_base_type() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "email".to_string(),
+            r#type: "domain".to_string(),
+            values: None,
+            attributes: None,
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        let result = validate_create_type_params(&params);
+        assert_eq!(
+            result.expect_err("domain without base_type should fail"),
+            "Domain type requires base_type"
+        );
+    }
+
+    #[test]
+    fn test_build_create_type_definition_uses_composite_attributes() {
+        let attributes = vec![TypeAttribute {
+            name: "price".to_string(),
+            r#type: "numeric(10,2)".to_string(),
+        }];
+
+        let definition = build_create_type_definition("composite", None, Some(&attributes), None)
+            .expect("composite definition should build");
+
+        assert_eq!(
+            definition,
+            TypeDefinition::Composite {
+                attributes: vec![TypeAttributeDefinition {
+                    name: "price".to_string(),
+                    type_name: "numeric(10,2)".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn test_build_postgres_custom_type_kind_sql_uses_current_schema_for_unqualified_type() {
+        let sql = build_postgres_custom_type_kind_sql(&TableRef::new("mood"));
+
+        assert!(sql.contains("t.typname = 'mood'"));
+        assert!(sql.contains("n.nspname = current_schema()"));
+        assert!(sql.contains("t.typtype IN ('e', 'd')"));
+        assert!(sql.contains("t.typtype = 'c' AND c.relkind = 'c'"));
+    }
+
+    #[test]
+    fn test_validate_create_type_rejects_duplicate_enum_values_after_trimming() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "mood".to_string(),
+            r#type: "enum".to_string(),
+            values: Some(vec!["happy".to_string(), " happy ".to_string()]),
+            attributes: None,
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        assert_eq!(
+            validate_create_type_params(&params)
+                .expect_err("duplicate enum values should be rejected"),
+            "Enum values must be unique"
+        );
+    }
+
+    #[test]
+    fn test_validate_create_type_rejects_duplicate_attribute_names_after_trimming() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "inventory_item".to_string(),
+            r#type: "composite".to_string(),
+            values: None,
+            attributes: Some(vec![
+                TypeAttribute {
+                    name: "price".to_string(),
+                    r#type: "numeric".to_string(),
+                },
+                TypeAttribute {
+                    name: " price ".to_string(),
+                    r#type: "integer".to_string(),
+                },
+            ]),
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        assert_eq!(
+            validate_create_type_params(&params)
+                .expect_err("duplicate attribute names should be rejected"),
+            "Composite attribute names must be unique"
+        );
+    }
+
+    #[test]
+    fn test_validate_create_type_rejects_quoted_type_name() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "\"public\".mood".to_string(),
+            r#type: "enum".to_string(),
+            values: Some(vec!["happy".to_string()]),
+            attributes: None,
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        assert_eq!(
+            validate_create_type_params(&params).expect_err("quoted type names should be rejected"),
+            "Quoted PostgreSQL type names are not supported; use unquoted name or schema.name"
+        );
+    }
+
+    #[test]
+    fn test_validate_create_type_rejects_unsafe_domain_base_type() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "email".to_string(),
+            r#type: "domain".to_string(),
+            values: None,
+            attributes: None,
+            base_type: Some("text; DROP TABLE users;".to_string()),
+            if_not_exists: Some(true),
+        };
+
+        assert_eq!(
+            validate_create_type_params(&params).expect_err("unsafe base_type should be rejected"),
+            "Domain base_type contains unsupported PostgreSQL type syntax"
+        );
+    }
+
+    #[test]
+    fn test_validate_create_type_rejects_unsafe_composite_attribute_type() {
+        let params = CreateTypeParams {
+            connection_id: "test".to_string(),
+            name: "inventory_item".to_string(),
+            r#type: "composite".to_string(),
+            values: None,
+            attributes: Some(vec![TypeAttribute {
+                name: "supplier_id".to_string(),
+                r#type: "integer); DROP TYPE mood; --".to_string(),
+            }]),
+            base_type: None,
+            if_not_exists: Some(true),
+        };
+
+        assert_eq!(
+            validate_create_type_params(&params)
+                .expect_err("unsafe composite type should be rejected"),
+            "Composite attribute 'supplier_id' type contains unsupported PostgreSQL type syntax"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_type_error_detection_handles_sqlstate_and_message() {
+        assert!(is_postgres_duplicate_type_error(
+            "Create type error: type \"mood\" already exists"
+        ));
+        assert!(is_postgres_duplicate_type_error(
+            "Create type error: SQLSTATE 42710 duplicate_object"
+        ));
+        assert!(!is_postgres_duplicate_type_error(
+            "Create type error: permission denied"
+        ));
+    }
+
+    #[test]
+    fn test_parse_custom_type_kind_result_reads_kind_values() {
+        let result = dbflux_core::QueryResult::table(
+            Vec::new(),
+            vec![vec![Value::Text("domain".to_string())]],
+            None,
+            std::time::Duration::ZERO,
+        );
+
+        assert_eq!(
+            parse_custom_type_kind_result(&result).expect("kind result should parse"),
+            Some(CreateTypeKind::Domain)
+        );
+    }
+
+    #[test]
+    fn test_build_create_type_definition_trims_strings() {
+        let definition = build_create_type_definition(
+            "composite",
+            None,
+            Some(&[TypeAttribute {
+                name: " price ".to_string(),
+                r#type: " numeric(10,2) ".to_string(),
+            }]),
+            None,
+        )
+        .expect("composite definition should build");
+
+        assert_eq!(
+            definition,
+            TypeDefinition::Composite {
+                attributes: vec![TypeAttributeDefinition {
+                    name: "price".to_string(),
+                    type_name: "numeric(10,2)".to_string(),
+                }],
+            }
+        );
     }
 
     #[test]

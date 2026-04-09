@@ -370,26 +370,50 @@ impl CodeGenerator for PostgresCodeGenerator {
 
         match &req.definition {
             TypeDefinition::Enum { values } => {
-                let vals = if values.is_empty() {
-                    "'value1', 'value2'".to_string()
-                } else {
-                    values
-                        .iter()
-                        .map(|v| format!("'{}'", v))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
+                if values.is_empty() {
+                    return None;
+                }
+
+                let vals = values
+                    .iter()
+                    .map(|v| format!("'{}'", POSTGRES_DIALECT.escape_string(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
                 Some(format!("CREATE TYPE {} AS ENUM ({});", type_name, vals))
             }
 
             TypeDefinition::Domain { base_type } => {
+                if !is_safe_postgres_type_expression(base_type) {
+                    return None;
+                }
+
                 Some(format!("CREATE DOMAIN {} AS {};", type_name, base_type))
             }
 
-            TypeDefinition::Composite => Some(format!(
-                "CREATE TYPE {} AS (\n    field1 type1,\n    field2 type2\n);",
-                type_name
-            )),
+            TypeDefinition::Composite { attributes } => {
+                if attributes.is_empty() {
+                    return None;
+                }
+
+                let fields = attributes
+                    .iter()
+                    .map(|attribute| {
+                        if !is_safe_postgres_type_expression(&attribute.type_name) {
+                            return None;
+                        }
+
+                        Some(format!(
+                            "    {} {}",
+                            self.quote(&attribute.name),
+                            attribute.type_name
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .join(",\n");
+
+                Some(format!("CREATE TYPE {} AS (\n{}\n);", type_name, fields))
+            }
         }
     }
 
@@ -2511,7 +2535,7 @@ fn get_custom_types(client: &mut Client, schema: &str) -> Result<Vec<CustomTypeI
                 END as enum_values,
                 CASE
                     WHEN t.typtype = 'd' THEN (
-                        SELECT bt.typname FROM pg_type bt WHERE bt.oid = t.typbasetype
+                        pg_catalog.format_type(t.typbasetype, t.typtypmod)
                     )
                     ELSE NULL
                 END as base_type
@@ -3133,6 +3157,52 @@ fn pg_quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
+fn is_safe_postgres_type_expression(expression: &str) -> bool {
+    let trimmed = expression.trim();
+
+    if trimmed.is_empty()
+        || trimmed.contains('"')
+        || trimmed.contains('\'')
+        || trimmed.contains(';')
+        || trimmed.contains("--")
+        || trimmed.contains("/*")
+        || trimmed.contains("*/")
+    {
+        return false;
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut paren_depth = 0usize;
+    let mut saw_identifier = false;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        match ch {
+            'A'..='Z' | 'a'..='z' | '_' => saw_identifier = true,
+            '0'..='9' | ' ' | '\t' | '\n' | '\r' | '.' | ',' => {}
+            '(' => paren_depth += 1,
+            ')' => {
+                if paren_depth == 0 {
+                    return false;
+                }
+                paren_depth -= 1;
+            }
+            '[' => {
+                if chars.get(index + 1) != Some(&']') {
+                    return false;
+                }
+                index += 1;
+            }
+            _ => return false,
+        }
+
+        index += 1;
+    }
+
+    paren_depth == 0 && saw_identifier
+}
+
 fn pg_qualified_name(schema: Option<&str>, name: &str) -> String {
     match schema {
         Some(s) => format!("{}.{}", pg_quote_ident(s), pg_quote_ident(name)),
@@ -3310,12 +3380,14 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        PgUriSslMode, PostgresDialect, PostgresDriver, inject_password_into_pg_uri,
-        parse_pg_uri_sslmode, plan_postgres_semantic_request,
+        PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
     };
     use dbflux_core::{
-        DatabaseCategory, DbConfig, DbDriver, DbError, FormValues, MutationRequest, QueryLanguage,
-        RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableRef, Value, WhereOperator,
+        CodeGenerator, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
+        FormValues, MutationRequest, QueryLanguage, RowInsert, SemanticRequest, SqlDialect,
+        TableBrowseRequest, TableRef, TypeAttributeDefinition, TypeDefinition, Value,
+        WhereOperator,
     };
 
     #[test]
@@ -3530,5 +3602,111 @@ mod tests {
             plan.queries[0].text,
             "SELECT \"customer_id\", SUM(\"amount\") AS \"total_amount\" FROM \"public\".\"orders\" GROUP BY \"customer_id\" HAVING \"total_amount\" > 100 LIMIT 10"
         );
+    }
+
+    #[test]
+    fn postgres_codegen_escapes_enum_values_when_creating_types() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "mood",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Enum {
+                values: vec!["happy".to_string(), "Bob's".to_string()],
+            },
+        };
+
+        let sql = generator
+            .generate_create_type(&request)
+            .expect("postgres should generate create type sql");
+
+        assert_eq!(
+            sql,
+            "CREATE TYPE \"public\".\"mood\" AS ENUM ('happy', 'Bob''s');"
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_uses_composite_attributes_when_creating_types() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "inventory_item",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Composite {
+                attributes: vec![
+                    TypeAttributeDefinition {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                    },
+                    TypeAttributeDefinition {
+                        name: "supplier_id".to_string(),
+                        type_name: "integer".to_string(),
+                    },
+                ],
+            },
+        };
+
+        let sql = generator
+            .generate_create_type(&request)
+            .expect("postgres should generate composite type sql");
+
+        assert_eq!(
+            sql,
+            "CREATE TYPE \"public\".\"inventory_item\" AS (\n    \"name\" text,\n    \"supplier_id\" integer\n);"
+        );
+    }
+
+    #[test]
+    fn postgres_codegen_skips_enum_types_without_real_values() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "mood",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Enum { values: vec![] },
+        };
+
+        assert!(generator.generate_create_type(&request).is_none());
+    }
+
+    #[test]
+    fn postgres_codegen_skips_composite_types_without_real_attributes() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "inventory_item",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Composite { attributes: vec![] },
+        };
+
+        assert!(generator.generate_create_type(&request).is_none());
+    }
+
+    #[test]
+    fn postgres_codegen_rejects_unsafe_domain_type_expression() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "email",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Domain {
+                base_type: "text; DROP TABLE users;".to_string(),
+            },
+        };
+
+        assert!(generator.generate_create_type(&request).is_none());
+    }
+
+    #[test]
+    fn postgres_codegen_rejects_unsafe_composite_attribute_type_expression() {
+        let generator = PostgresCodeGenerator;
+        let request = CreateTypeRequest {
+            type_name: "inventory_item",
+            schema_name: Some("public"),
+            definition: TypeDefinition::Composite {
+                attributes: vec![TypeAttributeDefinition {
+                    name: "supplier_id".to_string(),
+                    type_name: "integer); DROP TYPE mood; --".to_string(),
+                }],
+            },
+        };
+
+        assert!(generator.generate_create_type(&request).is_none());
     }
 }
