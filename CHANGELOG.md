@@ -2,6 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.4] – 2026-04-09
+
+### Features
+
+* Add MCP `create_type` support (#15)
+
+### Fixes
+
+* Add Linux client-side window decorations in the UI (#14)
+* Expand command palette global search behavior (#17)
+* Preserve MongoDB SRV URIs in URI mode (#19)
+
+### Improvements
+
+* Add a pull request template to standardize change summaries and validation details
+
+---
+
 ## [0.4.3] – 2026-04-08
 
 ### Features
