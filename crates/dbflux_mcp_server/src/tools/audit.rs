@@ -112,8 +112,8 @@ fn parse_iso8601_to_epoch_ms(date_str: &str) -> Result<i64, String> {
         .map_err(|e| format!("Invalid ISO8601 date '{}': {}", date_str, e))
 }
 
-#[allow(dead_code)] // Used by query_audit_logs and export_audit_logs tools
-fn build_audit_filter(
+/// Common filter fields shared by query and export audit params.
+struct AuditFilterInput {
     actor_id: Option<String>,
     tool_id: Option<String>,
     decision: Option<String>,
@@ -123,35 +123,67 @@ fn build_audit_filter(
     category: Option<String>,
     level: Option<String>,
     outcome: Option<String>,
-) -> Result<AuditQueryFilter, String> {
-    let start_epoch_ms = if let Some(ref date) = start_date {
-        Some(parse_iso8601_to_epoch_ms(date)?)
-    } else {
-        None
-    };
+}
 
-    let end_epoch_ms = if let Some(ref date) = end_date {
-        Some(parse_iso8601_to_epoch_ms(date)?)
-    } else {
-        None
-    };
+impl AuditFilterInput {
+    fn from_query(p: &QueryAuditLogsParams) -> Self {
+        Self {
+            actor_id: p.actor_id.clone(),
+            tool_id: p.tool_id.clone(),
+            decision: p.decision.clone(),
+            start_date: p.start_date.clone(),
+            end_date: p.end_date.clone(),
+            limit: p.limit,
+            category: p.category.clone(),
+            level: p.level.clone(),
+            outcome: p.outcome.clone(),
+        }
+    }
 
-    Ok(AuditQueryFilter {
-        actor_id,
-        tool_id,
-        decision,
-        start_epoch_ms,
-        end_epoch_ms,
-        limit,
-        level,
-        category,
-        action: None,
-        source_id: None,
-        outcome,
-        object_type: None,
-        free_text: None,
-        correlation_id: None,
-    })
+    fn from_export(p: &ExportAuditLogsParams) -> Self {
+        Self {
+            actor_id: p.actor_id.clone(),
+            tool_id: p.tool_id.clone(),
+            decision: p.decision.clone(),
+            start_date: p.start_date.clone(),
+            end_date: p.end_date.clone(),
+            limit: p.limit,
+            category: p.category.clone(),
+            level: p.level.clone(),
+            outcome: p.outcome.clone(),
+        }
+    }
+
+    fn into_filter(self) -> Result<AuditQueryFilter, String> {
+        let start_epoch_ms = self
+            .start_date
+            .as_deref()
+            .map(parse_iso8601_to_epoch_ms)
+            .transpose()?;
+
+        let end_epoch_ms = self
+            .end_date
+            .as_deref()
+            .map(parse_iso8601_to_epoch_ms)
+            .transpose()?;
+
+        Ok(AuditQueryFilter {
+            actor_id: self.actor_id,
+            tool_id: self.tool_id,
+            decision: self.decision,
+            start_epoch_ms,
+            end_epoch_ms,
+            limit: self.limit,
+            level: self.level,
+            category: self.category,
+            action: None,
+            source_id: None,
+            outcome: self.outcome,
+            object_type: None,
+            free_text: None,
+            correlation_id: None,
+        })
+    }
 }
 
 #[tool_router(router = audit_router, vis = "pub")]
@@ -165,15 +197,7 @@ impl DbFluxServer {
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
 
-        let actor_id = params.actor_id;
-        let tool_id = params.tool_id;
-        let decision = params.decision;
-        let start_date = params.start_date;
-        let end_date = params.end_date;
-        let limit = params.limit;
-        let category = params.category;
-        let level = params.level;
-        let outcome = params.outcome;
+        let filter_input = AuditFilterInput::from_query(&params);
 
         let state = self.state.clone();
 
@@ -183,11 +207,9 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Read,
                 move || async move {
-                    let filter = build_audit_filter(
-                        actor_id, tool_id, decision, start_date, end_date, limit, category, level,
-                        outcome,
-                    )
-                    .map_err(|e| e.into_error_data())?;
+                    let filter = filter_input
+                        .into_filter()
+                        .map_err(|e| e.into_error_data())?;
 
                     let runtime = state.runtime.read().await;
                     let audit_service = runtime.audit_service();
@@ -250,15 +272,7 @@ impl DbFluxServer {
     ) -> Result<CallToolResult, ErrorData> {
         use dbflux_policy::ExecutionClassification;
 
-        let actor_id = params.actor_id;
-        let tool_id = params.tool_id;
-        let decision = params.decision;
-        let start_date = params.start_date;
-        let end_date = params.end_date;
-        let limit = params.limit;
-        let category = params.category;
-        let level = params.level;
-        let outcome = params.outcome;
+        let filter_input = AuditFilterInput::from_export(&params);
         let format = params.format;
 
         let state = self.state.clone();
@@ -269,11 +283,9 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Read,
                 move || async move {
-                    let filter = build_audit_filter(
-                        actor_id, tool_id, decision, start_date, end_date, limit, category, level,
-                        outcome,
-                    )
-                    .map_err(|e| e.into_error_data())?;
+                    let filter = filter_input
+                        .into_filter()
+                        .map_err(|e| e.into_error_data())?;
 
                     let export_format = match format.to_lowercase().as_str() {
                         "csv" => AuditExportFormat::Csv,
