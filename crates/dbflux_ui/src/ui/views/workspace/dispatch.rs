@@ -73,11 +73,6 @@ impl CommandDispatcher for Workspace {
                 true
             }
             #[cfg(feature = "mcp")]
-            Command::OpenMcpAudit => {
-                self.open_mcp_audit(window, cx);
-                true
-            }
-            #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => {
                 self.refresh_mcp_governance(window, cx);
                 true

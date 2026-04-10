@@ -2,8 +2,6 @@ use dbflux_audit::AuditService;
 use dbflux_core::QueryLanguage;
 use dbflux_core::observability::EventCategory;
 use dbflux_core::observability::actions::MCP_AUTHORIZE;
-use dbflux_mcp::governance_service::{AuditExportFormat, AuditQuery};
-use dbflux_mcp::handlers::audit::{export_audit_logs, query_audit_logs};
 use dbflux_mcp::handlers::query::{QueryExecutionRequest, QueryHandlerError, handle_query_tool};
 use dbflux_mcp::handlers::scripts::{ScriptHandler, ScriptHandlerError, ScriptLifecycleState};
 use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
@@ -159,63 +157,4 @@ fn script_run_requires_runnable_lifecycle() {
     let engine = allow_engine("run_script", ExecutionClassification::Admin);
     let result = handler.run_script(&engine, "agent-a", "conn-a", script.id);
     assert!(matches!(result, Err(ScriptHandlerError::NotRunnable)));
-}
-
-#[test]
-fn audit_tools_query_and_export_filtered_results() {
-    use dbflux_core::observability::actions::QUERY_EXECUTE;
-    use dbflux_core::observability::types::{
-        EventCategory, EventOutcome, EventRecord, EventSeverity,
-    };
-
-    let audit_service = fresh_audit_service("dbflux-mcp-audit-tools-test.sqlite");
-
-    audit_service
-        .record(
-            EventRecord::new(
-                1,
-                EventSeverity::Info,
-                EventCategory::Query,
-                EventOutcome::Success,
-            )
-            .with_typed_action(QUERY_EXECUTE)
-            .with_summary("Query executed")
-            .with_actor_id("agent-a")
-            .with_connection_context("conn-1", "main", "sqlite")
-            .with_duration_ms(5),
-        )
-        .expect("first record should succeed");
-    audit_service
-        .record(
-            EventRecord::new(
-                2,
-                EventSeverity::Info,
-                EventCategory::Script,
-                EventOutcome::Failure,
-            )
-            .with_action("run_script")
-            .with_summary("Script denied")
-            .with_actor_id("agent-b")
-            .with_error("policy", "policy")
-            .with_object_ref("script", "script-1"),
-        )
-        .expect("second record should succeed");
-
-    let query = AuditQuery {
-        actor_id: Some("agent-a".to_string()),
-        tool_id: None,
-        decision: None,
-        start_epoch_ms: None,
-        end_epoch_ms: None,
-        limit: None,
-    };
-
-    let filtered = query_audit_logs(&audit_service, &query).expect("query should succeed");
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].actor_id, "agent-a");
-
-    let exported = export_audit_logs(&audit_service, &query, AuditExportFormat::Json)
-        .expect("export should succeed");
-    assert!(exported.contains("agent-a"));
-    assert!(!exported.contains("agent-b"));
 }

@@ -130,7 +130,7 @@ const TOOL_META: &[(&str, &str, &str)] = &[
     (
         "query_audit_logs",
         "Query Audit Logs",
-        "Search and filter the MCP audit trail",
+        "Search and filter the audit trail",
     ),
     (
         "get_audit_entry",

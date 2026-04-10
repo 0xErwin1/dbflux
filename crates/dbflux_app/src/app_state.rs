@@ -23,9 +23,9 @@ use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
-    AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, McpGovernanceService,
-    McpRuntime, McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
-    ToolPolicyDto, TrustedClientDto,
+    ApprovalOutcome, ConnectionPolicyAssignmentDto, McpGovernanceService, McpRuntime,
+    McpRuntimeEvent, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto,
 };
 
 #[cfg(feature = "sqlite")]
@@ -2099,13 +2099,16 @@ impl AppState {
     pub fn approve_mcp_pending_execution(
         &mut self,
         pending_id: &str,
-    ) -> Result<AuditEntry, String> {
+    ) -> Result<ApprovalOutcome, String> {
         self.mcp_runtime
             .approve_pending_execution_with_origin_mut(pending_id, "local", EventOrigin::local())
             .map_err(|error| error.to_string())
     }
 
-    pub fn reject_mcp_pending_execution(&mut self, pending_id: &str) -> Result<AuditEntry, String> {
+    pub fn reject_mcp_pending_execution(
+        &mut self,
+        pending_id: &str,
+    ) -> Result<ApprovalOutcome, String> {
         self.mcp_runtime
             .reject_pending_execution_with_origin_mut(
                 pending_id,
@@ -2113,20 +2116,6 @@ impl AppState {
                 None,
                 EventOrigin::local(),
             )
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn query_mcp_audit_entries(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, String> {
-        dbflux_mcp::McpGovernanceService::query_audit_entries(&self.mcp_runtime, query)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn export_mcp_audit_entries(
-        &self,
-        query: &AuditQuery,
-        format: AuditExportFormat,
-    ) -> Result<String, String> {
-        dbflux_mcp::McpGovernanceService::export_audit_entries(&self.mcp_runtime, query, format)
             .map_err(|error| error.to_string())
     }
 

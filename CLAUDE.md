@@ -288,7 +288,7 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 - `dbflux_proxy`: SOCKS5/HTTP CONNECT proxy via `TunnelConnector` impl
 - `dbflux_ssh`: SSH tunnel via `TunnelConnector` impl (all SSH ops serialized to one thread for libssh2 safety)
 - `dbflux_lua`: Embedded Lua runtime and `HookExecutor` implementation for in-process hooks
-- `dbflux_mcp`: MCP runtime (`McpRuntime`), governance service trait (`McpGovernanceService`), tool catalog, and handlers for query/approval/audit/discovery
+- `dbflux_mcp`: MCP runtime (`McpRuntime`), governance service trait (`McpGovernanceService`), tool catalog, and handlers for query/approval/discovery
 - `dbflux_mcp_server`: Standalone binary for AI clients to connect via MCP protocol; uses `dbflux_mcp` runtime
 - `dbflux_policy`: `PolicyEngine` with roles (`PolicyRole`) and tool policies (`ToolPolicy`); `TrustedClientRegistry`; `ExecutionClassification` enum
 - `dbflux_approval`: `ApprovalService` and `InMemoryPendingExecutionStore` for deferred executions requiring human approval
@@ -472,7 +472,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **UI Integration**:
 - `McpApprovalsView` document for reviewing pending executions
-- MCP settings section for trusted clients, roles, policies, and audit log
+- MCP settings section for trusted clients, roles, and policies
+- `AuditDocument` as the unified audit viewer for all event categories (no separate MCP audit surface)
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
 ### Platform Detection
