@@ -109,7 +109,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | Approval | `get_pending_execution` | Retrieve details of a specific pending execution |
 | Approval | `approve_execution` | Approve a pending mutation (admin only) |
 | Approval | `reject_execution` | Reject and discard a pending mutation (admin only) |
-| Audit | `query_audit_logs` | Search and filter the MCP audit trail |
+| Audit | `query_audit_logs` | Search and filter the audit trail |
 | Audit | `get_audit_entry` | Retrieve a single audit log entry by ID |
 | Audit | `export_audit_logs` | Download audit log entries as CSV or JSON |
 

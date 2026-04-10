@@ -9,9 +9,9 @@ pub use built_ins::{
     BUILTIN_ID_PREFIX, builtin_display_name, builtin_policies, builtin_roles, is_builtin,
 };
 pub use governance_service::{
-    AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, GovernanceError,
-    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
-    ToolPolicyDto, TrustedClientDto,
+    ApprovalOutcome, ConnectionPolicyAssignmentDto, GovernanceError, McpGovernanceService,
+    PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto,
 };
 pub use runtime::{McpRuntime, McpRuntimeEvent};
 pub use tool_catalog::{

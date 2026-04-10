@@ -94,7 +94,7 @@ These can be changed at runtime via `AuditService::set_*()` methods. The MCP ser
 
 ### In the DBFlux UI
 
-Navigate to **Workspace → Audit** (or **Settings → MCP → Audit**). The view supports:
+Navigate to **Workspace → Audit**. The unified audit view supports:
 
 - Filtering by actor, tool/action, date range, decision, category
 - Exporting filtered results to CSV or JSON

@@ -158,19 +158,31 @@ impl Workspace {
         use crate::ui::document::AuditDocument;
 
         // Check if an audit document is already open
-        let existing_audit_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| matches!(doc, crate::ui::document::DocumentHandle::Audit { .. }))
-            .map(|doc| doc.id());
+        let existing_audit =
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find_map(|doc| match doc {
+                    crate::ui::document::DocumentHandle::Audit { id, entity } => {
+                        Some((*id, entity.clone()))
+                    }
+                    _ => None,
+                });
 
-        if let Some(id) = existing_audit_id {
+        self.active_governance_panel = None;
+
+        if let Some((id, entity)) = existing_audit {
+            entity.update(cx, |doc, cx| {
+                doc.set_category_filter(None, cx);
+            });
+
             // Focus the existing audit tab
             self.tab_manager.update(cx, |mgr, cx| {
                 mgr.activate(id, cx);
             });
+
+            self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
             cx.toast_info("Focusing existing audit viewer", window);
             return;
         }
@@ -197,18 +209,6 @@ impl Workspace {
 
         self.active_governance_panel = Some(super::GovernancePanel::Approvals);
         cx.toast_info("Opened MCP approvals", window);
-    }
-
-    #[cfg(feature = "mcp")]
-    pub(super) fn open_mcp_audit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
-        self.mcp_audit_view.update(cx, |view, cx| {
-            view.refresh(cx);
-        });
-
-        self.active_governance_panel = Some(super::GovernancePanel::Audit);
-        cx.toast_info("Opened MCP audit viewer", window);
     }
 
     #[cfg(feature = "mcp")]

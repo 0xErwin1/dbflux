@@ -12,11 +12,11 @@ use dbflux_policy::{
 };
 
 use crate::governance_service::{
-    AuditEntry, AuditExportFormat, AuditQuery, ConnectionPolicyAssignmentDto, GovernanceError,
-    McpGovernanceService, PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto,
-    ToolPolicyDto, TrustedClientDto,
+    ApprovalOutcome, ConnectionPolicyAssignmentDto, GovernanceError, McpGovernanceService,
+    PendingExecutionDetail, PendingExecutionSummary, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto,
 };
-use crate::handlers::{approval as approval_handler, audit as audit_handler};
+use crate::handlers::approval as approval_handler;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpRuntimeEvent {
@@ -228,47 +228,22 @@ impl McpGovernanceService for McpRuntime {
         })
     }
 
-    fn approve_pending_execution(&self, _pending_id: &str) -> Result<AuditEntry, GovernanceError> {
+    fn approve_pending_execution(
+        &self,
+        _pending_id: &str,
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         Err(GovernanceError::Operation(
             "approve_pending_execution requires mutable runtime access".to_string(),
         ))
     }
 
-    fn reject_pending_execution(&self, _pending_id: &str) -> Result<AuditEntry, GovernanceError> {
+    fn reject_pending_execution(
+        &self,
+        _pending_id: &str,
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         Err(GovernanceError::Operation(
             "reject_pending_execution requires mutable runtime access".to_string(),
         ))
-    }
-
-    fn query_audit_entries(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, GovernanceError> {
-        let events = audit_handler::query_audit_logs_extended(&self.audit_service, query)
-            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
-
-        Ok(events
-            .into_iter()
-            .map(|event| {
-                let tool_id = event.legacy_tool_id();
-                let decision = event.legacy_decision();
-
-                AuditEntry {
-                    id: event.id.to_string(),
-                    actor_id: event.actor_id,
-                    tool_id,
-                    decision,
-                    reason: event.reason,
-                    created_at_epoch_ms: event.created_at_epoch_ms,
-                }
-            })
-            .collect())
-    }
-
-    fn export_audit_entries(
-        &self,
-        query: &AuditQuery,
-        format: AuditExportFormat,
-    ) -> Result<String, GovernanceError> {
-        audit_handler::export_audit_logs_extended(&self.audit_service, query, format)
-            .map_err(|error| GovernanceError::Operation(error.to_string()))
     }
 }
 
@@ -370,7 +345,7 @@ impl McpRuntime {
     pub fn approve_pending_execution_mut(
         &mut self,
         pending_id: &str,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         self.approve_pending_execution_as_mut(pending_id, "system")
     }
 
@@ -378,7 +353,7 @@ impl McpRuntime {
         &mut self,
         pending_id: &str,
         approver_actor_id: &str,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         self.approve_pending_execution_with_origin_mut(
             pending_id,
             approver_actor_id,
@@ -391,7 +366,7 @@ impl McpRuntime {
         pending_id: &str,
         approver_actor_id: &str,
         origin: EventOrigin,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         let pending = approval_handler::get_pending_execution(&self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
         let replay_plan = &pending.plan;
@@ -432,13 +407,13 @@ impl McpRuntime {
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
 
-        Ok(self.audit_entry_from_recorded(recorded, "approve_execution", "allow", None))
+        Ok(self.approval_outcome_from_recorded(recorded, "approved"))
     }
 
     pub fn reject_pending_execution_mut(
         &mut self,
         pending_id: &str,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         self.reject_pending_execution_as_mut(pending_id, "system", None)
     }
 
@@ -447,7 +422,7 @@ impl McpRuntime {
         pending_id: &str,
         rejector_actor_id: &str,
         reason: Option<&str>,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         self.reject_pending_execution_with_origin_mut(
             pending_id,
             rejector_actor_id,
@@ -462,7 +437,7 @@ impl McpRuntime {
         rejector_actor_id: &str,
         reason: Option<&str>,
         origin: EventOrigin,
-    ) -> Result<AuditEntry, GovernanceError> {
+    ) -> Result<ApprovalOutcome, GovernanceError> {
         let pending = approval_handler::get_pending_execution(&self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
         let pending_plan = &pending.plan;
@@ -506,12 +481,7 @@ impl McpRuntime {
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
 
-        Ok(self.audit_entry_from_recorded(
-            recorded,
-            "reject_execution",
-            "deny",
-            Some(rejection_reason.to_string()),
-        ))
+        Ok(self.approval_outcome_from_recorded(recorded, "rejected"))
     }
 
     pub fn request_execution_mut(&mut self, plan: ExecutionPlan) -> PendingExecutionSummary {
@@ -578,20 +548,16 @@ impl McpRuntime {
         Ok(recorded)
     }
 
-    fn audit_entry_from_recorded(
+    fn approval_outcome_from_recorded(
         &self,
         recorded: EventRecord,
-        tool_id: &str,
-        decision: &str,
-        reason: Option<String>,
-    ) -> AuditEntry {
-        AuditEntry {
+        status: &str,
+    ) -> ApprovalOutcome {
+        ApprovalOutcome {
             id: recorded.id.map(|id| id.to_string()).unwrap_or_default(),
+            status: status.to_string(),
             actor_id: recorded.actor_id.unwrap_or_default(),
-            tool_id: tool_id.to_string(),
-            decision: decision.to_string(),
-            reason,
-            created_at_epoch_ms: recorded.ts_ms,
+            timestamp_ms: recorded.ts_ms,
         }
     }
 }

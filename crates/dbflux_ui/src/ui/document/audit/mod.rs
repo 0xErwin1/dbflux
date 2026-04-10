@@ -326,6 +326,46 @@ impl AuditDocument {
         }
     }
 
+    /// Creates a new audit document with a category pre-filter applied.
+    ///
+    /// This is the entry point for opening the audit viewer focused on a specific
+    /// category (e.g., MCP events from the governance panel). The dropdown is synced
+    /// to reflect the pre-selected category.
+    pub fn new_with_category(
+        category: EventCategory,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut doc = Self::new(app_state, window, cx);
+
+        doc.set_category_filter(Some(category), cx);
+        doc.pending_initial_load = false;
+
+        doc
+    }
+
+    pub fn set_category_filter(&mut self, category: Option<EventCategory>, cx: &mut Context<Self>) {
+        let selected_index = Self::category_index(category);
+
+        self.dropdown_category.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(Some(selected_index), cx);
+        });
+
+        if self.filters.category == category {
+            cx.notify();
+            return;
+        }
+
+        self.filters.category = category;
+        self.reset_pagination();
+        self.load_events(cx);
+    }
+
+    pub fn category_filter(&self) -> Option<EventCategory> {
+        self.filters.category
+    }
+
     fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
         if self.refresh_policy == policy {
             return;
@@ -641,6 +681,20 @@ impl AuditDocument {
             DropdownItem::new("MCP"),
             DropdownItem::new("Governance"),
         ]
+    }
+
+    fn category_index(category: Option<EventCategory>) -> usize {
+        match category {
+            Some(EventCategory::Config) => 1,
+            Some(EventCategory::Connection) => 2,
+            Some(EventCategory::Query) => 3,
+            Some(EventCategory::Hook) => 4,
+            Some(EventCategory::Script) => 5,
+            Some(EventCategory::System) => 6,
+            Some(EventCategory::Mcp) => 7,
+            Some(EventCategory::Governance) => 8,
+            None => 0,
+        }
     }
 
     fn category_for_index(index: usize) -> Option<EventCategory> {
@@ -2414,5 +2468,21 @@ impl Render for AuditDocument {
                     .children(context_menu),
             )
             .child(self.render_status_bar(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuditDocument;
+    use dbflux_core::observability::EventCategory;
+
+    #[test]
+    fn category_index_maps_none_to_all() {
+        assert_eq!(AuditDocument::category_index(None), 0);
+    }
+
+    #[test]
+    fn category_index_maps_mcp_to_mcp_dropdown_entry() {
+        assert_eq!(AuditDocument::category_index(Some(EventCategory::Mcp)), 7);
     }
 }

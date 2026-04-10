@@ -120,37 +120,15 @@ pub struct PendingExecutionDetail {
     pub plan: serde_json::Value,
 }
 
+/// Lightweight outcome returned when an approval or rejection completes.
+/// Replaces the former `AuditEntry` in approve/reject return positions so
+/// that the governance trait no longer depends on audit-query DTOs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuditQuery {
-    #[serde(default)]
-    pub actor_id: Option<String>,
-    #[serde(default)]
-    pub tool_id: Option<String>,
-    #[serde(default)]
-    pub decision: Option<String>,
-    #[serde(default)]
-    pub start_epoch_ms: Option<i64>,
-    #[serde(default)]
-    pub end_epoch_ms: Option<i64>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuditExportFormat {
-    Csv,
-    Json,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuditEntry {
+pub struct ApprovalOutcome {
     pub id: String,
+    pub status: String,
     pub actor_id: String,
-    pub tool_id: String,
-    pub decision: String,
-    pub reason: Option<String>,
-    pub created_at_epoch_ms: i64,
+    pub timestamp_ms: i64,
 }
 
 #[derive(Debug, Error)]
@@ -193,15 +171,13 @@ pub trait McpGovernanceService {
         pending_id: &str,
     ) -> Result<PendingExecutionDetail, GovernanceError>;
 
-    fn approve_pending_execution(&self, pending_id: &str) -> Result<AuditEntry, GovernanceError>;
-
-    fn reject_pending_execution(&self, pending_id: &str) -> Result<AuditEntry, GovernanceError>;
-
-    fn query_audit_entries(&self, query: &AuditQuery) -> Result<Vec<AuditEntry>, GovernanceError>;
-
-    fn export_audit_entries(
+    fn approve_pending_execution(
         &self,
-        query: &AuditQuery,
-        format: AuditExportFormat,
-    ) -> Result<String, GovernanceError>;
+        pending_id: &str,
+    ) -> Result<ApprovalOutcome, GovernanceError>;
+
+    fn reject_pending_execution(
+        &self,
+        pending_id: &str,
+    ) -> Result<ApprovalOutcome, GovernanceError>;
 }

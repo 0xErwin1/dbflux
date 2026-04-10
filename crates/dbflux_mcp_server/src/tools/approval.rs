@@ -21,6 +21,8 @@ use uuid::Uuid;
 
 use crate::server::DbFluxServer;
 
+const DEFAULT_REJECTION_REASON: &str = "rejected by approver";
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RequestExecutionParams {
     #[schemars(description = "Tool ID to execute (e.g., 'delete_records', 'drop_table')")]
@@ -70,8 +72,8 @@ impl DbFluxServer {
         let state = self.state.clone();
         let client_id = state.client_id.clone();
 
-        // Classify the operation based on the tool_id
-        let classification = Self::classify_tool(&params.tool_id);
+        let classification = Self::request_execution_classification(&params.tool_id)
+            .map_err(|error| ErrorData::invalid_params(error, None))?;
 
         // Extract connection_id for authorization
         let connection_id_ref = params.connection_id.clone();
@@ -97,12 +99,11 @@ impl DbFluxServer {
 
                     let pending = {
                         let mut runtime = state.runtime.write().await;
-                        let approval_service = runtime.approval_service_mut();
-                        approval_service.request_execution(&plan)
+                        runtime.request_execution_mut(plan)
                     };
 
                     let response = serde_json::json!({
-                        "pending_id": pending.id.to_string(),
+                        "pending_id": pending.id,
                         "status": "pending",
                         "classification": format!("{:?}", classification),
                         "message": "Execution request created. Awaiting approval."
@@ -277,6 +278,7 @@ impl DbFluxServer {
         Parameters(params): Parameters<RejectExecutionParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let state = self.state.clone();
+        let rejection_reason = effective_rejection_reason(params.reason.as_deref()).to_string();
         let pending_id = params
             .pending_id
             .parse::<Uuid>()
@@ -288,22 +290,22 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Admin,
                 move || async move {
-                    let rejected = {
+                    {
                         let mut runtime = state.runtime.write().await;
                         runtime
                             .reject_pending_execution_with_origin_mut(
                                 &pending_id.to_string(),
                                 &state.client_id,
-                                params.reason.as_deref(),
+                                Some(rejection_reason.as_str()),
                                 dbflux_core::observability::EventOrigin::mcp(),
                             )
-                            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    };
+                            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+                    }
 
                     let response = serde_json::json!({
                         "rejected": true,
                         "pending_id": pending_id.to_string(),
-                        "reason": rejected.reason.unwrap_or_else(|| "No reason provided".to_string())
+                        "reason": rejection_reason
                     });
 
                     Ok(CallToolResult::success(vec![Content::text(
@@ -314,58 +316,110 @@ impl DbFluxServer {
             .await
     }
 
-    /// Classify a tool by its ID to determine its execution classification
-    fn classify_tool(tool_id: &str) -> ExecutionClassification {
+    fn request_execution_classification(tool_id: &str) -> Result<ExecutionClassification, String> {
+        let target_classification = Self::classify_tool(tool_id)
+            .ok_or_else(|| format!("Unsupported tool for approval request: {}", tool_id))?;
+
+        Ok(ExecutionClassification::Admin.max(target_classification))
+    }
+
+    /// Classify a tool by its ID to determine its execution classification.
+    fn classify_tool(tool_id: &str) -> Option<ExecutionClassification> {
         match tool_id {
             // Metadata operations
             "list_connections"
+            | "connect"
+            | "disconnect"
             | "list_databases"
             | "list_schemas"
             | "list_tables"
             | "list_collections"
             | "describe_object"
-            | "get_connection_info" => ExecutionClassification::Metadata,
+            | "get_connection_info"
+            | "list_scripts" => Some(ExecutionClassification::Metadata),
 
             // Read operations
-            "select_data" | "count_records" | "aggregate_data" => ExecutionClassification::Read,
+            "select_data" | "count_records" | "aggregate_data" | "explain_query"
+            | "preview_mutation" | "get_script" | "query_audit_logs" | "get_audit_entry"
+            | "export_audit_logs" => Some(ExecutionClassification::Read),
 
             // Write operations
-            "insert_record" | "update_records" | "upsert_record" => ExecutionClassification::Write,
+            "insert_record" | "update_records" | "upsert_record" | "create_script"
+            | "update_script" => Some(ExecutionClassification::Write),
 
             // Destructive operations
-            "delete_records" | "truncate_table" | "drop_table" | "drop_database" | "drop_index" => {
-                ExecutionClassification::Destructive
-            }
+            "delete_records" | "truncate_table" => Some(ExecutionClassification::Destructive),
 
             // Admin operations
-            "create_table" | "alter_table" | "create_index" | "create_type" => {
-                ExecutionClassification::Admin
+            "create_table" | "create_index" | "drop_index" | "create_type" | "delete_script" => {
+                Some(ExecutionClassification::Admin)
             }
 
-            // Default to Admin for unknown tools (safest classification)
-            _ => ExecutionClassification::Admin,
+            // Dynamic or strongly destructive operations default to the stricter class.
+            "alter_table" | "execute_script" | "drop_table" | "drop_database" => {
+                Some(ExecutionClassification::AdminDestructive)
+            }
+
+            _ => None,
         }
     }
 }
 
+fn effective_rejection_reason(reason: Option<&str>) -> &str {
+    reason.unwrap_or(DEFAULT_REJECTION_REASON)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::DbFluxServer;
+    use super::{DEFAULT_REJECTION_REASON, DbFluxServer, effective_rejection_reason};
     use dbflux_policy::ExecutionClassification;
 
     #[test]
     fn classify_tool_keeps_stricter_requested_execution_levels() {
         assert_eq!(
             DbFluxServer::classify_tool("drop_table"),
-            ExecutionClassification::Destructive
+            Some(ExecutionClassification::AdminDestructive)
         );
         assert_eq!(
             DbFluxServer::classify_tool("select_data"),
-            ExecutionClassification::Read
+            Some(ExecutionClassification::Read)
         );
         assert_eq!(
             DbFluxServer::classify_tool("alter_table"),
-            ExecutionClassification::Admin
+            Some(ExecutionClassification::AdminDestructive)
         );
+        assert_eq!(DbFluxServer::classify_tool("request_execution"), None);
+    }
+
+    #[test]
+    fn request_execution_classification_is_at_least_admin() {
+        assert_eq!(
+            DbFluxServer::request_execution_classification("insert_record"),
+            Ok(ExecutionClassification::Admin)
+        );
+        assert_eq!(
+            DbFluxServer::request_execution_classification("drop_table"),
+            Ok(ExecutionClassification::AdminDestructive)
+        );
+    }
+
+    #[test]
+    fn request_execution_rejects_unsupported_governance_tools() {
+        assert!(DbFluxServer::request_execution_classification("request_execution").is_err());
+        assert!(DbFluxServer::request_execution_classification("approve_execution").is_err());
+        assert!(DbFluxServer::request_execution_classification("unknown_tool").is_err());
+    }
+
+    #[test]
+    fn request_execution_promotes_read_only_tools_to_admin_review() {
+        assert_eq!(
+            DbFluxServer::request_execution_classification("select_data"),
+            Ok(ExecutionClassification::Admin)
+        );
+    }
+
+    #[test]
+    fn reject_execution_uses_runtime_default_reason_when_missing() {
+        assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
     }
 }

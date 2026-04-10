@@ -318,7 +318,7 @@ crates/
     src/governance_service.rs # McpGovernanceService trait and DTOs
     src/tool_catalog.rs     # Canonical MCP tools and deferred tool definitions
     src/built_ins.rs        # Built-in roles and policies
-    src/handlers/           # MCP tool handlers (query, approval, audit, discovery, scripts)
+     src/handlers/           # MCP tool handlers (query, approval, discovery, scripts)
     src/server/             # MCP server infrastructure (router, authorization, bootstrap)
   dbflux_mcp_server/        # Standalone MCP server binary
     src/main.rs             # CLI entrypoint with --client-id and --config-dir
@@ -586,7 +586,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 **MCP Runtime** (`dbflux_mcp/runtime.rs`):
 - `McpRuntime` implements `McpGovernanceService` trait
 - Integrates policy engine, approval service, and audit service
-- Emits `McpRuntimeEvent` for UI updates (clients/roles/policies changed, pending executions, audit)
+- Emits `McpRuntimeEvent` for UI updates (clients/roles/policies changed, pending executions)
 - Tool catalog (`tool_catalog.rs`) defines canonical MCP tools and deferred tools
 
 **Standalone Server** (`dbflux_mcp_server`):
@@ -598,7 +598,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **UI Integration**:
 - `McpApprovalsView` (`crates/dbflux_ui/src/ui/document/governance.rs`) for reviewing pending executions
-- `mcp_section.rs` in Settings for trusted clients, roles, policies, and audit log
+- `mcp_section.rs` in Settings for trusted clients, roles, and policies
+- `AuditDocument` (`crates/dbflux_ui/src/ui/document/audit.rs`) as the unified audit viewer for all event categories (no separate MCP audit surface)
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
 ## Data Flow

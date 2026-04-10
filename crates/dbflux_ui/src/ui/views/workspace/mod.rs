@@ -20,7 +20,7 @@ use crate::ui::document::{
 };
 
 #[cfg(feature = "mcp")]
-use crate::ui::document::{McpApprovalsView, McpAuditView};
+use crate::ui::document::McpApprovalsView;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
@@ -248,8 +248,6 @@ pub struct Workspace {
 
     #[cfg(feature = "mcp")]
     mcp_approvals_view: Entity<McpApprovalsView>,
-    #[cfg(feature = "mcp")]
-    mcp_audit_view: Entity<McpAuditView>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -278,7 +276,6 @@ pub struct Workspace {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GovernancePanel {
     Approvals,
-    Audit,
 }
 
 impl Workspace {
@@ -302,8 +299,6 @@ impl Workspace {
 
         #[cfg(feature = "mcp")]
         let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
-        #[cfg(feature = "mcp")]
-        let mcp_audit_view = cx.new(|cx| McpAuditView::new(app_state.clone(), window, cx));
 
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
 
@@ -671,8 +666,6 @@ impl Workspace {
             tab_bar,
             #[cfg(feature = "mcp")]
             mcp_approvals_view,
-            #[cfg(feature = "mcp")]
-            mcp_audit_view,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
@@ -873,8 +866,6 @@ impl Workspace {
             PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
             #[cfg(feature = "mcp")]
             PaletteCommand::new("open_mcp_approvals", "Open MCP Approvals", "View"),
-            #[cfg(feature = "mcp")]
-            PaletteCommand::new("open_mcp_audit", "Open MCP Audit Viewer", "View"),
             #[cfg(feature = "mcp")]
             PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
             PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")

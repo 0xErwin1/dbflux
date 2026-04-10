@@ -580,15 +580,11 @@ impl Render for Workspace {
                         let close_entity = cx.entity().clone();
                         let title = match panel {
                             super::GovernancePanel::Approvals => "MCP Approvals",
-                            super::GovernancePanel::Audit => "MCP Audit",
                         };
 
                         let content = match panel {
                             super::GovernancePanel::Approvals => {
                                 self.mcp_approvals_view.clone().into_any_element()
-                            }
-                            super::GovernancePanel::Audit => {
-                                self.mcp_audit_view.clone().into_any_element()
                             }
                         };
 

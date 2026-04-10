@@ -103,8 +103,6 @@ pub enum Command {
     #[cfg(feature = "mcp")]
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
-    OpenMcpAudit,
-    #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
 }
 
@@ -139,8 +137,6 @@ impl Command {
             "open_audit_viewer" => Some(Command::OpenAuditViewer),
             #[cfg(feature = "mcp")]
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
-            #[cfg(feature = "mcp")]
-            "open_mcp_audit" => Some(Command::OpenMcpAudit),
             #[cfg(feature = "mcp")]
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
             _ => None,
@@ -237,8 +233,6 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "Open MCP Approvals",
             #[cfg(feature = "mcp")]
-            Command::OpenMcpAudit => "Open MCP Audit Viewer",
-            #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
         }
     }
@@ -330,9 +324,7 @@ impl Command {
             | Command::OpenAuditViewer => "View",
 
             #[cfg(feature = "mcp")]
-            Command::OpenMcpApprovals | Command::OpenMcpAudit | Command::RefreshMcpGovernance => {
-                "View"
-            }
+            Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
         }
     }
 
@@ -372,9 +364,7 @@ impl Command {
             {
                 matches!(
                     self,
-                    Command::OpenMcpApprovals
-                        | Command::OpenMcpAudit
-                        | Command::RefreshMcpGovernance
+                    Command::OpenMcpApprovals | Command::RefreshMcpGovernance
                 )
             }
             #[cfg(not(feature = "mcp"))]

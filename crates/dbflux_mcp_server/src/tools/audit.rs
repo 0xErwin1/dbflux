@@ -43,6 +43,17 @@ pub struct QueryAuditLogsParams {
 
     #[schemars(description = "Maximum number of entries to return (optional)")]
     pub limit: Option<usize>,
+
+    #[schemars(description = "Filter by category (e.g., 'mcp', 'query', 'governance') (optional)")]
+    pub category: Option<String>,
+
+    #[schemars(description = "Filter by level (e.g., 'info', 'warn', 'error') (optional)")]
+    pub level: Option<String>,
+
+    #[schemars(
+        description = "Filter by outcome (e.g., 'success', 'failure', 'cancelled') (optional)"
+    )]
+    pub outcome: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -77,6 +88,17 @@ pub struct ExportAuditLogsParams {
     #[schemars(description = "Maximum number of entries to return (optional)")]
     pub limit: Option<usize>,
 
+    #[schemars(description = "Filter by category (e.g., 'mcp', 'query', 'governance') (optional)")]
+    pub category: Option<String>,
+
+    #[schemars(description = "Filter by level (e.g., 'info', 'warn', 'error') (optional)")]
+    pub level: Option<String>,
+
+    #[schemars(
+        description = "Filter by outcome (e.g., 'success', 'failure', 'cancelled') (optional)"
+    )]
+    pub outcome: Option<String>,
+
     #[schemars(description = "Export format: 'csv' or 'json'")]
     pub format: String,
 }
@@ -98,6 +120,9 @@ fn build_audit_filter(
     start_date: Option<String>,
     end_date: Option<String>,
     limit: Option<usize>,
+    category: Option<String>,
+    level: Option<String>,
+    outcome: Option<String>,
 ) -> Result<AuditQueryFilter, String> {
     let start_epoch_ms = if let Some(ref date) = start_date {
         Some(parse_iso8601_to_epoch_ms(date)?)
@@ -118,12 +143,11 @@ fn build_audit_filter(
         start_epoch_ms,
         end_epoch_ms,
         limit,
-        // Extended filter fields (not used in MCP governance path)
-        level: None,
-        category: None,
+        level,
+        category,
         action: None,
         source_id: None,
-        outcome: None,
+        outcome,
         object_type: None,
         free_text: None,
         correlation_id: None,
@@ -147,6 +171,9 @@ impl DbFluxServer {
         let start_date = params.start_date;
         let end_date = params.end_date;
         let limit = params.limit;
+        let category = params.category;
+        let level = params.level;
+        let outcome = params.outcome;
 
         let state = self.state.clone();
 
@@ -157,7 +184,8 @@ impl DbFluxServer {
                 ExecutionClassification::Read,
                 move || async move {
                     let filter = build_audit_filter(
-                        actor_id, tool_id, decision, start_date, end_date, limit,
+                        actor_id, tool_id, decision, start_date, end_date, limit, category, level,
+                        outcome,
                     )
                     .map_err(|e| e.into_error_data())?;
 
@@ -228,6 +256,9 @@ impl DbFluxServer {
         let start_date = params.start_date;
         let end_date = params.end_date;
         let limit = params.limit;
+        let category = params.category;
+        let level = params.level;
+        let outcome = params.outcome;
         let format = params.format;
 
         let state = self.state.clone();
@@ -239,7 +270,8 @@ impl DbFluxServer {
                 ExecutionClassification::Read,
                 move || async move {
                     let filter = build_audit_filter(
-                        actor_id, tool_id, decision, start_date, end_date, limit,
+                        actor_id, tool_id, decision, start_date, end_date, limit, category, level,
+                        outcome,
                     )
                     .map_err(|e| e.into_error_data())?;
 

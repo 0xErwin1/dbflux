@@ -27,7 +27,7 @@ pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use data_view::{DataViewConfig, DataViewMode};
 
 #[cfg(feature = "mcp")]
-pub use governance::{McpApprovalsView, McpAuditView};
+pub use governance::McpApprovalsView;
 
 pub use handle::{DocumentEvent, DocumentHandle};
 pub use key_value::{KeyValueDocument, KeyValueDocumentEvent};
