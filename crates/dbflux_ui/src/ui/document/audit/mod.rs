@@ -12,6 +12,7 @@ use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
+use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 // FilterBar item indices — used both when building the state and in dispatch_command.
 const FILTER_BAR_IDX_SEARCH: usize = 0;
 const FILTER_BAR_IDX_TIME: usize = 1;
@@ -37,7 +38,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
-use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
+use super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 
 // ── Context menu ─────────────────────────────────────────────────────────────
@@ -119,14 +120,16 @@ pub struct AuditDocument {
     export_menu_open: bool,
     search_input: Entity<InputState>,
     dropdown_time_range: Entity<Dropdown>,
-    dropdown_level: Entity<Dropdown>,
-    dropdown_category: Entity<Dropdown>,
-    dropdown_outcome: Entity<Dropdown>,
+    multi_select_level: Entity<MultiSelect>,
+    multi_select_category: Entity<MultiSelect>,
+    multi_select_outcome: Entity<MultiSelect>,
     refresh_policy: RefreshPolicy,
     refresh_dropdown: Entity<Dropdown>,
     load_request_id: u64,
     _refresh_timer: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
+
+    suppress_load: bool,
 
     // ── Keyboard navigation state ─────────────────────────────────────────
     focus_handle: FocusHandle,
@@ -163,31 +166,27 @@ impl AuditDocument {
                 .placeholder("Last 24 h")
                 .items(Self::time_range_items())
                 .selected_index(Some(2))
-                .toolbar_style(true)
         });
 
-        let dropdown_level = cx.new(|_cx| {
-            Dropdown::new("audit-level")
-                .placeholder("All")
-                .items(Self::level_items())
-                .selected_index(Some(0))
-                .toolbar_style(true)
+        let multi_select_level = cx.new(|cx| {
+            let items: Vec<DropdownItem> = Self::level_items();
+            let mut ms = MultiSelect::new("audit-level").placeholder("Level");
+            ms.set_items(items, cx);
+            ms
         });
 
-        let dropdown_category = cx.new(|_cx| {
-            Dropdown::new("audit-category")
-                .placeholder("All")
-                .items(Self::category_items())
-                .selected_index(Some(0))
-                .toolbar_style(true)
+        let multi_select_category = cx.new(|cx| {
+            let items: Vec<DropdownItem> = Self::category_items();
+            let mut ms = MultiSelect::new("audit-category").placeholder("Category");
+            ms.set_items(items, cx);
+            ms
         });
 
-        let dropdown_outcome = cx.new(|_cx| {
-            Dropdown::new("audit-outcome")
-                .placeholder("All")
-                .items(Self::outcome_items())
-                .selected_index(Some(0))
-                .toolbar_style(true)
+        let multi_select_outcome = cx.new(|cx| {
+            let items: Vec<DropdownItem> = Self::outcome_items();
+            let mut ms = MultiSelect::new("audit-outcome").placeholder("Outcome");
+            ms.set_items(items, cx);
+            ms
         });
 
         let audit_repo = app_state.read(cx).storage_runtime().audit();
@@ -223,27 +222,80 @@ impl AuditDocument {
         );
 
         let level_sub = cx.subscribe(
-            &dropdown_level,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.filters.level = Self::level_for_index(event.index);
+            &multi_select_level,
+            |this, entity, _event: &MultiSelectChanged, cx| {
+                if this.suppress_load {
+                    return;
+                }
+
+                let levels: Vec<EventSeverity> = entity
+                    .read(cx)
+                    .selected_values()
+                    .iter()
+                    .filter_map(|v| EventSeverity::from_str_repr(v.as_ref()))
+                    .collect();
+
+                if levels.is_empty() {
+                    this.filters.levels = None;
+                    this.filters.level = None;
+                } else {
+                    this.filters.levels = Some(levels);
+                    this.filters.level = None;
+                }
+
                 this.reset_pagination();
                 this.load_events(cx);
             },
         );
 
         let category_sub = cx.subscribe(
-            &dropdown_category,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.filters.category = Self::category_for_index(event.index);
+            &multi_select_category,
+            |this, entity, _event: &MultiSelectChanged, cx| {
+                if this.suppress_load {
+                    return;
+                }
+
+                let categories: Vec<EventCategory> = entity
+                    .read(cx)
+                    .selected_values()
+                    .iter()
+                    .filter_map(|v| Self::category_for_value(v.as_ref()))
+                    .collect();
+
+                if categories.is_empty() {
+                    this.filters.categories = None;
+                    this.filters.category = None;
+                } else {
+                    this.filters.categories = Some(categories);
+                    this.filters.category = None;
+                }
+
                 this.reset_pagination();
                 this.load_events(cx);
             },
         );
 
         let outcome_sub = cx.subscribe(
-            &dropdown_outcome,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.filters.outcome = Self::outcome_for_index(event.index);
+            &multi_select_outcome,
+            |this, _entity, event: &MultiSelectChanged, cx| {
+                if this.suppress_load {
+                    return;
+                }
+
+                let outcomes: Vec<EventOutcome> = event
+                    .selected_values
+                    .iter()
+                    .filter_map(|v| EventOutcome::from_str_repr(v.as_ref()))
+                    .collect();
+
+                if outcomes.is_empty() {
+                    this.filters.outcomes = None;
+                    this.filters.outcome = None;
+                } else {
+                    this.filters.outcomes = Some(outcomes);
+                    this.filters.outcome = None;
+                }
+
                 this.reset_pagination();
                 this.load_events(cx);
             },
@@ -275,9 +327,9 @@ impl AuditDocument {
         let filter_bar = FilterBarState::new(vec![
             FilterBarItem::input("Search:", search_input.clone()),
             FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
-            FilterBarItem::dropdown("Level:", dropdown_level.clone()),
-            FilterBarItem::dropdown("Category:", dropdown_category.clone()),
-            FilterBarItem::dropdown("Outcome:", dropdown_outcome.clone()),
+            FilterBarItem::button("Level"),
+            FilterBarItem::button("Category"),
+            FilterBarItem::button("Outcome"),
             FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
             FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
             FilterBarItem::button("Clear"),
@@ -302,9 +354,9 @@ impl AuditDocument {
             export_menu_open: false,
             search_input,
             dropdown_time_range,
-            dropdown_level,
-            dropdown_category,
-            dropdown_outcome,
+            multi_select_level,
+            multi_select_category,
+            multi_select_outcome,
             refresh_policy: RefreshPolicy::Manual,
             refresh_dropdown,
             load_request_id: 0,
@@ -317,6 +369,7 @@ impl AuditDocument {
                 outcome_sub,
                 refresh_dropdown_sub,
             ],
+            suppress_load: false,
             focus_handle,
             selected_row: None,
             context_menu: None,
@@ -346,24 +399,34 @@ impl AuditDocument {
     }
 
     pub fn set_category_filter(&mut self, category: Option<EventCategory>, cx: &mut Context<Self>) {
-        let selected_index = Self::category_index(category);
-
-        self.dropdown_category.update(cx, |dropdown, cx| {
-            dropdown.set_selected_index(Some(selected_index), cx);
-        });
-
-        if self.filters.category == category {
-            cx.notify();
-            return;
+        match category {
+            Some(cat) => {
+                let value = cat.as_str().to_string();
+                self.multi_select_category.update(cx, |ms, cx| {
+                    ms.set_selected_values(&[value], cx);
+                });
+                self.filters.categories = Some(vec![cat]);
+                self.filters.category = None;
+            }
+            None => {
+                self.suppress_load = true;
+                self.multi_select_category
+                    .update(cx, |ms, cx| ms.clear_selection(cx));
+                self.suppress_load = false;
+                self.filters.categories = None;
+                self.filters.category = None;
+            }
         }
 
-        self.filters.category = category;
         self.reset_pagination();
         self.load_events(cx);
     }
 
     pub fn category_filter(&self) -> Option<EventCategory> {
-        self.filters.category
+        self.filters
+            .categories
+            .as_ref()
+            .and_then(|cats| cats.first().copied())
     }
 
     fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
@@ -416,6 +479,12 @@ impl AuditDocument {
             .level
             .as_ref()
             .map(|level| level.as_str().to_string());
+        let levels_str = self.filters.levels.as_ref().map(|levels| {
+            levels
+                .iter()
+                .map(|level| level.as_str().to_string())
+                .collect()
+        });
         let category_str = self
             .filters
             .category
@@ -445,6 +514,7 @@ impl AuditDocument {
             limit,
             offset,
             level: level_str,
+            levels: levels_str,
             category: category_str,
             action: None,
             categories: categories_str,
@@ -454,6 +524,12 @@ impl AuditDocument {
                 .outcome
                 .as_ref()
                 .map(|outcome| outcome.as_str().to_string()),
+            outcomes: self.filters.outcomes.as_ref().map(|outcomes| {
+                outcomes
+                    .iter()
+                    .map(|outcome| outcome.as_str().to_string())
+                    .collect()
+            }),
             connection_id: self.filters.connection_id.clone(),
             driver_id: self.filters.driver_id.clone(),
             actor_type: self
@@ -582,16 +658,18 @@ impl AuditDocument {
         self.reset_pagination();
         self.export_menu_open = false;
 
+        self.suppress_load = true;
         self.dropdown_time_range
             .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(2), cx));
-        self.dropdown_level
-            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(0), cx));
-        self.dropdown_category
-            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(0), cx));
-        self.dropdown_outcome
-            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(0), cx));
+        self.multi_select_level
+            .update(cx, |ms, cx| ms.clear_selection(cx));
+        self.multi_select_category
+            .update(cx, |ms, cx| ms.clear_selection(cx));
+        self.multi_select_outcome
+            .update(cx, |ms, cx| ms.clear_selection(cx));
         self.search_input
             .update(cx, |state, cx| state.set_value("", window, cx));
+        self.suppress_load = false;
 
         self.load_events(cx);
     }
@@ -653,13 +731,13 @@ impl AuditDocument {
 
     fn level_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("All"),
-            DropdownItem::new("Error"),
-            DropdownItem::new("Warn"),
-            DropdownItem::new("Info"),
+            DropdownItem::with_value("Error", "error"),
+            DropdownItem::with_value("Warn", "warn"),
+            DropdownItem::with_value("Info", "info"),
         ]
     }
 
+    #[allow(dead_code)]
     fn level_for_index(index: usize) -> Option<EventSeverity> {
         match index {
             1 => Some(EventSeverity::Error),
@@ -671,18 +749,18 @@ impl AuditDocument {
 
     fn category_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("All"),
-            DropdownItem::new("Config"),
-            DropdownItem::new("Connection"),
-            DropdownItem::new("Query"),
-            DropdownItem::new("Hook"),
-            DropdownItem::new("Script"),
-            DropdownItem::new("System"),
-            DropdownItem::new("MCP"),
-            DropdownItem::new("Governance"),
+            DropdownItem::with_value("Config", "config"),
+            DropdownItem::with_value("Connection", "connection"),
+            DropdownItem::with_value("Query", "query"),
+            DropdownItem::with_value("Hook", "hook"),
+            DropdownItem::with_value("Script", "script"),
+            DropdownItem::with_value("System", "system"),
+            DropdownItem::with_value("MCP", "mcp"),
+            DropdownItem::with_value("Governance", "governance"),
         ]
     }
 
+    #[allow(dead_code)]
     fn category_index(category: Option<EventCategory>) -> usize {
         match category {
             Some(EventCategory::Config) => 1,
@@ -697,6 +775,7 @@ impl AuditDocument {
         }
     }
 
+    #[allow(dead_code)]
     fn category_for_index(index: usize) -> Option<EventCategory> {
         match index {
             1 => Some(EventCategory::Config),
@@ -711,15 +790,20 @@ impl AuditDocument {
         }
     }
 
+    /// Maps a category string value (as stored in DropdownItem.value) to EventCategory.
+    fn category_for_value(value: &str) -> Option<EventCategory> {
+        EventCategory::from_str_repr(value)
+    }
+
     fn outcome_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("All"),
-            DropdownItem::new("Success"),
-            DropdownItem::new("Failure"),
-            DropdownItem::new("Cancelled"),
+            DropdownItem::with_value("Success", "success"),
+            DropdownItem::with_value("Failure", "failure"),
+            DropdownItem::with_value("Cancelled", "cancelled"),
         ]
     }
 
+    #[allow(dead_code)]
     fn outcome_for_index(index: usize) -> Option<EventOutcome> {
         match index {
             1 => Some(EventOutcome::Success),
@@ -761,6 +845,15 @@ impl AuditDocument {
         self.load_events(cx);
     }
 
+    /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
+    fn null_display(theme: &gpui_component::Theme) -> Div {
+        div()
+            .text_sm()
+            .italic()
+            .text_color(theme.muted_foreground)
+            .child("NULL")
+    }
+
     fn short_category_label(category: Option<&str>) -> &'static str {
         match category {
             Some("config") => "CONFIG",
@@ -771,7 +864,7 @@ impl AuditDocument {
             Some("system") => "SYS",
             Some("mcp") => "MCP",
             Some("governance") => "GOV",
-            _ => "---",
+            _ => "NULL",
         }
     }
 
@@ -850,6 +943,18 @@ impl AuditDocument {
                 self.clear_filters(window, cx);
                 self.filter_bar.deactivate();
                 self.focus_handle.focus(window);
+            }
+            FILTER_BAR_IDX_LEVEL => {
+                self.multi_select_level
+                    .update(cx, |ms, cx| ms.toggle_open(cx));
+            }
+            FILTER_BAR_IDX_CATEGORY => {
+                self.multi_select_category
+                    .update(cx, |ms, cx| ms.toggle_open(cx));
+            }
+            FILTER_BAR_IDX_OUTCOME => {
+                self.multi_select_outcome
+                    .update(cx, |ms, cx| ms.toggle_open(cx));
             }
             _ => {}
         }
@@ -1629,7 +1734,11 @@ impl AuditDocument {
             .when(ring(FILTER_BAR_IDX_SEARCH), |d| {
                 d.border_1().border_color(theme.ring)
             })
-            .child(div().flex_1().child(Input::new(&self.search_input).small()));
+            .child(
+                div()
+                    .flex_1()
+                    .child(Input::new(&self.search_input).small().h(Heights::BUTTON)),
+            );
 
         // Dropdown wrappers — ring goes around the whole labeled control.
         let time_control = div()
@@ -1644,21 +1753,21 @@ impl AuditDocument {
             .when(ring(FILTER_BAR_IDX_LEVEL), |d| {
                 d.border_1().border_color(theme.ring)
             })
-            .child(self.dropdown_level.clone());
+            .child(self.multi_select_level.clone());
 
         let category_control = div()
             .rounded(Radii::SM)
             .when(ring(FILTER_BAR_IDX_CATEGORY), |d| {
                 d.border_1().border_color(theme.ring)
             })
-            .child(self.dropdown_category.clone());
+            .child(self.multi_select_category.clone());
 
         let outcome_control = div()
             .rounded(Radii::SM)
             .when(ring(FILTER_BAR_IDX_OUTCOME), |d| {
                 d.border_1().border_color(theme.ring)
             })
-            .child(self.dropdown_outcome.clone());
+            .child(self.multi_select_outcome.clone());
 
         // Refresh split button.
         let refresh_label = if self.refresh_policy.is_auto() {
@@ -1749,11 +1858,11 @@ impl AuditDocument {
         compact_top_bar(
             &theme,
             vec![
-                compact_labeled_control("Search:", search_control, &theme).into_any_element(),
-                compact_labeled_control("Time:", time_control, &theme).into_any_element(),
-                compact_labeled_control("Level:", level_control, &theme).into_any_element(),
-                compact_labeled_control("Category:", category_control, &theme).into_any_element(),
-                compact_labeled_control("Outcome:", outcome_control, &theme).into_any_element(),
+                search_control.into_any_element(),
+                time_control.into_any_element(),
+                level_control.into_any_element(),
+                category_control.into_any_element(),
+                outcome_control.into_any_element(),
                 div().flex_1().into_any_element(),
                 refresh_btn.into_any_element(),
                 clear_btn.into_any_element(),
@@ -1862,12 +1971,30 @@ impl AuditDocument {
         // user isn't confused by three simultaneous focus indicators.
         let is_selected = self.has_focus && self.selected_row == Some(row_index);
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.as_deref().unwrap_or("---");
+        let level = event.level.as_deref();
+        let level_display: AnyElement = match level {
+            Some(l) => div()
+                .px_1p5()
+                .py_px()
+                .rounded(px(3.0))
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(Self::level_color(Some(l), theme))
+                .bg(Self::level_bg_color(Some(l), theme))
+                .flex_shrink_0()
+                .child(l.to_uppercase())
+                .into_any_element(),
+            None => Self::null_display(theme).flex_shrink_0().into_any_element(),
+        };
         let summary = event.summary.clone().unwrap_or_default();
-        let summary_display = if summary.is_empty() {
-            "-".to_string()
+        let summary_display: AnyElement = if summary.is_empty() {
+            Self::null_display(theme).into_any_element()
         } else {
-            summary
+            div()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(summary)
+                .into_any_element()
         };
         let category = Self::short_category_label(event.category.as_deref());
         let connection_driver =
@@ -1936,18 +2063,7 @@ impl AuditDocument {
                             .flex_shrink_0()
                             .child(timestamp),
                     )
-                    .child(
-                        div()
-                            .px_1p5()
-                            .py_px()
-                            .rounded(px(3.0))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Self::level_color(event.level.as_deref(), theme))
-                            .bg(Self::level_bg_color(event.level.as_deref(), theme))
-                            .flex_shrink_0()
-                            .child(level.to_uppercase()),
-                    )
+                    .child(level_display)
                     .child(
                         div()
                             .text_xs()
@@ -1955,14 +2071,7 @@ impl AuditDocument {
                             .flex_shrink_0()
                             .child(category),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .flex_1()
-                            .truncate()
-                            .child(summary_display),
-                    )
+                    .child(div().text_sm().flex_1().truncate().child(summary_display))
                     .when_some(
                         connection_driver.filter(|value| !value.is_empty()),
                         |row, value| {
@@ -1984,9 +2093,17 @@ impl AuditDocument {
     fn render_detail_field(
         &self,
         label: &'static str,
-        value: String,
+        value: Option<String>,
         theme: &gpui_component::Theme,
     ) -> Div {
+        let value_element: AnyElement = match value {
+            Some(ref v) if !v.is_empty() => div()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(v.clone())
+                .into_any_element(),
+            _ => Self::null_display(theme).into_any_element(),
+        };
         div()
             .flex_col()
             .gap_1p5()
@@ -1998,7 +2115,7 @@ impl AuditDocument {
                     .text_color(theme.muted_foreground)
                     .child(label),
             )
-            .child(div().text_sm().text_color(theme.foreground).child(value))
+            .child(value_element)
     }
 
     fn render_inline_detail(
@@ -2008,9 +2125,12 @@ impl AuditDocument {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.as_deref().unwrap_or("-").to_string();
-        let category = Self::short_category_label(event.category.as_deref()).to_string();
-        let outcome = event.outcome.as_deref().unwrap_or("-").to_string();
+        let level = event.level.clone();
+        let category = match Self::short_category_label(event.category.as_deref()) {
+            "NULL" => None,
+            label => Some(label.to_string()),
+        };
+        let outcome = event.outcome.clone();
         let actor = if event
             .actor_type
             .as_deref()
@@ -2025,8 +2145,8 @@ impl AuditDocument {
         } else {
             event.actor_id.clone()
         };
-        let action = event.action.as_deref().unwrap_or("-").to_string();
-        let source = event.source_id.as_deref().unwrap_or("-").to_string();
+        let action = event.action.clone();
+        let source = event.source_id.clone();
         let connection_driver =
             Self::format_connection_driver(&event.connection_id, &event.driver_id);
         let duration = event
@@ -2057,7 +2177,7 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", timestamp, theme)
+                        self.render_detail_field("Time", Some(timestamp), theme)
                             .into_any_element(),
                         self.render_detail_field("Level", level, theme)
                             .into_any_element(),
@@ -2065,7 +2185,7 @@ impl AuditDocument {
                             .into_any_element(),
                         self.render_detail_field("Outcome", outcome, theme)
                             .into_any_element(),
-                        self.render_detail_field("Actor", actor, theme)
+                        self.render_detail_field("Actor", Some(actor), theme)
                             .into_any_element(),
                         self.render_detail_field("Action", action, theme)
                             .into_any_element(),
@@ -2073,10 +2193,10 @@ impl AuditDocument {
                             .into_any_element(),
                     ])
                     .when_some(connection_driver, |row, value| {
-                        row.child(self.render_detail_field("Connection/Driver", value, theme))
+                        row.child(self.render_detail_field("Connection/Driver", Some(value), theme))
                     })
                     .when_some(duration, |row, value| {
-                        row.child(self.render_detail_field("Duration", value, theme))
+                        row.child(self.render_detail_field("Duration", Some(value), theme))
                     }),
             )
             .when_some(summary, |root, value| {

@@ -17,6 +17,8 @@ pub struct AuditFilters {
     pub end_ms: Option<i64>,
     /// Filter by severity level.
     pub level: Option<EventSeverity>,
+    /// Filter by multiple severity levels (OR'd together). Takes precedence over `level`.
+    pub levels: Option<Vec<EventSeverity>>,
     /// Filter by event category.
     pub category: Option<EventCategory>,
     /// Filter by multiple event categories (OR'd together). Takes precedence over `category`.
@@ -25,6 +27,8 @@ pub struct AuditFilters {
     pub source: Option<EventSourceId>,
     /// Filter by outcome.
     pub outcome: Option<EventOutcome>,
+    /// Filter by multiple outcomes (OR'd together). Takes precedence over `outcome`.
+    pub outcomes: Option<Vec<EventOutcome>>,
     /// Free-text search across summary, action, error_message, details.
     pub free_text: Option<String>,
     /// Filter by actor ID (partial match).

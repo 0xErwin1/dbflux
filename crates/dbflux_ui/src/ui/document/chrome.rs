@@ -23,6 +23,7 @@ pub(crate) fn compact_top_bar(
 
 /// Labeled control pair matching the `WHERE`/`LIMIT` style in DataGridPanel:
 /// muted label text + control inline.
+#[allow(dead_code)]
 pub(crate) fn compact_labeled_control(
     label: impl Into<SharedString>,
     control: impl IntoElement,
