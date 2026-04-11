@@ -133,12 +133,16 @@ pub struct AuditQueryFilter {
     pub offset: Option<usize>,
     // Extended filter fields
     pub level: Option<String>,
+    /// Filter for multiple severity levels (OR'd together). Takes precedence over `level`.
+    pub levels: Option<Vec<String>>,
     pub category: Option<String>,
     pub action: Option<String>,
     /// Filter for multiple categories (OR'd together). Takes precedence over `category`.
     pub categories: Option<Vec<String>>,
     pub source_id: Option<String>,
     pub outcome: Option<String>,
+    /// Filter for multiple outcomes (OR'd together). Takes precedence over `outcome`.
+    pub outcomes: Option<Vec<String>>,
     pub connection_id: Option<String>,
     pub driver_id: Option<String>,
     pub actor_type: Option<String>,
@@ -287,7 +291,15 @@ impl AuditRepository {
             values.push(Box::new(end));
         }
 
-        if let Some(ref level) = filter.level {
+        if let Some(ref levels) = filter.levels
+            && !levels.is_empty()
+        {
+            let placeholders: Vec<String> = levels.iter().map(|_| "?".to_string()).collect();
+            conditions.push(format!("level IN ({})", placeholders.join(", ")));
+            for level in levels {
+                values.push(Box::new(level.clone()));
+            }
+        } else if let Some(ref level) = filter.level {
             conditions.push("level = ?".to_string());
             values.push(Box::new(level.clone()));
         }
@@ -315,7 +327,15 @@ impl AuditRepository {
             values.push(Box::new(source_id.clone()));
         }
 
-        if let Some(ref outcome) = filter.outcome {
+        if let Some(ref outcomes) = filter.outcomes
+            && !outcomes.is_empty()
+        {
+            let placeholders: Vec<String> = outcomes.iter().map(|_| "?".to_string()).collect();
+            conditions.push(format!("outcome IN ({})", placeholders.join(", ")));
+            for outcome in outcomes {
+                values.push(Box::new(outcome.clone()));
+            }
+        } else if let Some(ref outcome) = filter.outcome {
             conditions.push("outcome = ?".to_string());
             values.push(Box::new(outcome.clone()));
         }

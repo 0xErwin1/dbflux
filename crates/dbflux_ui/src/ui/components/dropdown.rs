@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::ui::tokens::Heights;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
@@ -416,6 +417,7 @@ impl Render for Dropdown {
 
         let mut trigger = div()
             .id("dropdown-trigger")
+            .h(Heights::BUTTON)
             .flex()
             .items_center()
             .w_full()

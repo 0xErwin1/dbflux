@@ -1,3 +1,4 @@
+use crate::ui::tokens::Heights;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
@@ -95,7 +96,7 @@ impl MultiSelect {
         cx.notify();
     }
 
-    fn toggle_open(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_open(&mut self, cx: &mut Context<Self>) {
         if self.items.is_empty() {
             return;
         }
@@ -236,13 +237,13 @@ impl Render for MultiSelect {
 
         let trigger = div()
             .id("ms-trigger")
+            .h(Heights::BUTTON)
             .flex()
             .items_center()
             .justify_between()
             .gap_2()
             .w_full()
             .px_3()
-            .py_1p5()
             .rounded_md()
             .bg(theme.background)
             .border_1()
