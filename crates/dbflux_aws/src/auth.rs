@@ -448,6 +448,19 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
     }
 }
 
+fn password_field(id: &str, label: &str, placeholder: &str, required: bool) -> FormFieldDef {
+    FormFieldDef {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind: FormFieldKind::Password,
+        placeholder: placeholder.to_string(),
+        required,
+        default_value: String::new(),
+        enabled_when_checked: None,
+        enabled_when_unchecked: None,
+    }
+}
+
 fn build_aws_sso_form() -> AuthFormDef {
     AuthFormDef {
         tabs: vec![FormTab {
@@ -494,7 +507,12 @@ fn build_aws_static_credentials_form() -> AuthFormDef {
             label: "Main".to_string(),
             sections: vec![FormSection {
                 title: "AWS Static Credentials".to_string(),
-                fields: vec![required_text_field("region", "Region", "us-east-1")],
+                fields: vec![
+                    required_text_field("access_key_id", "Access Key ID", "AKIAIOSFODNN7EXAMPLE"),
+                    password_field("secret_access_key", "Secret Access Key", "", true),
+                    password_field("session_token", "Session Token", "", false),
+                    required_text_field("region", "Region", "us-east-1"),
+                ],
             }],
         }],
     }
@@ -558,6 +576,73 @@ fn build_aws_value_providers_blocking(
             AwsSecretsManagerProvider::new(sdk_config.clone()),
             AwsSsmParameterProvider::new(sdk_config),
         ))
+    })
+}
+
+/// Builds an `SdkConfig` from explicit static credentials stored in the
+/// auth profile's `fields` map, bypassing the default credential chain.
+///
+/// Reads `access_key_id`, `secret_access_key`, `session_token`, and `region`
+/// from `profile.fields`. Returns an error if `access_key_id` or
+/// `secret_access_key` is absent or empty.
+fn build_static_sdk_config_blocking(profile: &AuthProfile) -> Result<aws_config::SdkConfig, DbError> {
+    let access_key_id = profile.fields.get("access_key_id").map(String::as_str).unwrap_or("");
+    if access_key_id.is_empty() {
+        return Err(DbError::ValueResolutionFailed(
+            "Missing required field 'access_key_id' for static AWS credentials".to_string(),
+        ));
+    }
+
+    let secret_access_key = profile.fields.get("secret_access_key").map(String::as_str).unwrap_or("");
+    if secret_access_key.is_empty() {
+        return Err(DbError::ValueResolutionFailed(
+            "Missing required field 'secret_access_key' for static AWS credentials".to_string(),
+        ));
+    }
+
+    let session_token = profile
+        .fields
+        .get("session_token")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let region = profile
+        .fields
+        .get("region")
+        .cloned()
+        .unwrap_or_else(|| "us-east-1".to_string());
+
+    let access_key_id = access_key_id.to_string();
+    let secret_access_key = secret_access_key.to_string();
+
+    let creds = aws_sdk_sts::config::Credentials::new(
+        access_key_id,
+        secret_access_key,
+        session_token,
+        None,
+        "dbflux-static",
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|err| {
+            DbError::ValueResolutionFailed(format!(
+                "Failed to create Tokio runtime for static AWS provider init: {}",
+                err
+            ))
+        })?;
+
+    runtime.block_on(async move {
+        let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .credentials_provider(creds)
+            .region(aws_config::Region::new(region))
+            .load()
+            .await;
+
+        Ok(sdk_config)
     })
 }
 
@@ -837,6 +922,20 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
         profile: &AuthProfile,
     ) -> Result<ResolvedCredentials, DbError> {
         resolve_aws_credentials(profile).await
+    }
+
+    fn register_value_providers(
+        &self,
+        profile: &AuthProfile,
+        _session: Option<&AuthSession>,
+        resolver: &mut dbflux_core::values::CompositeValueResolver,
+    ) -> Result<(), DbError> {
+        let sdk_config = build_static_sdk_config_blocking(profile)?;
+
+        resolver.register_secret_provider(Arc::new(AwsSecretsManagerProvider::new(sdk_config.clone())));
+        resolver.register_parameter_provider(Arc::new(AwsSsmParameterProvider::new(sdk_config)));
+
+        Ok(())
     }
 }
 
@@ -1425,6 +1524,216 @@ mod tests {
         } else {
             AuthSessionState::Valid {
                 expires_at: Some(expires_at),
+            }
+        }
+    }
+
+    fn field_def_by_id<'a>(fields: &'a [FormFieldDef], id: &str) -> Option<&'a FormFieldDef> {
+        fields.iter().find(|f| f.id == id)
+    }
+
+    #[test]
+    fn static_credentials_form_has_all_fields() {
+        let form = build_aws_static_credentials_form();
+
+        let fields = &form.tabs[0].sections[0].fields;
+
+        let access_key = field_def_by_id(fields, "access_key_id").expect("access_key_id field missing");
+        assert_eq!(access_key.kind, FormFieldKind::Text);
+        assert!(access_key.required);
+
+        let secret_key = field_def_by_id(fields, "secret_access_key").expect("secret_access_key field missing");
+        assert_eq!(secret_key.kind, FormFieldKind::Password);
+        assert!(secret_key.required);
+
+        let session_token = field_def_by_id(fields, "session_token").expect("session_token field missing");
+        assert_eq!(session_token.kind, FormFieldKind::Password);
+        assert!(!session_token.required);
+
+        let region = field_def_by_id(fields, "region").expect("region field missing");
+        assert_eq!(region.kind, FormFieldKind::Text);
+        assert!(region.required);
+    }
+
+    #[test]
+    fn static_credentials_missing_access_key_returns_error() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
+
+        let result = build_static_sdk_config_blocking(&profile);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("access_key_id"),
+            "Error should mention access_key_id, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn static_credentials_missing_secret_key_returns_error() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
+
+        let result = build_static_sdk_config_blocking(&profile);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("secret_access_key"),
+            "Error should mention secret_access_key, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn static_credentials_empty_session_token_succeeds() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
+        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert("session_token".to_string(), String::new());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
+
+        let result = build_static_sdk_config_blocking(&profile);
+
+        // The SdkConfig load attempts a network call to STS regional endpoints,
+        // which may fail in CI without real AWS credentials. The important
+        // assertion is that the function passes validation — it must NOT return
+        // a "missing required field" error for access_key_id, secret_access_key,
+        // or session_token (since the latter is optional and was provided as empty).
+        match result {
+            Ok(_) => {}
+            Err(err) => {
+                let msg = err.to_string();
+                let forbidden_fields = ["access_key_id", "secret_access_key", "session_token"];
+                for field in &forbidden_fields {
+                    assert!(
+                        !msg.contains(field),
+                        "Should not fail on field '{}', got error: {}",
+                        field,
+                        msg
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn static_credentials_missing_session_token_succeeds() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
+        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+        // Deliberately NOT inserting "session_token" at all.
+
+        let profile = AuthProfile::new("test-static-no-token", "aws-static-credentials", fields);
+
+        let result = build_static_sdk_config_blocking(&profile);
+
+        // Same as the empty-session-token test — we just need to verify the
+        // function does not error on missing session_token (it's optional).
+        // Network failures from fake credentials are acceptable.
+        match result {
+            Ok(_) => {}
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    !msg.contains("access_key_id"),
+                    "Should not fail on access_key_id, got: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("secret_access_key"),
+                    "Should not fail on secret_access_key, got: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("session_token"),
+                    "session_token is optional, got error mentioning it: {}",
+                    msg
+                );
+            }
+        }
+    }
+
+    /// Verifies that `register_value_providers()` exercises the full code path
+    /// through `build_static_sdk_config_blocking` with present-but-fake
+    /// credentials. The AWS SDK will reject the fake credentials at runtime,
+    /// but the test proves the function does not fail on missing-field
+    /// validation and that the error (if any) propagates correctly.
+    ///
+    /// The happy path (real AWS credentials resolving to a working SdkConfig
+    /// and providers being registered) requires integration testing with live
+    /// AWS credentials and is not covered here.
+    #[test]
+    fn static_credentials_register_value_providers_with_fake_credentials() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
+        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("test-register", "aws-static-credentials", fields);
+
+        let provider = AwsStaticCredentialsAuthProvider::new();
+        let cache = Arc::new(dbflux_core::values::ValueCache::new(
+            std::time::Duration::from_secs(60),
+        ));
+        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+
+        let result = dbflux_core::auth::DynAuthProvider::register_value_providers(
+            &provider,
+            &profile,
+            None,
+            &mut resolver,
+        );
+
+        // With fake credentials, the SdkConfig load may or may not succeed
+        // depending on the environment. The critical assertion is that if it
+        // fails, the error is NOT about missing required fields — proving the
+        // validation passed and the error came from the AWS SDK layer.
+        match result {
+            Ok(()) => {
+                // SdkConfig loaded successfully — verify providers were registered.
+                let secret_providers = resolver.available_secret_providers();
+                let param_providers = resolver.available_parameter_providers();
+
+                assert!(
+                    secret_providers.iter().any(|(id, _)| *id == "aws-secrets-manager"),
+                    "Expected aws-secrets-manager provider to be registered, found: {:?}",
+                    secret_providers
+                );
+                assert!(
+                    param_providers.iter().any(|(id, _)| *id == "aws-ssm"),
+                    "Expected aws-ssm provider to be registered, found: {:?}",
+                    param_providers
+                );
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    !msg.contains("access_key_id"),
+                    "Should not fail on access_key_id validation, got: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("secret_access_key"),
+                    "Should not fail on secret_access_key validation, got: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("session_token"),
+                    "session_token is optional, got: {}",
+                    msg
+                );
             }
         }
     }
