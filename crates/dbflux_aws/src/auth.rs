@@ -585,15 +585,25 @@ fn build_aws_value_providers_blocking(
 /// Reads `access_key_id`, `secret_access_key`, `session_token`, and `region`
 /// from `profile.fields`. Returns an error if `access_key_id` or
 /// `secret_access_key` is absent or empty.
-fn build_static_sdk_config_blocking(profile: &AuthProfile) -> Result<aws_config::SdkConfig, DbError> {
-    let access_key_id = profile.fields.get("access_key_id").map(String::as_str).unwrap_or("");
+fn build_static_sdk_config_blocking(
+    profile: &AuthProfile,
+) -> Result<aws_config::SdkConfig, DbError> {
+    let access_key_id = profile
+        .fields
+        .get("access_key_id")
+        .map(String::as_str)
+        .unwrap_or("");
     if access_key_id.is_empty() {
         return Err(DbError::ValueResolutionFailed(
             "Missing required field 'access_key_id' for static AWS credentials".to_string(),
         ));
     }
 
-    let secret_access_key = profile.fields.get("secret_access_key").map(String::as_str).unwrap_or("");
+    let secret_access_key = profile
+        .fields
+        .get("secret_access_key")
+        .map(String::as_str)
+        .unwrap_or("");
     if secret_access_key.is_empty() {
         return Err(DbError::ValueResolutionFailed(
             "Missing required field 'secret_access_key' for static AWS credentials".to_string(),
@@ -932,7 +942,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
     ) -> Result<(), DbError> {
         let sdk_config = build_static_sdk_config_blocking(profile)?;
 
-        resolver.register_secret_provider(Arc::new(AwsSecretsManagerProvider::new(sdk_config.clone())));
+        resolver
+            .register_secret_provider(Arc::new(AwsSecretsManagerProvider::new(sdk_config.clone())));
         resolver.register_parameter_provider(Arc::new(AwsSsmParameterProvider::new(sdk_config)));
 
         Ok(())
@@ -1538,15 +1549,18 @@ mod tests {
 
         let fields = &form.tabs[0].sections[0].fields;
 
-        let access_key = field_def_by_id(fields, "access_key_id").expect("access_key_id field missing");
+        let access_key =
+            field_def_by_id(fields, "access_key_id").expect("access_key_id field missing");
         assert_eq!(access_key.kind, FormFieldKind::Text);
         assert!(access_key.required);
 
-        let secret_key = field_def_by_id(fields, "secret_access_key").expect("secret_access_key field missing");
+        let secret_key =
+            field_def_by_id(fields, "secret_access_key").expect("secret_access_key field missing");
         assert_eq!(secret_key.kind, FormFieldKind::Password);
         assert!(secret_key.required);
 
-        let session_token = field_def_by_id(fields, "session_token").expect("session_token field missing");
+        let session_token =
+            field_def_by_id(fields, "session_token").expect("session_token field missing");
         assert_eq!(session_token.kind, FormFieldKind::Password);
         assert!(!session_token.required);
 
@@ -1558,7 +1572,10 @@ mod tests {
     #[test]
     fn static_credentials_missing_access_key_returns_error() {
         let mut fields = std::collections::HashMap::new();
-        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert(
+            "secret_access_key".to_string(),
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
+        );
         fields.insert("region".to_string(), "us-east-1".to_string());
 
         let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
@@ -1577,7 +1594,10 @@ mod tests {
     #[test]
     fn static_credentials_missing_secret_key_returns_error() {
         let mut fields = std::collections::HashMap::new();
-        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
+        fields.insert(
+            "access_key_id".to_string(),
+            "AKIAIOSFODNN7EXAMPLE".to_string(),
+        );
         fields.insert("region".to_string(), "us-east-1".to_string());
 
         let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
@@ -1596,8 +1616,14 @@ mod tests {
     #[test]
     fn static_credentials_empty_session_token_succeeds() {
         let mut fields = std::collections::HashMap::new();
-        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
-        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert(
+            "access_key_id".to_string(),
+            "AKIAIOSFODNN7EXAMPLE".to_string(),
+        );
+        fields.insert(
+            "secret_access_key".to_string(),
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
+        );
         fields.insert("session_token".to_string(), String::new());
         fields.insert("region".to_string(), "us-east-1".to_string());
 
@@ -1630,8 +1656,14 @@ mod tests {
     #[test]
     fn static_credentials_missing_session_token_succeeds() {
         let mut fields = std::collections::HashMap::new();
-        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
-        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert(
+            "access_key_id".to_string(),
+            "AKIAIOSFODNN7EXAMPLE".to_string(),
+        );
+        fields.insert(
+            "secret_access_key".to_string(),
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
+        );
         fields.insert("region".to_string(), "us-east-1".to_string());
         // Deliberately NOT inserting "session_token" at all.
 
@@ -1677,8 +1709,14 @@ mod tests {
     #[test]
     fn static_credentials_register_value_providers_with_fake_credentials() {
         let mut fields = std::collections::HashMap::new();
-        fields.insert("access_key_id".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string());
-        fields.insert("secret_access_key".to_string(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string());
+        fields.insert(
+            "access_key_id".to_string(),
+            "AKIAIOSFODNN7EXAMPLE".to_string(),
+        );
+        fields.insert(
+            "secret_access_key".to_string(),
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
+        );
         fields.insert("region".to_string(), "us-east-1".to_string());
 
         let profile = AuthProfile::new("test-register", "aws-static-credentials", fields);
@@ -1707,7 +1745,9 @@ mod tests {
                 let param_providers = resolver.available_parameter_providers();
 
                 assert!(
-                    secret_providers.iter().any(|(id, _)| *id == "aws-secrets-manager"),
+                    secret_providers
+                        .iter()
+                        .any(|(id, _)| *id == "aws-secrets-manager"),
                     "Expected aws-secrets-manager provider to be registered, found: {:?}",
                     secret_providers
                 );
