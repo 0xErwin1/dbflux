@@ -10,11 +10,6 @@ on:
         description: 'Release version (e.g., v0.1.0)'
         required: true
         type: string
-      sign:
-        description: 'Sign artifacts (GPG)'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -116,9 +111,6 @@ jobs:
           cd pkg
           tar -czf ../dbflux-linux-${{ matrix.arch }}.tar.gz .
 
-      - name: Generate checksum
-        run: sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
-
       - name: Download appimagetool
         run: |
           ARCH=$(echo "${{ matrix.arch }}" | sed 's/amd64/x86_64/' | sed 's/arm64/aarch64/')
@@ -167,9 +159,6 @@ jobs:
 
           mv "$APPIMAGE_FILE" dbflux-linux-${{ matrix.arch }}.AppImage
 
-      - name: Generate AppImage checksum
-        run: sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
-
       - name: Generate PNG icons
         run: |
           mkdir -p packaging/icons/256x256/apps
@@ -212,29 +201,50 @@ jobs:
           envsubst < packaging/nfpm.rpm.yaml > nfpm.rpm.yaml
           ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
 
-      - name: Generate package checksums
-        run: |
-          sha256sum dbflux_*.deb > dbflux_${{ matrix.arch }}.deb.sha256
-          sha256sum dbflux-*.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
+      - name: Install signing tools
+        run: sudo apt-get install -y dpkg-sig rpm
 
       - name: Import GPG key
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
+      - name: Sign .deb packages
+        run: |
+          GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
+          for deb in dbflux_*.deb; do
+            dpkg-sig -k "$GPG_KEY_ID" --sign builder "$deb"
+          done
+
+      - name: Configure RPM signing
+        run: |
+          GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
+          {
+            echo "%_gpg_name $GPG_KEY_ID"
+            echo "%__gpg /usr/bin/gpg"
+            echo "%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --passphrase-fd 3 --no-secmem-warning -u '%{_gpg_name}' -sbo %{__signature_filename} %{__plaintext_filename}"
+          } > ~/.rpmmacros
+
+      - name: Sign .rpm packages
+        run: |
+          for rpm in dbflux-*.rpm; do
+            rpm --addsign "$rpm" 3< <(echo "${{ secrets.GPG_PASSPHRASE }}")
+          done
+
       - name: Sign artifacts
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         run: |
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
-          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage
-          gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.AppImage.sha256
           gpg --armor --detach-sign dbflux_*.deb
-          gpg --armor --detach-sign dbflux_${{ matrix.arch }}.deb.sha256
           gpg --armor --detach-sign dbflux-*.rpm
-          gpg --armor --detach-sign dbflux_${{ matrix.arch }}.rpm.sha256
+
+      - name: Generate checksums
+        run: |
+          sha256sum dbflux-linux-${{ matrix.arch }}.tar.gz > dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+          sha256sum dbflux-linux-${{ matrix.arch }}.AppImage > dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+          sha256sum dbflux_*.deb > dbflux_${{ matrix.arch }}.deb.sha256
+          sha256sum dbflux-*.rpm > dbflux_${{ matrix.arch }}.rpm.sha256
 
       - name: Upload artifacts
         if: env.ACT != 'true'
@@ -244,28 +254,16 @@ jobs:
           path: |
             dbflux-linux-${{ matrix.arch }}.tar.gz
             dbflux-linux-${{ matrix.arch }}.tar.gz.sha256
+            dbflux-linux-${{ matrix.arch }}.tar.gz.asc
             dbflux-linux-${{ matrix.arch }}.AppImage
             dbflux-linux-${{ matrix.arch }}.AppImage.sha256
+            dbflux-linux-${{ matrix.arch }}.AppImage.asc
             dbflux_*.deb
+            dbflux_*.deb.asc
             dbflux_${{ matrix.arch }}.deb.sha256
             dbflux-*.rpm
-            dbflux_${{ matrix.arch }}.rpm.sha256
-          retention-days: 90
-
-      - name: Upload signatures
-        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.arch }}-signatures
-          path: |
-            dbflux-linux-${{ matrix.arch }}.tar.gz.asc
-            dbflux-linux-${{ matrix.arch }}.tar.gz.sha256.asc
-            dbflux-linux-${{ matrix.arch }}.AppImage.asc
-            dbflux-linux-${{ matrix.arch }}.AppImage.sha256.asc
-            dbflux_*.deb.asc
-            dbflux_${{ matrix.arch }}.deb.sha256.asc
             dbflux-*.rpm.asc
-            dbflux_${{ matrix.arch }}.rpm.sha256.asc
+            dbflux_${{ matrix.arch }}.rpm.sha256
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -274,18 +272,16 @@ jobs:
           mkdir -p /tmp/artifacts/linux-${{ matrix.arch }}
           cp dbflux-linux-${{ matrix.arch }}.tar.gz /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.tar.gz.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-linux-${{ matrix.arch }}.AppImage.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_*.deb /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux_*.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.deb.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux-*.rpm /tmp/artifacts/linux-${{ matrix.arch }}/
+          cp dbflux-*.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           cp dbflux_${{ matrix.arch }}.rpm.sha256 /tmp/artifacts/linux-${{ matrix.arch }}/
-          if [ -f dbflux-linux-${{ matrix.arch }}.tar.gz.asc ]; then
-            cp dbflux-linux-${{ matrix.arch }}.tar.gz.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-            cp dbflux-linux-${{ matrix.arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-            cp dbflux_*.deb.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-            cp dbflux-*.rpm.asc /tmp/artifacts/linux-${{ matrix.arch }}/
-          fi
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}
@@ -368,21 +364,18 @@ jobs:
             dbflux-macos-${{ matrix.arch }}.dmg \
             DBFlux.app
 
-      - name: Generate checksum
-        run: shasum -a 256 dbflux-macos-${{ matrix.arch }}.dmg > dbflux-macos-${{ matrix.arch }}.dmg.sha256
-
       - name: Import GPG key
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign artifacts
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         run: |
           gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg
-          gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg.sha256
+
+      - name: Generate checksum
+        run: shasum -a 256 dbflux-macos-${{ matrix.arch }}.dmg > dbflux-macos-${{ matrix.arch }}.dmg.sha256
 
       - name: Upload artifacts
         if: env.ACT != 'true'
@@ -392,16 +385,7 @@ jobs:
           path: |
             dbflux-macos-${{ matrix.arch }}.dmg
             dbflux-macos-${{ matrix.arch }}.dmg.sha256
-          retention-days: 90
-
-      - name: Upload signatures
-        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.arch }}-signatures
-          path: |
             dbflux-macos-${{ matrix.arch }}.dmg.asc
-            dbflux-macos-${{ matrix.arch }}.dmg.sha256.asc
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -410,9 +394,7 @@ jobs:
           mkdir -p /tmp/artifacts/macos-${{ matrix.arch }}
           cp dbflux-macos-${{ matrix.arch }}.dmg /tmp/artifacts/macos-${{ matrix.arch }}/
           cp dbflux-macos-${{ matrix.arch }}.dmg.sha256 /tmp/artifacts/macos-${{ matrix.arch }}/
-          if [ -f dbflux-macos-${{ matrix.arch }}.dmg.asc ]; then
-            cp dbflux-macos-${{ matrix.arch }}.dmg.asc /tmp/artifacts/macos-${{ matrix.arch }}/
-          fi
+          cp dbflux-macos-${{ matrix.arch }}.dmg.asc /tmp/artifacts/macos-${{ matrix.arch }}/
 
   build-windows:
     name: Build Windows amd64
@@ -460,11 +442,6 @@ jobs:
           Copy-Item dbflux.ico pkg/dbflux.ico
           Compress-Archive -Path pkg/* -DestinationPath dbflux-windows-amd64.zip -Force
 
-      - name: Generate ZIP checksum
-        run: |
-          $hash = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64.zip).Hash.ToLower()
-          "$hash  dbflux-windows-amd64.zip" | Out-File -FilePath dbflux-windows-amd64.zip.sha256 -Encoding ascii
-
       - name: Prepare installer files
         run: |
           New-Item -Path installer -ItemType Directory -Force | Out-Null
@@ -493,28 +470,27 @@ jobs:
           path: installer/installer.iss
           options: /DMyAppVersion=${{ steps.version.outputs.version }}
 
-      - name: Generate installer checksum
-        run: |
-          $hash = (Get-FileHash -Algorithm SHA256 installer/output/dbflux-windows-amd64-setup.exe).Hash.ToLower()
-          "$hash  dbflux-windows-amd64-setup.exe" | Out-File -FilePath dbflux-windows-amd64-setup.exe.sha256 -Encoding ascii
-
       - name: Move installer
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
       - name: Import GPG key
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign artifacts
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
         run: |
           gpg --armor --detach-sign dbflux-windows-amd64.zip
-          gpg --armor --detach-sign dbflux-windows-amd64.zip.sha256
           gpg --armor --detach-sign dbflux-windows-amd64-setup.exe
-          gpg --armor --detach-sign dbflux-windows-amd64-setup.exe.sha256
+
+      - name: Generate checksums
+        run: |
+          $hashZip = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64.zip).Hash.ToLower()
+          "$hashZip  dbflux-windows-amd64.zip" | Out-File -FilePath dbflux-windows-amd64.zip.sha256 -Encoding ascii
+
+          $hashExe = (Get-FileHash -Algorithm SHA256 dbflux-windows-amd64-setup.exe).Hash.ToLower()
+          "$hashExe  dbflux-windows-amd64-setup.exe" | Out-File -FilePath dbflux-windows-amd64-setup.exe.sha256 -Encoding ascii
 
       - name: Upload artifacts
         if: env.ACT != 'true'
@@ -524,20 +500,10 @@ jobs:
           path: |
             dbflux-windows-amd64.zip
             dbflux-windows-amd64.zip.sha256
+            dbflux-windows-amd64.zip.asc
             dbflux-windows-amd64-setup.exe
             dbflux-windows-amd64-setup.exe.sha256
-          retention-days: 90
-
-      - name: Upload signatures
-        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-amd64-signatures
-          path: |
-            dbflux-windows-amd64.zip.asc
-            dbflux-windows-amd64.zip.sha256.asc
             dbflux-windows-amd64-setup.exe.asc
-            dbflux-windows-amd64-setup.exe.sha256.asc
           retention-days: 90
 
       - name: (act) Store artifacts locally
@@ -547,12 +513,10 @@ jobs:
           New-Item -Path C:\tmp\artifacts\windows-amd64 -ItemType Directory -Force | Out-Null
           Copy-Item dbflux-windows-amd64.zip C:\tmp\artifacts\windows-amd64\
           Copy-Item dbflux-windows-amd64.zip.sha256 C:\tmp\artifacts\windows-amd64\
+          Copy-Item dbflux-windows-amd64.zip.asc C:\tmp\artifacts\windows-amd64\
           Copy-Item dbflux-windows-amd64-setup.exe C:\tmp\artifacts\windows-amd64\
           Copy-Item dbflux-windows-amd64-setup.exe.sha256 C:\tmp\artifacts\windows-amd64\
-          if (Test-Path dbflux-windows-amd64.zip.asc) {
-            Copy-Item dbflux-windows-amd64.zip.asc C:\tmp\artifacts\windows-amd64\
-            Copy-Item dbflux-windows-amd64-setup.exe.asc C:\tmp\artifacts\windows-amd64\
-          }
+          Copy-Item dbflux-windows-amd64-setup.exe.asc C:\tmp\artifacts\windows-amd64\
 
   release:
     name: Create Release
@@ -671,30 +635,25 @@ jobs:
           files: |
             artifacts/linux-*/*.tar.gz
             artifacts/linux-*/*.tar.gz.sha256
+            artifacts/linux-*/*.tar.gz.asc
             artifacts/linux-*/*.AppImage
             artifacts/linux-*/*.AppImage.sha256
+            artifacts/linux-*/*.AppImage.asc
             artifacts/linux-*/*.deb
             artifacts/linux-*/*.deb.sha256
+            artifacts/linux-*/*.deb.asc
             artifacts/linux-*/*.rpm
             artifacts/linux-*/*.rpm.sha256
+            artifacts/linux-*/*.rpm.asc
             artifacts/macos-*/*.dmg
             artifacts/macos-*/*.dmg.sha256
+            artifacts/macos-*/*.dmg.asc
             artifacts/windows-*/*.zip
             artifacts/windows-*/*.zip.sha256
+            artifacts/windows-*/*.zip.asc
             artifacts/windows-*/*-setup.exe
             artifacts/windows-*/*-setup.exe.sha256
-          draft: true
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload signatures to release
-        if: env.ACT != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.sign == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          files: |
-            artifacts/*/*.asc
+            artifacts/windows-*/*-setup.exe.asc
           draft: true
           prerelease: false
         env:
