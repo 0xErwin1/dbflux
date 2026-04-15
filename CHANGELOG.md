@@ -2,6 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.5] – 2026-04-15
+
+### Features
+
+* Register value providers for AWS static credentials auth (#22)
+* Sign .deb/.rpm packages natively and make GPG signing always-on (#6, #23)
+
+### Fixes
+
+* Use UUID for temp SQLite path to avoid parallel test lock contention
+* Align audit filter controls and multi-select behavior (#21)
+
+### Improvements
+
+* Unify MCP audit with app-wide audit system (#20)
+
+---
+
 ## [0.4.4] – 2026-04-09
 
 ### Features

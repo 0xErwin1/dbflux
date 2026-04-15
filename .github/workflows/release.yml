@@ -202,7 +202,7 @@ jobs:
           ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target dbflux-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
 
       - name: Install signing tools
-        run: sudo apt-get install -y dpkg-sig rpm
+        run: sudo apt-get install -y rpm debsigs
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
@@ -214,7 +214,7 @@ jobs:
         run: |
           GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
           for deb in dbflux_*.deb; do
-            dpkg-sig -k "$GPG_KEY_ID" --sign builder "$deb"
+            debsigs --sign=origin -k "$GPG_KEY_ID" "$deb"
           done
 
       - name: Configure RPM signing
