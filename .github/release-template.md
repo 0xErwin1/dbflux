@@ -53,17 +53,49 @@ xattr -cr /Applications/DBFlux.app
 
 ## Verify Downloads
 
-Releases triggered with `workflow_dispatch` and `sign=true` include GPG signatures (key `A614B7D25134987A`).
+All release artifacts are signed with GPG key `A614B7D25134987A`.
+
+### Import the public key (one time)
 
 ```bash
-# Import the public key (one time)
 gpg --keyserver keyserver.ubuntu.com --recv-keys A614B7D25134987A
+```
 
-# Verify checksum
-sha256sum -c dbflux-linux-amd64.tar.gz.sha256
+### Verify a detached GPG signature
 
-# Verify GPG signature (if signed)
+```bash
+# Linux tarball
 gpg --verify dbflux-linux-amd64.tar.gz.asc dbflux-linux-amd64.tar.gz
+
+# Linux AppImage
+gpg --verify dbflux-linux-amd64.AppImage.asc dbflux-linux-amd64.AppImage
+
+# macOS DMG
+gpg --verify dbflux-macos-arm64.dmg.asc dbflux-macos-arm64.dmg
+
+# Windows ZIP
+gpg --verify dbflux-windows-amd64.zip.asc dbflux-windows-amd64.zip
+
+# Windows installer
+gpg --verify dbflux-windows-amd64-setup.exe.asc dbflux-windows-amd64-setup.exe
+```
+
+### Verify a native .deb package
+
+```bash
+dpkg-sig --verify dbflux_*.deb
+```
+
+### Verify a native .rpm package
+
+```bash
+rpm --checksig dbflux-*.rpm
+```
+
+### Verify a SHA256 checksum
+
+```bash
+sha256sum -c dbflux-linux-amd64.tar.gz.sha256
 ```
 
 ## System Requirements
