@@ -2161,7 +2161,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbflux"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_app"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "dbflux_audit",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_approval"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_policy",
  "serde",
@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_audit"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_storage",
@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_aws"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "bitflags 2.10.0",
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_dynamodb"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
@@ -2327,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_host"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_dynamodb",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_ipc"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "bincode",
  "dbflux_core",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mongodb"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "bson",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mysql"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_postgres"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_redis"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_ssh",
@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_sqlite"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_test_support",
@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_export"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "csv",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ipc"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "bincode",
  "dbflux_core",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_lua"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "log",
@@ -2475,7 +2475,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_approval",
  "dbflux_audit",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp_server"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_policy"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2534,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_proxy"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ssh"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ssm"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_storage"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2588,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_test_support"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_redis",
@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_tunnel_core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "dbflux_core",
  "log",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ui"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "async-trait",
