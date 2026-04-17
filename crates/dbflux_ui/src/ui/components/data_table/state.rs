@@ -815,6 +815,26 @@ impl DataTableState {
         }
     }
 
+    /// Request saving all pending changes at once.
+    /// Emits a single SaveAllRequested event with all pending deletes, inserts, and dirty rows.
+    pub fn request_save_all(&mut self, cx: &mut Context<Self>) {
+        let pending_deletes = self.edit_buffer.pending_delete_rows();
+        let pending_inserts = self.edit_buffer.pending_insert_rows();
+        let dirty_rows = self.edit_buffer.dirty_rows();
+
+        if pending_deletes.is_empty() && pending_inserts.is_empty() && dirty_rows.is_empty() {
+            return;
+        }
+
+        let insert_indices: Vec<usize> = pending_inserts.iter().map(|(idx, _)| *idx).collect();
+
+        cx.emit(DataTableEvent::SaveAllRequested {
+            pending_deletes,
+            pending_inserts: insert_indices,
+            dirty_rows,
+        });
+    }
+
     /// Revert all changes for a specific row.
     #[allow(dead_code)]
     pub fn revert_row(&mut self, row: usize, cx: &mut Context<Self>) {

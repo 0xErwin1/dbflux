@@ -318,7 +318,7 @@ impl gpui::Render for DataTable {
         let s = self.state.clone();
         let on_save_row = move |_: &SaveRow, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
-                state.request_save_row(cx);
+                state.request_save_all(cx);
             });
         };
 

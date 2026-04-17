@@ -160,4 +160,11 @@ pub enum DataTableEvent {
 
     /// Request to commit a pending delete (base_row_idx marked for deletion).
     CommitDeleteRequested(usize),
+
+    /// Request to save all pending changes at once (deletes, inserts, edits).
+    SaveAllRequested {
+        pending_deletes: Vec<usize>,
+        pending_inserts: Vec<usize>,
+        dirty_rows: Vec<usize>,
+    },
 }

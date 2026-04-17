@@ -1058,6 +1058,27 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         let btn_hover = theme.muted;
 
+        let count = self
+            .pending_delete_confirm
+            .as_ref()
+            .map(|c| c.row_indices.len())
+            .unwrap_or(1);
+
+        let title = if count == 1 {
+            "Delete row?".to_string()
+        } else {
+            format!("Delete {} rows?", count)
+        };
+
+        let description = if count == 1 {
+            "This action cannot be undone.".to_string()
+        } else {
+            format!(
+                "{} rows will be permanently deleted. This cannot be undone.",
+                count
+            )
+        };
+
         // Backdrop with centered modal
         div()
             .id("delete-modal-overlay")
@@ -1097,14 +1118,14 @@ impl DataGridPanel {
                                     .text_size(FontSizes::SM)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.foreground)
-                                    .child("Delete row?"),
+                                    .child(title),
                             ),
                     )
                     .child(
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
-                            .child("This action cannot be undone."),
+                            .child(description),
                     )
                     .child(
                         div()
@@ -2174,7 +2195,7 @@ impl DataGridPanel {
             ContextMenuAction::DeleteRow => {
                 if menu.is_document_view {
                     self.pending_delete_confirm = Some(PendingDeleteConfirm {
-                        row_idx: menu.row,
+                        row_indices: vec![menu.row],
                         is_table: false,
                     });
                     cx.notify();

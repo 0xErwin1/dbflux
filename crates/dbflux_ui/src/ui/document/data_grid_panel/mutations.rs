@@ -1,5 +1,5 @@
 use super::utils::{extract_pk_columns, value_to_json};
-use super::{DataGridPanel, DataSource, PendingDeleteConfirm, PendingToast};
+use super::{DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm, PendingToast};
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::NodeId;
 use crate::ui::components::toast::ToastExt;
@@ -706,6 +706,12 @@ impl DataGridPanel {
                 });
             }
         }
+
+        // Chain to the next batch operation if in a pipeline
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+        }
+
         cx.notify();
     }
 
@@ -823,7 +829,12 @@ impl DataGridPanel {
                                 message: "Document inserted".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+
+                            if panel.pending_batch_remaining.is_some() {
+                                panel.process_next_batch_op(cx);
+                            } else {
+                                panel.pending_refresh = true;
+                            }
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
@@ -960,7 +971,12 @@ impl DataGridPanel {
                                 message: "Row inserted".to_string(),
                                 is_error: false,
                             });
-                            panel.pending_refresh = true;
+
+                            if panel.pending_batch_remaining.is_some() {
+                                panel.process_next_batch_op(cx);
+                            } else {
+                                panel.pending_refresh = true;
+                            }
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
@@ -991,7 +1007,7 @@ impl DataGridPanel {
             DataSource::Table { .. } => {
                 // Show confirmation before deleting from SQL tables
                 self.pending_delete_confirm = Some(PendingDeleteConfirm {
-                    row_idx,
+                    row_indices: vec![row_idx],
                     is_table: true,
                 });
                 cx.notify();
@@ -1013,11 +1029,11 @@ impl DataGridPanel {
                 ..
             } = &self.source
             {
-                self.commit_delete_table(
+                self.commit_bulk_deletes_table(
                     *profile_id,
                     database.clone(),
                     table.clone(),
-                    confirm.row_idx,
+                    confirm.row_indices,
                     cx,
                 );
             }
@@ -1027,7 +1043,12 @@ impl DataGridPanel {
             ..
         } = &self.source
         {
-            self.commit_delete_collection(*profile_id, collection.clone(), confirm.row_idx, cx);
+            self.commit_bulk_deletes_collection(
+                *profile_id,
+                collection.clone(),
+                confirm.row_indices,
+                cx,
+            );
         }
 
         self.focus_active_view(window, cx);
@@ -1173,6 +1194,7 @@ impl DataGridPanel {
         .detach();
     }
 
+    #[allow(dead_code)]
     pub(super) fn commit_delete_table(
         &mut self,
         profile_id: Uuid,
@@ -1294,6 +1316,461 @@ impl DataGridPanel {
                                 message: format!("Delete failed: {}", e),
                                 is_error: true,
                             });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .log_if_dropped();
+        })
+        .detach();
+    }
+
+    /// Handle the SaveAllRequested event by dispatching all pending operations.
+    ///
+    /// Pipeline order: deletes -> inserts -> updates.
+    /// Each stage completes before the next starts, and pending_refresh is only
+    /// set after all operations finish.
+    pub(super) fn handle_save_all(
+        &mut self,
+        pending_deletes: Vec<usize>,
+        pending_inserts: Vec<usize>,
+        dirty_rows: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let has_remaining = !pending_inserts.is_empty() || !dirty_rows.is_empty();
+
+        // Handle all pending deletes as a batch
+        if !pending_deletes.is_empty() {
+            // Store remaining ops for after deletes complete
+            if has_remaining {
+                self.pending_batch_remaining = Some(PendingBatchRemaining {
+                    pending_inserts,
+                    dirty_rows,
+                });
+            }
+
+            match &self.source {
+                DataSource::Collection {
+                    profile_id,
+                    collection,
+                    ..
+                } => {
+                    self.commit_bulk_deletes_collection(
+                        *profile_id,
+                        collection.clone(),
+                        pending_deletes,
+                        cx,
+                    );
+                }
+                DataSource::Table { .. } => {
+                    self.pending_delete_confirm = Some(PendingDeleteConfirm {
+                        row_indices: pending_deletes,
+                        is_table: true,
+                    });
+                    cx.notify();
+                }
+                DataSource::QueryResult { .. } => {}
+            }
+            return;
+        }
+
+        // No deletes — start pipeline from inserts/dirty directly
+        if has_remaining {
+            self.pending_batch_remaining = Some(PendingBatchRemaining {
+                pending_inserts,
+                dirty_rows,
+            });
+            self.process_next_batch_op(cx);
+        }
+    }
+
+    /// Advance the batch save pipeline by one step.
+    ///
+    /// Processes the next pending insert or dirty row. If none remain,
+    /// sets pending_refresh to trigger a table reload.
+    ///
+    /// This is called from async completion callbacks (insert/delete/save)
+    /// to chain the next operation in the pipeline without triggering an
+    /// intermediate refresh that would destroy the edit buffer.
+    pub(super) fn process_next_batch_op(&mut self, cx: &mut Context<Self>) {
+        let Some(mut remaining) = self.pending_batch_remaining.take() else {
+            self.pending_refresh = true;
+            cx.notify();
+            return;
+        };
+
+        if let Some(insert_idx) = remaining.pending_inserts.first().copied() {
+            remaining.pending_inserts.remove(0);
+            if !remaining.pending_inserts.is_empty() || !remaining.dirty_rows.is_empty() {
+                self.pending_batch_remaining = Some(remaining);
+            }
+            self.handle_commit_insert(insert_idx, cx);
+            return;
+        }
+
+        if let Some(row_idx) = remaining.dirty_rows.first().copied() {
+            remaining.dirty_rows.remove(0);
+            if !remaining.dirty_rows.is_empty() {
+                self.pending_batch_remaining = Some(remaining);
+            }
+            self.handle_save_row(row_idx, cx);
+            return;
+        }
+
+        // All batch operations complete
+        self.pending_refresh = true;
+        cx.notify();
+    }
+
+    /// Execute multiple row deletes for a SQL table in a single async block.
+    /// Reads all PK identities upfront, executes deletes sequentially, then
+    /// triggers a single refresh at the end.
+    pub(super) fn commit_bulk_deletes_table(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table_ref: TableRef,
+        row_indices: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let count = row_indices.len();
+        let pk_indices = {
+            let state = table_state.read(cx);
+            state.pk_columns()
+        };
+
+        if pk_indices.is_empty() {
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot delete: no primary key defined for this table".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        // Collect PK identity for every row upfront before any async work
+        let mut identities = Vec::with_capacity(count);
+        {
+            let state = table_state.read(cx);
+            let model = state.model();
+
+            for &row_idx in &row_indices {
+                let mut pk_columns = Vec::with_capacity(pk_indices.len());
+                let mut pk_values = Vec::with_capacity(pk_indices.len());
+
+                for &col_idx in pk_indices.iter() {
+                    if let Some(col_spec) = model.columns.get(col_idx) {
+                        pk_columns.push(col_spec.title.to_string());
+                    }
+                    if let Some(cell) = model.cell(row_idx, col_idx) {
+                        pk_values.push(cell.to_value());
+                    }
+                }
+
+                if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
+                    log::error!(
+                        "[BULK DELETE] Failed to build row identity for row {}",
+                        row_idx
+                    );
+                    continue;
+                }
+
+                identities.push((row_idx, RowIdentity::new(pk_columns, pk_values)));
+            }
+        }
+
+        if identities.is_empty() {
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot delete: failed to identify any rows".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            &format!("Delete {} row(s)", identities.len()),
+            cx,
+        );
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+        let table_name = table_ref.name.clone();
+        let schema_name = table_ref.schema.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .and_then(|connected| {
+                            connected
+                                .resolve_connection_for_execution(database.as_deref())
+                                .ok()
+                        })
+                })
+                .unwrap_or_log_dropped();
+
+            let Some(conn) = conn else {
+                log::error!("[BULK DELETE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .log_if_dropped();
+                return;
+            };
+
+            let mut success_count = 0usize;
+            let mut last_error: Option<dbflux_core::DbError> = None;
+
+            for (row_idx, identity) in &identities {
+                let delete =
+                    RowDelete::new(identity.clone(), table_name.clone(), schema_name.clone());
+
+                let conn = conn.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { conn.delete_row(&delete) })
+                    .await;
+
+                match result {
+                    Ok(_) => {
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        log::error!("[BULK DELETE] Failed to delete row {}: {}", row_idx, e);
+                        last_error = Some(e);
+                        // Stop on first error — remaining rows may depend on consistency
+                        break;
+                    }
+                }
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    if let Some(e) = last_error {
+                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                        panel.pending_toast = Some(PendingToast {
+                            message: format!(
+                                "Deleted {} of {} row(s), then failed: {}",
+                                success_count,
+                                identities.len(),
+                                e
+                            ),
+                            is_error: true,
+                        });
+                    } else {
+                        panel.runner.complete_mutation(task_id, cx);
+
+                        // Unmark all successfully deleted rows
+                        table_state_clone.update(cx, |state, cx| {
+                            for i in 0..success_count {
+                                let (row_idx, _) = &identities[i];
+                                state.edit_buffer_mut().unmark_delete(*row_idx);
+                            }
+                            cx.notify();
+                        });
+
+                        panel.pending_toast = Some(PendingToast {
+                            message: format!("{} row(s) deleted", success_count),
+                            is_error: false,
+                        });
+
+                        if panel.pending_batch_remaining.is_some() {
+                            panel.process_next_batch_op(cx);
+                        } else {
+                            panel.pending_refresh = true;
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .log_if_dropped();
+        })
+        .detach();
+    }
+
+    /// Execute multiple document deletes for a collection in a single async block.
+    pub(super) fn commit_bulk_deletes_collection(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        row_indices: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let count = row_indices.len();
+        let pk_columns = extract_pk_columns(&self.result);
+
+        // Collect filters for every document upfront
+        let mut filters = Vec::with_capacity(count);
+        {
+            let state = table_state.read(cx);
+            let model = state.model();
+
+            for &row_idx in &row_indices {
+                let filter = if pk_columns.is_empty() {
+                    let id_col_idx = self
+                        .result
+                        .columns
+                        .iter()
+                        .position(|c| c.name == "_id")
+                        .unwrap_or(0);
+
+                    let id_value = model
+                        .cell(row_idx, id_col_idx)
+                        .map(|c| c.to_value())
+                        .unwrap_or(Value::Null);
+
+                    match &id_value {
+                        Value::ObjectId(oid) => dbflux_core::DocumentFilter::new(
+                            serde_json::json!({"_id": {"$oid": oid}}),
+                        ),
+                        Value::Text(s) => {
+                            dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s}))
+                        }
+                        _ => {
+                            log::error!(
+                                "[BULK DELETE] Invalid _id value for document at row {}",
+                                row_idx
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    let mut filter_obj = serde_json::Map::new();
+                    for (col_idx, col_name) in &pk_columns {
+                        if let Some(cell) = model.cell(row_idx, *col_idx) {
+                            filter_obj.insert(col_name.clone(), value_to_json(&cell.to_value()));
+                        }
+                    }
+                    dbflux_core::DocumentFilter::new(serde_json::Value::Object(filter_obj))
+                };
+
+                filters.push((row_idx, filter));
+            }
+        }
+
+        if filters.is_empty() {
+            self.pending_toast = Some(PendingToast {
+                message: "Cannot delete: failed to identify any documents".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            &format!("Delete {} document(s)", filters.len()),
+            cx,
+        );
+
+        let app_state = self.app_state.clone();
+        let entity = cx.entity().clone();
+        let table_state_clone = table_state.clone();
+        let collection_name = collection.name.clone();
+        let collection_db = collection.database.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let conn = cx
+                .update(|cx| {
+                    app_state
+                        .read(cx)
+                        .connections()
+                        .get(&profile_id)
+                        .map(|c| c.connection.clone())
+                })
+                .unwrap_or_log_dropped();
+
+            let Some(conn) = conn else {
+                log::error!("[BULK DELETE] No connection for profile {}", profile_id);
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.runner.fail_mutation(task_id, "No connection", cx);
+                    });
+                })
+                .log_if_dropped();
+                return;
+            };
+
+            let mut success_count = 0usize;
+            let mut last_error: Option<dbflux_core::DbError> = None;
+
+            for (row_idx, filter) in &filters {
+                let delete =
+                    dbflux_core::DocumentDelete::new(collection_name.clone(), filter.clone())
+                        .with_database(collection_db.clone());
+
+                let conn = conn.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { conn.delete_document(&delete) })
+                    .await;
+
+                match result {
+                    Ok(_) => {
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "[BULK DELETE] Failed to delete document at row {}: {}",
+                            row_idx,
+                            e
+                        );
+                        last_error = Some(e);
+                        break;
+                    }
+                }
+            }
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    if let Some(e) = last_error {
+                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                        panel.pending_toast = Some(PendingToast {
+                            message: format!(
+                                "Deleted {} of {} document(s), then failed: {}",
+                                success_count,
+                                filters.len(),
+                                e
+                            ),
+                            is_error: true,
+                        });
+                    } else {
+                        panel.runner.complete_mutation(task_id, cx);
+
+                        table_state_clone.update(cx, |state, cx| {
+                            for i in 0..success_count {
+                                let (row_idx, _) = &filters[i];
+                                state.edit_buffer_mut().unmark_delete(*row_idx);
+                            }
+                            cx.notify();
+                        });
+
+                        panel.pending_toast = Some(PendingToast {
+                            message: format!("{} document(s) deleted", success_count),
+                            is_error: false,
+                        });
+
+                        if panel.pending_batch_remaining.is_some() {
+                            panel.process_next_batch_op(cx);
+                        } else {
+                            panel.pending_refresh = true;
                         }
                     }
                     cx.notify();
