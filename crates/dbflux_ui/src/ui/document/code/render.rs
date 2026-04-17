@@ -316,14 +316,11 @@ impl CodeDocument {
                     }),
             )
             .child(
-                div().flex_1().overflow_y_scrollbar().p(Spacing::MD).child(
-                    div()
-                        .font_family("monospace")
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.foreground)
-                        .whitespace_nowrap()
-                        .child(text),
-                ),
+                div()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .p(Spacing::MD)
+                    .child(div().whitespace_nowrap().child(Text::code(text))),
             )
             .when(live_output.is_truncated(), |el| {
                 el.child(

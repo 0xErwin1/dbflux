@@ -857,49 +857,35 @@ impl DataGridPanel {
         };
 
         match value {
-            Value::Null => div()
-                .text_size(FontSizes::SM)
+            Value::Null => Text::caption("null")
                 .text_color(text_color)
-                .child("null")
                 .into_any_element(),
 
-            Value::Bool(b) => div()
-                .text_size(FontSizes::SM)
+            Value::Bool(b) => Text::caption(if *b { "true" } else { "false" })
                 .text_color(text_color)
-                .child(if *b { "true" } else { "false" })
                 .into_any_element(),
 
-            Value::Int(i) => div()
-                .text_size(FontSizes::SM)
+            Value::Int(i) => Text::caption(i.to_string())
                 .text_color(text_color)
-                .child(i.to_string())
                 .into_any_element(),
 
-            Value::Float(f) => div()
-                .text_size(FontSizes::SM)
+            Value::Float(f) => Text::caption(f.to_string())
                 .text_color(text_color)
-                .child(f.to_string())
                 .into_any_element(),
 
             Value::Text(s) => {
                 let display: String = s.replace('\n', "\\n").replace('\r', "\\r");
-                div()
-                    .text_size(FontSizes::SM)
+                Text::caption(format!("\"{}\"", display))
                     .text_color(text_color)
-                    .child(format!("\"{}\"", display))
                     .into_any_element()
             }
 
-            Value::ObjectId(oid) => div()
-                .text_size(FontSizes::SM)
+            Value::ObjectId(oid) => Text::caption(format!("ObjectId(\"{}\")", oid))
                 .text_color(text_color)
-                .child(format!("ObjectId(\"{}\")", oid))
                 .into_any_element(),
 
-            Value::DateTime(dt) => div()
-                .text_size(FontSizes::SM)
+            Value::DateTime(dt) => Text::caption(dt.to_rfc3339())
                 .text_color(text_color)
-                .child(dt.to_rfc3339())
                 .into_any_element(),
 
             Value::Array(arr) => {
@@ -945,10 +931,8 @@ impl DataGridPanel {
                 let display = format!("{:?}", value)
                     .replace('\n', "\\n")
                     .replace('\r', "\\r");
-                div()
-                    .text_size(FontSizes::SM)
+                Text::caption(display)
                     .text_color(theme.foreground)
-                    .child(display)
                     .into_any_element()
             }
         }
@@ -1015,8 +999,6 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         const MAX_LINES: usize = 5000;
 
-        let fg = theme.foreground;
-
         let line_count = content.lines().count();
         let truncated = line_count > MAX_LINES;
 
@@ -1040,11 +1022,8 @@ impl DataGridPanel {
             .bg(theme.background)
             .child(
                 div()
-                    .font_family("monospace")
-                    .text_size(FontSizes::SM)
-                    .text_color(fg)
                     .whitespace_nowrap()
-                    .child(display_text),
+                    .child(Text::code(display_text)),
             )
             .when(truncated, |d| {
                 d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
@@ -1074,11 +1053,8 @@ impl DataGridPanel {
             .bg(theme.background)
             .child(
                 div()
-                    .font_family("monospace")
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
                     .whitespace_nowrap()
-                    .child(hex_dump),
+                    .child(Text::code(hex_dump)),
             )
     }
 
@@ -1238,14 +1214,12 @@ impl DataGridPanel {
                             .child("Prev"),
                     )
                     .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child(if let Some(total) = total_pages {
-                                format!("Page {}/{} ({}-{})", page, total, start, end)
-                            } else {
-                                format!("Page {} ({}-{})", page, start, end)
-                            }),
+                        Text::caption(if let Some(total) = total_pages {
+                            format!("Page {}/{} ({}-{})", page, total, start, end)
+                        } else {
+                            format!("Page {} ({}-{})", page, start, end)
+                        })
+                        .font_size(FontSizes::XS),
                     )
                     .child(
                         div()

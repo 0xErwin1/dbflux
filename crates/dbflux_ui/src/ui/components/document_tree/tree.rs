@@ -6,6 +6,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -434,14 +435,12 @@ fn render_toolbar(
         .border_color(theme.border)
         .bg(theme.secondary.opacity(0.3))
         .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(if is_tree_mode {
-                    "Tree View"
-                } else {
-                    "Raw JSON"
-                }),
+            Text::caption(if is_tree_mode {
+                "Tree View"
+            } else {
+                "Raw JSON"
+            })
+            .font_size(FontSizes::XS),
         )
         .child(
             div()
@@ -509,12 +508,7 @@ fn render_search_bar(
                 .text_color(theme.muted_foreground),
         )
         .child(div().flex_1().child(Input::new(&input).small().w_full()))
-        .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(match_text),
-        )
+        .child(Text::caption(match_text).font_size(FontSizes::XS))
         .child(
             div()
                 .id("close-search")

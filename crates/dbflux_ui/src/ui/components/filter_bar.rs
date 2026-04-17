@@ -29,8 +29,8 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::input::InputState;
+use gpui_component::ActiveTheme;
 
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
@@ -340,18 +340,14 @@ fn render_item(
     _cx: &App,
 ) -> AnyElement {
     use dbflux_components::controls::Input;
+    use dbflux_components::primitives::Text;
 
     match item {
         FilterBarItem::Input { label, input } => div()
             .flex()
             .items_center()
             .gap(Spacing::XS)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(label.clone()),
-            )
+            .child(Text::caption(label.clone()))
             .child(
                 div()
                     .flex()
@@ -367,14 +363,8 @@ fn render_item(
             .flex()
             .items_center()
             .gap(Spacing::XS)
+            .child(Text::caption(label.clone()))
             .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(label.clone()),
-            )
-            .child(
-                // Ring wraps the dropdown widget exactly as it wraps the input.
                 div()
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))

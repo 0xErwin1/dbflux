@@ -1390,9 +1390,9 @@ impl DataGridPanel {
                                         div()
                                             .px(Spacing::SM)
                                             .py(Spacing::XS)
-                                            .text_size(FontSizes::XS)
-                                            .text_color(theme.muted_foreground)
-                                            .child("Cell value"),
+                                            .child(
+                                                Text::caption("Cell value").font_size(FontSizes::XS),
+                                            ),
                                     )
                                 })
                                 .children(

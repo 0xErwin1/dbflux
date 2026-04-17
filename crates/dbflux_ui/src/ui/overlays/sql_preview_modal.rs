@@ -639,9 +639,7 @@ impl Render for SqlPreviewModal {
             .py(Spacing::XS)
             .rounded(Radii::SM)
             .bg(theme.secondary)
-            .text_size(FontSizes::XS)
-            .text_color(theme.muted_foreground)
-            .child(badge_text);
+            .child(Text::caption(badge_text).font_size(FontSizes::XS));
 
         let mut frame = ModalFrame::new("sql-preview-modal", &self.focus_handle, close)
             .title(title)

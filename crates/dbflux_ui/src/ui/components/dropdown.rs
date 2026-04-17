@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::ui::tokens::Heights;
+use crate::ui::tokens::{FontSizes, Heights};
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
@@ -434,10 +435,7 @@ impl Render for Dropdown {
 
         if self.compact_trigger {
             trigger = trigger.h_full().justify_center().px_2().text_sm().child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("▾"),
+                Text::caption("▾").font_size(FontSizes::XS),
             );
         } else if self.toolbar_style {
             // Borderless inline trigger matching the DataGridPanel toolbar weight.
@@ -448,12 +446,7 @@ impl Render for Dropdown {
                 .px_1p5()
                 .text_xs()
                 .child(div().flex_1().truncate().child(label))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("▾"),
-                );
+                .child(Text::caption("▾").font_size(FontSizes::XS));
         } else {
             trigger = trigger
                 .justify_between()
@@ -466,12 +459,7 @@ impl Render for Dropdown {
                 .border_color(theme.input)
                 .text_sm()
                 .child(div().flex_1().truncate().child(label))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("▾"),
-                );
+                .child(Text::caption("▾").font_size(FontSizes::XS));
         }
 
         if !disabled {

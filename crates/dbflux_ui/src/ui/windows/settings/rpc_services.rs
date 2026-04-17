@@ -1266,12 +1266,7 @@ impl ServicesSection {
                                     )
                                     .child(Input::new(key_input).small()),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child("="),
-                            )
+                            .child(Text::caption("="))
                             .child(
                                 div()
                                     .flex_1()

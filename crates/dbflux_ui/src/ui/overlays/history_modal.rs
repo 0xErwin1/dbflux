@@ -612,26 +612,28 @@ impl HistoryModal {
                                 });
                                 this.close(cx);
                             }))
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(entry.sql_preview(60)),
-                            )
+                            .child(div().overflow_hidden().text_ellipsis().child(
+                                Text::caption(entry.sql_preview(60)).text_color(theme.foreground),
+                            ))
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.formatted_timestamp())
+                                    .child(
+                                        Text::caption(entry.formatted_timestamp())
+                                            .font_size(FontSizes::XS),
+                                    )
                                     .when_some(entry.row_count, |d, count| {
-                                        d.child(format!("{} rows", count))
+                                        d.child(
+                                            Text::caption(format!("{} rows", count))
+                                                .font_size(FontSizes::XS),
+                                        )
                                     })
-                                    .child(format!("{}ms", entry.execution_time_ms)),
+                                    .child(
+                                        Text::caption(format!("{}ms", entry.execution_time_ms))
+                                            .font_size(FontSizes::XS),
+                                    ),
                             )
                     }))
                     .when(entries.is_empty(), |d| {
@@ -700,10 +702,8 @@ impl HistoryModal {
                                             })
                                             .when(!is_editing, |d| {
                                                 d.child(
-                                                    div()
-                                                        .text_size(FontSizes::SM)
-                                                        .text_color(theme.foreground)
-                                                        .child(entry.name.clone()),
+                                                    Text::caption(entry.name.clone())
+                                                        .text_color(theme.foreground),
                                                 )
                                             }),
                                     )
@@ -735,20 +735,12 @@ impl HistoryModal {
                                         ),
                                     ),
                             )
+                            .child(Text::caption(entry.sql_preview(80)).font_size(FontSizes::XS))
                             .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.sql_preview(80)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.formatted_last_used_at()),
+                                div().flex().items_center().gap(Spacing::SM).child(
+                                    Text::caption(entry.formatted_last_used_at())
+                                        .font_size(FontSizes::XS),
+                                ),
                             )
                     }))
                     .when(entries.is_empty(), |d| {

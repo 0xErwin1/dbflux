@@ -1,10 +1,11 @@
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::form_navigation::{
-    FormEditState, FormField, FormNavigation, focus_ring, subscribe_form_input,
+    focus_ring, subscribe_form_input, FormEditState, FormField, FormNavigation,
 };
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::KeyType;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -456,12 +457,7 @@ impl Render for AddMemberModal {
 
         // -- Header label ---------------------------------------------------
 
-        body = body.child(
-            div()
-                .text_size(FontSizes::SM)
-                .text_color(theme.muted_foreground)
-                .child(self.section_label()),
-        );
+        body = body.child(Text::caption(self.section_label()));
 
         // -- Rows -----------------------------------------------------------
 
@@ -575,12 +571,7 @@ impl Render for AddMemberModal {
         // -- Error message --------------------------------------------------
 
         if let Some(error) = &self.error_message {
-            body = body.child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(format!("Error: {}", error)),
-            );
+            body = body.child(Text::caption(format!("Error: {}", error)));
         }
 
         // -- Footer buttons -------------------------------------------------
