@@ -197,7 +197,7 @@ impl Render for ToastHost {
                             .min_w_0()
                             .when(!is_error, |d| d.overflow_hidden().text_ellipsis())
                             .child(
-                                Text::caption(toast.message.clone()).text_color(theme.foreground),
+                                Text::body(toast.message.clone()),
                             ),
                     )
                     .child(close_button)

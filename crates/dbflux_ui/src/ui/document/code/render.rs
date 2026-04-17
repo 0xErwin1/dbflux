@@ -178,7 +178,7 @@ impl CodeDocument {
                                         .size_3()
                                         .text_color(theme.foreground),
                                 )
-                                .child(Text::caption(refresh_label).text_color(theme.foreground)),
+                                .child(Text::body(refresh_label)),
                         )
                         .child(div().w(px(1.0)).h_full().bg(theme.input))
                         .child(

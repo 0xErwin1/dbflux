@@ -120,7 +120,7 @@ impl Sidebar {
                             this.toggle_add_menu(cx);
                         });
                     })
-                    .child(Text::body("+").text_color(theme.muted_foreground))
+                    .child(Text::muted("+"))
             })
     }
 

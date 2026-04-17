@@ -612,9 +612,12 @@ impl HistoryModal {
                                 });
                                 this.close(cx);
                             }))
-                            .child(div().overflow_hidden().text_ellipsis().child(
-                                Text::caption(entry.sql_preview(60)).text_color(theme.foreground),
-                            ))
+                            .child(
+                                div()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(Text::body(entry.sql_preview(60))),
+                            )
                             .child(
                                 div()
                                     .flex()
@@ -701,10 +704,7 @@ impl HistoryModal {
                                                 )
                                             })
                                             .when(!is_editing, |d| {
-                                                d.child(
-                                                    Text::caption(entry.name.clone())
-                                                        .text_color(theme.foreground),
-                                                )
+                                                d.child(Text::body(entry.name.clone()))
                                             }),
                                     )
                                     .child(

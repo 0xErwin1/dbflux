@@ -508,7 +508,7 @@ impl DataGridPanel {
                                     .size_4()
                                     .text_color(theme.foreground),
                             )
-                            .child(Text::caption(refresh_label).text_color(theme.foreground)),
+                            .child(Text::body(refresh_label)),
                     )
                     .child(div().w(px(1.0)).h_full().bg(theme.input))
                     .child(
@@ -927,8 +927,7 @@ impl DataGridPanel {
                 let display = format!("{:?}", value)
                     .replace('\n', "\\n")
                     .replace('\r', "\\r");
-                Text::caption(display)
-                    .text_color(theme.foreground)
+                Text::body(display)
                     .into_any_element()
             }
         }
@@ -1031,7 +1030,7 @@ impl DataGridPanel {
         raw_bytes: Option<&[u8]>,
         text_body: Option<&str>,
         theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let hex_dump = if let Some(bytes) = raw_bytes {
             format_hex_dump(bytes)
@@ -1047,30 +1046,11 @@ impl DataGridPanel {
             .p(Spacing::MD)
             .overflow_y_scroll()
             .bg(theme.background)
-                        .child(
-                            div()
-                                .id("clear-filter")
-                                .w(px(20.0))
-                                .h(px(20.0))
-                                .mr(Spacing::XS)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(Radii::SM)
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .cursor_pointer()
-                                .hover(|d| {
-                                    d.bg(theme.secondary).text_color(theme.foreground)
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.filter_input.update(cx, |input, cx| {
-                                        input.set_value("", window, cx);
-                                    });
-                                    this.refresh(window, cx);
-                                }))
-                                .child("\u{00d7}"),
-                        )
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .child(Text::code(hex_dump)),
+            )
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -198,7 +198,7 @@ impl Render for PipelineProgress {
                                 .size(px(12.0))
                                 .text_color(theme.info),
                         )
-                        .child(Text::caption(label).font_size(FontSizes::XS).text_color(theme.foreground)),
+                        .child(Text::body(label).font_size(FontSizes::XS)),
                 )
             })
             // SSO waiting message

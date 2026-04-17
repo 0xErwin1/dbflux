@@ -2264,7 +2264,7 @@ impl AuditDocument {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.export_with_format(format, cx);
                     }))
-                    .child(Text::caption(label).text_color(theme.foreground))
+                    .child(Text::body(label))
                     .into_any_element()
             })
             .collect::<Vec<_>>();

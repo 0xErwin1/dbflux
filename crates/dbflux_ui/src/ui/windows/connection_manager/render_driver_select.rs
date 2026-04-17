@@ -1,8 +1,10 @@
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::FontSizes;
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::list::ListItem;
+use gpui_component::ActiveTheme;
 
 use super::ConnectionManagerWindow;
 
@@ -42,13 +44,9 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .mb_2()
-                                .child("Select database type (j/k to navigate, Enter to select)"),
-                        )
+                        .child(div().mb_2().child(Text::muted(
+                            "Select database type (j/k to navigate, Enter to select)",
+                        )))
                         .children(drivers.into_iter().enumerate().map(|(idx, driver_info)| {
                             let driver_id = driver_info.id.clone();
                             let icon = driver_info.icon;
@@ -89,10 +87,8 @@ impl ConnectionManagerWindow {
                                                                 .child(driver_info.name),
                                                         )
                                                         .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(theme.muted_foreground)
-                                                                .child(driver_info.description),
+                                                            Text::muted(driver_info.description)
+                                                                .font_size(FontSizes::XS),
                                                         ),
                                                 ),
                                         ),
