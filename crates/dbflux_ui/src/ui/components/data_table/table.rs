@@ -430,6 +430,12 @@ impl gpui::Render for DataTable {
         let state_for_empty_context = self.state.clone();
         let focus_for_empty = focus_handle.clone();
 
+        // Resize drag handlers live on the root div so they keep firing
+        // even when the cursor leaves the narrow 6px resize handle.
+        let resize_drag_for_move = self.resize_drag.clone();
+        let state_for_resize_move = self.state.clone();
+        let resize_drag_for_up = self.resize_drag.clone();
+
         let inner_table = div()
             .id("table-inner")
             .flex()
@@ -504,6 +510,35 @@ impl gpui::Render for DataTable {
             // Undo/Redo
             .on_action(on_undo)
             .on_action(on_redo)
+            // Column resize: move and up handlers on the root div so the drag
+            // continues even when the cursor leaves the 6px handle area.
+            .on_mouse_move(move |event, _window, cx| {
+                let (col, new_width) = {
+                    let drag = resize_drag_for_move.lock().ok();
+                    if let Some(drag) = drag {
+                        if let Some(col) = drag.col {
+                            let delta = event.position.x - drag.start_x;
+                            let delta_f32: f32 = delta.into();
+                            let new_width = drag.original_width + delta_f32;
+                            (Some(col), new_width.max(super::theme::MIN_COLUMN_WIDTH))
+                        } else {
+                            (None, 0.0)
+                        }
+                    } else {
+                        (None, 0.0)
+                    }
+                };
+                if let Some(col) = col {
+                    state_for_resize_move.update(cx, |state, cx| {
+                        state.set_column_width(col, new_width, cx);
+                    });
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
+                if let Ok(mut drag) = resize_drag_for_up.lock() {
+                    drag.col = None;
+                }
+            })
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
             .child({
@@ -616,10 +651,7 @@ impl DataTable {
                 };
 
                 let state_for_click = state_entity.clone();
-                let state_for_resize = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
-                let resize_drag_for_move = resize_drag.clone();
-                let resize_drag_for_up = resize_drag.clone();
 
                 div()
                     .id(("header-col", col_ix))
@@ -666,7 +698,9 @@ impl DataTable {
                             })
                             .child(sort_indicator),
                     )
-                    // Resize handle
+                    // Resize handle: mouse-down starts the drag; move/up are
+                    // handled on the DataTable root div so the drag survives
+                    // the cursor leaving this 6px strip.
                     .child(
                         div()
                             .id(("resize-handle", col_ix))
@@ -687,34 +721,7 @@ impl DataTable {
                                         drag.original_width = width;
                                     }
                                 },
-                            )
-                            .on_mouse_move(move |event, _window, cx| {
-                                let (col, new_width) = {
-                                    let drag = resize_drag_for_move.lock().ok();
-                                    if let Some(drag) = drag {
-                                        if let Some(col) = drag.col {
-                                            let delta = event.position.x - drag.start_x;
-                                            let delta_f32: f32 = delta.into();
-                                            let new_width = drag.original_width + delta_f32;
-                                            (Some(col), new_width.max(40.0))
-                                        } else {
-                                            (None, 0.0)
-                                        }
-                                    } else {
-                                        (None, 0.0)
-                                    }
-                                };
-                                if let Some(col) = col {
-                                    state_for_resize.update(cx, |state, cx| {
-                                        state.set_column_width(col, new_width, cx);
-                                    });
-                                }
-                            })
-                            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
-                                if let Ok(mut drag) = resize_drag_for_up.lock() {
-                                    drag.col = None;
-                                }
-                            }),
+                            ),
                     )
             })
             .collect();
