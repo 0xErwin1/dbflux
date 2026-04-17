@@ -740,7 +740,7 @@ impl DataGridPanel {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if let Some(table_state) = &this.table_state {
                                             table_state.update(cx, |state, cx| {
-                                                state.request_save_row(cx);
+                                                state.request_save_all(cx);
                                             });
                                         }
                                         // Refocus table after button click
