@@ -3,8 +3,8 @@ use crate::ui::tokens::FontSizes;
 use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::list::ListItem;
+use gpui_component::ActiveTheme;
 
 use super::ConnectionManagerWindow;
 
