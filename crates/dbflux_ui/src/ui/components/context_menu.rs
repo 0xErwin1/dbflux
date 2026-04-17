@@ -1,9 +1,11 @@
 pub use dbflux_components::composites::MenuItem;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use gpui::prelude::FluentBuilder;
+
+use dbflux_components::composites::{
+    render_menu_container as render_components_menu_container,
+    render_menu_item as render_components_menu_item,
+    render_separator as render_components_separator,
+};
 use gpui::*;
-use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
 
@@ -35,10 +37,8 @@ pub fn render_menu_container(
     selected_index: Option<usize>,
     on_click: impl Fn(usize, &mut App) + 'static,
     on_hover: impl Fn(usize, &mut App) + 'static,
-    cx: &App,
+    cx: &mut App,
 ) -> Div {
-    let theme = cx.theme();
-
     let on_click = std::rc::Rc::new(on_click);
     let on_hover = std::rc::Rc::new(on_hover);
 
@@ -47,141 +47,26 @@ pub fn render_menu_container(
         .enumerate()
         .map(|(idx, item)| {
             if item.is_separator {
-                return render_separator(theme).into_any_element();
+                return render_components_separator(cx).into_any_element();
             }
 
             let on_click = on_click.clone();
             let on_hover = on_hover.clone();
 
-            render_menu_item(
+            render_components_menu_item(
                 panel_id,
-                idx,
                 item,
+                idx,
                 selected_index == Some(idx),
-                theme,
-                move |cx| on_click(idx, cx),
+                move |_, _, cx| on_click(idx, cx),
                 move |cx| on_hover(idx, cx),
+                cx,
             )
             .into_any_element()
         })
         .collect();
 
-    div()
-        .min_w(px(160.0))
-        .bg(theme.popover)
-        .border_1()
-        .border_color(theme.border)
-        .rounded(Radii::MD)
-        .shadow_lg()
-        .py(Spacing::XS)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_down(MouseButton::Right, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .children(children)
-}
-
-fn render_separator(theme: &gpui_component::Theme) -> Div {
-    div()
-        .h(px(1.0))
-        .mx(Spacing::SM)
-        .my(Spacing::XS)
-        .bg(theme.border)
-}
-
-fn render_menu_item(
-    panel_id: &str,
-    idx: usize,
-    item: &MenuItem,
-    is_selected: bool,
-    theme: &gpui_component::Theme,
-    on_click: impl Fn(&mut App) + 'static,
-    on_hover: impl Fn(&mut App) + 'static,
-) -> Stateful<Div> {
-    let is_danger = item.is_danger;
-    let has_submenu = item.has_submenu;
-    let icon = item.icon.clone();
-    let label = item.label.clone();
-
-    let fg = if is_danger {
-        theme.danger
-    } else {
-        theme.foreground
-    };
-
-    let icon_color = if is_danger {
-        theme.danger
-    } else if is_selected {
-        theme.accent_foreground
-    } else {
-        theme.muted_foreground
-    };
-
-    let item_id = SharedString::from(format!("{}-item-{}", panel_id, idx));
-
-    let has_no_icon = icon.is_none();
-
-    div()
-        .id(item_id)
-        .flex()
-        .items_center()
-        .gap(Spacing::SM)
-        .h(Heights::ROW_COMPACT)
-        .px(Spacing::SM)
-        .mx(Spacing::XS)
-        .rounded(Radii::SM)
-        .cursor_pointer()
-        .text_size(FontSizes::SM)
-        .text_color(fg)
-        .when(is_selected, |d| {
-            d.bg(if is_danger {
-                theme.danger.opacity(0.1)
-            } else {
-                theme.accent
-            })
-            .text_color(if is_danger {
-                theme.danger
-            } else {
-                theme.accent_foreground
-            })
-        })
-        .when(!is_selected, |d| {
-            let hover_bg = if is_danger {
-                theme.danger.opacity(0.1)
-            } else {
-                theme.secondary
-            };
-            d.hover(move |d| d.bg(hover_bg))
-        })
-        .on_mouse_move(move |_, _, cx| {
-            on_hover(cx);
-        })
-        .on_click(move |_, _, cx| {
-            on_click(cx);
-        })
-        .when_some(icon, move |d, icon| {
-            d.child(Icon::new(icon).small().color(icon_color))
-        })
-        .when(has_no_icon, |d| d.pl(px(20.0)))
-        .child(
-            div()
-                .flex_1()
-                .truncate()
-                .child(Text::body(label).text_color(fg)),
-        )
-        .when(has_submenu, |d| {
-            d.child(
-                Icon::new(AppIcon::ChevronRight)
-                    .small()
-                    .color(if is_selected {
-                        theme.accent_foreground
-                    } else {
-                        theme.muted_foreground
-                    }),
-            )
-        })
+    render_components_menu_container(children, cx)
 }
 
 #[cfg(test)]
