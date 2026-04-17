@@ -1,7 +1,7 @@
 use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon, Label, Text};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
@@ -45,7 +45,7 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(svg().path(AppIcon::Plug.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Plug).small().color(
                                 if active_tab == ActiveTab::Main {
                                     theme.foreground
                                 } else {
@@ -81,10 +81,9 @@ impl ConnectionManagerWindow {
                                 .items_center()
                                 .gap_1()
                                 .child(
-                                    svg()
-                                        .path(AppIcon::FingerprintPattern.path())
-                                        .size_4()
-                                        .text_color(if active_tab == ActiveTab::Access {
+                                    Icon::new(AppIcon::FingerprintPattern)
+                                        .small()
+                                        .color(if active_tab == ActiveTab::Access {
                                             theme.foreground
                                         } else {
                                             theme.muted_foreground
@@ -118,7 +117,7 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(svg().path(AppIcon::Settings.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Settings).small().color(
                                 if active_tab == ActiveTab::Settings {
                                     theme.foreground
                                 } else {
@@ -152,7 +151,7 @@ impl ConnectionManagerWindow {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(svg().path(AppIcon::Lock.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Lock).small().color(
                                 if active_tab == ActiveTab::Mcp {
                                     theme.foreground
                                 } else {

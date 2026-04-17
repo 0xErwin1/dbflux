@@ -1,9 +1,9 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, Pixels, Window, div, svg};
+use gpui::{div, App, ClickEvent, ElementId, Pixels, Window};
 use gpui_component::ActiveTheme;
-use gpui_component::IconNamed;
 
 use crate::icon::IconSource;
+use crate::primitives::Icon;
 use crate::tokens::{Heights, Radii};
 
 /// Clickable icon in a consistent hit target with baked-in hover and focus styles.
@@ -47,18 +47,10 @@ impl RenderOnce for IconButton {
         let theme = cx.theme();
         let hover_bg = theme.accent;
 
-        let icon_el = match self.icon {
-            IconSource::Named(name) => svg()
-                .path(name.path())
-                .size(self.icon_size)
-                .text_color(theme.muted_foreground)
-                .into_any_element(),
-            IconSource::Svg(path) => svg()
-                .path(path)
-                .size(self.icon_size)
-                .text_color(theme.muted_foreground)
-                .into_any_element(),
-        };
+        let icon_el = Icon::new(self.icon)
+            .size(self.icon_size)
+            .color(theme.muted_foreground)
+            .into_any_element();
 
         let mut btn = div()
             .id(self.id)

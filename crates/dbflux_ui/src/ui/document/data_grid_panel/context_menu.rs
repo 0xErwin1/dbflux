@@ -10,7 +10,7 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -1088,10 +1088,9 @@ impl DataGridPanel {
                             .items_center()
                             .gap_2()
                             .child(
-                                svg()
-                                    .path(AppIcon::TriangleAlert.path())
-                                    .size_5()
-                                    .text_color(theme.warning),
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .medium()
+                                    .color(theme.warning),
                             )
                             .child(Text::heading("Delete row?")),
                     )
@@ -1117,10 +1116,9 @@ impl DataGridPanel {
                                         this.cancel_delete(window, cx);
                                     }))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::X.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground),
+                                        Icon::new(AppIcon::X)
+                                            .small()
+                                            .color(theme.muted_foreground),
                                     )
                                     .child(Text::caption("Cancel")),
                             )
@@ -1140,10 +1138,9 @@ impl DataGridPanel {
                                         this.confirm_delete(window, cx);
                                     }))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::Delete.path())
-                                            .size_4()
-                                            .text_color(theme.background),
+                                        Icon::new(AppIcon::Delete)
+                                            .small()
+                                            .color(theme.background),
                                     )
                                     .child(Text::caption("Delete").text_color(theme.background)),
                             ),
@@ -1244,7 +1241,7 @@ impl DataGridPanel {
                         this.handle_context_menu_action(action, window, cx);
                     }))
                     .when_some(icon, |d, icon| {
-                        d.child(svg().path(icon.path()).size_4().text_color(if is_danger {
+                        d.child(Icon::new(icon).small().color(if is_danger {
                             theme.danger
                         } else if is_selected {
                             theme.accent_foreground
@@ -1348,16 +1345,15 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::ListFilter.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::ListFilter).small().color(
                                 filter_label_color,
                             ))
                             .child(Text::caption("Filter").text_color(filter_label_color)),
                     )
                     .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if filter_selected && !filter_submenu_open {
+                        Icon::new(AppIcon::ChevronRight)
+                            .small()
+                            .color(if filter_selected && !filter_submenu_open {
                                 theme.accent_foreground
                             } else {
                                 theme.muted_foreground
@@ -1562,16 +1558,15 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::ArrowUpDown.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::ArrowUpDown).small().color(
                                 order_label_color,
                             ))
                             .child(Text::caption("Order").text_color(order_label_color)),
                     )
                     .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if order_selected && !order_submenu_open {
+                        Icon::new(AppIcon::ChevronRight)
+                            .small()
+                            .color(if order_selected && !order_submenu_open {
                                 theme.accent_foreground
                             } else {
                                 theme.muted_foreground
@@ -1687,10 +1682,9 @@ impl DataGridPanel {
                                                         },
                                                     ))
                                                     .child(
-                                                        svg()
-                                                            .path(icon.path())
-                                                            .size_4()
-                                                            .text_color(if is_remove {
+                                                        Icon::new(icon)
+                                                            .small()
+                                                            .color(if is_remove {
                                                                 theme.danger
                                                             } else if is_submenu_selected {
                                                                 theme.accent_foreground
@@ -1784,16 +1778,15 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::Code.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Code).small().color(
                                 gen_sql_label_color,
                             ))
                             .child(Text::caption("Generate SQL").text_color(gen_sql_label_color)),
                     )
                     .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if gen_sql_selected && !sql_submenu_open {
+                        Icon::new(AppIcon::ChevronRight)
+                            .small()
+                            .color(if gen_sql_selected && !sql_submenu_open {
                                 theme.accent_foreground
                             } else {
                                 theme.muted_foreground
@@ -1863,10 +1856,9 @@ impl DataGridPanel {
                                                 this.handle_context_menu_action(action, window, cx);
                                             }))
                                             .child(
-                                                svg()
-                                                    .path(AppIcon::Code.path())
-                                                    .size_4()
-                                                    .text_color(if is_submenu_selected {
+                                                Icon::new(AppIcon::Code)
+                                                    .small()
+                                                    .color(if is_submenu_selected {
                                                         theme.accent_foreground
                                                     } else {
                                                         theme.muted_foreground
@@ -1946,7 +1938,7 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::Columns.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Columns).small().color(
                                 if copy_query_selected && !copy_submenu_open {
                                     theme.accent_foreground
                                 } else {
@@ -1956,10 +1948,9 @@ impl DataGridPanel {
                             .child(copy_query_label),
                     )
                     .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if copy_query_selected && !copy_submenu_open {
+                        Icon::new(AppIcon::ChevronRight)
+                            .small()
+                            .color(if copy_query_selected && !copy_submenu_open {
                                 theme.accent_foreground
                             } else {
                                 theme.muted_foreground
@@ -2024,10 +2015,9 @@ impl DataGridPanel {
                                                 this.handle_context_menu_action(action, window, cx);
                                             }))
                                             .child(
-                                                svg()
-                                                    .path(AppIcon::Columns.path())
-                                                    .size_4()
-                                                    .text_color(if is_submenu_selected {
+                                                Icon::new(AppIcon::Columns)
+                                                    .small()
+                                                    .color(if is_submenu_selected {
                                                         theme.accent_foreground
                                                     } else {
                                                         theme.muted_foreground

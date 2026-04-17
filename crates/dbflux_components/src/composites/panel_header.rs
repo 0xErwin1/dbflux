@@ -1,8 +1,10 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, SharedString, Stateful, Window, div, svg};
+use gpui::{div, App, ClickEvent, SharedString, Stateful, Window};
 use gpui_component::ActiveTheme;
-use gpui_component::{IconName, IconNamed};
+use gpui_component::IconName;
 
+use crate::icon::IconSource;
+use crate::primitives::Icon;
 use crate::tokens::{FontSizes, Heights, Spacing};
 
 /// Render a toolbar-height panel header with a title.
@@ -66,10 +68,9 @@ fn panel_header_inner(
 
     if let Some(icon) = chevron {
         left = left.child(
-            svg()
-                .path(icon.path())
+            Icon::new(IconSource::Named(icon))
                 .size(Heights::ICON_SM)
-                .text_color(theme.muted_foreground),
+                .color(theme.muted_foreground),
         );
     }
 
@@ -118,10 +119,9 @@ fn panel_header_inner_stateful(
 
     if let Some(icon) = chevron {
         left = left.child(
-            svg()
-                .path(icon.path())
+            Icon::new(IconSource::Named(icon))
                 .size(Heights::ICON_SM)
-                .text_color(theme.muted_foreground),
+                .color(theme.muted_foreground),
         );
     }
 

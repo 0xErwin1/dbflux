@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{div, App, FontWeight, Hsla, SharedString, Window};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::FontSizes;

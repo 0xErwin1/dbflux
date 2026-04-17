@@ -1,57 +1,11 @@
-use dbflux_components::primitives::Text;
+pub use dbflux_components::composites::MenuItem;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-
-/// Purely visual menu item — consumers map clicked indices to their own action types.
-pub struct MenuItem {
-    pub label: SharedString,
-    pub icon: Option<AppIcon>,
-    pub is_separator: bool,
-    pub is_danger: bool,
-    pub has_submenu: bool,
-}
-
-#[allow(dead_code)]
-impl MenuItem {
-    pub fn new(label: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            icon: None,
-            is_separator: false,
-            is_danger: false,
-            has_submenu: false,
-        }
-    }
-
-    pub fn icon(mut self, icon: AppIcon) -> Self {
-        self.icon = Some(icon);
-        self
-    }
-
-    pub fn separator() -> Self {
-        Self {
-            label: SharedString::default(),
-            icon: None,
-            is_separator: true,
-            is_danger: false,
-            has_submenu: false,
-        }
-    }
-
-    pub fn danger(mut self) -> Self {
-        self.is_danger = true;
-        self
-    }
-
-    pub fn submenu(mut self) -> Self {
-        self.has_submenu = true;
-        self
-    }
-}
 
 /// Full-screen transparent overlay that dismisses the menu on any click outside.
 pub fn render_menu_overlay(
@@ -119,7 +73,7 @@ pub fn render_menu_container(
         .border_color(theme.border)
         .rounded(Radii::MD)
         .shadow_lg()
-        .py_1()
+        .py(Spacing::XS)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
         })
@@ -148,7 +102,7 @@ fn render_menu_item(
 ) -> Stateful<Div> {
     let is_danger = item.is_danger;
     let has_submenu = item.has_submenu;
-    let icon = item.icon;
+    let icon = item.icon.clone();
     let label = item.label.clone();
 
     let fg = if is_danger {
@@ -166,6 +120,8 @@ fn render_menu_item(
     };
 
     let item_id = SharedString::from(format!("{}-item-{}", panel_id, idx));
+
+    let has_no_icon = icon.is_none();
 
     div()
         .id(item_id)
@@ -206,9 +162,9 @@ fn render_menu_item(
             on_click(cx);
         })
         .when_some(icon, move |d, icon| {
-            d.child(svg().path(icon.path()).size_4().text_color(icon_color))
+            d.child(Icon::new(icon).small().color(icon_color))
         })
-        .when(icon.is_none(), |d| d.pl(px(20.0)))
+        .when(has_no_icon, |d| d.pl(px(20.0)))
         .child(
             div()
                 .flex_1()
@@ -217,10 +173,9 @@ fn render_menu_item(
         )
         .when(has_submenu, |d| {
             d.child(
-                svg()
-                    .path(AppIcon::ChevronRight.path())
-                    .size_4()
-                    .text_color(if is_selected {
+                Icon::new(AppIcon::ChevronRight)
+                    .small()
+                    .color(if is_selected {
                         theme.accent_foreground
                     } else {
                         theme.muted_foreground

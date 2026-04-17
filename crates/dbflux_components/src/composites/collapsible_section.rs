@@ -1,8 +1,10 @@
 use gpui::prelude::*;
-use gpui::{App, SharedString, Window, div, svg};
+use gpui::{div, App, SharedString, Window};
 use gpui_component::ActiveTheme;
-use gpui_component::{IconName, IconNamed};
+use gpui_component::IconName;
 
+use crate::icon::IconSource;
+use crate::primitives::Icon;
 use crate::tokens::{FontSizes, Heights, Spacing};
 
 /// A section with a clickable header that toggles visibility of its content.
@@ -70,10 +72,9 @@ impl Render for CollapsibleSection {
                 this.toggle(cx);
             }))
             .child(
-                svg()
-                    .path(chevron.path())
+                Icon::new(IconSource::Named(chevron))
                     .size(Heights::ICON_SM)
-                    .text_color(theme.muted_foreground),
+                    .color(theme.muted_foreground),
             )
             .child(
                 div()
