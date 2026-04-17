@@ -77,6 +77,7 @@ impl RenderOnce for Input {
         if self.cleanable {
             input = input.cleanable(true);
         }
+
         input
     }
 }

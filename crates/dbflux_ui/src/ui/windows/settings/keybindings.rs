@@ -1,4 +1,4 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::keymap::{default_keymap, ContextId, KeyChord};
 use dbflux_components::controls::Input;
 use gpui::prelude::*;
 use gpui::*;

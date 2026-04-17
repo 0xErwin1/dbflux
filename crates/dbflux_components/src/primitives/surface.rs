@@ -122,6 +122,7 @@ impl gpui::ParentElement for Surface {
         self.children.extend(elements);
     }
 }
+
 impl RenderOnce for Surface {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
