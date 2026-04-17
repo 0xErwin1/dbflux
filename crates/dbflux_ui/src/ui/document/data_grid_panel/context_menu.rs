@@ -1111,8 +1111,6 @@ impl DataGridPanel {
                                     .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.muted_foreground)
                                     .bg(theme.secondary)
                                     .hover(|d| d.bg(btn_hover))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1124,7 +1122,7 @@ impl DataGridPanel {
                                             .size_4()
                                             .text_color(theme.muted_foreground),
                                     )
-                                    .child("Cancel"),
+                                    .child(Text::caption("Cancel").text_color(theme.muted_foreground)),
                             )
                             .child(
                                 div()
@@ -1136,8 +1134,6 @@ impl DataGridPanel {
                                     .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.background)
                                     .bg(theme.danger)
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1149,7 +1145,7 @@ impl DataGridPanel {
                                             .size_4()
                                             .text_color(theme.background),
                                     )
-                                    .child("Delete"),
+                                    .child(Text::caption("Delete").text_color(theme.background)),
                             ),
                     ),
             )
@@ -1202,6 +1198,12 @@ impl DataGridPanel {
             let icon = item.icon;
             let current_index = visual_index;
 
+            let label_color = if is_danger {
+                theme.danger
+            } else {
+                theme.foreground
+            };
+
             menu_items.push(
                 div()
                     .id(SharedString::from(label))
@@ -1214,21 +1216,11 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if is_danger {
-                        theme.danger
-                    } else {
-                        theme.foreground
-                    })
                     .when(is_selected, |d| {
                         d.bg(if is_danger {
                             theme.danger.opacity(0.1)
                         } else {
                             theme.accent
-                        })
-                        .text_color(if is_danger {
-                            theme.danger
-                        } else {
-                            theme.accent_foreground
                         })
                     })
                     .when(!is_selected, |d| {
@@ -1261,7 +1253,17 @@ impl DataGridPanel {
                         }))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
-                    .child(label)
+                    .child(
+                        Text::caption(label).text_color(if is_selected {
+                            if is_danger {
+                                theme.danger
+                            } else {
+                                theme.accent_foreground
+                            }
+                        } else {
+                            label_color
+                        }),
+                    )
                     .into_any_element(),
             );
 
@@ -1296,6 +1298,12 @@ impl DataGridPanel {
             let (_col_name_display, filter_submenu_count, filter_items, value_ops_count) =
                 self.build_filter_items(menu, backend, cx);
 
+            let filter_label_color = if filter_selected && !filter_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
             menu_items.push(
                 div()
                     .id("filter-trigger")
@@ -1309,11 +1317,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if filter_selected && !filter_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(filter_submenu_open, |d| d.bg(submenu_hover))
                     .when(filter_selected && !filter_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1346,13 +1349,9 @@ impl DataGridPanel {
                             .items_center()
                             .gap(Spacing::SM)
                             .child(svg().path(AppIcon::ListFilter.path()).size_4().text_color(
-                                if filter_selected && !filter_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
+                                filter_label_color,
                             ))
-                            .child("Filter"),
+                            .child(Text::caption("Filter").text_color(filter_label_color)),
                     )
                     .child(
                         svg()
@@ -1432,6 +1431,14 @@ impl DataGridPanel {
                                             let label_shared =
                                                 SharedString::from(format!("filter-{}", idx));
 
+                                            let item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
                                             elements.push(
                                                 div()
                                                     .id(label_shared)
@@ -1444,13 +1451,6 @@ impl DataGridPanel {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(if is_remove {
-                                                        theme.danger
-                                                    } else if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        submenu_fg
-                                                    })
                                                     .when(is_submenu_selected && !is_remove, |d| {
                                                         d.bg(theme.accent)
                                                     })
@@ -1479,7 +1479,7 @@ impl DataGridPanel {
                                                             );
                                                         },
                                                     ))
-                                                    .child(label.clone())
+                                                    .child(Text::caption(label.clone()).text_color(item_color))
                                                     .into_any_element(),
                                             );
 
@@ -1512,6 +1512,12 @@ impl DataGridPanel {
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
+            let order_label_color = if order_selected && !order_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
             menu_items.push(
                 div()
                     .id("order-trigger")
@@ -1525,11 +1531,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if order_selected && !order_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(order_submenu_open, |d| d.bg(submenu_hover))
                     .when(order_selected && !order_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1562,13 +1563,9 @@ impl DataGridPanel {
                             .items_center()
                             .gap(Spacing::SM)
                             .child(svg().path(AppIcon::ArrowUpDown.path()).size_4().text_color(
-                                if order_selected && !order_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
+                                order_label_color,
                             ))
-                            .child("Order"),
+                            .child(Text::caption("Order").text_color(order_label_color)),
                     )
                     .child(
                         svg()
@@ -1638,6 +1635,14 @@ impl DataGridPanel {
                                             let is_remove =
                                                 matches!(action, ContextMenuAction::RemoveOrdering);
 
+                                            let order_item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
                                             elements.push(
                                                 div()
                                                     .id(SharedString::from(format!(
@@ -1653,13 +1658,6 @@ impl DataGridPanel {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(if is_remove {
-                                                        theme.danger
-                                                    } else if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        submenu_fg
-                                                    })
                                                     .when(is_submenu_selected && !is_remove, |d| {
                                                         d.bg(theme.accent)
                                                     })
@@ -1700,7 +1698,7 @@ impl DataGridPanel {
                                                                 theme.muted_foreground
                                                             }),
                                                     )
-                                                    .child(label)
+                                                    .child(Text::caption(label).text_color(order_item_color))
                                                     .into_any_element(),
                                             );
 
@@ -1738,7 +1736,13 @@ impl DataGridPanel {
             let gen_sql_selected = selected_index == gen_sql_index;
             let submenu_selected_index = menu.submenu_selected_index;
 
-            menu_items.push(
+                let gen_sql_label_color = if gen_sql_selected && !sql_submenu_open {
+                    theme.accent_foreground
+                } else {
+                    submenu_fg
+                };
+
+                menu_items.push(
                 div()
                     .id("generate-sql-trigger")
                     .relative()
@@ -1751,11 +1755,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if gen_sql_selected && !sql_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(sql_submenu_open, |d| d.bg(submenu_hover))
                     .when(gen_sql_selected && !sql_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1786,13 +1785,9 @@ impl DataGridPanel {
                             .items_center()
                             .gap(Spacing::SM)
                             .child(svg().path(AppIcon::Code.path()).size_4().text_color(
-                                if gen_sql_selected && !sql_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
+                                gen_sql_label_color,
                             ))
-                            .child("Generate SQL"),
+                            .child(Text::caption("Generate SQL").text_color(gen_sql_label_color)),
                     )
                     .child(
                         svg()
@@ -1835,7 +1830,13 @@ impl DataGridPanel {
                                     .enumerate()
                                     .map(|(idx, (label, action))| {
                                         let is_submenu_selected = idx == submenu_selected_index;
-                                        div()
+                                            let sql_item_color = if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
+                                            div()
                                             .id(SharedString::from(label))
                                             .flex()
                                             .items_center()
@@ -1846,11 +1847,6 @@ impl DataGridPanel {
                                             .rounded(Radii::SM)
                                             .cursor_pointer()
                                             .text_size(FontSizes::SM)
-                                            .text_color(if is_submenu_selected {
-                                                theme.accent_foreground
-                                            } else {
-                                                submenu_fg
-                                            })
                                             .when(is_submenu_selected, |d| d.bg(theme.accent))
                                             .when(!is_submenu_selected, |d| {
                                                 d.hover(|d| d.bg(submenu_hover))
@@ -1876,7 +1872,7 @@ impl DataGridPanel {
                                                         theme.muted_foreground
                                                     }),
                                             )
-                                            .child(label)
+                                            .child(Text::caption(label).text_color(sql_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),

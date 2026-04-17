@@ -644,17 +644,12 @@ fn render_tree_row(
                 .items_center()
                 .gap(Spacing::XS)
                 .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(primary_color)
+                    Text::caption(node.key.to_string())
                         .font_weight(FontWeight::MEDIUM)
-                        .child(node.key.to_string()),
+                        .text_color(primary_color),
                 )
                 .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(muted_color)
-                        .child(":"),
+                    Text::caption(":").font_size(FontSizes::XS).text_color(muted_color),
                 ),
         )
         // Value preview
@@ -671,12 +666,14 @@ fn render_tree_row(
         .child({
             let type_color = get_type_color(&node.value, &theme);
             div()
-                .text_size(FontSizes::XS)
-                .text_color(type_color)
                 .px(Spacing::XS)
                 .rounded(Radii::SM)
                 .bg(type_color.opacity(0.15))
-                .child(node.value.type_label())
+                .child(
+                    Text::caption(node.value.type_label())
+                        .font_size(FontSizes::XS)
+                        .text_color(type_color),
+                )
         })
 }
 

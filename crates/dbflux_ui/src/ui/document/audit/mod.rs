@@ -848,9 +848,8 @@ impl AuditDocument {
 
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
     fn null_display(theme: &gpui_component::Theme) -> Div {
-        div()
-            .italic()
-            .child(Text::caption("NULL").text_color(theme.muted_foreground))
+        let _ = theme;
+        div().italic().child(Text::caption("NULL"))
     }
 
     fn short_category_label(category: Option<&str>) -> &'static str {
@@ -1621,11 +1620,6 @@ impl AuditDocument {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if is_selected {
-                        theme.accent_foreground
-                    } else {
-                        theme.foreground
-                    })
                     .when(is_selected, |d| d.bg(theme.accent))
                     .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
                     // Icon or indent to keep label alignment consistent.
@@ -1680,7 +1674,13 @@ impl AuditDocument {
                             }
                         }
                     }))
-                    .child(label)
+                    .child(
+                        Text::caption(label).text_color(if is_selected {
+                            theme.accent_foreground
+                        } else {
+                            theme.foreground
+                        }),
+                    )
                     .into_any_element(),
             );
         }
@@ -1802,8 +1802,6 @@ impl AuditDocument {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
                     .cursor_pointer()
                     .hover(|d| d.bg(theme.accent.opacity(0.08)))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1815,7 +1813,7 @@ impl AuditDocument {
                             .size_4()
                             .text_color(theme.foreground),
                     )
-                    .child(refresh_label),
+                    .child(Text::caption(refresh_label)),
             )
             .child(div().w(px(1.0)).h_full().bg(theme.input))
             .child(
@@ -1837,20 +1835,18 @@ impl AuditDocument {
             .items_center()
             .px(Spacing::SM)
             .rounded(Radii::SM)
-            .text_size(FontSizes::SM)
             .border_1()
             .border_color(if ring(FILTER_BAR_IDX_CLEAR) {
                 theme.ring
             } else {
                 gpui::transparent_black()
             })
-            .text_color(theme.muted_foreground)
             .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+            .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.clear_filters(window, cx);
             }))
-            .child("Clear");
+            .child(Text::caption("Clear").text_color(theme.muted_foreground));
 
         let _ = window;
 
@@ -1893,11 +1889,7 @@ impl AuditDocument {
                 .justify_center()
                 .gap_3()
                 .child(
-                    div()
-                        .text_color(theme.danger)
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Failed to load audit events"),
+                    Text::heading("Failed to load audit events").text_color(theme.danger),
                 )
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
@@ -1960,12 +1952,14 @@ impl AuditDocument {
                 .px_1p5()
                 .py_px()
                 .rounded(px(3.0))
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(Self::level_color(Some(l), theme))
                 .bg(Self::level_bg_color(Some(l), theme))
                 .flex_shrink_0()
-                .child(l.to_uppercase())
+                .child(
+                    Text::caption(l.to_uppercase())
+                        .font_size(FontSizes::XS)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Self::level_color(Some(l), theme)),
+                )
                 .into_any_element(),
             None => Self::null_display(theme).flex_shrink_0().into_any_element(),
         };
@@ -2190,8 +2184,6 @@ impl AuditDocument {
                         .child(Label::new("Correlation ID"))
                         .child(
                             div()
-                                .text_sm()
-                                .text_color(theme.primary)
                                 .cursor_pointer()
                                 .hover(|style| style.underline())
                                 .on_mouse_down(
@@ -2203,7 +2195,7 @@ impl AuditDocument {
                                         );
                                     }),
                                 )
-                                .child(value),
+                                .child(Text::body(value.clone()).text_color(theme.primary)),
                         ),
                 )
             })
@@ -2225,10 +2217,8 @@ impl AuditDocument {
             .gap_1()
             .px(Spacing::XS)
             .rounded(Radii::SM)
-            .text_size(FontSizes::XS)
             .cursor_pointer()
-            .text_color(theme.muted_foreground)
-            .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+            .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.toggle_export_menu(cx);
             }))
@@ -2238,7 +2228,7 @@ impl AuditDocument {
                     .size_4()
                     .text_color(theme.muted_foreground),
             )
-            .child("Export")
+            .child(Text::caption("Export").text_color(theme.muted_foreground))
             .child(
                 svg()
                     .path(AppIcon::ChevronDown.path())
@@ -2270,13 +2260,11 @@ impl AuditDocument {
                     .mx(Spacing::XS)
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.export_with_format(format, cx);
                     }))
-                    .child(label)
+                    .child(Text::caption(label).text_color(theme.foreground))
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -2355,15 +2343,12 @@ impl AuditDocument {
                             .text_size(FontSizes::XS)
                             .when(can_prev, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_prev_page(cx);
                                     }))
                             })
-                            .when(!can_prev, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
+                            .when(!can_prev, |d| d.opacity(0.5))
                             .child(svg().path(AppIcon::ChevronLeft.path()).size_3().text_color(
                                 if can_prev {
                                     theme.foreground
@@ -2371,7 +2356,13 @@ impl AuditDocument {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child("Prev"),
+                            .child(
+                                Text::caption("Prev").text_color(if can_prev {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                            ),
                     )
                     .child(Text::caption(if total_pages > 1 {
                         format!("Page {}/{} ({}-{})", page, total_pages, start, end)
@@ -2389,16 +2380,19 @@ impl AuditDocument {
                             .text_size(FontSizes::XS)
                             .when(can_next, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_next_page(cx);
                                     }))
                             })
-                            .when(!can_next, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("Next")
+                            .when(!can_next, |d| d.opacity(0.5))
+                            .child(
+                                Text::caption("Next").text_color(if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                            )
                             .child(
                                 svg()
                                     .path(AppIcon::ChevronRight.path())

@@ -110,7 +110,7 @@ impl Render for super::KeyValueDocument {
                                     .size(Heights::ICON_SM)
                                     .text_color(theme.muted_foreground),
                             )
-                            .child(div().text_size(FontSizes::BASE).child(key_name)),
+                            .child(Text::body(key_name)),
                     )
                     .child(
                         div()
@@ -197,7 +197,7 @@ impl Render for super::KeyValueDocument {
                                     .size(Heights::ICON_SM)
                                     .text_color(ttl_color),
                             )
-                            .child(div().text_color(ttl_color).child(self.ttl_display.clone())),
+                            .child(Text::body(self.ttl_display.clone()).text_color(ttl_color)),
                     )
                     .child(Text::caption(size_label)),
             );
@@ -425,6 +425,7 @@ impl Render for super::KeyValueDocument {
                         .border_l_1()
                         .border_color(theme.border)
                         .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
                         .when(is_editable, |d| {
                             d.cursor_pointer().on_mouse_down(
                                 MouseButton::Left,
@@ -551,8 +552,6 @@ impl Render for super::KeyValueDocument {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
                                     .cursor_pointer()
                                     .hover(|d| d.bg(theme.accent.opacity(0.08)))
                                     .on_mouse_down(
@@ -579,7 +578,7 @@ impl Render for super::KeyValueDocument {
                                             .size(Heights::ICON_SM)
                                             .text_color(theme.foreground),
                                     )
-                                    .child(refresh_label),
+                                    .child(Text::caption(refresh_label).text_color(theme.foreground)),
                             )
                             .child(div().w(px(1.0)).h_full().bg(theme.input))
                             .child(
@@ -639,15 +638,12 @@ impl Render for super::KeyValueDocument {
                                     .text_size(FontSizes::XS)
                                     .when(can_prev, |d| {
                                         d.cursor_pointer()
-                                            .text_color(theme.foreground)
                                             .hover(|d| d.bg(theme.secondary))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.go_prev_page(cx);
                                             }))
                                     })
-                                    .when(!can_prev, |d| {
-                                        d.text_color(theme.muted_foreground).opacity(0.5)
-                                    })
+                                    .when(!can_prev, |d| d.opacity(0.5))
                                     .child(
                                         svg()
                                             .path(AppIcon::ChevronLeft.path())
@@ -658,7 +654,13 @@ impl Render for super::KeyValueDocument {
                                                 theme.muted_foreground
                                             }),
                                     )
-                                    .child("Prev"),
+                                    .child(
+                                        Text::caption("Prev").text_color(if can_prev {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                    ),
                             )
                             .child(Text::caption(format!("Page {}", current_page)))
                             .child(
@@ -672,16 +674,19 @@ impl Render for super::KeyValueDocument {
                                     .text_size(FontSizes::XS)
                                     .when(can_next, |d| {
                                         d.cursor_pointer()
-                                            .text_color(theme.foreground)
                                             .hover(|d| d.bg(theme.secondary))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.go_next_page(cx);
                                             }))
                                     })
-                                    .when(!can_next, |d| {
-                                        d.text_color(theme.muted_foreground).opacity(0.5)
-                                    })
-                                    .child("Next")
+                                    .when(!can_next, |d| d.opacity(0.5))
+                                    .child(
+                                        Text::caption("Next").text_color(if can_next {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                    )
                                     .child(
                                         svg()
                                             .path(AppIcon::ChevronRight.path())
@@ -761,11 +766,10 @@ impl Render for super::KeyValueDocument {
                         row = row.child(
                             div()
                                 .flex_1()
-                                .text_size(FontSizes::SM)
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .whitespace_nowrap()
-                                .child(key.key.clone()),
+                                .child(Text::caption(key.key.clone())),
                         );
 
                         row = row.child(Text::caption(
@@ -891,8 +895,6 @@ fn render_delete_confirm_modal(
                                 .py(Spacing::XS)
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
                                 .bg(theme.secondary)
                                 .hover(move |d| d.bg(btn_hover))
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -906,7 +908,7 @@ fn render_delete_confirm_modal(
                                         .size_4()
                                         .text_color(theme.muted_foreground),
                                 )
-                                .child("Cancel"),
+                                .child(Text::caption("Cancel").text_color(theme.muted_foreground)),
                         )
                         .child(
                             div()
@@ -918,8 +920,6 @@ fn render_delete_confirm_modal(
                                 .py(Spacing::XS)
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.background)
                                 .bg(theme.danger)
                                 .hover(|d| d.opacity(0.9))
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -935,7 +935,7 @@ fn render_delete_confirm_modal(
                                         .size_4()
                                         .text_color(theme.background),
                                 )
-                                .child("Delete"),
+                                .child(Text::caption("Delete").text_color(theme.background)),
                         ),
                 ),
         )
@@ -964,6 +964,14 @@ fn render_kv_context_menu(
             let icon = item.icon;
             let action = item.action;
 
+            let label_color = if is_danger {
+                theme.danger
+            } else if is_selected {
+                theme.accent_foreground
+            } else {
+                theme.foreground
+            };
+
             div()
                 .id(SharedString::from(label))
                 .flex()
@@ -975,21 +983,11 @@ fn render_kv_context_menu(
                 .rounded(Radii::SM)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(if is_danger {
-                    theme.danger
-                } else {
-                    theme.foreground
-                })
                 .when(is_selected, |d| {
                     d.bg(if is_danger {
                         theme.danger.opacity(0.1)
                     } else {
                         theme.accent
-                    })
-                    .text_color(if is_danger {
-                        theme.danger
-                    } else {
-                        theme.accent_foreground
                     })
                 })
                 .when(!is_selected, |d| {
@@ -1022,7 +1020,7 @@ fn render_kv_context_menu(
                 } else {
                     theme.muted_foreground
                 }))
-                .child(label)
+                .child(Text::caption(label).text_color(label_color))
                 .into_any_element()
         })
         .collect();

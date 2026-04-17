@@ -66,17 +66,11 @@ impl CodeDocument {
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .text_xs()
                     .when(run_enabled, |el| {
                         el.bg(if is_executing { theme.danger } else { primary })
-                            .text_color(theme.background)
                             .hover(|d| d.opacity(0.9))
                     })
-                    .when(!run_enabled, |el| {
-                        el.bg(btn_bg)
-                            .text_color(theme.muted_foreground)
-                            .cursor_not_allowed()
-                    })
+                    .when(!run_enabled, |el| el.bg(btn_bg).cursor_not_allowed())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.state == DocumentState::Executing {
                             this.cancel_query(cx);
@@ -94,7 +88,11 @@ impl CodeDocument {
                                 theme.muted_foreground
                             }),
                     )
-                    .child(run_label),
+                    .child(Text::caption(run_label).text_color(if run_enabled {
+                        theme.background
+                    } else {
+                        theme.muted_foreground
+                    })),
             )
             .when(is_db_language && !is_executing, |el| {
                 el.child(
@@ -107,9 +105,7 @@ impl CodeDocument {
                         .py(Spacing::XS)
                         .rounded(Radii::SM)
                         .cursor_pointer()
-                        .text_xs()
                         .bg(btn_bg)
-                        .text_color(theme.foreground)
                         .hover(|d| d.bg(theme.secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_query_in_new_tab(window, cx);
@@ -120,7 +116,7 @@ impl CodeDocument {
                                 .size_3()
                                 .text_color(theme.foreground),
                         )
-                        .child("New tab"),
+                        .child(Text::caption("New tab").text_color(theme.foreground)),
                 )
                 .child(
                     div()
@@ -132,9 +128,7 @@ impl CodeDocument {
                         .py(Spacing::XS)
                         .rounded(Radii::SM)
                         .cursor_pointer()
-                        .text_xs()
                         .bg(btn_bg)
-                        .text_color(theme.foreground)
                         .hover(|d| d.bg(theme.secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_selected_query(window, cx);
@@ -145,7 +139,7 @@ impl CodeDocument {
                                 .size_3()
                                 .text_color(theme.foreground),
                         )
-                        .child("Selection"),
+                        .child(Text::caption("Selection").text_color(theme.foreground)),
                 )
             })
             .child(Text::caption(shortcut_hint))
@@ -169,9 +163,7 @@ impl CodeDocument {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_sm()
                                 .cursor_pointer()
-                                .text_color(theme.foreground)
                                 .hover(|d| d.bg(theme.accent.opacity(0.08)))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if this.runner.is_primary_active() {
@@ -186,7 +178,7 @@ impl CodeDocument {
                                         .size_3()
                                         .text_color(theme.foreground),
                                 )
-                                .child(refresh_label),
+                                .child(Text::caption(refresh_label).text_color(theme.foreground)),
                         )
                         .child(div().w(px(1.0)).h_full().bg(theme.input))
                         .child(
@@ -365,18 +357,18 @@ impl CodeDocument {
                             .py(Spacing::XS)
                             .rounded(Radii::SM)
                             .cursor_pointer()
-                            .text_xs()
-                            .when(is_active, |el| {
-                                el.bg(theme.secondary).text_color(theme.foreground)
-                            })
+                            .when(is_active, |el| el.bg(theme.secondary))
                             .when(!is_active, |el| {
-                                el.text_color(theme.muted_foreground)
-                                    .hover(|d| d.bg(theme.secondary.opacity(0.5)))
+                                el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.activate_result_tab(i, cx);
                             }))
-                            .child(tab.title.clone())
+                            .child(Text::caption(tab.title.clone()).text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }))
                             .child(
                                 div()
                                     .id(ElementId::Name(

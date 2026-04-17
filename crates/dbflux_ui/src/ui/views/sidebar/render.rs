@@ -1,4 +1,4 @@
-use super::render_tree::{TreeRenderParams, render_tree_item};
+use super::render_tree::{render_tree_item, TreeRenderParams};
 use super::*;
 use dbflux_components::primitives::Text;
 
@@ -61,16 +61,22 @@ impl Sidebar {
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Connections))
-                            .text_size(FontSizes::XS)
-                            .text_color(tab_text_color(active_tab == SidebarTab::Connections))
-                            .font_weight(tab_font_weight(active_tab == SidebarTab::Connections))
                             .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Connections, cx);
                                 });
                             })
-                            .child("CONNECTIONS"),
+                            .child(
+                                Text::caption("CONNECTIONS")
+                                    .font_size(FontSizes::XS)
+                                    .font_weight(tab_font_weight(
+                                        active_tab == SidebarTab::Connections,
+                                    ))
+                                    .text_color(tab_text_color(
+                                        active_tab == SidebarTab::Connections,
+                                    )),
+                            ),
                     )
                     .child(
                         div()
@@ -82,16 +88,18 @@ impl Sidebar {
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Scripts))
-                            .text_size(FontSizes::XS)
-                            .text_color(tab_text_color(active_tab == SidebarTab::Scripts))
-                            .font_weight(tab_font_weight(active_tab == SidebarTab::Scripts))
                             .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar2.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Scripts, cx);
                                 });
                             })
-                            .child("SCRIPTS"),
+                            .child(
+                                Text::caption("SCRIPTS")
+                                    .font_size(FontSizes::XS)
+                                    .font_weight(tab_font_weight(active_tab == SidebarTab::Scripts))
+                                    .text_color(tab_text_color(active_tab == SidebarTab::Scripts)),
+                            ),
                     ),
             )
             .child({
@@ -105,16 +113,14 @@ impl Sidebar {
                     .items_center()
                     .justify_center()
                     .rounded(Radii::SM)
-                    .text_size(FontSizes::LG)
-                    .text_color(theme.muted_foreground)
                     .cursor_pointer()
-                    .hover(move |d| d.bg(hover_bg).text_color(theme.foreground))
+                    .hover(move |d| d.bg(hover_bg))
                     .on_click(move |_, _, cx| {
                         sidebar_for_toggle.update(cx, |this, cx| {
                             this.toggle_add_menu(cx);
                         });
                     })
-                    .child("+")
+                    .child(Text::body("+").text_color(theme.muted_foreground))
             })
     }
 
@@ -134,9 +140,10 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.foreground)
-                        .child("Press x to confirm delete, ESC to cancel"),
+                        .child(
+                            Text::caption("Press x to confirm delete, ESC to cancel")
+                                .text_color(theme.foreground),
+                        ),
                 )
             })
     }
