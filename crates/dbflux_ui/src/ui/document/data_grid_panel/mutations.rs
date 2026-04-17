@@ -1495,7 +1495,7 @@ impl DataGridPanel {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
-            &format!("Delete {} row(s)", identities.len()),
+            format!("Delete {} row(s)", identities.len()),
             cx,
         );
 
@@ -1575,8 +1575,7 @@ impl DataGridPanel {
 
                         // Unmark all successfully deleted rows
                         table_state_clone.update(cx, |state, cx| {
-                            for i in 0..success_count {
-                                let (row_idx, _) = &identities[i];
+                            for (row_idx, _) in identities.iter().take(success_count) {
                                 state.edit_buffer_mut().unmark_delete(*row_idx);
                             }
                             cx.notify();
@@ -1676,7 +1675,7 @@ impl DataGridPanel {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
-            &format!("Delete {} document(s)", filters.len()),
+            format!("Delete {} document(s)", filters.len()),
             cx,
         );
 
@@ -1755,8 +1754,7 @@ impl DataGridPanel {
                         panel.runner.complete_mutation(task_id, cx);
 
                         table_state_clone.update(cx, |state, cx| {
-                            for i in 0..success_count {
-                                let (row_idx, _) = &filters[i];
+                            for (row_idx, _) in filters.iter().take(success_count) {
                                 state.edit_buffer_mut().unmark_delete(*row_idx);
                             }
                             cx.notify();
