@@ -1,3 +1,4 @@
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -178,15 +179,13 @@ impl Render for PipelineProgress {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
                     .child(
                         gpui::svg()
                             .path(AppIcon::CircleCheck.path())
                             .size(px(12.0))
                             .text_color(theme.success),
                     )
-                    .child(stage.clone())
+                    .child(Text::caption(stage.clone()))
             }))
             // Current in-progress stage
             .when(current_label.is_some(), |el| {
@@ -211,10 +210,8 @@ impl Render for PipelineProgress {
             .when(is_waiting_sso, |el| {
                 el.child(
                     div()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
                         .italic()
-                        .child("Waiting for SSO login in browser..."),
+                        .child(Text::caption("Waiting for SSO login in browser...")),
                 )
             })
     }

@@ -693,10 +693,7 @@ impl ConnectionManagerWindow {
                     .gap_1()
                     .opacity(opacity)
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Policy"),
+                        Text::body("Policy").font_weight(FontWeight::MEDIUM),
                     )
                     .child(Text::caption(
                         "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
@@ -706,12 +703,7 @@ impl ConnectionManagerWindow {
                     .child(self.conn_mcp_policy_multi_select.clone()),
             )
             .child(Text::caption("Scope/policy assignment preview").into_any_element())
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(preview_text),
-            );
+            .child(Text::body(preview_text));
 
         vec![
             self.render_section("MCP Governance", content, &theme)

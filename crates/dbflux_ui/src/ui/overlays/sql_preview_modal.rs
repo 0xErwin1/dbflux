@@ -2,16 +2,17 @@ use crate::app::AppStateEntity;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::{
     ColumnInfo, MutationRequest, MutationTemplateOperation, MutationTemplateRequest, QueryLanguage,
     ReadTemplateOperation, ReadTemplateRequest, SqlGenerationOptions, SqlGenerationRequest,
     SqlOperation, SqlValueMode, TableInfo, Value,
 };
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use uuid::Uuid;
 
 /// Type of SQL statement to generate.
@@ -678,13 +679,7 @@ impl Render for SqlPreviewModal {
                     .flex()
                     .items_center()
                     .gap(Spacing::LG)
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Options"),
-                    )
+                    .child(Text::caption("Options").font_weight(FontWeight::MEDIUM))
                     .child(
                         div()
                             .flex()
@@ -698,12 +693,7 @@ impl Render for SqlPreviewModal {
                                         this.toggle_fully_qualified(window, cx);
                                     })),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .child("Fully qualified names"),
-                            ),
+                            .child(Text::body("Fully qualified names")),
                     )
                     .child(
                         div()
@@ -718,12 +708,7 @@ impl Render for SqlPreviewModal {
                                         this.toggle_compact(window, cx);
                                     })),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .child("Compact SQL"),
-                            ),
+                            .child(Text::body("Compact SQL")),
                     ),
             );
         }

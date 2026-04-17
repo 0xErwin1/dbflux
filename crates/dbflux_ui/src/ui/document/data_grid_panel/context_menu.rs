@@ -10,6 +10,7 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -1092,20 +1093,9 @@ impl DataGridPanel {
                                     .size_5()
                                     .text_color(theme.warning),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.foreground)
-                                    .child("Delete row?"),
-                            ),
+                            .child(Text::heading("Delete row?")),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("This action cannot be undone."),
-                    )
+                    .child(Text::muted("This action cannot be undone."))
                     .child(
                         div()
                             .flex()

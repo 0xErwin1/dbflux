@@ -7,9 +7,9 @@ use dbflux_components::primitives::Text;
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -784,10 +784,8 @@ impl HistoryModal {
             .flex()
             .items_center()
             .justify_between()
-            .text_size(FontSizes::XS)
-            .text_color(theme.muted_foreground)
-            .child(shortcuts)
-            .child(format!("{} items", count))
+            .child(Text::caption(shortcuts))
+            .child(Text::caption(format!("{} items", count)))
     }
 
     fn render_save(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -834,9 +832,7 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_b_1()
                             .border_color(theme.border)
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
-                            .child("Save Query"),
+                            .child(Text::body("Save Query")),
                     )
                     .child(div().p(Spacing::MD).child(Input::new(&input).w_full()))
                     .child(
@@ -845,9 +841,7 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_t_1()
                             .border_color(theme.border)
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child("Enter to save, Esc to cancel"),
+                            .child(Text::caption("Enter to save, Esc to cancel")),
                     ),
             )
             .into_any_element()

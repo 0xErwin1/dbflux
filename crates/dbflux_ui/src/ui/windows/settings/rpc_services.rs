@@ -1,6 +1,7 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
+use dbflux_components::primitives::Text;
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
@@ -772,13 +773,7 @@ impl ServicesSection {
                     .flex_col()
                     .gap_1()
                     .when(services.is_empty(), |container| {
-                        container.child(
-                            div()
-                                .p_4()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("No services configured"),
-                        )
+                        container.child(div().p_4().child(Text::muted("No services configured")))
                     })
                     .children(services.iter().enumerate().map(|(idx, service)| {
                         let is_selected = editing_idx == Some(idx);
@@ -854,12 +849,7 @@ impl ServicesSection {
                                                         )
                                                     }),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(subtitle.to_string()),
-                                            ),
+                                            .child(Text::caption(subtitle.to_string())),
                                     ),
                             )
                     })),
