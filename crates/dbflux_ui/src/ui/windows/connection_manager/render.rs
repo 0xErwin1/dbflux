@@ -2,13 +2,11 @@ use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::icons::AppIcon;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
+use dbflux_components::controls::Button;
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Icon, IconName};
@@ -225,6 +223,14 @@ impl ConnectionManagerWindow {
         let theme = cx.theme();
         let border_color = theme.border;
         let ring_color = theme.ring;
+        let danger_color = theme.danger;
+        let danger_bg = theme.danger.opacity(0.15);
+        let info_color = theme.info;
+        let info_bg = theme.info.opacity(0.15);
+        let success_color = theme.success;
+        let success_bg = theme.success.opacity(0.15);
+        let muted_fg = theme.muted_foreground;
+        let muted_bg = theme.muted_foreground.opacity(0.15);
 
         div()
             .flex()
@@ -239,7 +245,7 @@ impl ConnectionManagerWindow {
                     .border_b_1()
                     .border_color(border_color)
                     .when(!is_editing, |d| {
-                        d.child(Button::new("back").ghost().label("<").small().on_click(
+                        d.child(Button::new("back", "<").ghost().small().on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.back_to_driver_select(window, cx);
                             }),
@@ -294,12 +300,12 @@ impl ConnectionManagerWindow {
                     .p_4()
                     .when(!validation_errors.is_empty(), |d| {
                         d.child(div().child(
-                            div().p_2().rounded(px(4.0)).bg(gpui::rgb(0x7F1D1D)).child(
+                            div().p_2().rounded(px(4.0)).bg(danger_bg).child(
                                 div().flex().flex_col().gap_1().children(
                                     validation_errors.iter().map(|err| {
                                         div()
                                             .text_sm()
-                                            .text_color(gpui::rgb(0xFCA5A5))
+                                            .text_color(danger_color)
                                             .child(err.clone())
                                     }),
                                 ),
@@ -319,23 +325,23 @@ impl ConnectionManagerWindow {
                     .when(test_status != TestStatus::None, |d| {
                         let (bg, text_color, message) = match test_status {
                             TestStatus::Testing => (
-                                gpui::rgb(0x1E3A5F),
-                                gpui::rgb(0x93C5FD),
+                                info_bg,
+                                info_color,
                                 "Testing connection...".to_string(),
                             ),
                             TestStatus::Success => (
-                                gpui::rgb(0x14532D),
-                                gpui::rgb(0x86EFAC),
+                                success_bg,
+                                success_color,
                                 "Connection successful!".to_string(),
                             ),
                             TestStatus::Failed => (
-                                gpui::rgb(0x7F1D1D),
-                                gpui::rgb(0xFCA5A5),
+                                danger_bg,
+                                danger_color,
                                 test_error.unwrap_or_else(|| "Connection failed".to_string()),
                             ),
                             TestStatus::None => (
-                                gpui::rgb(0x1F2937),
-                                gpui::rgb(0x9CA3AF),
+                                muted_bg,
+                                muted_fg,
                                 "No test status available".to_string(),
                             ),
                         };
@@ -363,10 +369,9 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("test-connection")
+                                        Button::new("test-connection", "Test Connection")
                                             .ghost()
                                             .icon(Icon::new(IconName::ExternalLink))
-                                            .label("Test Connection")
                                             .small()
                                             .disabled(test_status == TestStatus::Testing)
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -383,10 +388,9 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("save-connection")
+                                        Button::new("save-connection", "Save")
                                             .primary()
                                             .icon(Icon::new(IconName::Check))
-                                            .label("Save")
                                             .small()
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.save_profile(window, cx);
@@ -406,6 +410,7 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let danger_color = cx.theme().danger;
         if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
         {
             let field_enabled = self.is_field_enabled(field_def);
@@ -486,7 +491,7 @@ impl ConnectionManagerWindow {
                                 )
                                 .when(field_def.required && field_enabled, |d| {
                                     d.child(
-                                        div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"),
+                                        div().text_sm().text_color(danger_color).child("*"),
                                     )
                                 }),
                         )
@@ -579,7 +584,7 @@ impl ConnectionManagerWindow {
                                         d.child(
                                             div()
                                                 .text_sm()
-                                                .text_color(gpui::rgb(0xEF4444))
+                                                .text_color(danger_color)
                                                 .child("*"),
                                         )
                                     }),
@@ -639,7 +644,7 @@ impl ConnectionManagerWindow {
                                     .child(field_def.label.clone()),
                             )
                             .when(field_def.required, |d| {
-                                d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                                d.child(div().text_sm().text_color(danger_color).child("*"))
                             }),
                     )
                     .child(
@@ -673,8 +678,7 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("browse-file-path")
-                                            .label("Browse")
+                                        Button::new("browse-file-path", "Browse")
                                             .small()
                                             .ghost()
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -884,6 +888,7 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let danger_color = cx.theme().danger;
         let Some(host_input) = self.input_state_for_field("host") else {
             return div().into_any_element();
         };
@@ -947,7 +952,7 @@ impl ConnectionManagerWindow {
                             .child(primary_label),
                     )
                     .when(primary_required && primary_enabled, |d| {
-                        d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                        d.child(div().text_sm().text_color(danger_color).child("*"))
                     }),
             )
             .child(
@@ -1040,6 +1045,7 @@ impl ConnectionManagerWindow {
         field: FormFocus,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let danger_color = cx.theme().danger;
         div()
             .rounded(px(4.0))
             .border_2()
@@ -1065,7 +1071,7 @@ impl ConnectionManagerWindow {
                             .child(label.to_string()),
                     )
                     .when(required, |d| {
-                        d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
+                        d.child(div().text_sm().text_color(danger_color).child("*"))
                     }),
             )
             .child(Input::new(input))

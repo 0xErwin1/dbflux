@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, Hsla, Pixels, Window, div};
+use gpui::{div, AnyElement, App, Hsla, Pixels, Window};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::Radii;
@@ -26,6 +26,7 @@ pub struct Surface {
     border_color_override: Option<Hsla>,
     rounded_override: Option<Pixels>,
     show_border: bool,
+    children: Vec<AnyElement>,
 }
 
 impl Surface {
@@ -36,6 +37,7 @@ impl Surface {
             border_color_override: None,
             rounded_override: None,
             show_border: true,
+            children: Vec::new(),
         }
     }
 
@@ -46,6 +48,7 @@ impl Surface {
             border_color_override: None,
             rounded_override: None,
             show_border: true,
+            children: Vec::new(),
         }
     }
 
@@ -56,6 +59,7 @@ impl Surface {
             border_color_override: None,
             rounded_override: None,
             show_border: true,
+            children: Vec::new(),
         }
     }
 
@@ -66,6 +70,7 @@ impl Surface {
             border_color_override: None,
             rounded_override: None,
             show_border: false,
+            children: Vec::new(),
         }
     }
 
@@ -112,6 +117,12 @@ impl Surface {
     }
 }
 
+impl gpui::ParentElement for Surface {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
 impl RenderOnce for Surface {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
@@ -127,6 +138,7 @@ impl RenderOnce for Surface {
             el = el.border_1().border_color(border_color);
         }
 
+        el = el.children(self.children);
         el
     }
 }

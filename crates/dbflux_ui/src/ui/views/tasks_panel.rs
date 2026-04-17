@@ -286,7 +286,7 @@ impl TasksPanel {
                         .flex_col()
                         .gap_1()
                         .bg(theme.secondary)
-                        .children(lines.into_iter().map(|line| Text::caption(line))),
+                        .children(lines.into_iter().map(Text::caption)),
                 )
             })
     }

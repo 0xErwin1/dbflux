@@ -1,9 +1,8 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::keymap::{default_keymap, ContextId, KeyChord};
+use dbflux_components::controls::Input;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};

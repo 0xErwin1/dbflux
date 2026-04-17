@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{App, Entity, IntoElement, Window};
-use gpui_component::Sizable;
 use gpui_component::input::{Input as GpuiInput, InputState};
+use gpui_component::Sizable;
 
 /// Thin wrapper around `gpui_component::input::Input` that pre-applies
 /// DBFlux design token defaults (height, size).
@@ -13,6 +13,7 @@ pub struct Input {
     disabled: bool,
     w_full: bool,
     appearance: bool,
+    cleanable: bool,
 }
 
 impl Input {
@@ -24,6 +25,7 @@ impl Input {
             disabled: false,
             w_full: false,
             appearance: true,
+            cleanable: false,
         }
     }
 
@@ -51,6 +53,11 @@ impl Input {
         self.appearance = appearance;
         self
     }
+
+    pub fn cleanable(mut self, cleanable: bool) -> Self {
+        self.cleanable = cleanable;
+        self
+    }
 }
 
 impl RenderOnce for Input {
@@ -65,6 +72,10 @@ impl RenderOnce for Input {
 
         if self.w_full {
             input = input.w_full();
+        }
+
+        if self.cleanable {
+            input = input.cleanable(true);
         }
 
         input

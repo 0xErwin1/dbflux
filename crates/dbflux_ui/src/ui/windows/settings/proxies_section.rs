@@ -1,15 +1,14 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
+use dbflux_components::controls::Button;
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::Button;
-use gpui_component::button::ButtonVariants;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -546,9 +545,8 @@ impl ProxiesSection {
                             transparent_black()
                         })
                         .child(
-                            Button::new("new-proxy")
+                            Button::new("new-proxy", "New Proxy")
                                 .icon(Icon::new(IconName::Plus))
-                                .label("New Proxy")
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -814,8 +812,7 @@ impl ProxiesSection {
                                     transparent_black()
                                 })
                                 .child(
-                                    Button::new("delete-proxy")
-                                        .label("Delete")
+                                    Button::new("delete-proxy", "Delete")
                                         .small()
                                         .danger()
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -838,17 +835,21 @@ impl ProxiesSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("save-proxy")
-                                    .label(if editing_id.is_some() {
+                                Button::new(
+                                    "save-proxy",
+                                    if editing_id.is_some() {
                                         "Update"
                                     } else {
                                         "Create"
-                                    })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    },
+                                )
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.save_proxy(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                     }),
             )

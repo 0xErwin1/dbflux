@@ -1,12 +1,11 @@
 use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
+use dbflux_components::controls::Input;
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::Input;
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus};
 

@@ -1,20 +1,19 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
-use super::form_section::{FormSection, create_blur_subscription};
+use super::form_section::{create_blur_subscription, FormSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::ssh_tunnels::SshFormNav;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
+use dbflux_components::controls::Button;
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::Button;
-use gpui_component::button::ButtonVariants;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
+use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -551,8 +550,7 @@ impl SshTunnelsSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("browse-ssh-key")
-                                    .label("Browse")
+                                Button::new("browse-ssh-key", "Browse")
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -675,9 +673,8 @@ impl SshTunnelsSection {
                             transparent_black()
                         })
                         .child(
-                            Button::new("new-ssh-tunnel")
+                            Button::new("new-ssh-tunnel", "New Tunnel")
                                 .icon(Icon::new(IconName::Plus))
-                                .label("New Tunnel")
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -928,8 +925,7 @@ impl SshTunnelsSection {
                                     transparent_black()
                                 })
                                 .child(
-                                    Button::new("delete-ssh-tunnel")
-                                        .label("Delete")
+                                    Button::new("delete-ssh-tunnel", "Delete")
                                         .small()
                                         .danger()
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -951,8 +947,7 @@ impl SshTunnelsSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("test-ssh-tunnel")
-                                    .label("Test")
+                                Button::new("test-ssh-tunnel", "Test")
                                     .small()
                                     .ghost()
                                     .disabled(self.ssh_test_status == SshTestStatus::Testing)
@@ -973,17 +968,21 @@ impl SshTunnelsSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("save-ssh-tunnel")
-                                    .label(if editing_id.is_some() {
+                                Button::new(
+                                    "save-ssh-tunnel",
+                                    if editing_id.is_some() {
                                         "Update"
                                     } else {
                                         "Create"
-                                    })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    },
+                                )
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.save_tunnel(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                     }),
             )

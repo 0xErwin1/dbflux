@@ -3,12 +3,12 @@ use super::parsing::{key_type_icon, key_type_label, render_value_preview};
 use super::{KeyValueDocumentEvent, KeyValueFocusMode, KvValueViewMode, TtlState};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::Input;
 use dbflux_components::primitives::{IconButton, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{ActiveTheme, Sizable};
+use gpui_component::ActiveTheme;
 
 impl Render for super::KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
